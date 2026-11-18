@@ -15,13 +15,13 @@
   }
   *{box-sizing:border-box}
   body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;background:var(--bg);color:var(--ink)}
-  .top{background:var(--card);border-bottom:1px solid var(--line);padding:18px 32px 16px;position:sticky;top:0;z-index:5}
+  .top{background:var(--card);border-bottom:1px solid var(--line);padding:18px 32px 18px}
   h1{margin:0 0 4px;font-size:22px}
   h1 a{font-size:13px;font-weight:400;color:var(--muted);margin-left:12px}
-  .lede{margin:0 0 16px;font-size:15px;color:var(--ink2)}
-  .step{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 10px;font-size:16px;font-weight:700}
-  .step .num{flex:none;width:24px;height:24px;border-radius:50%;background:var(--accent);color:#232F3E;display:grid;place-items:center;font-size:14px}
-  .step .sub{font-weight:400;font-size:13.5px;color:var(--muted)}
+  .lede{margin:0 0 18px;font-size:15px;color:var(--ink2)}
+  .step{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:0 0 12px;font-size:20px;font-weight:800}
+  .step .num{flex:none;width:34px;height:34px;border-radius:50%;background:var(--accent);color:#232F3E;display:grid;place-items:center;font-size:18px;font-weight:800;box-shadow:0 0 0 4px color-mix(in srgb,var(--accent) 25%,transparent)}
+  .step .sub{font-weight:400;font-size:14px;color:var(--muted)}
   .pills{display:flex;flex-wrap:wrap;gap:8px}
   .pill{border:1.5px solid var(--line);background:var(--card);color:var(--ink);border-radius:999px;padding:6px 13px;font:inherit;font-size:14px;cursor:pointer;display:flex;gap:8px;align-items:center;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
   .pill:hover{border-color:var(--ink2)}
@@ -31,23 +31,32 @@
   .pill.custom{border-style:dashed;font-family:inherit}
   .pill.custom.on{border-style:solid;background:var(--accent);border-color:var(--accent);color:#232F3E}
   .pill.custom.on .n{color:#232F3E}
-  .summary{margin-top:12px;display:flex;gap:24px;align-items:baseline;flex-wrap:wrap}
-  .big{font-size:22px;font-weight:700}
+  .summary{display:flex;gap:14px;align-items:baseline;flex-wrap:wrap}
+  .big{font-size:17px;font-weight:700}
   .big b{color:var(--accent)}
-  .meta{font-size:14px;color:var(--ink2)}
+  .meta{font-size:13.5px;color:var(--ink2)}
   .meta em{font-style:normal;color:var(--muted)}
-  .reset{font:inherit;font-size:13px;border:1.5px solid var(--ink2);background:var(--card);color:var(--ink);border-radius:8px;padding:3px 10px;cursor:pointer;margin-left:6px}
-  .bottom{position:sticky;bottom:0;z-index:5;background:var(--card);border-top:1px solid var(--line);box-shadow:0 -4px 14px rgba(0,0,0,.06);padding:14px 32px}
+  .reset{font:inherit;font-size:12.5px;border:1.5px solid var(--ink2);background:var(--card);color:var(--ink);border-radius:8px;padding:2px 9px;cursor:pointer;margin-left:6px}
+  .bottom{position:sticky;bottom:0;z-index:5;background:var(--card);border-top:1px solid var(--line);box-shadow:0 -4px 14px rgba(0,0,0,.06);padding:10px 32px 12px}
+  .bar{display:flex;align-items:center;gap:8px 24px;flex-wrap:wrap;margin:0 0 8px}
+  .bar .step{margin:0}
+  .bar .advbtn{margin-left:auto}
   .cmd{display:flex;gap:10px;flex-wrap:wrap;align-items:stretch}
-  .what{flex:1 1 100%;display:flex;gap:10px;align-items:center;font-size:14px;font-weight:600}
-  .what input{flex:1;font:inherit;font-weight:400;font-size:14px;border:1.5px solid var(--line);background:var(--card);color:var(--ink);border-radius:9px;padding:8px 12px}
-  .what input:focus{outline:none;border-color:var(--accent)}
-  .cmd code{flex:1 1 520px;background:var(--code);color:var(--code-ink);border-radius:9px;padding:10px 14px;font:13.5px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre-wrap;word-break:break-word}
+  .cmd input{flex:0 1 420px;min-width:240px;font:inherit;font-size:14px;border:1.5px solid var(--line);background:var(--card);color:var(--ink);border-radius:9px;padding:8px 12px}
+  .cmd input:focus{outline:none;border-color:var(--accent)}
+  .cmd code{flex:1 1 420px;background:var(--code);color:var(--code-ink);border-radius:9px;padding:9px 14px;font:13.5px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre-wrap;word-break:break-word}
   .cmd code .k{color:var(--accent)}
   .cmd code .d{color:#9FB3C8;font-style:italic}
   .copy{font:inherit;font-size:14px;font-weight:600;border:0;background:var(--accent);color:#232F3E;border-radius:9px;padding:0 18px;cursor:pointer;min-width:92px}
   .copy.done{background:#1D8102;color:#fff}
-  .note{margin:8px 0 0;font-size:12.5px;color:var(--muted)}
+  .advbtn{font:inherit;font-size:13px;border:1.5px solid var(--line);background:var(--card);color:var(--ink2);border-radius:8px;padding:4px 10px;cursor:pointer}
+  .advbtn::before{content:"\25B8  "}
+  .advbtn[aria-expanded="true"]::before{content:"\25BE  "}
+  .advbtn.set{border-color:var(--accent)}
+  .adv{display:flex;gap:16px;align-items:center;flex-wrap:wrap;font-size:14px;font-weight:600;margin:0 0 8px}
+  .adv[hidden]{display:none}
+  .adv select{font:inherit;font-weight:400;font-size:13.5px;margin-left:6px;border:1.5px solid var(--line);background:var(--card);color:var(--ink);border-radius:7px;padding:4px 8px}
+  .adv .sub{font-weight:400;font-size:12.5px;color:var(--muted)}
   main{padding:20px 32px 24px}
   .board{display:grid;grid-template-columns:.8fr 1fr 1fr 1fr 1fr;gap:14px;align-items:start}
   .phase{background:var(--card);border-radius:12px;box-shadow:0 1px 2px rgba(0,0,0,.06),0 4px 14px rgba(0,0,0,.05);overflow:hidden}
@@ -80,10 +89,9 @@
 <body>
 <section class="top">
   <h1>AI-DLC scope explorer <a href="../05-scopes-and-depth/">Scopes, Depth, and Test Strategy</a></h1>
-  <p class="lede">Build the <code>/aidlc</code> command that starts your work with exactly the stages you want.</p>
+  <p class="lede">Build the <code>/aidlc</code> command that starts your work with exactly the stages you want. The page address keeps your selection, so you can share a plan as a link.</p>
   <div class="step"><span class="num">1</span>Pick a scope<span class="sub">Each button is a ready-made plan for one kind of work; the number is how many stages it runs.</span></div>
   <div class="pills" id="pills"></div>
-  <div class="summary" id="summary"></div>
 </section>
 <main>
   <div class="step"><span class="num">2</span>Tick or untick stages<span class="sub">Optional: tailor the plan. Click a phase header to toggle the whole phase. Initialization always runs.</span></div>
@@ -95,13 +103,21 @@
   </div>
 </main>
 <section class="bottom">
-  <div class="step"><span class="num">3</span>Say what to build and copy the command</div>
+  <div class="bar">
+    <div class="step"><span class="num">3</span>Copy the command<span class="sub">and paste it into your AI-DLC chat</span></div>
+    <div class="summary" id="summary"></div>
+    <button class="advbtn" id="advbtn" type="button" aria-expanded="false" aria-controls="adv">Advanced options</button>
+  </div>
+  <div class="adv" id="adv" hidden>
+    <label>Depth <select id="depth"></select></label>
+    <label>Test strategy <select id="tests"></select></label>
+    <span class="sub">Depth: how much detail each stage writes. Test strategy: how many tests Construction writes.</span>
+  </div>
   <div class="cmd">
-    <label class="what">What to build <input id="what" type="text" placeholder="Example: a Hello World application in JavaScript"></label>
+    <input id="what" type="text" aria-label="What to build" placeholder="What to build, e.g. a Hello World app in JavaScript">
     <code id="cmd"></code>
     <button class="copy" id="copy" type="button">Copy</button>
   </div>
-  <p class="note">Paste the command into your AI-DLC chat. The page address keeps your selection, so you can share this plan as a link.</p>
 </section>
 <script>
 const DATA = {"phases":[{"slug":"initialization","label":"Initialization","color":"#5F6B7A"},{"slug":"ideation","label":"Ideation","color":"#8C4FFF"},{"slug":"inception","label":"Inception","color":"#0972D3"},{"slug":"construction","label":"Construction","color":"#E07700"},{"slug":"operation","label":"Operation","color":"#1D8102"}],"stages":[{"number":"0.1","slug":"workspace-scaffold","name":"Workspace Scaffold","phase":"initialization","conditional":false,"perUnit":false,"condition":"Ensure-exists the per-intent record and in-scope phase dirs, idempotent (creates on demand, skips existing)"},{"number":"0.2","slug":"workspace-detection","name":"Workspace Detection","phase":"initialization","conditional":false,"perUnit":false,"condition":"Scans and classifies workspace — auto-proceeds (no approval gate)"},{"number":"0.3","slug":"state-init","name":"State Initialization","phase":"initialization","conditional":false,"perUnit":false,"condition":"Creates full populated state file and determines routing — auto-proceeds"},{"number":"1.1","slug":"intent-capture","name":"Intent Capture & Framing","phase":"ideation","conditional":false,"perUnit":false,"condition":"First stage of every workflow — establishes the initiative's foundation"},{"number":"1.2","slug":"market-research","name":"Market Research","phase":"ideation","conditional":true,"perUnit":false,"condition":"Execute when initiative has external market positioning or build-vs-buy considerations. Skip for internal tools, bug fixes, or refactors."},{"number":"1.3","slug":"feasibility","name":"Feasibility & Constraints","phase":"ideation","conditional":true,"perUnit":false,"condition":"Execute when there are integration constraints, regulatory requirements, or significant technical uncertainty. Skip for trivial changes with no technical risk."},{"number":"1.4","slug":"scope-definition","name":"Scope Definition","phase":"ideation","conditional":false,"perUnit":false,"condition":"Always executes — defines the scope boundary and prioritized backlog"},{"number":"1.5","slug":"team-formation","name":"Team Formation","phase":"ideation","conditional":true,"perUnit":false,"condition":"Execute when team composition, capacity, or mob planning is relevant. Skip for solo developer or small team projects."},{"number":"1.6","slug":"rough-mockups","name":"Rough Mockups","phase":"ideation","conditional":true,"perUnit":false,"condition":"Execute when user-facing UI is part of the initiative; for API/backend, produce system interaction diagrams. Skip for non-UI, API-only, or infrastructure-only initiatives."},{"number":"1.7","slug":"approval-handoff","name":"Approval & Handoff","phase":"ideation","conditional":false,"perUnit":false,"condition":"Always executes — compiles all Ideation artifacts into initiative brief for approval"},{"number":"2.1","slug":"reverse-engineering","name":"Reverse Engineering","phase":"inception","conditional":true,"perUnit":false,"condition":"Execute when project is brownfield. On rerun the Step 1 guard checks store freshness (codekb-scope-diff) - verified-CURRENT stores may be reused by human choice, anything else rescans. Skip for greenfield projects."},{"number":"2.2","slug":"practices-discovery","name":"Practices Discovery","phase":"inception","conditional":true,"perUnit":false,"condition":"Always rerun for freshness. Brownfield discovers from evidence + reverse-engineering artifacts. Greenfield prompts user via structured questions using org.md defaults."},{"number":"2.3","slug":"requirements-analysis","name":"Requirements Analysis","phase":"inception","conditional":false,"perUnit":false,"condition":"Always executes — depth scales with project complexity"},{"number":"2.4","slug":"user-stories","name":"User Stories","phase":"inception","conditional":true,"perUnit":false,"condition":"Execute when user-facing features, multiple personas, complex business logic, or cross-team work is involved. Skip for pure refactoring, isolated bug fixes, infrastructure-only changes, or developer tooling."},{"number":"2.5","slug":"refined-mockups","name":"Refined Mockups","phase":"inception","conditional":true,"perUnit":false,"condition":"Execute when user-facing UI exists; for APIs, refine interaction diagrams"},{"number":"2.6","slug":"domain-design","name":"Domain Design","phase":"inception","conditional":true,"perUnit":false,"condition":"Execute when new components or logical building blocks are needed. Skip when changes are modifications to existing components only."},{"number":"2.7","slug":"units-generation","name":"Units Generation","phase":"inception","conditional":false,"perUnit":false,"condition":"Always executes when in scope. Produces the dependency DAG that Stage 2.9 Delivery Planning consumes for Bolt sequencing. In the compiled scope grid, 2.7 (Units Generation) and 2.9 (Delivery Planning) travel together — both EXECUTE or both SKIP per scope."},{"number":"2.8","slug":"contract-design","name":"Contract Design","phase":"inception","conditional":true,"perUnit":false,"condition":"Execute when the system has any formal contract to pin down — an inter-unit boundary (more than one unit that must integrate) OR a unit that exposes a public/external API consumed outside the system. Skip only for a single self-contained unit with no inter-unit boundaries and no externally consumed API."},{"number":"2.9","slug":"delivery-planning","name":"Delivery Planning","phase":"inception","conditional":false,"perUnit":false,"condition":"Always executes — capstone Inception stage, produces the detailed execution plan for Construction and Operation"},{"number":"3.1","slug":"functional-design","name":"Functional Design","phase":"construction","conditional":true,"perUnit":true,"condition":"New data models, complex business logic, or business rules need design. Skip if simple logic changes with no new business logic."},{"number":"3.2","slug":"nfr-requirements","name":"NFR Requirements","phase":"construction","conditional":true,"perUnit":true,"condition":"Performance, security, scalability, reliability, or observability requirements needed, or tech stack selection needed. Skip if no NFR requirements and tech stack already determined."},{"number":"3.3","slug":"nfr-design","name":"NFR Design","phase":"construction","conditional":true,"perUnit":true,"condition":"NFR Requirements was executed and NFR patterns need design. Skip if NFR Requirements was skipped."},{"number":"3.4","slug":"infrastructure-design","name":"Infrastructure Design","phase":"construction","conditional":true,"perUnit":true,"condition":"Infrastructure services need mapping, deployment architecture required, or cloud resources needed. Skip if no infrastructure changes and infrastructure already defined."},{"number":"3.5","slug":"code-generation","name":"Code Generation","phase":"construction","conditional":false,"perUnit":true,"condition":"Always executes for every unit in the execution plan."},{"number":"3.6","slug":"build-and-test","name":"Build and Test","phase":"construction","conditional":false,"perUnit":false,"condition":"Always executes once after all per-unit stages are finished."},{"number":"3.7","slug":"ci-pipeline","name":"CI Pipeline","phase":"construction","conditional":true,"perUnit":false,"condition":"Execute when CI pipeline needs creation or significant modification. Skip if CI already exists and is adequate."},{"number":"4.1","slug":"deployment-pipeline","name":"Deployment Pipeline","phase":"operation","conditional":true,"perUnit":false,"condition":"Execute when CD pipeline needs creation or significant modification"},{"number":"4.2","slug":"environment-provisioning","name":"Environment Provisioning","phase":"operation","conditional":true,"perUnit":false,"condition":"Execute when AWS environments need provisioning or validation"},{"number":"4.3","slug":"deployment-execution","name":"Deployment Execution","phase":"operation","conditional":true,"perUnit":false,"condition":"Execute after deployment pipeline and environment are ready"},{"number":"4.4","slug":"observability-setup","name":"Observability Setup","phase":"operation","conditional":true,"perUnit":false,"condition":"Execute when monitoring, dashboards, alarms, or tracing need configuration"},{"number":"4.5","slug":"incident-response","name":"Incident Response","phase":"operation","conditional":true,"perUnit":false,"condition":"Execute when operational runbooks and incident response procedures are needed"},{"number":"4.6","slug":"performance-validation","name":"Performance Validation","phase":"operation","conditional":true,"perUnit":false,"condition":"Execute when NFR performance targets need validation under load"},{"number":"4.7","slug":"feedback-optimization","name":"Feedback & Optimization","phase":"operation","conditional":true,"perUnit":false,"condition":"Execute when ongoing operational monitoring and optimization are needed"}],"scopes":[{"name":"enterprise","depth":"Comprehensive","testStrategy":"Comprehensive","description":"Regulated enterprise feature, full audit trail","stages":["workspace-scaffold","workspace-detection","state-init","intent-capture","market-research","feasibility","scope-definition","team-formation","rough-mockups","approval-handoff","reverse-engineering","practices-discovery","requirements-analysis","user-stories","refined-mockups","domain-design","units-generation","contract-design","delivery-planning","functional-design","nfr-requirements","nfr-design","infrastructure-design","code-generation","build-and-test","ci-pipeline","deployment-pipeline","environment-provisioning","deployment-execution","observability-setup","incident-response","performance-validation","feedback-optimization"]},{"name":"feature","depth":"Standard","testStrategy":"Standard","description":"Full lifecycle for new features, practical depth","stages":["workspace-scaffold","workspace-detection","state-init","intent-capture","market-research","feasibility","scope-definition","team-formation","rough-mockups","approval-handoff","reverse-engineering","practices-discovery","requirements-analysis","user-stories","refined-mockups","domain-design","units-generation","contract-design","delivery-planning","functional-design","nfr-requirements","nfr-design","infrastructure-design","code-generation","build-and-test","ci-pipeline","deployment-pipeline","environment-provisioning","deployment-execution","observability-setup","incident-response","performance-validation","feedback-optimization"]},{"name":"workshop","depth":"Standard","testStrategy":"Minimal","description":"Facilitated group session with mandatory gates","stages":["workspace-scaffold","workspace-detection","state-init","reverse-engineering","practices-discovery","requirements-analysis","user-stories","refined-mockups","domain-design","units-generation","contract-design","delivery-planning","functional-design","nfr-requirements","nfr-design","infrastructure-design","code-generation","build-and-test","ci-pipeline","deployment-pipeline","environment-provisioning","deployment-execution","observability-setup","incident-response","performance-validation","feedback-optimization"]},{"name":"mvp","depth":"Standard","testStrategy":"Standard","description":"Skip operations, ship the core","stages":["workspace-scaffold","workspace-detection","state-init","intent-capture","feasibility","scope-definition","rough-mockups","reverse-engineering","practices-discovery","requirements-analysis","user-stories","refined-mockups","domain-design","units-generation","contract-design","delivery-planning","functional-design","nfr-requirements","nfr-design","infrastructure-design","code-generation","build-and-test","ci-pipeline"]},{"name":"classic","depth":"Standard","testStrategy":"Standard","description":"V1-style ceremony through Inception and Construction - the implicit default","stages":["workspace-scaffold","workspace-detection","state-init","reverse-engineering","practices-discovery","requirements-analysis","user-stories","refined-mockups","domain-design","units-generation","contract-design","delivery-planning","functional-design","nfr-requirements","nfr-design","infrastructure-design","code-generation","build-and-test"]},{"name":"infra","depth":"Standard","testStrategy":"Standard","description":"Infrastructure changes","stages":["workspace-scaffold","workspace-detection","state-init","practices-discovery","requirements-analysis","nfr-requirements","nfr-design","infrastructure-design","code-generation","build-and-test","ci-pipeline","deployment-pipeline","environment-provisioning","deployment-execution","observability-setup"]},{"name":"express","depth":"Minimal","testStrategy":"Minimal","description":"Lightest run: requirements to deploy, no design pass, no reviewers","stages":["workspace-scaffold","workspace-detection","state-init","reverse-engineering","requirements-analysis","code-generation","build-and-test","deployment-pipeline","deployment-execution","observability-setup"]},{"name":"refactor","depth":"Minimal","testStrategy":"Minimal","description":"Clean up existing code","stages":["workspace-scaffold","workspace-detection","state-init","reverse-engineering","requirements-analysis","functional-design","code-generation","build-and-test","deployment-pipeline","deployment-execution"]},{"name":"security-patch","depth":"Minimal","testStrategy":"Minimal","description":"CVE response","stages":["workspace-scaffold","workspace-detection","state-init","reverse-engineering","requirements-analysis","nfr-requirements","code-generation","build-and-test","deployment-pipeline","deployment-execution"]},{"name":"bugfix","depth":"Minimal","testStrategy":"Minimal","description":"Fix a specific bug","stages":["workspace-scaffold","workspace-detection","state-init","reverse-engineering","requirements-analysis","code-generation","build-and-test","deployment-pipeline","deployment-execution"]},{"name":"poc","depth":"Minimal","testStrategy":"Minimal","description":"Prove feasibility fast","stages":["workspace-scaffold","workspace-detection","state-init","intent-capture","reverse-engineering","requirements-analysis","code-generation","build-and-test"]}]};
@@ -175,12 +191,38 @@ function diff(name){
 }
 
 const what = document.getElementById("what");
+const LEVELS = ["minimal", "standard", "comprehensive"];
+const depthSel = document.getElementById("depth"), testsSel = document.getElementById("tests");
+const advBtn = document.getElementById("advbtn"), adv = document.getElementById("adv");
+function fillLevels(select, scopeDefault){
+  const keep = select.value;
+  select.innerHTML = '<option value="">Scope default (' + esc(scopeDefault) + ')</option>' +
+    LEVELS.map(l => '<option value="' + l + '">' + l + '</option>').join("");
+  select.value = keep;
+}
+// A level is only written into the command when it differs from the scope's default.
+function override(select, scopeDefault){
+  return select.value && select.value !== scopeDefault.toLowerCase() ? select.value : "";
+}
+advBtn.onclick = () => {
+  const open = adv.hidden;
+  adv.hidden = !open;
+  advBtn.setAttribute("aria-expanded", String(open));
+};
+depthSel.onchange = testsSel.onchange = () => render();
 let cmdText = "";
 function renderCommand(){
   const d = diff(base);
+  const s = SCOPES.find(x=>x.name===base);
+  const depth = override(depthSel, s.depth), tests = override(testsSel, s.testStrategy);
   const parts = [["/aidlc",""],["--scope","k"],[base,""]];
+  if (depth) parts.push(["--depth","k"],[depth,""]);
+  if (tests) parts.push(["--test-strategy","k"],[tests,""]);
   if (d.skip.length) parts.push(["--skip","k"],[d.skip.join(","),""]);
   if (d.add.length) parts.push(["--add","k"],[d.add.join(","),""]);
+  const set = (depth ? 1 : 0) + (tests ? 1 : 0);
+  advBtn.textContent = set ? "Advanced options \u00b7 " + set + " set" : "Advanced options";
+  advBtn.classList.toggle("set", set > 0);
   const desc = what.value.trim();
   const quoted = '"' + (desc ? desc.replace(/["\\]/g, "\\$&") : "<what to build>") + '"';
   cmdText = parts.map(p=>p[0]).join(" ") + " " + quoted;
@@ -230,15 +272,21 @@ function render(){
     '<div class="big"><b>' + sel.size + '</b> / ' + STAGES.length + ' stages</div><div class="meta">' + meta + '</div>';
   const r = document.getElementById("reset"); if (r) r.onclick = () => select(base);
 
+  const s0 = SCOPES.find(x=>x.name===base);
+  fillLevels(depthSel, s0.depth);
+  fillLevels(testsSel, s0.testStrategy);
   renderCommand();
   const d = diff(base);
   const q = new URLSearchParams({ scope: base });
+  const depth = override(depthSel, s0.depth), tests = override(testsSel, s0.testStrategy);
+  if (depth) q.set("depth", depth);
+  if (tests) q.set("tests", tests);
   if (d.skip.length) q.set("skip", d.skip.join(","));
   if (d.add.length) q.set("add", d.add.join(","));
   history.replaceState(null, "", location.pathname + location.search + "#" + q.toString().replace(/%2C/g, ","));
 }
 
-// Restore #scope=poc&skip=...&add=... from the address.
+// Restore #scope=poc&depth=...&tests=...&skip=...&add=... from the address.
 const h = new URLSearchParams(location.hash.slice(1));
 const known = new Set(STAGES.filter(s=>!isInit(s)).map(s=>s.slug));
 const list = k => (h.get(k) || "").split(",").filter(x=>known.has(x));
@@ -247,6 +295,12 @@ if (SCOPES.some(s=>s.name===h.get("scope"))) {
   list("skip").forEach(x=>sel.delete(x));
   list("add").forEach(x=>sel.add(x));
 }
+const s1 = SCOPES.find(x=>x.name===base);
+fillLevels(depthSel, s1.depth);
+fillLevels(testsSel, s1.testStrategy);
+if (LEVELS.includes(h.get("depth"))) depthSel.value = h.get("depth");
+if (LEVELS.includes(h.get("tests"))) testsSel.value = h.get("tests");
+if (depthSel.value || testsSel.value) advBtn.click();
 render();
 </script>
 </body>
