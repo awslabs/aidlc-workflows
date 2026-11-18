@@ -224,11 +224,13 @@ export type HarnessManifest = {
     /**
      * What the agent does itself, then the one line it shows the person, when
      * this harness's hooks are not running (the person's lines quoted
-     * exactly). `next` stops with it before any work, and the refusal for a
-     * reply that was not recorded carries it. Set only when a hook on the
-     * agent's own shell command leaves a heartbeat in the record before the
-     * engine runs, even with its own check switched off, so a record with
-     * stage progress and no heartbeat at all proves the hooks did not run.
+     * exactly). `next` stops with it before any work, the refusal for a reply
+     * that was not recorded carries it, and a save-again refusal of the summary
+     * evidence gives it in place of the save, with no question waiting. Set
+     * only when a hook on the agent's own shell command leaves a heartbeat in
+     * the record before the engine runs, even with its own check switched off,
+     * so a record with stage progress and no heartbeat at all proves the hooks
+     * did not run.
      * `<entry>`, `<folder>` and `<next>` are filled in. `<next>` is the
      * engine's `next` command in backticks; in `next`'s stop it is fixed
      * words saying to run the stopped command again, so its request is kept.

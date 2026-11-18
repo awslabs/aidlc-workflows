@@ -25,7 +25,7 @@ import {
   timeWindow, withoutReportTurns,
 } from "./lib-audit.ts";
 import {
-  doctorEnv, environment, findProjectRoot, importAidlcTools, listIntents, nativeInstall, ownTree, type PersonTools, readTrees, recordPersonTool, type SafeTools, secretRulesFile, toolsUsed, type Tree,
+  doctorEnv, environment, findProjectRoot, importAidlcTools, importKiroPolicyReader, listIntents, nativeInstall, ownTree, type PersonTools, readTrees, recordPersonTool, type SafeTools, secretRulesFile, toolsUsed, type Tree,
 } from "./lib-project.ts";
 import { HOST_TOOLS, Labels, Shaper, time, version } from "./lib-shape.ts";
 import { claude, codex, copilotCli, editorStores, kiroV2, kiroV3, type Local, type Summary } from "./lib-transcripts.ts";
@@ -163,12 +163,14 @@ const health = readHooksHealth(hookHealthDirs(project, intents), since, until);
 
 // ---- the AI tool's own logs ----
 const local: Local = { prompts: [], refusals: [], errors: [] };
+// Kiro CLI's approve-for-me policy is read by AI-DLC's own reader, from the install.
+const kiroPolicies = await importKiroPolicyReader(project, import.meta.dir);
 // The tool each reader names, for one that failed (the readers' own labels).
 const READER_TOOL: Record<string, string> = { claude: "claude-code", codex: "codex", kiroV3: "kiro (v3)", kiroV2: "kiro-cli (v2)", copilotCli: "copilot-cli" };
 const transcripts = [claude, codex, kiroV3, kiroV2, copilotCli]
   .map((fn) => {
     try {
-      return fn(project, since, until, local);
+      return fn === kiroV3 ? kiroV3(project, since, until, local, kiroPolicies) : fn(project, since, until, local);
     } catch (e) {
       local.errors.push({ tool: fn.name, ts: new Date().toISOString(), text: String(e).slice(0, 600) });
       return { tool: READER_TOOL[fn.name] ?? "other", error: "reader failed" };

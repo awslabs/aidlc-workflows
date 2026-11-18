@@ -1379,16 +1379,21 @@ function rewriteCursorNativePermissions(outRoot: string, m: HarnessManifest): vo
   writeFileSync(cliPath, `${JSON.stringify(value, null, 2)}\n`);
 }
 
-// The native Permissions line. A harness whose native allow list carries the
-// exact read-only and turn-back-on commands names them; the others keep the
-// engine prefix alone.
-function nativePermissionsLine(exactReads: boolean): string {
-  return exactReads
-    ? `- **Permissions**: the \`aidlc\` agent pre-approves only the native \`${TRUSTED_COMMAND_PREFIX}\` command prefix, the read-only \`aidlc doctor\`, \`status\`, \`version\` and \`config <section> --show\` (with or without \`--json\`) and \`--help\` forms, turning a check back on (\`aidlc config flags --clear-bypass <switch> --yes\`), and its listed read-only tools; everything else prompts, including any other \`config\` change.`
-    : `- **Permissions**: the \`aidlc\` agent pre-approves only the native \`${TRUSTED_COMMAND_PREFIX}\` command prefix and its listed read-only tools; everything else prompts.`;
+// The native Permissions line for the `aidlc` agent, which only Kiro's trees
+// ship; their native allow list carries the exact read-only and turn-back-on
+// commands, so the line names them.
+function nativePermissionsLine(): string {
+  return `- **Permissions**: the \`aidlc\` agent pre-approves only the native \`${TRUSTED_COMMAND_PREFIX}\` command prefix, the read-only \`aidlc doctor\`, \`status\`, \`version\` and \`config <section> --show\` (with or without \`--json\`) and \`--help\` forms, turning a check back on (\`aidlc config flags --clear-bypass <switch> --yes\`), and its listed read-only tools; everything else prompts, including any other \`config\` change.`;
 }
 
-function rewriteNativeOnboarding(value: string, exactReads = false): string {
+// Codex's native Permissions line: its own bullet names copy-channel scripts a
+// native tree cannot carry, so the native one keeps the rest of it.
+const CODEX_NATIVE_PERMISSIONS_LINE =
+  `- **Permissions**: \`.codex/rules/default.rules\` (Starlark prefix rules) pre-allows AI-DLC's workflow commands as it runs them, so Codex runs them without asking, outside its sandbox: \`${TRUSTED_COMMAND_PREFIX} ...\` and \`git worktree\`/\`commit\`/\`add\`. Everything else runs inside the \`workspace-write\` sandbox, so a command that writes \`.git\` or \`.codex/\` (a \`config\` change, for one) needs your approval to run outside it.`;
+
+// `permissions` replaces the authored Permissions bullet; without it the tree
+// keeps its own bullet, its commands already rewritten to their native form.
+function rewriteNativeOnboarding(value: string, permissions?: string): string {
   return value
     .replace(
       /^- \*\*bun\*\*:.*$/gm,
@@ -1398,7 +1403,7 @@ function rewriteNativeOnboarding(value: string, exactReads = false): string {
       /^- \*\*Hook permissions\*\*:.*$/gm,
       "- **Hook permissions**: Framework hooks run through the self-contained `aidlc` binary. No separate script runtime or executable bits are required.",
     )
-    .replace(/^- \*\*Permissions\*\*:.*$/gm, nativePermissionsLine(exactReads))
+    .replace(/^- \*\*Permissions\*\*:.*$/gm, (line) => permissions ?? line)
     .replace(
       /TypeScript, run via bun/g,
       "TypeScript sources invoked through the self-contained `aidlc` runtime",
@@ -1580,7 +1585,12 @@ function rewriteNativeInvocations(
       `"${trustedCommand(".*")}"`,
     );
     value = substituteInvocationTokens(value, m.harnessDir, "aidlc");
-    value = rewriteNativeOnboarding(value, m.tierFlavor === "claude" || m.tierFlavor === "cursor" || m.tierFlavor === "kiro");
+    value = rewriteNativeOnboarding(
+      value,
+      m.tierFlavor === "kiro"
+        ? nativePermissionsLine()
+        : m.tierFlavor === "codex" ? CODEX_NATIVE_PERMISSIONS_LINE : undefined,
+    );
     writeFileSync(file, value);
   }
   rewriteKiroNativeAllowlists(outRoot, m);

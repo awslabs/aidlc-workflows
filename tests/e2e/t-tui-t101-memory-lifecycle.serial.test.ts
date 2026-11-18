@@ -97,9 +97,7 @@ const MEM_RELPATH = join("ideation", "approval-handoff", "memory.md");
 // The verbatim template ownership blockquote (knowledge/aidlc-shared/
 // memory-template.md). The init is an engine-owned copy of that template
 // (bootstrapDirectiveMemory, copyFileSync), so it reproduces this byte-for-byte.
-const OWNERSHIP_LINE =
-  "> This file is kept up to date automatically while the stage runs. " +
-  "Add observations at the review step, not by editing here directly.";
+const OWNERSHIP_LINE = "> This file is kept up to date automatically while the stage runs.";
 
 interface Run {
   rc: number;

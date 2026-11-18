@@ -210,7 +210,14 @@ describe("a parallel batch's Unit runs the approved tests through swarm check", 
     recordCommand(pd, `bun -e "process.kill(process.pid, 'SIGKILL')"`);
     failed(check());
     recordCommand(pd, `bun -e "setTimeout(Boolean, 2000)"`);
-    failed(checkWithShortBudget(pd));
+    // The driver stops it at 200 ms; the verdict names the limit check itself set.
+    const stopped = checkWithShortBudget(pd);
+    expect(stopped.code, `${stopped.out}\n${stopped.err}`).toBe(1);
+    expect(stopped.out.trim()).toBe(JSON.stringify({
+      unit: "alpha", converged: false, tampered: false, reason: "error",
+      detail: "the check command was stopped after 30 minutes, before it finished, so this is no verdict on the Unit's code; " +
+        "run check again with --timeout-ms <milliseconds> to give it longer",
+    }));
 
     recordCommand(pd, `bun -e "process.stdout.write(${LOUD})"`);
     const loud = check();

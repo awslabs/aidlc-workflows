@@ -4,7 +4,8 @@
 // IDs only in the form the stage files and verification.md give (`FR1`,
 // `FR1.2`, `NFR3`, `US1.1`, `AC1.1.1`, `BR1.1`, `U1`; ID_PATTERNS in
 // aidlc-sensor-traceability.ts). An example in shipped prose that shows such
-// an ID with a hyphen or underscore (`FR-1`, `NFR_2`, `S-4`, `FR-n`) is one
+// an ID with a hyphen or underscore (`FR-1`, `NFR_2`, `S-4`, `FR-n`, or a
+// template such as `FR-NNN` or `NFR-SCALE-NNN`) is one
 // more nudge for an agent to write IDs the sensor cannot read, and a
 // requirements file written that way first gets its finding at User Stories,
 // after the person approved it (#2852). This reads AI-DLC's own shipped prose
@@ -21,7 +22,7 @@ const FOLDERS = ["core", "harness", "plugins"];
 const NOT_PROSE = /\.(?:ts|tsx|mts|cts|js|mjs|cjs|json)$/;
 const PLUGIN_TESTS = /^plugins\/[^/]+\/tests\//;
 // `S` is the bare story prefix the reviewer examples used for `US`.
-const OFF_FORM = /\b(?:N?FR|US|AC|BR|U|S)[-_](?:\d+|[nxy])\b/g;
+const OFF_FORM = /\b(?:N?FR|US|AC|BR|U|S)[-_](?:\d+|[nxy]|N{2,}|[A-Z]+[-_](?:\d+|N+))\b/g;
 
 function offFormIds(text: string): string[] {
   return [...text.matchAll(OFF_FORM)].map((match) => match[0]);
@@ -37,10 +38,10 @@ function proseFiles(): string[] {
 
 describe("t-traced-id-examples", () => {
   test("the check finds the hyphen and underscore forms and leaves the forms the sensor reads", () => {
-    expect(offFormIds("FR-1 NFR_2 FR-001 U-007 S-4 US-1 AC-1 BR-2 FR-n/NFR-n")).toEqual([
-      "FR-1", "NFR_2", "FR-001", "U-007", "S-4", "US-1", "AC-1", "BR-2", "FR-n", "NFR-n",
+    expect(offFormIds("FR-1 NFR_2 FR-001 U-007 S-4 US-1 AC-1 BR-2 FR-n/NFR-n FR-NNN NFR-SCALE-NNN NFR-AUTH-001")).toEqual([
+      "FR-1", "NFR_2", "FR-001", "U-007", "S-4", "US-1", "AC-1", "BR-2", "FR-n", "NFR-n", "FR-NNN", "NFR-SCALE-NNN", "NFR-AUTH-001",
     ]);
-    expect(offFormIds("FR1 FR1.2 NFR3 NFR2.1 US1.1 AC1.1.1 BR1.1 U1 u1-auth R-01 ENT-001 AWS-1 FR{n}")).toEqual([]);
+    expect(offFormIds("FR1 FR1.2 NFR3 NFR2.1 US1.1 AC1.1.1 BR1.1 U1 u1-auth R-01 ENT-001 AWS-1 FR{n} NFR-to-Architecture")).toEqual([]);
   });
 
   test("no example in shipped prose shows a traced ID in a form the sensor cannot read", () => {

@@ -150,6 +150,21 @@ describe("t151 neutral and native onboarding", () => {
     }
   });
 
+  test("the Kiro onboarding names the command that refreshes each harness tree, not the framework's packaging", () => {
+    const kiro = HARNESS_MATRIX.find((harness) => harness.name === "kiro-ide");
+    expect(kiro).toBeDefined();
+    for (const native of [false, true]) {
+      const path = kiro?.harnessOnboardingDist ?? "";
+      const setup = readFileSync(native ? releasePath(path) : path, "utf-8");
+      const invoke = native ? "aidlc" : "bun .kiro/tools/aidlc.ts";
+      const bullet = setup.split("\n").find((line) => line.includes("workspace tree is harness-neutral")) ?? "";
+      expect(bullet).not.toContain("packaging");
+      expect(bullet).toContain(`\`${invoke} config --harness <name>\` (\`claude\`, \`kiro\`)`);
+      expect(bullet).toContain("which a copied install may need to run with `--download` or `--from`");
+      expect(bullet).toContain(`\`${invoke} doctor\` names the commands`);
+    }
+  });
+
   test("all five identical-sharing harnesses ship byte-identical root instructions", () => {
     const sharing = HARNESS_MATRIX.filter((h) => h.manifest.rootIntegrations.some(
       (integration) => integration.path === "AGENTS.md" && integration.shared === "identical",

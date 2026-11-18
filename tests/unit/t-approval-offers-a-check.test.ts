@@ -18,7 +18,7 @@ import {
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { basename, dirname, join, relative } from "node:path";
 import {
   AIDLC_SRC, cleanupTestProject, createTestProject, resetAidlcEnv,
   runOrchestrateNext, seedAidlcMemory, seedBoltDag, seededRecordDir, seededStateFile,
@@ -26,7 +26,7 @@ import {
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
   artifactFilename, auditBlockField, findStageBySlug, latestMainWorkflowStageRunFloorForProject, MESSAGE_FILL,
-  readAuditShardEvents, reviewArtifactFingerprint,
+  readAuditShardEvents, reviewArtifactFingerprint, writeSessionBinding,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 // The stage's checks run once before its review or gate, and again at the gate
@@ -320,6 +320,38 @@ describe("t-approval-offers-a-check", () => {
     expect(notices).toContain(`${line} ${OFFER}`);
     expect(notices).toHaveLength(kept.length);
     expect(JSON.stringify(gate).split(OFFER)).toHaveLength(2);
+  });
+
+  // Claude Code's interactive CLI shows a gate's own lines in its question box (t-gate-notice-in-box); the offer is a
+  // question of its own, so it stays with the agent, who reads the person's answer to it.
+  test("on Claude Code's interactive CLI the offer stays on the step with its note, and is never put in the question box", () => {
+    const p = fixture({ checkpoints: false });
+    const slug = "functional-design";
+    buildStage(p, slug, "alpha", ["entities.md", "entities.md"]);
+    buildStage(p, slug, "beta", [undefined]);
+    editDocument(p, slug, "alpha", "A new approach.");
+    // The chat that runs the work, as `intent create` binds it.
+    writeSessionBinding(p, SESSION, "default", basename(seededRecordDir(p)), "switch");
+    const before = accepted(p).length;
+    const env: NodeJS.ProcessEnv = { ...process.env, CLAUDE_CODE_ENTRYPOINT: "cli", AIDLC_SESSION_OVERRIDE: SESSION };
+    delete env.AIDLC_SKIP_ARTIFACT_GUARD;
+    const gate = json(tool(p, "orchestrate", ["report", "--stage", slug, "--result", "awaiting-approval"], env));
+    const offered = accepted(p).slice(before).map((row) => auditBlockField(row.block, "Details") ?? "")
+      .find((details) => details.includes("alpha"));
+    expect(offered, JSON.stringify(gate)).toBeDefined();
+    expect(gate.change_notices).toEqual([`${offered} ${OFFER}`]);
+    expect(String(gate.change_notices_note)).toStartWith("Say each notice listed beside this note");
+    const box = {
+      question: "Functional Design complete. How would you like to proceed?", header: "Approval", multiSelect: false,
+      options: [{ label: "Approve", description: "" }, { label: "Request Changes", description: "" }],
+    };
+    const result = spawnSync(process.execPath, [join(AIDLC_SRC, "tools/aidlc.ts"), "engine", "hook", "guard-tool-call"], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", cwd: p,
+      env: { ...env, AIDLC_PROJECT_DIR: p, CLAUDE_PROJECT_DIR: p },
+      input: JSON.stringify({ hook_event_name: "PreToolUse", session_id: SESSION, cwd: p, tool_name: "AskUserQuestion", tool_input: { questions: [box] } }),
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toBe("");
   });
 
   test("Guard Policy strict: the changed work is re-checked on its own, and no offer is made", () => {

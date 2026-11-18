@@ -43,10 +43,16 @@ opens, on the tables as they are then:
    requirement); without that record, a table's requirements are the ones it
    lists and the ones the FR and NFR ID patterns find in requirements.md.
 5. Verifies deterministic targets where possible: stories, Unit mappings,
-   business rules, and workspace-relative code paths. At Units Generation, with
-   stories, a story whose row names only `library`, `spec` or `packaging` Units
-   says how it is reached (`existing: <where>` or `interface`, on its row or
-   once as a `Reached through:` line), or it is reported as an invalid target. A Functional Design Unit
+   business rules, and workspace-relative code paths. At Units Generation, a
+   story or requirement no Unit's row names is a gap, unless the team keeps it
+   out of every Unit on purpose: a `Deferred` row with a non-empty target (the
+   reason, and where it is handled, say Operation) settles it, with `none` in
+   its story-map Units cell. An `N/A` row does not, since it is also how an ID
+   is handed to another Unit. With stories, a story whose row names only
+   `library`, `spec` or `packaging` Units says how it is reached
+   (`existing: <where>` or `interface`, on its row or once as a `Reached
+   through:` line), or it is reported as an invalid target. A Functional Design
+   Unit
    whose kind writes no `rules.md` (a `ui` Unit) names one of its design files
    (`functional-spec.md`, `frontend-components.md`) on each row instead of a
    business rule.
@@ -66,7 +72,10 @@ parent alone not covering them; otherwise by its own row or, when User Stories
 ran, through the criteria of the stories User Stories traced it to. One that
 nothing builds is settled when the latest stage that traced it (User Stories,
 NFR Requirements, then Code Generation) marked it `N/A` with its reason in
-every table there that lists it; an `N/A` with no reason is not settled.
+every table there that lists it; an `N/A` with no reason is not settled. A
+story Units Generation kept out of every Unit, `Deferred` with its reason,
+settles its criteria the same way (a requirement, in work without stories),
+unless a later stage's table lists them.
 
 ## Expected JSON schema
 

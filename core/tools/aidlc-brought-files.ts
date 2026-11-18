@@ -518,6 +518,11 @@ export function quoted(path: string): string | null {
   return `"${path}"`;
 }
 
+// The file's path quoted, or null when it or its repo's folder cannot be.
+function quotedIn(file: ChangedFile): string | null {
+  return file.repo && quoted(file.repo) === null ? null : quoted(file.path);
+}
+
 /** The line, the files in the order it names them (deleted, then top-level, then by path). */
 export function broughtFilesLine(ordered: readonly ChangedFile[]): string {
   const named = ordered.slice(0, NAMED_MAX);
@@ -535,15 +540,15 @@ export function broughtFilesLine(ordered: readonly ChangedFile[]): string {
   const groups = new Map<string, string[]>();
   const fromGit: ChangedFile[] = [];
   for (const file of ordered) {
-    const path = file.ref === null ? null : quoted(file.path);
+    const path = file.ref === null ? null : quotedIn(file);
     if (file.ref === null || path === null) continue;
     fromGit.push(file);
-    const command = `git${file.repo ? ` -C ${file.repo}` : ""} checkout ${file.ref} --`;
+    const command = `git${file.repo ? ` -C ${quoted(file.repo)}` : ""} checkout ${file.ref} --`;
     groups.set(command, [...(groups.get(command) ?? []), path]);
   }
   const commands = andList([...groups].map(([command, paths]) => `\`${command} ${paths.join(" ")}\``));
   const noCopy = named.filter((file) => file.ref === null);
-  const noCommand = named.filter((file) => file.ref !== null && quoted(file.path) === null);
+  const noCommand = named.filter((file) => file.ref !== null && quotedIn(file) === null);
   // Past the named ones, only HEAD is read, so nothing is said of the rest
   // that git may hold further back.
   if (fromGit.length === 0 && noCommand.length === 0) {

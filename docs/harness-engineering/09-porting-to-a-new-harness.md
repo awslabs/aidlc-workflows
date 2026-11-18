@@ -204,8 +204,8 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
   fewer than five options besides its own Other row: the number it shows, the
   one its `question-rendering.md` names. The questions file then letters each
   question's options from A to that letter before `X. Other`, so the agent puts
-  every question in the box whole. Absent, the file uses A-E. Only Claude Code
-  declares it (4, for AskUserQuestion).
+  every question in the box whole. Absent, the file uses A-E. Claude Code
+  declares it (4, for AskUserQuestion) and Codex (3, for request_user_input).
 - `agentFinishRecorded` (optional) - `{ env: [...] }`, only for a host whose own
   stop event runs the `log-subagent` hook (its `SUBAGENT_COMPLETED` row) before
   the agent that dispatched a helper sees the helper's result, for every

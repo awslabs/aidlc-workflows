@@ -10,6 +10,10 @@
 //
 //   - a ready plan is asked for by the engine (summary, plan path, three
 //     choices), and nothing the agent writes can answer it;
+//   - in work with several repositories, one line under the summary names the
+//     repositories the plan names files in, and leaves the fingerprint, the
+//     approval and a file asked before it (with an answer written there) as
+//     they are; nothing in one-repository work;
 //   - the hook keeps the person's reply, from any chat on this work; the agent
 //     reads it and records their choice (an exact pick like "1" the hook records
 //     itself, and the agent cannot overrule it);
@@ -3583,6 +3587,133 @@ describe("the question's summary", () => {
   });
 });
 
+// In work with several repositories the question says which of them the plan
+// names files in, in one line the tool writes from the plan's own paths: a
+// summary line is cut at 200 characters, and a repository named after the cut
+// would not be on screen. In work with one repository nothing is added.
+describe("in work with several repositories the question names the plan's repositories", () => {
+  const CUT_TOUCHES = "api/src/routes/orders.ts, api/src/routes/payments.ts, api/src/services/orders-service.ts, " +
+    "api/src/services/payments-service.ts, api/src/models/order.ts, api/src/models/payment.ts, " +
+    "api/src/db/migrations.ts, web/src/pages/Checkout.tsx";
+
+  function reposProject(repos: string[]): string {
+    const proj = project();
+    const registry = join(intentsDirOf(proj), "intents.json");
+    const rows = JSON.parse(readFileSync(registry, "utf-8"));
+    rows[0].repos = repos;
+    writeFileSync(registry, `${JSON.stringify(rows, null, 2)}\n`);
+    for (const repo of repos) {
+      mkdirSync(join(proj, repo, "src"), { recursive: true });
+      writeFileSync(join(proj, repo, "src", "base.ts"), "export const base = true;\n");
+    }
+    return proj;
+  }
+
+  function askedWith(proj: string, touches: string): Emitted {
+    writePlan(proj, "", null, touches);
+    const directive = next(proj);
+    expect(directive.ask_type, JSON.stringify(directive)).toBe("plan-approval");
+    return directive;
+  }
+
+  function fingerprint(proj: string): string | null {
+    return /^\[Approval Fingerprint\]: (\S+)$/m.exec(questions(proj))?.[1] ?? null;
+  }
+
+  test("two repositories: the line is under the cut summary, whole, in the question, its prose and its record", () => {
+    const proj = reposProject(["api", "web"]);
+    const asked = askedWith(proj, CUT_TOUCHES);
+    const cut = `Touches: ${CUT_TOUCHES}`.slice(0, 197) + "...";
+    expect(cut).not.toContain("web/");
+    expect(asked.plan_approval.targets?.[0].summary).toEqual([
+      "Builds: slugify for titles", cut, "Tests: 3 unit tests", "Names files in api and web.",
+    ]);
+    const prose = (asked as unknown as Record<string, unknown>).numbered_prose_question as string;
+    expect(prose).toContain(`- ${cut}\n- Tests: 3 unit tests\n- Names files in api and web.\n`);
+    expect(questions(proj)).toContain(`- ${cut}\n- Tests: 3 unit tests\n- Names files in api and web.\n\nFull plan: `);
+  });
+
+  test("each form of the line, and nothing where the plan names no file in a repository", () => {
+    const line = (repos: string[], touches: string) =>
+      askedWith(reposProject(repos), touches).plan_approval.targets?.[0].summary.slice(3);
+    expect(line(["api", "web", "worker"], "api/src/a.ts, web/src/b.tsx, worker/src/c.ts"))
+      .toEqual(["Names files in api, web and worker."]);
+    expect(line(["api", "web"], "api/src/a.ts, api/src/b.ts")).toEqual(["Names files in api."]);
+    expect(line(["api", "web"], "api\\src\\a.ts, web\\src\\b.tsx")).toEqual(["Names files in api and web."]);
+    expect(line(["api", "web"], "api/src/a.ts, deploy/compose.yaml, package.json")).toEqual(["Names files in api."]);
+    expect(line(["api", "web"], "deploy/compose.yaml, package.json")).toEqual([]);
+  });
+
+  test("one repository: the question and its record are as they always were", () => {
+    for (const repos of [["api"], []]) {
+      const proj = repos.length > 0 ? reposProject(repos) : project();
+      const asked = askedWith(proj, "api/src/a.ts, api/src/b.ts");
+      expect(asked.plan_approval.targets?.[0].summary).toEqual([
+        "Builds: slugify for titles", "Touches: api/src/a.ts, api/src/b.ts", "Tests: 3 unit tests",
+      ]);
+      expect(questions(proj)).toContain("- Tests: 3 unit tests\n\nFull plan: ");
+    }
+  });
+
+  // The approval is of the plan, by its fingerprint, never of the question's
+  // lines: the same plan asked with and without the line has one fingerprint,
+  // and approving it records that fingerprint and builds.
+  test("the plan's fingerprint and its approval do not depend on the line", () => {
+    const one = reposProject(["api"]);
+    askedWith(one, CUT_TOUCHES);
+    const two = reposProject(["api", "web"]);
+    askedWith(two, CUT_TOUCHES);
+    expect(questions(two)).toContain("- Names files in api and web.");
+    expect(fingerprint(two)).not.toBeNull();
+    expect(fingerprint(two)).toBe(fingerprint(one));
+    replyAndRecord(two, "approve", "Approve Plan");
+    const recorded = readAuditShardEvents(two).filter((row) => row.event === "PLAN_APPROVAL_RECORDED");
+    expect(recorded).toHaveLength(1);
+    expect(auditBlockField(recorded[0].block, "Approval Fingerprint")).toBe(fingerprint(one));
+    expect(next(two).kind).toBe("run-stage");
+  });
+
+  // A questions file written without the line (by an earlier AI-DLC, for the
+  // same question) is not rewritten for the line alone: an answer the person
+  // wrote there stays whole, nothing asks them again, and it is read as theirs.
+  test("a question asked before the line keeps its file and the answer written in it", () => {
+    const proj = reposProject(["api", "web"]);
+    askedWith(proj, CUT_TOUCHES);
+    const path = join(stageDir(proj), "code-generation-questions.md");
+    const earlier = questions(proj).replace("- Names files in api and web.\n", "");
+    expect(earlier).not.toContain("Names files in");
+    writeFileSync(path, earlier);
+    expect(next(proj).plan_approval.targets?.[0].summary.at(-1)).toBe("Names files in api and web.");
+    expect(questions(proj)).toBe(earlier);
+    const written = earlier.replace(/^\[Answer\]:.*$/m, "[Answer]: Approve Plan, the payments part looks right");
+    writeFileSync(path, written);
+    expect(next(proj).ask_type).toBe("plan-approval");
+    expect(questions(proj)).toBe(written);
+    const events = (name: string) => readAuditShardEvents(proj).filter((row) => row.event === name);
+    expect(events("QUESTION_ASKED")).toHaveLength(1);
+    expect(events("QUESTION_SHOWN")).toHaveLength(0);
+    replyAndRecord(proj, "done, my answer is in the questions file", "Approve Plan");
+    expect(events("PLAN_APPROVAL_RECORDED")).toHaveLength(1);
+    expect(auditBlockField(events("PLAN_APPROVAL_RECORDED")[0].block, "Answer Line In File"))
+      .toBe("Approve Plan, the payments part looks right");
+    expect(next(proj).kind).toBe("run-stage");
+  });
+
+  // A teammate's clone keeps no record of the question: the file the earlier
+  // AI-DLC wrote and committed stays as it was there too.
+  test("in a clone with no record of the question, the file asked before the line stays as it was", () => {
+    const proj = reposProject(["api", "web"]);
+    askedWith(proj, CUT_TOUCHES);
+    const path = join(stageDir(proj), "code-generation-questions.md");
+    const earlier = questions(proj).replace("- Names files in api and web.\n", "");
+    writeFileSync(path, earlier);
+    const records = dirname(planApprovalRuntimeFile(proj, "probe"));
+    for (const name of readdirSync(records).filter((entry) => entry.startsWith("ask-"))) rmSync(join(records, name));
+    expect(next(proj).plan_approval.targets?.[0].summary.at(-1)).toBe("Names files in api and web.");
+    expect(questions(proj)).toBe(earlier);
+  });
+});
+
 // While a plan waits, what the person asks for runs the first time: every
 // command the engine itself names for their request gets through the guard,
 // and code still waits for the approved plan.
@@ -4548,7 +4679,7 @@ function approveThroughParts(proj: string, scope: string): Emitted {
   const early = guardWrite(proj, join(proj, "src", "slugify.ts"));
   expect(early.code).toBe(2);
   expect(early.stderr).toContain(`continue ${first.receipt}\``);
-  expect(early.stderr).not.toContain("cannot select one approval target");
+  expect(early.stderr).not.toContain("AI-DLC is not on the build step");
   const build = continueEachPart(proj, first);
   expect(build.kind, JSON.stringify(build)).toBe("run-stage");
   expect(build.stage).toBe("code-generation");
@@ -4781,7 +4912,7 @@ describe("a setting typed over the step in hand keeps that step current", () => 
     expect(kept?.stage).toBe("code-generation");
     const write = guardWrite(proj, planFile(proj));
     expect(write.code, write.stderr).toBe(0);
-    expect(write.stderr).not.toContain("no matching v2 code-generation active directive");
+    expect(write.stderr).not.toContain("AI-DLC is not on the build step");
   });
 
   test("after approval, with the build issued: a source write goes through, and the review the setting turned off is refused", () => {
@@ -5239,9 +5370,7 @@ describe("the engine writes the plan's Testing Contract itself", () => {
   );
 
   // The person's own note under the heading, written while they edit the
-  // files: with the block intact nothing is written and the note stays; a note
-  // that took the block's place is written over only with the question that
-  // says the engine repaired the Testing Contract of their edited plan.
+  // files: with the block intact nothing is written and the note stays.
   test("their own note beside the intact block stays, and their approval records the plan with it", () => {
     const proj = project();
     askFor(proj);
@@ -5256,17 +5385,51 @@ describe("the engine writes the plan's Testing Contract itself", () => {
     expect(planText(proj)).toBe(theirs);
   });
 
-  test("their own note in the block's place is written over only with the line that says so", () => {
+  // Their note in the block's place, or beside a block their edit broke: the
+  // engine writes the block back and keeps their words after it, in the same
+  // section, and the question says it repaired the contract of their edited plan.
+  test.each([
+    ["in the block's place", () => `${STEPS}## Testing Contract\n\nMy note: use TDD for this one.\n`, "My note: use TDD for this one."],
+    ["beside a block their edit broke", (plan: string) =>
+      `${plan.replace('"version": 1', '"version": 1,,')}\nMy note: keep the slugify tests short.\n`, "My note: keep the slugify tests short."],
+  ] as const)("their own note %s is kept after the block the engine writes back", (_label, edit, note) => {
     const proj = project();
     askFor(proj);
     replyAndRecord(proj, "I'll edit the files", "I'll edit the files");
-    writeFileSync(planPath(proj), `${STEPS}## Testing Contract\n\nMy note: use TDD for this one.\n`, "utf-8");
+    writeFileSync(planPath(proj), edit(planText(proj)), "utf-8");
     reply(proj, "done");
     expect(answer(proj, "Approve Plan").message).toContain("broke the Testing Contract block");
     const asked = next(proj);
     expect(asked.kind, JSON.stringify(asked)).toBe("ask");
     expect(asked.question).toBe("I repaired the plan's Testing Contract (the test rules your build follows). Build your edited plan?");
-    expect(planText(proj)).toBe(STEPS + contract(proj));
+    const written = `${STEPS}${contract(proj)}\n${note}\n`;
+    expect(planText(proj)).toBe(written);
+    // Read as current: no second write.
+    expect(next(proj).kind).toBe("ask");
+    expect(planText(proj)).toBe(written);
+    replyAndRecord(proj, "1", "Approve Plan");
+    expect(next(proj).plan_approval).toEqual({ status: "approved" });
+    expect(planText(proj)).toBe(written);
+  });
+
+  // Their note beside an intact block that a setting left out of date while
+  // they edited: their approval renders the section again and keeps the note.
+  test("their own note beside a block a setting left out of date is kept when their approval renders it again", () => {
+    const proj = project();
+    askFor(proj);
+    replyAndRecord(proj, "I'll edit the files", "I'll edit the files");
+    writeFileSync(planPath(proj), `${planText(proj)}\nMy note: keep the slugify tests short.\n`, "utf-8");
+    // A setting changed while they edit; the question stays open over the state write.
+    const state = seededStateFile(proj);
+    const before = readFileSync(state, "utf-8");
+    moveContract(proj);
+    expect(keepPlanApprovalAskOverStateWrite(proj, before, readFileSync(state, "utf-8"))).toBe(true);
+    reply(proj, "done");
+    const recorded = answer(proj, "Approve Plan");
+    expect(recorded.code, recorded.message).toBe(0);
+    expect(recorded.message).toContain("was rendered again");
+    expect(planText(proj)).toBe(`${STEPS}${contract(proj)}\nMy note: keep the slugify tests short.\n`);
+    expect(next(proj).plan_approval).toEqual({ status: "approved" });
   });
 
   // A plan sent back waits for its change: the engine never makes it read as

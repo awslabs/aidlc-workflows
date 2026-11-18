@@ -435,6 +435,26 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
     expect(frozenFindings(bundleDir!)).toEqual([]);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // validate-state beats only before a compaction on Claude Code; the audit
+  // hook beats on every call.
+  test("2j: a hook that fires only at compaction does not read frozen while another hook beat within the day before the latest work", () => {
+    const proj = freshProject();
+    const record = seedIdleIntentBeats(proj);
+    const health = join(record, ".aidlc-engine", "hooks-health");
+    writeFileSync(join(health, "write-audit-log.last"), "2026-05-21T10:59:00Z\n", "utf-8");
+    writeFileSync(join(health, "validate-state.last"), "2026-05-19T11:00:00Z\n", "utf-8");
+    writeFileSync(
+      join(record, "audit", "later.md"),
+      "## Stage Started\n**Timestamp**: 2026-05-21T11:00:00Z\n" +
+        "**Event**: STAGE_STARTED\n**Stage**: requirements-analysis\n",
+      "utf-8",
+    );
+    const { bundleDir, out } = runExport(proj);
+    expect(bundleDir, out).not.toBeNull();
+    expect(frozenFindings(bundleDir!)).toEqual([]);
+    expect(out).not.toContain("hook-heartbeat-frozen");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("2h: the evidence shows autonomy, walk order, jumps and each Unit's progress, with Unit names hashed", () => {
     const proj = freshProject();
     // The shipped graph keeps core stage slugs readable, as in test 11.
@@ -555,7 +575,9 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("3: report.json exposes findings + timeline.stages and the gate-unresolved error", () => {
+  // A gate waiting for the person is healthy waiting, as the live report's
+  // "Approval gate pending" row says: the report keeps it, at info.
+  test("3: report.json exposes findings + timeline.stages and the waiting gate at info", () => {
     const proj = freshProject();
     seedCanaryIntent(proj);
     const { bundleDir } = runExport(proj);
@@ -565,7 +587,26 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
     expect(Array.isArray(report.timeline.stages)).toBe(true);
     const gate = report.findings.find((f: { id: string }) => f.id === "gate-unresolved");
     expect(gate).toBeDefined();
-    expect(gate.severity).toBe("error");
+    expect(gate.severity).toBe("info");
+    expect(report.timeline.stages.find((s: { gate: string }) => s.gate === "unresolved")).toBeDefined();
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("3c: a stage waiting at its gate is no warning in the live report or the export's printed findings", () => {
+    const proj = freshProject();
+    seedCanaryIntent(proj);
+    const live = spawnSync(BUN, [UTIL, "doctor", "--project-dir", proj], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      encoding: "utf-8",
+      env: { ...process.env, NO_COLOR: "1" },
+    });
+    const liveOut = `${live.stdout ?? ""}${live.stderr ?? ""}`;
+    expect(liveOut).toContain("AI-DLC doctor");
+    expect(liveOut).not.toContain("gate-unresolved");
+    expect(liveOut).not.toContain("unresolved approval gate");
+    const { bundleDir, out } = runExport(proj);
+    expect(bundleDir, out).not.toBeNull();
+    expect(out).not.toContain("gate-unresolved");
+    expect(readFileSync(join(bundleDir!, "report.md"), "utf-8")).not.toContain("gate-unresolved");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // The remedy names the command this install's person types: $aidlc on Codex.

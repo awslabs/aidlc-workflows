@@ -12,6 +12,10 @@
 // is trusted only while the host process it names (CLAUDE_PID) is alive. Kiro
 // CLI gives the agent's shell no pid of its own (measured: KIRO_SESSION_ID is
 // the only Kiro variable there), so its id has no liveness anchor to check.
+// Claude Code's Linux sandbox runs each command in its own PID namespace, where
+// the host process cannot be found at all: a command it marks SANDBOX_RUNTIME=1
+// still follows its chat there while Claude Code's own record of the chat
+// (sessions/<pid>.json in its config folder) is there.
 
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -82,6 +86,8 @@ function activeRecordSeenBy(dir: string, harnessDir: string, env: NodeJS.Process
       CLAUDE_CODE_SESSION_ID: undefined,
       CLAUDECODE: undefined,
       CLAUDE_PID: undefined,
+      CLAUDE_CONFIG_DIR: undefined,
+      SANDBOX_RUNTIME: undefined,
       KIRO_SESSION_ID: undefined,
       ...env,
     } as NodeJS.ProcessEnv,
@@ -116,6 +122,50 @@ describe("the host names this chat in the agent's own shell", () => {
       CLAUDECODE: "1",
     })).toBe(CURSOR_RECORD);
   });
+
+  // A pid that is gone answers ESRCH the way the host's pid does from inside
+  // the sandbox's own PID namespace; the config folder holds Claude Code's
+  // record of the chat only while the chat runs.
+  function sandboxedChat(record: boolean, recordedChat = CHAT): NodeJS.ProcessEnv {
+    const unseen = deadPid();
+    const config = realpathSync(mkdtempSync(join(tmpdir(), "t-host-var-config-")));
+    projects.push(config);
+    mkdirSync(join(config, "sessions"));
+    if (record) {
+      writeFileSync(join(config, "sessions", `${unseen}.json`), JSON.stringify({ pid: unseen, sessionId: recordedChat }));
+    }
+    return {
+      CLAUDE_CODE_SESSION_ID: CHAT,
+      CLAUDE_PID: String(unseen),
+      CLAUDE_CONFIG_DIR: config,
+      CLAUDECODE: "1",
+      SANDBOX_RUNTIME: "1",
+    };
+  }
+
+  test.skipIf(process.platform !== "linux")(
+    "Claude Code: a command in its Linux sandbox follows the chat while Claude Code's record of it is there",
+    () => {
+      const dir = project(".claude");
+      expect(activeRecordSeenBy(dir, ".claude", sandboxedChat(true))).toBe(CHAT_RECORD);
+      // The chat ended and its record went with it.
+      expect(activeRecordSeenBy(dir, ".claude", sandboxedChat(false))).toBe(CURSOR_RECORD);
+      // The record under that pid is another chat's.
+      expect(activeRecordSeenBy(dir, ".claude", sandboxedChat(true, "sess-another-chat-0002"))).toBe(CURSOR_RECORD);
+      // Without the sandbox's mark the id is one a gone chat left behind.
+      expect(activeRecordSeenBy(dir, ".claude", { ...sandboxedChat(true), SANDBOX_RUNTIME: undefined })).toBe(
+        CURSOR_RECORD,
+      );
+    },
+  );
+
+  test.skipIf(process.platform === "linux")(
+    "Claude Code: off Linux the sandbox's mark does not stand in for a host process that is gone",
+    () => {
+      const dir = project(".claude");
+      expect(activeRecordSeenBy(dir, ".claude", sandboxedChat(true))).toBe(CURSOR_RECORD);
+    },
+  );
 
   test("Kiro CLI: the chat's id is followed; another harness's variable is not read", () => {
     const dir = project(".kiro");

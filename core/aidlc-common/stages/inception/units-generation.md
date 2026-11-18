@@ -80,7 +80,7 @@ work) still belong to Delivery Planning; do not duplicate that interview here.
 
 ### Step 3: Collect and Analyze Answers
 
-Collect answers following stage-protocol.md §3 question flow (offer interaction mode choice, collect answers, write back to file).
+Collect answers following stage-protocol.md §3 question flow (collect answers, write back to file).
 - MANDATORY ambiguity analysis: scan for vague language, contradictions, missing details
 - Create follow-up questions if ANY ambiguity found
 - Resolve all ambiguities before proceeding
@@ -135,6 +135,7 @@ NOTE: This artifact describes topology only. It does NOT pick a single "recommen
 - Rows that span multiple units (cross-cutting concerns)
 - How each story is reached, when `stories.md` is produced. A story someone uses needs a Unit that exposes it: a `ui` or `service` Unit on its row does (so does a Unit with no kind). When every Unit on the row is a `library`, `spec` or `packaging` Unit, add the Unit that builds the screen, command or endpoint, or say how the story is reached in a `Reached through` cell on its row: `existing: <where>` when the product already has that place and this work changes what is behind it, `interface` when the story's caller is a developer or another system. When one answer holds for every story (a library, or a fix behind screens that exist), write it once below the table as `Reached through: <answer>`. An answer states a fact the person approves at the gate: a story a person uses, with no screen in the product or in the plan, needs a Unit for that screen, not an answer
 - Implementation order within each unit
+- A story the person decides no Unit builds, because it is handled outside Construction (in Operation, say): write `none` in its Units cell, and give its `traceability.json` row `Deferred` with the reason and where it is handled as the `target`. `N/A` does not settle it
 - Coverage verification: every enumerated ID assigned, every unit has rows
 
 Create `<record>/inception/units-generation/traceability.json` by running

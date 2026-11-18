@@ -383,8 +383,8 @@ On Claude Code, per-stage token usage and cost tracking is on by default: the fo
 
 Hooks are registered project-wide in the harness's native configuration. On
 Claude, verify that `.claude/settings.json` contains the expected `hooks`
-events. For a native project, complete active workflows,
-then run `aidlc config --harness claude` to restore the shipped registrations;
+events. For a native project,
+run `aidlc config --harness claude` to restore the shipped registrations;
 your own hook entries are kept. A copy-channel project instead uses
 `bun .claude/tools/aidlc.ts config --harness claude --from <the runtime/claude root you copied from>`.
 No `--force` is needed. Notes tell you when registrations were restored.
@@ -417,7 +417,7 @@ Kiro IDE lets you switch any project hook off in its Agent Hooks panel, and then
 
 ---
 
-## Kiro Read Denials <a id="kiro-ide-read-denials"></a>
+## Kiro Read Denials<a id="kiro-ide-read-denials"></a>
 
 ### Kiro IDE or Kiro CLI v3 denies every read under .kiro/ ("deny fs_read matching")
 
@@ -780,7 +780,7 @@ you answer in your own words, from any chat, or edit the files.
 
 ---
 
-## A Bolt attempt was set aside — getting the files back
+## A Bolt attempt was set aside — getting the files back<a id="a-bolt-attempt-was-set-aside-getting-the-files-back"></a>
 
 A recovery can set aside an attempt when its reviewed files changed again and
 its one allowed re-review was already used. The recovery abort's `--discard`
@@ -940,7 +940,7 @@ To have the stage that was in progress done again, say "redo this stage".
 
 **Symptom** (GitHub Copilot): you approved the code plan, the build started, and after the chat compacted every build step the assistant tries is refused.
 
-Your approval, the workflow state, and every file already written are kept; only what the assistant had not yet written to a file is gone from the chat. After a compaction the assistant must read its step again before it builds anything. It runs `next` as its own command, which hands the approved build straight back without asking you again. `/aidlc --doctor` shows the step as out of date, with the time and the reason (the chat was compacted, or the workflow state changed after the step was issued, naming what changed when it is known), until that `next` runs.
+Your approval, the workflow state, and every file already written are kept; only what the assistant had not yet written to a file is gone from the chat. After a compaction the assistant must read its step again before it builds anything. It runs `next` as its own command, which hands the approved build straight back without asking you again. The chat is also handed the workflow contract and its current position back with the next tool result it gets, so the commands it issues keep their flags and names. `/aidlc --doctor` shows the step as out of date, with the time and the reason (the chat was compacted, or the workflow state changed after the step was issued, naming what changed when it is known), until that `next` runs.
 
 ---
 
@@ -1044,7 +1044,7 @@ code. The row is absent when the records are visible, outside a Git repository,
 or when Git is unavailable.
 
 On Claude Code, doctor also reads the machine-managed `managed-settings.json` and alphabetical `managed-settings.d/` fragments. If the effective `allowManagedHooksOnly` value is `true`, organization policy blocks every hook declared by the project's `.claude/settings.json`; only your Claude Code administrator can lift that policy. When that policy is not set and heartbeats are still absent after workflow progress, set `"disableAllHooks": false` in this project's `.claude/settings.local.json`; it works in the same chat.
-When a workflow has issues, `--doctor` also prints a **Workflow diagnosis** section listing structured findings (unresolved gates, a missing runtime graph, cold hooks, and similar "it will not advance" causes) — the same analysis `--doctor --export` writes to its report.
+When a workflow has issues, `--doctor` also prints a **Workflow diagnosis** section listing structured findings (a missing runtime graph, cold hooks, and similar "it will not advance" causes), the same analysis `--doctor --export` writes to its report.
 
 See [CLI Commands](12-cli-commands.md#aidlc-doctor-health-check) for full details on what each check validates and how to fix failures.
 
@@ -1072,15 +1072,16 @@ intent ids and Unit names are hashed, and secret-like values are scrubbed.
 The report reconstructs the workflow timeline from the audit trail and runs
 deterministic condition→remedy rules. The two most common causes it catches:
 
-- **Unresolved approval gates** — a stage whose gate never resolved is the single
-  most common "it will not advance" cause.
-- **Missing runtime graph / cold hooks**: a runtime graph that is absent, or a
-  hook that last fired more than a day before the newest stage or approval step
-  recorded on the intent, points at a recompile that did not run. Opening a chat,
+- **A stage waiting at its approval gate**: the single most common reason the
+  work does not advance. The report's timeline shows its Gate as `unresolved`;
+  it is no warning, since the workflow is waiting for your answer.
+- **Missing runtime graph / cold hooks**: a runtime graph that is absent, or
+  hooks that all last fired more than a day before the newest stage or approval
+  step recorded on the intent, point at a recompile that did not run. Opening a chat,
   a prompt and doctor's own audit rows are not counted as work, so an intent
   nobody is working on does not read as having cold hooks.
 
-`report.md` inside the report lists every finding with a remedy; a remedy that
+`report.md` inside the report lists every error and warning with a remedy (`report.json` also keeps the informational findings); a remedy that
 names a recovery bypass (such as an `AIDLC_DISABLE_*` env var) is flagged
 as not safe to automate. See [CLI Commands](12-cli-commands.md#aidlc-doctor-export-write-a-diagnostic-report)
 for the full report contents and safety model.

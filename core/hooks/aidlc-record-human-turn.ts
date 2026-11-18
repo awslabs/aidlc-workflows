@@ -113,7 +113,7 @@ import {
   recordPlanApprovalHumanResponse,
   recordProtectedHumanResponse,
 } from "../tools/aidlc-testing-posture.ts";
-import { notePlanApprovalAskReply, openEngineQuestion, planQuestionBoxAsAsked } from "../tools/aidlc-plan-approval-ask.ts";
+import { gateNoticeBoxShown, notePlanApprovalAskReply, openEngineQuestion, planQuestionBoxAsAsked } from "../tools/aidlc-plan-approval-ask.ts";
 import { claudeTurnKey, noteClaudeTurnPending } from "../tools/aidlc-claude-turn-origin.ts";
 import { settleClaudeTurnsFirst } from "../tools/aidlc-claude-turn-pending.ts";
 import { openPlanQuestion } from "../tools/aidlc-question-store.ts";
@@ -618,6 +618,8 @@ try {
   // the agent's question (planQuestionBoxInput); everything below reads the box
   // as the agent asked it.
   const input = runtimeHarnessName() === "claude" ? planQuestionBoxAsAsked(projectDir, received) : received;
+  // Before the turn moves the kept lines on (gateNoticeBoxShown).
+  gateNoticeBoxShown(projectDir, received);
   // A turn Claude Code started itself before this one is settled first, so
   // nothing below reads it as the person's (aidlc-claude-turn-origin.ts).
   settleClaudeTurnsFirst(projectDir);
@@ -786,7 +788,7 @@ try {
     const theirText = [humanResponseText, ...picked].join("\n");
     if (!sessionId || !personHere || turnOrigin.kind === "host" || maskSecretShapes(theirText) === theirText) return;
     const session = sessionId;
-    forThePerson.push(() => saySecretMaskedOnce(projectDir, session));
+    forThePerson.push(() => saySecretMaskedOnce(projectDir, session, true));
   };
   // A help request the person typed is answered here, before any work exists
   // or this chat joins one, on every host that hands this hook's line to the
