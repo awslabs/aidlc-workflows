@@ -1,0 +1,389 @@
+// docs-scope-explorer.ts — renders docs/guide/assets/scope-explorer.html,
+// the interactive scope explorer linked from the Workflow Profiles and
+// Scopes, Depth, and Test Strategy guides: pick a scope, tick or untick
+// stages, and copy the /aidlc command that runs that plan. It is rendered from
+// the compiled stage graph and scope grid, so it cannot drift from what the
+// framework actually runs.
+//
+// The page is committed. Sources (read-only, under the Claude projection that
+// `bun scripts/package.ts` materializes, as t244 reads them):
+//   dist/claude/.claude/tools/data/stage-graph.json  stage numbers, names, phases
+//   dist/claude/.claude/tools/data/scope-grid.json   EXECUTE/SKIP per scope
+//   loadScopeMetadata()                              depth, tests, description
+//   isPerUnitStage()                                 stages repeated per Unit
+//
+// The output is deterministic (no dates, stable ordering), so
+// tests/unit/t-docs-scope-explorer.test.ts re-renders it and fails when the
+// committed page is stale.
+//
+// Usage:
+//   bun scripts/package.ts                      # once, to build dist/
+//   bun scripts/docs-scope-explorer.ts          # rewrite the page
+//   bun scripts/docs-scope-explorer.ts --check  # exit 1 if it is stale
+
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+
+const REPO_ROOT = join(import.meta.dir, "..");
+const AIDLC_SRC = join(REPO_ROOT, "dist", "claude", ".claude");
+const GRAPH = join(AIDLC_SRC, "tools", "data", "stage-graph.json");
+const GRID = join(AIDLC_SRC, "tools", "data", "scope-grid.json");
+const LIB = join(AIDLC_SRC, "tools", "aidlc-lib.ts");
+
+export const HTML_PATH = join(REPO_ROOT, "docs", "guide", "assets", "scope-explorer.html");
+
+const PHASES = [
+  { slug: "initialization", label: "Initialization", color: "#5F6B7A" },
+  { slug: "ideation", label: "Ideation", color: "#8C4FFF" },
+  { slug: "inception", label: "Inception", color: "#0972D3" },
+  { slug: "construction", label: "Construction", color: "#E07700" },
+  { slug: "operation", label: "Operation", color: "#1D8102" },
+] as const;
+
+export interface ExplorerStage {
+  number: string;
+  slug: string;
+  name: string;
+  phase: string;
+  conditional: boolean;
+  perUnit: boolean;
+  condition: string;
+}
+
+export interface ExplorerScope {
+  name: string;
+  depth: string;
+  testStrategy: string;
+  description: string;
+  stages: string[];
+}
+
+export interface ExplorerData {
+  phases: { slug: string; label: string; color: string }[];
+  stages: ExplorerStage[];
+  scopes: ExplorerScope[];
+}
+
+interface GraphStage {
+  slug: string;
+  number: string;
+  name: string;
+  phase: string;
+  execution: string;
+  condition?: string;
+  for_each?: string;
+}
+
+interface ScopeMeta {
+  depth: string;
+  testStrategy?: string;
+  description?: string;
+}
+
+/** Reads the compiled graph and grid. Scopes are ordered by stage count (most first), then name. */
+export async function loadExplorerData(): Promise<ExplorerData> {
+  for (const f of [GRAPH, GRID, LIB]) {
+    if (!existsSync(f)) {
+      throw new Error(`${f} not found: run \`bun scripts/package.ts\` first`);
+    }
+  }
+  const { loadScopeMetadata, isPerUnitStage } = (await import(LIB)) as {
+    loadScopeMetadata: () => Record<string, ScopeMeta>;
+    isPerUnitStage: (e: { slug: string; for_each?: string }) => boolean;
+  };
+  const graph = JSON.parse(readFileSync(GRAPH, "utf-8")) as GraphStage[];
+  const grid = JSON.parse(readFileSync(GRID, "utf-8")) as Record<string, { stages: Record<string, string> }>;
+  const meta = loadScopeMetadata();
+
+  const phaseOrder = PHASES.map((p) => p.slug as string);
+  for (const s of graph) {
+    if (!phaseOrder.includes(s.phase)) throw new Error(`stage ${s.slug} has unknown phase "${s.phase}"`);
+  }
+  const stages: ExplorerStage[] = graph.map((s) => ({
+    number: s.number,
+    slug: s.slug,
+    name: s.name,
+    phase: s.phase,
+    conditional: s.execution === "CONDITIONAL",
+    perUnit: isPerUnitStage(s),
+    condition: (s.condition ?? "").trim(),
+  }));
+
+  const scopes: ExplorerScope[] = Object.keys(grid).map((name) => {
+    const m = meta[name];
+    if (!m) throw new Error(`no scope metadata for ${name}`);
+    return {
+      name,
+      depth: m.depth,
+      testStrategy: m.testStrategy ?? m.depth,
+      description: (m.description ?? "").trim(),
+      stages: stages.filter((s) => grid[name].stages[s.slug] === "EXECUTE").map((s) => s.slug),
+    };
+  });
+  scopes.sort((a, b) => b.stages.length - a.stages.length || a.name.localeCompare(b.name));
+
+  return { phases: PHASES.map((p) => ({ ...p })), stages, scopes };
+}
+
+/** Interactive page: the data is inlined, so the file opens on its own (no network, no build step). */
+export function renderHtml(data: ExplorerData): string {
+  const json = JSON.stringify(data).replace(/</g, "\\u003c");
+  return HTML_TEMPLATE.replace("__DATA__", () => json);
+}
+
+const HTML_TEMPLATE = `<!DOCTYPE html>
+<!-- Generated by scripts/docs-scope-explorer.ts from the compiled scope grid. Do not edit by hand. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI-DLC scope explorer</title>
+<style>
+  :root{
+    --ink:#232F3E; --ink2:#37475A; --accent:#FF9900; --bg:#F4F6F8; --card:#FFFFFF;
+    --muted:#6B7785; --line:#D5DBE1; --code:#232F3E; --code-ink:#E6EBF0;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{ --ink:#E6EBF0; --ink2:#C9D1DA; --bg:#14181F; --card:#1E242D; --muted:#8C98A6; --line:#36404C; --code:#0B0E13; }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;background:var(--bg);color:var(--ink)}
+  .top{background:var(--card);border-bottom:1px solid var(--line);padding:18px 32px 16px;position:sticky;top:0;z-index:5}
+  h1{margin:0 0 12px;font-size:22px}
+  h1 a{font-size:13px;font-weight:400;color:var(--muted);margin-left:12px}
+  .pills{display:flex;flex-wrap:wrap;gap:8px}
+  .pill{border:1.5px solid var(--line);background:var(--card);color:var(--ink);border-radius:999px;padding:6px 13px;font:inherit;font-size:14px;cursor:pointer;display:flex;gap:8px;align-items:center;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  .pill:hover{border-color:var(--ink2)}
+  .pill .n{font-size:12px;color:var(--muted)}
+  .pill.on{background:var(--ink);border-color:var(--ink);color:var(--card)}
+  .pill.on .n{color:var(--accent)}
+  .pill.custom{border-style:dashed;font-family:inherit}
+  .pill.custom.on{border-style:solid;background:var(--accent);border-color:var(--accent);color:#232F3E}
+  .pill.custom.on .n{color:#232F3E}
+  .summary{margin-top:12px;display:flex;gap:24px;align-items:baseline;flex-wrap:wrap}
+  .big{font-size:22px;font-weight:700}
+  .big b{color:var(--accent)}
+  .meta{font-size:14px;color:var(--ink2)}
+  .meta em{font-style:normal;color:var(--muted)}
+  .reset{font:inherit;font-size:13px;border:1.5px solid var(--ink2);background:var(--card);color:var(--ink);border-radius:8px;padding:3px 10px;cursor:pointer;margin-left:6px}
+  .cmd{margin-top:12px;display:flex;gap:10px;flex-wrap:wrap}
+  .cmd code{flex:1 1 520px;background:var(--code);color:var(--code-ink);border-radius:9px;padding:10px 14px;font:13.5px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre-wrap;word-break:break-word}
+  .cmd code .k{color:var(--accent)}
+  .cmd code .d{color:#9FB3C8;font-style:italic}
+  .cmd input{flex:0 1 280px;font:inherit;font-size:14px;border:1.5px solid var(--line);background:var(--card);color:var(--ink);border-radius:9px;padding:8px 12px}
+  .copy{font:inherit;font-size:14px;font-weight:600;border:0;background:var(--accent);color:#232F3E;border-radius:9px;padding:0 18px;cursor:pointer;min-width:92px}
+  .copy.done{background:#1D8102;color:#fff}
+  main{padding:20px 32px 32px}
+  .hint{font-size:13px;color:var(--muted);margin:0 0 14px}
+  .board{display:grid;grid-template-columns:.8fr 1fr 1fr 1fr 1fr;gap:14px;align-items:start}
+  .phase{background:var(--card);border-radius:12px;box-shadow:0 1px 2px rgba(0,0,0,.06),0 4px 14px rgba(0,0,0,.05);overflow:hidden}
+  .phase-head{padding:12px 14px;color:#fff;display:flex;justify-content:space-between;align-items:center;cursor:pointer;user-select:none}
+  .phase-head h2{margin:0;font-size:17px}
+  .phase-head .cnt{background:rgba(255,255,255,.22);border-radius:999px;padding:2px 9px;font-size:12px}
+  .phase.empty .phase-head{filter:grayscale(.9);opacity:.55}
+  .stages{list-style:none;margin:0;padding:10px;display:flex;flex-direction:column;gap:7px}
+  .stage{border:1.5px solid var(--line);border-left:5px solid var(--c);border-radius:8px;padding:8px 10px;background:var(--card);cursor:pointer;user-select:none;transition:opacity .15s,filter .15s}
+  .stage.cond{border-style:dashed;border-left-style:solid}
+  .stage.locked{cursor:default}
+  .stage.off{opacity:.3;filter:grayscale(1)}
+  .stage.off:hover{opacity:.6}
+  .row{display:flex;gap:8px;align-items:center}
+  .id{font-size:12px;color:var(--c);font-weight:700;min-width:24px}
+  .name{font-weight:600;font-size:14px;flex:1}
+  .unit{font-size:10.5px;border-radius:5px;padding:1px 6px;background:#FFF1DE;color:#8A4B00;white-space:nowrap}
+  .chk{flex:none;width:18px;height:18px;border-radius:5px;border:1.5px solid var(--line);display:grid;place-items:center;font-size:12px;color:#fff}
+  .stage:not(.off) .chk{background:var(--c);border-color:var(--c)}
+  .stage:not(.off) .chk::after{content:"\\2713"}
+  .stage.locked .chk{opacity:.5}
+  .legend{display:flex;gap:20px;flex-wrap:wrap;margin-top:18px;font-size:13px;color:var(--ink2)}
+  .legend span{display:inline-flex;align-items:center;gap:7px}
+  .sw{width:22px;height:14px;border-radius:4px;border:1.5px solid var(--ink2);display:inline-block}
+  .sw.d{border-style:dashed}
+  @media (max-width:1100px){.board{grid-template-columns:1fr 1fr}}
+  @media (max-width:640px){.board{grid-template-columns:1fr}.top,main{padding-left:14px;padding-right:14px}}
+</style>
+</head>
+<body>
+<section class="top">
+  <h1>AI-DLC scope explorer <a href="../05-scopes-and-depth/">Scopes, Depth, and Test Strategy</a></h1>
+  <div class="pills" id="pills"></div>
+  <div class="summary" id="summary"></div>
+  <div class="cmd">
+    <code id="cmd"></code>
+    <input id="what" type="text" placeholder="What to build (optional)" aria-label="What to build">
+    <button class="copy" id="copy" type="button">Copy</button>
+  </div>
+</section>
+<main>
+  <p class="hint">Pick a scope, tick or untick stages, and copy the <code>/aidlc</code> command that runs that plan. Click a phase header to toggle the whole phase. The page address keeps your selection.</p>
+  <div class="board" id="board"></div>
+  <div class="legend">
+    <span><i class="sw"></i>ALWAYS stage</span>
+    <span><i class="sw d"></i>CONDITIONAL stage (may skip at runtime when its condition does not hold)</span>
+    <span><i class="unit">per Unit</i>Repeated for each Unit of Work</span>
+  </div>
+</main>
+<script>
+const DATA = __DATA__;
+const STAGES = DATA.stages, SCOPES = DATA.scopes;
+const color = Object.fromEntries(DATA.phases.map(p=>[p.slug,p.color]));
+const isInit = s => s.phase === "initialization";
+const scopeSet = name => new Set(SCOPES.find(s=>s.name===name).stages);
+const same = (a,b) => a.size===b.size && [...a].every(x=>b.has(x));
+const esc = s => s.replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+let base = SCOPES[0].name;  // scope the selection started from
+let sel = scopeSet(base);    // slugs of the selected stages
+
+const board = document.getElementById("board");
+const el = {};
+for (const p of DATA.phases) {
+  const stages = STAGES.filter(s=>s.phase===p.slug);
+  if (!stages.length) continue;
+  const col = document.createElement("section");
+  col.className = "phase";
+  col.innerHTML = '<div class="phase-head" style="background:'+p.color+'"><h2>'+esc(p.label)+'</h2><span class="cnt"></span></div><ol class="stages"></ol>';
+  col.querySelector(".phase-head").onclick = () => togglePhase(stages);
+  const ol = col.querySelector("ol");
+  for (const s of stages) {
+    const li = document.createElement("li");
+    li.className = "stage"+(s.conditional?" cond":"")+(isInit(s)?" locked":"");
+    li.style.setProperty("--c", color[s.phase]);
+    li.title = s.slug + (s.condition ? " \\u2014 " + s.condition : "");
+    li.innerHTML = '<div class="row"><span class="id">'+esc(s.number)+'</span><span class="name">'+esc(s.name)+'</span>'+(s.perUnit?'<span class="unit">per Unit</span>':'')+'<span class="chk"></span></div>';
+    li.onclick = () => toggle(s);
+    ol.appendChild(li);
+    el[s.slug] = li;
+  }
+  board.appendChild(col);
+  el["phase:"+p.slug] = col;
+}
+
+const pills = document.getElementById("pills");
+for (const s of SCOPES) {
+  const b = document.createElement("button");
+  b.className = "pill"; b.type = "button"; b.dataset.scope = s.name;
+  b.innerHTML = esc(s.name)+'<span class="n">'+s.stages.length+'</span>';
+  b.onclick = () => select(s.name);
+  pills.appendChild(b);
+}
+const custom = document.createElement("button");
+custom.className = "pill custom"; custom.type = "button"; custom.hidden = true;
+custom.innerHTML = 'My plan<span class="n"></span>';
+pills.appendChild(custom);
+
+function select(name){ base = name; sel = scopeSet(name); render(); }
+function toggle(s){
+  if (isInit(s)) return;
+  sel.has(s.slug) ? sel.delete(s.slug) : sel.add(s.slug);
+  render();
+}
+function togglePhase(stages){
+  const slugs = stages.filter(s=>!isInit(s)).map(s=>s.slug);
+  if (!slugs.length) return;
+  const allOn = slugs.every(x=>sel.has(x));
+  slugs.forEach(x=> allOn ? sel.delete(x) : sel.add(x));
+  render();
+}
+function diff(name){
+  const ref = scopeSet(name);
+  return {
+    skip: STAGES.filter(s=>ref.has(s.slug) && !sel.has(s.slug)).map(s=>s.slug),
+    add: STAGES.filter(s=>!ref.has(s.slug) && sel.has(s.slug)).map(s=>s.slug),
+  };
+}
+
+const what = document.getElementById("what");
+let cmdText = "";
+function renderCommand(){
+  const d = diff(base);
+  const parts = [["/aidlc",""],["--scope","k"],[base,""]];
+  if (d.skip.length) parts.push(["--skip","k"],[d.skip.join(","),""]);
+  if (d.add.length) parts.push(["--add","k"],[d.add.join(","),""]);
+  const desc = what.value.trim();
+  const quoted = '"' + (desc ? desc.replace(/["\\\\]/g, "\\\\$&") : "<what to build>") + '"';
+  cmdText = parts.map(p=>p[0]).join(" ") + " " + quoted;
+  document.getElementById("cmd").innerHTML =
+    parts.map(([t,c])=> c ? '<span class="'+c+'">'+esc(t)+'</span>' : esc(t)).join(" ") + " " +
+    (desc ? esc(quoted) : '<span class="d">"&lt;what to build&gt;"</span>');
+}
+what.oninput = renderCommand;
+
+const copyBtn = document.getElementById("copy");
+copyBtn.onclick = async () => {
+  try { await navigator.clipboard.writeText(cmdText); }
+  catch (e) {
+    const t = document.createElement("textarea"); t.value = cmdText;
+    document.body.appendChild(t); t.select(); document.execCommand("copy"); t.remove();
+  }
+  copyBtn.textContent = "Copied"; copyBtn.classList.add("done");
+  setTimeout(() => { copyBtn.textContent = "Copy"; copyBtn.classList.remove("done"); }, 1500);
+};
+
+function render(){
+  const match = same(scopeSet(base), sel) ? base : (SCOPES.find(s=>same(new Set(s.stages), sel)) || {}).name;
+  if (match) base = match;
+  pills.querySelectorAll(".pill:not(.custom)").forEach(b=>b.classList.toggle("on", b.dataset.scope===match));
+  custom.hidden = !!match;
+  custom.classList.toggle("on", !match);
+  custom.querySelector(".n").textContent = sel.size;
+
+  for (const s of STAGES) el[s.slug].classList.toggle("off", !sel.has(s.slug));
+  for (const p of DATA.phases) {
+    const col = el["phase:"+p.slug]; if (!col) continue;
+    const stages = STAGES.filter(s=>s.phase===p.slug);
+    const n = stages.filter(s=>sel.has(s.slug)).length;
+    col.querySelector(".cnt").textContent = n + " / " + stages.length;
+    col.classList.toggle("empty", n===0);
+  }
+
+  const s = SCOPES.find(x=>x.name===base);
+  let meta;
+  if (match) {
+    meta = esc(s.description) + ' <em>\\u00b7 depth ' + esc(s.depth) + ' \\u00b7 tests ' + esc(s.testStrategy) + '</em>';
+  } else {
+    const d = diff(base);
+    meta = 'Tailored from <b>' + esc(base) + '</b> <em>\\u00b7 +' + d.add.length + ' / \\u2212' + d.skip.length + '</em><button class="reset" id="reset" type="button">Back to ' + esc(base) + '</button>';
+  }
+  document.getElementById("summary").innerHTML =
+    '<div class="big"><b>' + sel.size + '</b> / ' + STAGES.length + ' stages</div><div class="meta">' + meta + '</div>';
+  const r = document.getElementById("reset"); if (r) r.onclick = () => select(base);
+
+  renderCommand();
+  const d = diff(base);
+  const q = new URLSearchParams({ scope: base });
+  if (d.skip.length) q.set("skip", d.skip.join(","));
+  if (d.add.length) q.set("add", d.add.join(","));
+  history.replaceState(null, "", location.pathname + location.search + "#" + q.toString().replace(/%2C/g, ","));
+}
+
+// Restore #scope=poc&skip=...&add=... from the address.
+const h = new URLSearchParams(location.hash.slice(1));
+const known = new Set(STAGES.filter(s=>!isInit(s)).map(s=>s.slug));
+const list = k => (h.get(k) || "").split(",").filter(x=>known.has(x));
+if (SCOPES.some(s=>s.name===h.get("scope"))) {
+  base = h.get("scope"); sel = scopeSet(base);
+  list("skip").forEach(x=>sel.delete(x));
+  list("add").forEach(x=>sel.add(x));
+}
+render();
+</script>
+</body>
+</html>
+`;
+
+if (import.meta.main) {
+  const check = process.argv.includes("--check");
+  const body = renderHtml(await loadExplorerData());
+  const rel = HTML_PATH.slice(REPO_ROOT.length + 1);
+  const current = existsSync(HTML_PATH) ? readFileSync(HTML_PATH, "utf-8") : null;
+  if (current !== body) {
+    if (check) {
+      console.error(`stale: ${rel} (run \`bun scripts/docs-scope-explorer.ts\`)`);
+      process.exit(1);
+    }
+    mkdirSync(dirname(HTML_PATH), { recursive: true });
+    writeFileSync(HTML_PATH, body);
+    console.log(`wrote ${rel}`);
+  }
+}

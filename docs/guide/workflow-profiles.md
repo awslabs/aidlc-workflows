@@ -42,6 +42,8 @@ self-skip when its condition does not apply, such as Reverse Engineering in a
 greenfield project. For the exact stage-by-profile matrix, see
 [Scopes, Depth, and Test Strategy](05-scopes-and-depth.md#stage-by-scope-matrix).
 
+<a class="md-button md-button--primary" href="https://awslabs.github.io/aidlc-workflows/guide/assets/scope-explorer.html">Open the scope explorer</a>
+
 ## `classic`
 
 **Choose Classic when:** you want v1-style ceremony: Inception with one human
