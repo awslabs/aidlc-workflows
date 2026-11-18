@@ -54,6 +54,8 @@ export interface ExplorerScope {
   name: string;
   depth: string;
   testStrategy: string;
+  /** The scope's ceiling on stage reviews; "" when each stage keeps its own declared class. */
+  reviewCap: string;
   description: string;
   stages: string[];
 }
@@ -77,6 +79,7 @@ interface GraphStage {
 interface ScopeMeta {
   depth: string;
   testStrategy?: string;
+  reviewCap?: string;
   description?: string;
 }
 
@@ -116,6 +119,7 @@ export async function loadExplorerData(): Promise<ExplorerData> {
       name,
       depth: m.depth,
       testStrategy: m.testStrategy ?? m.depth,
+      reviewCap: m.reviewCap ?? "",
       description: (m.description ?? "").trim(),
       stages: stages.filter((s) => grid[name].stages[s.slug] === "EXECUTE").map((s) => s.slug),
     };
@@ -244,7 +248,8 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
   <div class="adv" id="adv" hidden>
     <label>Depth <select id="depth"></select></label>
     <label>Test strategy <select id="tests"></select></label>
-    <span class="sub">Depth: how much detail each stage writes. Test strategy: how many tests Construction writes.</span>
+    <label>Stage reviews <select id="review"></select></label>
+    <span class="sub">Depth: how much detail each stage writes. Test strategy: how many tests Construction writes. Stage reviews: how hard a reviewer agent checks each stage's output.</span>
   </div>
   <div class="cmd">
     <input id="what" type="text" aria-label="What to build" placeholder="What to build, e.g. a Hello World app in JavaScript">
@@ -326,12 +331,24 @@ function diff(name){
 const what = document.getElementById("what");
 const LEVELS = ["minimal", "standard", "comprehensive"];
 const depthSel = document.getElementById("depth"), testsSel = document.getElementById("tests");
+const reviewSel = document.getElementById("review");
+const REVIEWS = [
+  ["adversarial", "adversarial: the reviewer challenges, the lead fixes"],
+  ["advisory", "advisory: one review pass, findings at the gate"],
+  ["none", "none: no stage reviews"],
+];
 const advBtn = document.getElementById("advbtn"), adv = document.getElementById("adv");
 function fillLevels(select, scopeDefault){
   const keep = select.value;
   select.innerHTML = '<option value="">Scope default (' + esc(scopeDefault) + ')</option>' +
     LEVELS.map(l => '<option value="' + l + '">' + l + '</option>').join("");
   select.value = keep;
+}
+function fillReviews(cap){
+  const keep = reviewSel.value;
+  reviewSel.innerHTML = '<option value="">Scope default (' + (cap ? esc(cap) : "each stage\\u2019s own") + ')</option>' +
+    REVIEWS.map(([v, label]) => '<option value="' + v + '">' + esc(label) + '</option>').join("");
+  reviewSel.value = keep;
 }
 // A level is only written into the command when it differs from the scope's default.
 function override(select, scopeDefault){
@@ -342,18 +359,20 @@ advBtn.onclick = () => {
   adv.hidden = !open;
   advBtn.setAttribute("aria-expanded", String(open));
 };
-depthSel.onchange = testsSel.onchange = () => render();
+depthSel.onchange = testsSel.onchange = reviewSel.onchange = () => render();
 let cmdText = "";
 function renderCommand(){
   const d = diff(base);
   const s = SCOPES.find(x=>x.name===base);
   const depth = override(depthSel, s.depth), tests = override(testsSel, s.testStrategy);
+  const review = override(reviewSel, s.reviewCap);
   const parts = [["/aidlc",""],["--scope","k"],[base,""]];
   if (depth) parts.push(["--depth","k"],[depth,""]);
   if (tests) parts.push(["--test-strategy","k"],[tests,""]);
+  if (review) parts.push(["--review","k"],[review,""]);
   if (d.skip.length) parts.push(["--skip","k"],[d.skip.join(","),""]);
   if (d.add.length) parts.push(["--add","k"],[d.add.join(","),""]);
-  const set = (depth ? 1 : 0) + (tests ? 1 : 0);
+  const set = (depth ? 1 : 0) + (tests ? 1 : 0) + (review ? 1 : 0);
   advBtn.textContent = set ? "Advanced options \\u00b7 " + set + " set" : "Advanced options";
   advBtn.classList.toggle("set", set > 0);
   const desc = what.value.trim();
@@ -408,18 +427,21 @@ function render(){
   const s0 = SCOPES.find(x=>x.name===base);
   fillLevels(depthSel, s0.depth);
   fillLevels(testsSel, s0.testStrategy);
+  fillReviews(s0.reviewCap);
   renderCommand();
   const d = diff(base);
   const q = new URLSearchParams({ scope: base });
   const depth = override(depthSel, s0.depth), tests = override(testsSel, s0.testStrategy);
+  const review = override(reviewSel, s0.reviewCap);
   if (depth) q.set("depth", depth);
   if (tests) q.set("tests", tests);
+  if (review) q.set("review", review);
   if (d.skip.length) q.set("skip", d.skip.join(","));
   if (d.add.length) q.set("add", d.add.join(","));
   history.replaceState(null, "", location.pathname + location.search + "#" + q.toString().replace(/%2C/g, ","));
 }
 
-// Restore #scope=poc&depth=...&tests=...&skip=...&add=... from the address.
+// Restore #scope=poc&depth=...&tests=...&review=...&skip=...&add=... from the address.
 const h = new URLSearchParams(location.hash.slice(1));
 const known = new Set(STAGES.filter(s=>!isInit(s)).map(s=>s.slug));
 const list = k => (h.get(k) || "").split(",").filter(x=>known.has(x));
@@ -431,9 +453,11 @@ if (SCOPES.some(s=>s.name===h.get("scope"))) {
 const s1 = SCOPES.find(x=>x.name===base);
 fillLevels(depthSel, s1.depth);
 fillLevels(testsSel, s1.testStrategy);
+fillReviews(s1.reviewCap);
 if (LEVELS.includes(h.get("depth"))) depthSel.value = h.get("depth");
 if (LEVELS.includes(h.get("tests"))) testsSel.value = h.get("tests");
-if (depthSel.value || testsSel.value) advBtn.click();
+if (REVIEWS.some(([v]) => v === h.get("review"))) reviewSel.value = h.get("review");
+if (depthSel.value || testsSel.value || reviewSel.value) advBtn.click();
 render();
 </script>
 </body>

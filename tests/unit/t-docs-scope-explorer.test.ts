@@ -15,6 +15,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { AIDLC_SRC, REPO_ROOT } from "../harness/fixtures.ts";
+import { loadScopeMetadata } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { HTML_PATH, loadExplorerData, renderHtml } from "../../scripts/docs-scope-explorer.ts";
 
 const grid = JSON.parse(readFileSync(join(AIDLC_SRC, "tools", "data", "scope-grid.json"), "utf-8")) as Record<
@@ -26,11 +27,13 @@ const REGEN = "stale: run `bun scripts/docs-scope-explorer.ts` and commit the re
 const EXPLORER_URL = "https://awslabs.github.io/aidlc-workflows/guide/assets/scope-explorer.html";
 
 describe("t-docs-scope-explorer generated page", () => {
-  test("1: data — every compiled scope is present with exactly its EXECUTE stages", () => {
+  test("1: data — every compiled scope is present with exactly its EXECUTE stages and its review cap", () => {
     expect(data.scopes.map((s) => s.name).sort()).toEqual(Object.keys(grid).sort());
+    const meta = loadScopeMetadata() as Record<string, { reviewCap?: string }>;
     for (const scope of data.scopes) {
       const expected = data.stages.filter((s) => grid[scope.name].stages[s.slug] === "EXECUTE").map((s) => s.slug);
       expect(scope.stages, `stages of ${scope.name}`).toEqual(expected);
+      expect(scope.reviewCap, `review cap of ${scope.name}`).toBe(meta[scope.name].reviewCap ?? "");
     }
   });
 
