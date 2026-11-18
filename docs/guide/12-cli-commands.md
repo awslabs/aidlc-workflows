@@ -755,12 +755,8 @@ with a plain push, never forced, so the teams can take Units from the plan or
 see a Unit that landed. Once it has pushed, it names what it committed: how
 many files and, by name as changed, new or deleted, up to ten outside
 `aidlc/`, with how many more. After it, this checkout shows the board instead of
-building Units. A push the remote refuses keeps the commit and says why. If the
-branch moved, pull it, then share again. If the remote's own rules refuse a
-direct push (a protected branch, a repository rule, a hook), pulling changes
-nothing: the message names a branch of your own to push the commit to, to be
-merged into the integration branch through the repository's review (a merge
-commit, a squash or a rebase), and then you pull. `/aidlc` offers this step itself when it is due:
+building Units. A push the remote refuses keeps the commit and says why; pull
+the branch, then share again. `/aidlc` offers this step itself when it is due:
 before a Unit would start on the lead's checkout, and after a land the remote
 does not have yet. A landing the remote's integration branch holds as a squash
 or a rebase (a pull request merged that way) counts as there: its landing
