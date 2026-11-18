@@ -15412,7 +15412,7 @@ function unitReceiptOnlyStep(
   stateContent: string | null,
   scope: string,
   // The person's change for a Unit paused on the step asks whether only its
-  // completion is left, as if it carried on.
+  // records are left (its review or its completion), as if it carried on.
   pausedCounts = false,
 ): UnitRecordStep | null {
   if (stateContent === null) return null;
@@ -18310,10 +18310,14 @@ function unitStepOwedOnlyReceipt(
   if (!paused && (step.kind !== "work" || step.stage.slug !== stageSlug || step.unit !== unit)) return false;
   const target = walk.block.find((stage) => stage.slug === stageSlug);
   if (target === undefined) return false;
-  return unitReceiptOnlyStep(
+  const owed = unitReceiptOnlyStep(
     projectDir, target, unit, walk.context.recordPrefix, walk.context.codekbCtx,
     walk.context.kinds?.get(unit) ?? null, unitLedgerFor(projectDir, stageSlug), stateContent, scope, paused,
-  )?.receipt === true;
+  );
+  // Paused with its files all written, a Unit owes only its records (its review
+  // or its completion): picking it up would leave no work to make the person's
+  // change in, so that counts too.
+  return paused ? owed !== null : owed?.receipt === true;
 }
 
 // The walk's step is that Unit's own pause on that stage.
@@ -18420,8 +18424,9 @@ function unitMajorReopen(
     }
     // The Unit in flight on the target itself: that is where the walk already is.
     // Asked for by name with no change, it carries on there; only the person's
-    // change reopens it, once nothing but its completion is left. Paused there
-    // before that, their change picks it up, and is made on the step as live.
+    // change reopens it, once nothing but its completion is left (paused there,
+    // nothing but its records). Paused with work still to do, their change picks
+    // it up, and is made on the step as live.
     const onItsStep = named === inFlight && liveStage === targetSlug;
     const reopens = onItsStep && flags.change === true &&
       unitStepOwedOnlyReceipt(projectDir, scope, stateContent, walk, targetSlug, named);

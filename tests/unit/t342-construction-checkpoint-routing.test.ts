@@ -4017,7 +4017,7 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
 
-  function betaCodeWrittenAndReviewed(): string {
+  function betaCodeWrittenAndReviewed(review: "ready" | "asked" | "none" = "ready"): string {
     const p = fixture({ scope: "classic" });
     writeFileSync(seededStateFile(p), readFileSync(seededStateFile(p), "utf-8")
       .replace("- **Review Override**: none", "- **Review Override**: adversarial"));
@@ -4047,8 +4047,13 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
       stage: "code-generation", unit: "beta", version: 1,
       writes: [1, 2, 3, 4].map((n) => ({ path: `src/part${n}.ts` })),
     }));
-    const reviewed = reviewThroughLog(p, codeReview("beta", 1));
-    expect(reviewed.status, reviewed.out).toBe(0);
+    if (review === "asked") {
+      const asked = tool(p, "log", codeReview("beta", 1));
+      expect(asked.status, asked.out).toBe(0);
+    } else if (review === "ready") {
+      const reviewed = reviewThroughLog(p, codeReview("beta", 1));
+      expect(reviewed.status, reviewed.out).toBe(0);
+    }
     return p;
   }
 
@@ -4134,13 +4139,13 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     });
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  // beta paused at its Code Generation, before its review (two of its steps
-  // built) or after it (built, its review READY, only its completion left);
-  // `aside` pauses it set aside for alpha, which is done, so the walk's step is
-  // still beta's pause.
-  function betaPaused(reviewed: boolean, aside = false): string {
-    const p = reviewed ? betaCodeWrittenAndReviewed() : betaBuilding();
-    if (!reviewed) startedBuild(p);
+  // beta paused at its Code Generation: with a file still to write (two of its
+  // steps built), or with every file written and its review READY, asked and
+  // waiting, or never asked; `aside` pauses it set aside for alpha, which is
+  // done, so the walk's step is still beta's pause.
+  function betaPaused(written: "ready" | "asked" | "none" | false, aside = false): string {
+    const p = written === false ? betaBuilding() : betaCodeWrittenAndReviewed(written);
+    if (written === false) startedBuild(p);
     const paused = tool(p, "state", [
       "unit", "pause", "--stage", "code-generation", "--unit", "beta", "--reason", "waiting for an answer",
       "--next-action", "Revise the plan.", ...(aside ? ["--set-aside-for", "alpha"] : []),
@@ -4175,29 +4180,31 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
   const rejections = (p: string) => readAuditShardEvents(p).filter((row) => row.event === "GATE_REJECTED");
 
   for (const form of ["change", "rejection"] as const) {
-    test(`${form}: the Unit paused after its review, only its completion left, is reopened for the change`, () => {
-      const p = betaPaused(true);
-      const step = changeFor(p, form);
-      expect(step.kind, JSON.stringify(step)).toBe("print");
-      const message = step.message ?? "";
-      expect(message).not.toContain("has not reached");
-      expect(message).toContain('"Making your change in Code Generation for unit beta. alpha keeps its finished work.');
-      const reopen = /aidlc-jump\.ts (reopen --target code-generation --stages code-generation --units beta --scope classic --via change)`/
-        .exec(message)?.[1];
-      expect(reopen, message).toBeDefined();
-      guardsLetThrough(p, `aidlc engine jump ${reopen}`);
-      runPrintedCommands(p, message);
-      expect(rejections(p)).toHaveLength(1);
-      expect(auditBlockField(rejections(p)[0].block, "Unit")).toBe("beta");
-      expect(auditBlockField(rejections(p)[0].block, "Reopen")).toBe("change");
-      expect(approved(p, "alpha")).toBe(true);
-      expect(next(p)).toMatchObject({
-        kind: "run-stage", stage: "code-generation", unit: "beta", plan_approval: { status: "revise" },
-      });
-    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+    for (const review of ["ready", "asked", "none"] as const) {
+      test(`${form}: the Unit paused with every file written and its review ${review === "ready" ? "READY" : review === "asked" ? "asked, no verdict" : "never asked"} is reopened for the change`, () => {
+        const p = betaPaused(review);
+        const step = changeFor(p, form);
+        expect(step.kind, JSON.stringify(step)).toBe("print");
+        const message = step.message ?? "";
+        expect(message).not.toContain("has not reached");
+        expect(message).toContain('"Making your change in Code Generation for unit beta. alpha keeps its finished work.');
+        const reopen = /aidlc-jump\.ts (reopen --target code-generation --stages code-generation --units beta --scope classic --via change)`/
+          .exec(message)?.[1];
+        expect(reopen, message).toBeDefined();
+        guardsLetThrough(p, `aidlc engine jump ${reopen}`);
+        runPrintedCommands(p, message);
+        expect(rejections(p)).toHaveLength(1);
+        expect(auditBlockField(rejections(p)[0].block, "Unit")).toBe("beta");
+        expect(auditBlockField(rejections(p)[0].block, "Reopen")).toBe("change");
+        expect(approved(p, "alpha")).toBe(true);
+        expect(next(p)).toMatchObject({
+          kind: "run-stage", stage: "code-generation", unit: "beta", plan_approval: { status: "revise" },
+        });
+      }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+    }
 
     for (const aside of [false, true]) {
-      test(`${form}: the Unit paused before its review${aside ? ", set aside for a Unit now done," : ""} is picked up for the change, with no rejection recorded`, () => {
+      test(`${form}: the Unit paused with a file still to write${aside ? ", set aside for a Unit now done," : ""} is picked up for the change, with no rejection recorded`, () => {
         const p = betaPaused(false, aside);
         const step = changeFor(p, form);
         expect(step.kind, JSON.stringify(step)).toBe("print");
