@@ -3134,7 +3134,7 @@ function sourceConflictsNextStep(projectDir: string, unit: string, owner: string
   const remote = /^refs\/remotes\/([^/]+)\/(.+)$/.exec(integrationRef);
   const push = remote && !localGit(projectDir, ["merge-base", "--is-ancestor", "HEAD", integrationRef]).ok
     ? `Main here has commits ${ref} does not have yet, and the merge was tried with main here: push main ` +
-      `first (aidlc unit share, or git push ${remote[1]} HEAD:${remote[2]}). Then, in`
+      `first (${aidlcInvocation()} unit share, or git push ${remote[1]} HEAD:${remote[2]}). Then, in`
     : "In";
   return `${push} ${claimedCheckout(owner, unit)}, merge ${ref}, resolve these files and publish ${unit} again; ` +
     "then pin it again here.";

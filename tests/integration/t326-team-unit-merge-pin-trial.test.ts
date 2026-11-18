@@ -63,7 +63,7 @@ describe("t326 pin tries a team Unit's merge with main before the merge question
     expect(pin.status, pin.out).not.toBe(0);
     expect(pin.out).toContain('Unit \\"alpha\\" source conflicts: src/shared.ts. Nothing was pinned.');
     expect(pin.out).toContain("Main here has commits origin/main does not have yet");
-    expect(pin.out).toContain("push main first (aidlc unit share, or git push origin HEAD:main). Then, in the checkout");
+    expect(pin.out).toContain("push main first (bun .claude/tools/aidlc.ts unit share, or git push origin HEAD:main). Then, in the checkout");
     expect(pin.out).toContain("merge origin/main, resolve these files and publish alpha again");
     expect(readUnitMergeTransaction(seed, "alpha")).toBeNull();
 
