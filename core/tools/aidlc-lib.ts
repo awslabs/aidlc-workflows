@@ -4790,7 +4790,11 @@ function sourceKeysChangedOutsideAidlc(
 // The paths outside AI-DLC's own files that moved since a kept listing (a
 // review's `Source Listing`, kept at the row `from`), as `<repo>\0<path>` keys;
 // a repo that joined the work since counts from what it held when it joined
-// (withRepoBaselineAdditions). Null when no listing was kept or it does not
+// (withRepoBaselineAdditions). A path Git ignores and HEAD does not track (a
+// tool's cache) is left out, as no Unit can claim it; a path in a checkout
+// nested in the project, a link's target or a recorded checkout is that
+// checkout's own source (sourceClaimCheckout judges it there), so the project's
+// .gitignore never leaves it out. Null when no listing was kept or it does not
 // read back exactly: the caller then compares fingerprints.
 export function sourceKeysChangedOutsideAidlcSince(
   projectDir: string,
@@ -4804,7 +4808,18 @@ export function sourceKeysChangedOutsideAidlcSince(
   if (recorded === null) return null;
   const joined = withRepoBaselineAdditions(projectDir, stageSlug, { state: "ready", listing: recorded }, rows, from);
   const start = joined.state === "ready" ? joined.listing : recorded;
-  return sourceKeysChangedOutsideAidlc(projectDir, recordedSourceListingForCompare(projectDir, start, current), current.listing);
+  const changed = sourceKeysChangedOutsideAidlc(projectDir, recordedSourceListingForCompare(projectDir, start, current), current.listing);
+  if (changed.size === 0) return changed;
+  const checkouts = readRecordedSourceCheckouts(projectDir);
+  const rootsOwn = [...changed].filter((key) => {
+    const parsed = splitSourcePathKey(key);
+    if (parsed === null) return false;
+    if (parsed.repo !== "") return true;
+    const claim = sourceClaimCheckout(projectDir, parsed.path, true, checkouts);
+    return claim.reason === undefined && claim.dir === projectDir;
+  });
+  for (const key of unclaimableIgnoredSourceKeys(projectDir, rootsOwn, false)) changed.delete(key);
+  return changed;
 }
 
 // A kept listing as the walk would list it now, to compare with `current`.
@@ -26001,6 +26016,7 @@ function ignoredPathClaimable(
 export function unclaimableIgnoredSourceKeys(
   projectDir: string,
   keys: readonly string[],
+  includeRecordedCheckouts = true,
 ): Set<string> {
   const unclaimable = new Set<string>();
   if (keys.length === 0) return unclaimable;
@@ -26011,7 +26027,7 @@ export function unclaimableIgnoredSourceKeys(
     return unclaimable;
   }
   const carriesWorkspaceShell = recordedRepos.length === 0;
-  const checkouts = readRecordedSourceCheckouts(projectDir);
+  const checkouts = includeRecordedCheckouts ? readRecordedSourceCheckouts(projectDir) : [];
   const sourceClaimValidation: GitSourceClaimValidationCache = new Map();
   const candidates: { key: string; sourceRepoDir: string; path: string }[] = [];
   for (const key of keys) {
