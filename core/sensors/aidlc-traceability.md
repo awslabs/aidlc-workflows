@@ -68,7 +68,10 @@ parent alone not covering them; otherwise by its own row or, when User Stories
 ran, through the criteria of the stories User Stories traced it to. One that
 nothing builds is settled when the latest stage that traced it (User Stories,
 NFR Requirements, then Code Generation) marked it `N/A` with its reason in
-every table there that lists it; an `N/A` with no reason is not settled.
+every table there that lists it; an `N/A` with no reason is not settled. A
+story Units Generation kept out of every Unit, `Deferred` with its reason,
+settles its criteria the same way (a requirement, in work without stories),
+unless a later stage's table lists them.
 
 ## Expected JSON schema
 

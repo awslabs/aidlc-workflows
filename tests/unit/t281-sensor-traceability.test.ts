@@ -389,11 +389,11 @@ describe("t281 upstream and target verification", () => {
     write(proj, "inception/units-generation/unit-of-work-story-map.md", [
       "# Story Map",
       "",
-      "| Story | Unit ID | Directory | Note |",
-      "|---|---|---|---|",
-      "| US1.1 | U1 | u1-auth | |",
-      "| US1.2 | U2 | u2-profile | |",
-      "| US1.3 | none | none | handled in the Operation phase |",
+      "| Story | Unit ID | Directory |",
+      "|---|---|---|",
+      "| US1.1 | U1 | u1-auth |",
+      "| US1.2 | U2 | u2-profile |",
+      "| US1.3 | none | none |",
     ].join("\n"));
     return trace(proj, "inception/units-generation/traceability.json", {
       stage: "units-generation",
@@ -1791,6 +1791,167 @@ describe("t281 Build and Test: every requirement and criterion is built", () => 
     expect(row(out, "FR2.1")).toEqual({ id: "FR2.1", covered: false, through: ["AC1.2.1"], not_built: ["AC1.2.1"] });
     expect(row(out, "AC1.2.1")).toEqual({ id: "AC1.2.1", covered: false });
     expect(row(out, "FR1.1")?.covered).toBe(true);
+  });
+
+  // A story the team keeps out of every Unit at Units Generation: `none` on its
+  // story-map row and a `Deferred` row with its reason, the shape that stage
+  // settles. FR3.1 is traced to it by User Stories. `laterU2` is a row for its
+  // criterion in u2-profile's Code Generation table, when a Unit lists it after all.
+  function seedKeptOutStory(proj: string, keptOut: { status: string; target: string }, laterU2?: { status: string; target?: string }): string {
+    seedStoryPath(proj, { status: "OK", target: "src/profile/reset.ts" });
+    writeRequirements(proj, `${GROUPED}\n### FR3: Audit\n**FR3.1** Export the audit trail\n`);
+    write(proj, "inception/user-stories/stories.md", [
+      "# Stories",
+      "",
+      "## US1.1 Login",
+      "- AC1.1.1 accepts valid credentials",
+      "- AC1.1.2 rejects invalid credentials",
+      "",
+      "## US1.2 Recovery",
+      "- AC1.2.1 sends a reset link",
+      "",
+      "## US1.3 Audit export",
+      "- AC1.3.1 exports the audit trail",
+    ].join("\n"));
+    trace(proj, "inception/user-stories/traceability.json", {
+      stage: "user-stories",
+      upstream_ids: ["FR1.1", "FR1.2", "FR2.1", "FR3.1", "NFR1"],
+      coverage: [
+        { id: "FR1.1", status: "OK", target: "US1.1" },
+        { id: "FR1.2", status: "OK", target: "US1.1" },
+        { id: "FR2.1", status: "OK", target: "US1.2" },
+        { id: "FR3.1", status: "OK", target: "US1.3" },
+        { id: "NFR1", status: "Deferred", target: "nfr-requirements" },
+      ],
+    });
+    write(proj, "inception/units-generation/unit-of-work-story-map.md", [
+      "# Story Map",
+      "",
+      "| Story | Unit ID | Directory |",
+      "|---|---|---|",
+      "| US1.1 | U1 | u1-auth |",
+      "| US1.2 | U2 | u2-profile |",
+      "| US1.3 | none | none |",
+    ].join("\n"));
+    if (laterU2) {
+      trace(proj, "construction/u2-profile/code-generation/traceability.json", {
+        stage: "code-generation",
+        unit: "u2-profile",
+        upstream_ids: ["AC1.2.1", "AC1.3.1", "NFR1.2"],
+        coverage: [
+          { id: "AC1.2.1", status: "OK", target: "src/profile/reset.ts" },
+          { id: "AC1.3.1", ...laterU2 },
+          { id: "NFR1.2", status: "OK", target: "src/profile/reset.ts" },
+        ],
+      });
+    }
+    return trace(proj, "inception/units-generation/traceability.json", {
+      stage: "units-generation",
+      upstream_ids: ["US1.1", "US1.2", "US1.3"],
+      coverage: [
+        { id: "US1.1", status: "OK", target: "U1" },
+        { id: "US1.2", status: "OK", target: "U2" },
+        { id: "US1.3", ...keptOut },
+      ],
+    });
+  }
+
+  test("with stories, a story kept out of every Unit at Units Generation is not uncovered at Build and Test", () => {
+    const proj = project();
+    const units = seedKeptOutStory(proj, { status: "Deferred", target: "handled in the Operation phase" });
+    const planned = run(proj, "units-generation", units);
+    expect(planned.result.pass, planned.result.reason).toBe(true);
+
+    const out = runFinal(proj);
+    expect(out.uncovered).toEqual([]);
+    expect(out.pass, out.reason).toBe(true);
+    expect(row(out, "AC1.3.1")).toEqual({
+      id: "AC1.3.1",
+      covered: true,
+      not_applicable: ["units-generation: handled in the Operation phase"],
+    });
+    expect(row(out, "FR3.1")).toEqual({ id: "FR3.1", covered: true, through: ["AC1.3.1"] });
+  });
+
+  test("with stories, a Unit that lists the kept-out story's criterion later still decides it", () => {
+    let proj = project();
+    seedKeptOutStory(proj, { status: "Deferred", target: "handled in the Operation phase" }, { status: "OK", target: "src/profile/reset.ts" });
+    let out = runFinal(proj);
+    expect(out.pass, out.reason).toBe(true);
+    expect(row(out, "AC1.3.1")).toEqual({ id: "AC1.3.1", covered: true, built_in: ["u2-profile: src/profile/reset.ts"] });
+
+    proj = project();
+    seedKeptOutStory(proj, { status: "Deferred", target: "handled in the Operation phase" }, { status: "GAP" });
+    out = runFinal(proj);
+    expect(out.pass).toBe(false);
+    expect(out.uncovered).toEqual(["FR3.1", "AC1.3.1"]);
+    expect(row(out, "AC1.3.1")).toEqual({ id: "AC1.3.1", covered: false });
+  });
+
+  test("with stories, a kept-out story whose Deferred row has no reason settles nothing at Build and Test", () => {
+    const proj = project();
+    seedKeptOutStory(proj, { status: "Deferred", target: "" });
+    const out = runFinal(proj);
+    expect(out.pass).toBe(false);
+    expect(out.uncovered).toEqual(["FR3.1", "AC1.3.1"]);
+    expect(row(out, "AC1.3.1")).toEqual({ id: "AC1.3.1", covered: false });
+  });
+
+  test("with stories, an N/A row at Units Generation settles nothing at Build and Test", () => {
+    const proj = project();
+    seedKeptOutStory(proj, { status: "N/A", target: "built by U2 later" });
+    const out = runFinal(proj);
+    expect(out.pass).toBe(false);
+    expect(out.uncovered).toEqual(["FR3.1", "AC1.3.1"]);
+  });
+
+  // Without stories the story map is keyed by requirement; only an FR no Unit's
+  // row names is kept out, so an NFR row's own `Deferred` there settles nothing.
+  test("without stories, a requirement kept out of every Unit is not uncovered at Build and Test", () => {
+    const proj = project();
+    writeRequirements(proj, [
+      "# Requirements",
+      "",
+      "## Functional",
+      "- FR1 Login",
+      "- FR2 Recovery",
+      "- FR3 Audit export",
+      "",
+      "## Non-functional",
+      "- NFR1 Security",
+    ].join("\n"));
+    seedUnits(proj);
+    write(proj, "inception/units-generation/unit-of-work-story-map.md", [
+      "# Story Map",
+      "",
+      "| Requirement | Unit ID | Directory |",
+      "|---|---|---|",
+      "| FR1 | U1 | u1-auth |",
+      "| FR2 | U2 | u2-profile |",
+      "| FR3 | none | none |",
+    ].join("\n"));
+    trace(proj, "inception/units-generation/traceability.json", {
+      stage: "units-generation",
+      upstream_ids: ["FR1", "FR2", "FR3", "NFR1"],
+      coverage: [
+        { id: "FR1", status: "OK", target: "U1" },
+        { id: "FR2", status: "OK", target: "U2" },
+        { id: "FR3", status: "Deferred", target: "handled in the Operation phase" },
+        { id: "NFR1", status: "Deferred", target: "nfr-requirements" },
+      ],
+    });
+    source(proj, "src/auth.ts");
+    for (const [unit, id] of [["u1-auth", "FR1"], ["u2-profile", "FR2"]]) {
+      trace(proj, `construction/${unit}/code-generation/traceability.json`, {
+        stage: "code-generation",
+        unit,
+        upstream_ids: [id],
+        coverage: [{ id, status: "OK", target: "src/auth.ts" }],
+      });
+    }
+    const out = runFinal(proj);
+    expect(row(out, "FR3")).toEqual({ id: "FR3", covered: true, not_applicable: ["units-generation: handled in the Operation phase"] });
+    expect(out.uncovered).toEqual(["NFR1"]);
   });
 
   test("without stories (security-patch shape), FR leaves are built by their own rows and NFR1 through NFR1.1", () => {
