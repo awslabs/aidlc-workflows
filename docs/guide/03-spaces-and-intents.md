@@ -585,7 +585,8 @@ of a shared workspace they are not, so a teammate would have to know which repos
 to clone and where. An **optional** repo list, `aidlc/repos.json`, kept with the
 team's record, records that expected set so it can be reproduced with one
 command. A `repos.json` at the workspace root, where releases before 2.12 wrote
-it, is still read, and the next refresh moves it into `aidlc/`
+it, is still read; the next refresh moves one git does not track into `aidlc/`,
+and one git tracks moves when you say yes to committing the update
 ([Configure or Refresh a Project](18-install-and-lifecycle.md#configure-or-refresh-a-project)):
 
 ```json

@@ -113,7 +113,6 @@ import { recordCommitBlock } from "../tools/aidlc-git.ts";
 import { ownFilesToCommit } from "../tools/aidlc-brought-files.ts";
 import {
   catchUpAsk,
-  RECORD_COMMIT_MESSAGE,
   unitBuildOf,
   unitWordsFile,
   writeCommitDraft,
@@ -122,7 +121,7 @@ import { AIDLC_VERSION } from "../tools/aidlc-version.ts";
 import {
   catchUpChangedLine,
   REPOS_FILE,
-  reposManifestMovedIntoAidlc,
+  reposMoveToCommit,
   trackedReposManifestAtRoot,
   UPDATE_COMMIT_MESSAGE,
   UPDATE_MESSAGE_KEY,
@@ -174,13 +173,12 @@ function completeHelpersOfEarlierProcess(projectDir: string, sessionId: string):
 // version row shows the project behind) and is tried again at the next chat's
 // start. A newer stamp is never touched. Two passes, as config refreshes a
 // folder only after a sibling it shares files with. The person's line when it
-// changed files git tracks, or moved a repos.json git tracks into aidlc/, and
-// the question that offers their commit when it can run (`update`: AI-DLC's
-// own files, the move with them, or in a Unit's build the move alone, naming what
-// its message is about and the files its yes leaves; else the move alone with
-// AI-DLC's record),
-// with the file its commit message is drafted in when the hook could write it;
-// null otherwise.
+// changed files git tracks, and the question that offers the update's own
+// commit when it can run (`update`: AI-DLC's own files, with the move of a
+// repos.json git tracks into aidlc/, which the refresh leaves at the root and
+// only that commit makes, or in a Unit's build the move alone, naming what its
+// message is about and the files its yes leaves), with the file its commit
+// message is drafted in when the hook could write it; null otherwise.
 function catchUpProjectFiles(
   projectDir: string,
   unitBuild: boolean,
@@ -238,20 +236,23 @@ function catchUpProjectFiles(
     // refused stays refused, so it runs once per chat start.
     if (pending.length === tried) break;
   }
-  const moved = trackedList && reposManifestMovedIntoAidlc(projectDir);
+  // The list's move, still to make: the update's own commit makes it on the yes its question names it in.
+  const moving = trackedList && reposMoveToCommit(projectDir).length > 0;
   const after = before === null ? null : projectChanges(projectDir);
-  const changed = after === null ? [] : refreshChanged(projectDir, before ?? new Map(), after, moved);
-  const told = catchUpChangedLine(AIDLC_VERSION, changed, moved);
-  if (told === null) return null;
-  if (process.env.AIDLC_UNATTENDED === "1") return { told, asked: null, messageFile: null, update: null, leave: [], later: null };
-  // The update's own commit, offered when it can run: AI-DLC's files that still hold what it wrote, the move with
-  // them. A settings file config merges counts only when git showed it unchanged before this refresh: one that held
+  const changed = after === null ? [] : refreshChanged(projectDir, before ?? new Map(), after);
+  const told = catchUpChangedLine(AIDLC_VERSION, changed, false);
+  if (told === null && !moving) return null;
+  if (process.env.AIDLC_UNATTENDED === "1") {
+    return told === null ? null : { told, asked: null, messageFile: null, update: null, leave: [], later: null };
+  }
+  // The update's own commit, offered when it can run: AI-DLC's files that still hold what it wrote, and the list's
+  // move. A settings file config merges counts only when git showed it unchanged before this refresh: one that held
   // the person's words then is left by the yes (--leave), and named when this refresh rewrote it. The draft file is
-  // the verb's sign that this offer was made.
+  // the verb's sign that this offer was made, and so the move is named only where it was written.
   const own = before === null ? null : ownFilesToCommit(projectDir, (path) => before.has(path));
   const files = own?.commit.some((path) => path !== REPOS_FILE && path !== `aidlc/${REPOS_FILE}`) === true;
   if (
-    own !== null && (files || (unitBuild && own.commit.length > 0)) &&
+    own !== null && (files ? told !== null : unitBuild && own.commit.length > 0) &&
     recordCommitBlock(projectDir, unitBuild, own.commit) === null
   ) {
     const file = unitWordsFile("record-message", UPDATE_MESSAGE_KEY);
@@ -259,23 +260,22 @@ function catchUpProjectFiles(
     // With no draft the yes leaves a settings file config merges, so it is named with the rest it leaves.
     const left = (drafted ? own : ownFilesToCommit(projectDir, null)).left.filter((path) => changed.includes(path));
     const branch = projectGit(projectDir, ["symbolic-ref", "--quiet", "--short", "HEAD"]).stdout.trim();
-    const asked = catchUpChangedLine(AIDLC_VERSION, changed, moved, true, drafted, { branch, left });
-    return { told, asked, messageFile: drafted ? file : null, update: updateCommitAbout(files, moved), leave: own.held, later: null };
+    const named = moving && drafted;
+    const asked = catchUpChangedLine(AIDLC_VERSION, changed, named, drafted, { branch, left });
+    if (asked !== null) {
+      return { told: told ?? asked, asked, messageFile: drafted ? file : null, update: updateCommitAbout(files, named), leave: own.held, later: null };
+    }
   }
-  // The list's move alone is AI-DLC's own record: offered to be committed on the person's yes, when the commit could
-  // run, with the message the agent drafts for it over the fallback this hook writes into the move's own file.
-  const asking = moved && changed.length === 0 && recordCommitBlock(projectDir, unitBuild) === null;
-  const file = unitWordsFile("record-message", `moved-${AIDLC_VERSION}`);
-  const drafted = asking && (existsSync(join(projectDir, ...file.split("/"))) || writeCommitDraft(projectDir, file, RECORD_COMMIT_MESSAGE));
-  const asked = asking ? catchUpChangedLine(AIDLC_VERSION, changed, moved, true, drafted) : null;
+  if (told === null) return null;
   // No branch, or a git operation of theirs under way: the commit can run once that is over, so the line says AI-DLC
   // makes it when they say, and the agent is handed the command. With no draft written, the yes leaves every settings
-  // file config merges, so a later yes never takes their words. Never where nothing still holds what AI-DLC wrote.
-  const block = asked !== null || own === null || own.commit.length === 0 ? null : recordCommitBlock(projectDir, unitBuild, own.commit);
+  // file config merges, so a later yes never takes their words, and the list where it is. Never where nothing of
+  // AI-DLC's files still holds what it wrote.
+  const block = files && own !== null ? recordCommitBlock(projectDir, unitBuild, own.commit) : null;
   const later = block?.why === "under-way" || block?.why === "detached"
-    ? { told: catchUpChangedLine(AIDLC_VERSION, changed, moved, false, false, undefined, true) ?? told, command: `unit commit-record${files || unitBuild ? " --update" : ""}` }
+    ? { told: catchUpChangedLine(AIDLC_VERSION, changed, false, false, undefined, true) ?? told, command: "unit commit-record --update" }
     : null;
-  return { told, asked, messageFile: drafted ? file : null, update: null, leave: [], later };
+  return { told, asked: null, messageFile: null, update: null, leave: [], later };
 }
 
 function projectGit(projectDir: string, args: string[], input?: string) {
@@ -333,9 +333,8 @@ function projectChanges(projectDir: string): Map<string, string> | null {
 }
 
 // The paths the refresh changed: new in git's view or with new content, a file
-// git does not track counted only in a folder git already tracks, and the
-// list's own two paths left to the move.
-function refreshChanged(projectDir: string, before: Map<string, string>, after: Map<string, string>, moved: boolean): string[] {
+// git does not track counted only in a folder git already tracks.
+function refreshChanged(projectDir: string, before: Map<string, string>, after: Map<string, string>): string[] {
   const tracked = new Map<string, boolean>();
   const folderTracked = (folder: string): boolean => {
     if (!tracked.has(folder)) tracked.set(folder, projectGit(projectDir, ["ls-files", "--", folder]).stdout.trim() !== "");
@@ -343,7 +342,6 @@ function refreshChanged(projectDir: string, before: Map<string, string>, after: 
   };
   return [...after].filter(([path, now]) => {
     if (before.get(path) === now) return false;
-    if (moved && path === REPOS_FILE) return false;
     if (!now.startsWith("??")) return true;
     const slash = path.indexOf("/");
     return slash > 0 && folderTracked(path.slice(0, slash));

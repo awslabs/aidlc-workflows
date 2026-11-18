@@ -10680,7 +10680,7 @@ function updateCommitStep(projectDir: string, stateContent: string): PrintDirect
   const files = own.commit.filter((path) => path !== REPOS_FILE && path !== `aidlc/${REPOS_FILE}`);
   const moved = files.length < own.commit.length;
   const branch = gitText(projectDir, ["symbolic-ref", "--quiet", "--short", "HEAD"])?.trim() ?? "";
-  const asked = catchUpChangedLine(AIDLC_VERSION, files, moved, true, true, { branch, left: own.left });
+  const asked = catchUpChangedLine(AIDLC_VERSION, files, moved, true, { branch, left: own.left });
   if (asked === null) return null;
   const said = catchUpAsk({ asked, messageFile: file, update: updateCommitAbout(files.length > 0, moved), leave: own.held }, "your reply");
   return turnEndingPrint(`${said.charAt(0).toUpperCase()}${said.slice(1)}`);

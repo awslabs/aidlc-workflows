@@ -12,6 +12,9 @@
 // makes that commit on the person's branch through their own git, hooks
 // included, with the message drafted for it, pushes nothing, and takes a
 // settings file config merges only where the update's offer drafted its message.
+// A root repos.json git tracks stays where the refresh found it, nothing staged,
+// and that commit moves it into aidlc/ only where its offer named the move; a
+// commit that does not go through leaves the list at the root as it was.
 
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -196,11 +199,11 @@ describe("what the update's own commit takes", () => {
     expect(left).not.toContain(".claude/scopes/aidlc-ours.md");
   });
 
-  test("the repo list's move goes with the files, and nothing else of aidlc/", () => {
+  test("the repo list's move, still to make, goes with the files, and nothing else of aidlc/", () => {
     const { dir } = projectBehind("claude", (d) => writeFileSync(join(d, "repos.json"), `${JSON.stringify({ repos: [{ name: "billing" }] }, null, 2)}\n`));
     writeFileSync(join(dir, "aidlc", "notes.md"), "work not shared yet\n");
     const changedBefore = refresh(dir, "claude");
-    expect(git(dir, ["status", "--porcelain"])).toContain("R  repos.json -> aidlc/repos.json");
+    expect(git(dir, ["status", "--porcelain", "--", "repos.json", "aidlc/repos.json"])).toBe("");
     const { commit } = ownFilesToCommit(dir, changedBefore);
     expect(commit).toContain("repos.json");
     expect(commit).toContain("aidlc/repos.json");
@@ -321,6 +324,12 @@ describe("two machines commit the same bytes for the same release", () => {
 describe("unit commit-record --update", () => {
   const draft = `aidlc/.aidlc-engine/request-text/unit-record-message-update-${AIDLC_VERSION}.txt`;
   const shown = (dir: string): string[] => git(dir, ["show", "--name-only", "--no-renames", "--format=", "HEAD"]).split("\n").filter(Boolean).sort();
+  const LIST = `${JSON.stringify({ repos: [{ name: "billing" }] }, null, 2)}\n`;
+  // The draft the session start's offer writes, its sign that the offer was made.
+  const drafted = (dir: string): void => {
+    mkdirSync(join(dir, "aidlc", ".aidlc-engine", "request-text"), { recursive: true });
+    writeFileSync(join(dir, ...draft.split("/")), `Update AI-DLC to ${AIDLC_VERSION}\n`);
+  };
 
   test("one commit of AI-DLC's own files on the branch, with the drafted message, a file staged elsewhere kept staged, nothing pushed", () => {
     const { dir } = projectBehind("claude");
@@ -372,7 +381,8 @@ describe("unit commit-record --update", () => {
     writeFileSync(seededStateFile(dir), readFileSync(join(FIXTURES_DIR, "state-construction.md"), "utf-8")
       .replace("- **Revision Count**: 0\n", "- **Revision Count**: 0\n- **Unit Build**: refunds\n"));
     refresh(dir, "claude");
-    const yes = run(UNIT, ["commit-record", "--update"], dir);
+    drafted(dir);
+    const yes = run(UNIT, ["commit-record", "--update", "--commit-message-file", draft], dir);
     expect(yes.status, yes.out).toBe(0);
     expect(shown(dir).filter((path) => path.startsWith("aidlc/"))).toEqual(["aidlc/repos.json"]);
     expect(shown(dir)).toContain("repos.json");
@@ -408,13 +418,144 @@ describe("unit commit-record --update", () => {
     writeFileSync(seededStateFile(dir), readFileSync(join(FIXTURES_DIR, "state-construction.md"), "utf-8")
       .replace("- **Revision Count**: 0\n", "- **Revision Count**: 0\n- **Unit Build**: refunds\n"));
     const changedBefore = refresh(dir, "claude");
-    // The files went in already; only the move is left to commit.
+    // The files went in already; only the move is left to make and commit.
     git(dir, ["add", "--", ".claude"]);
     git(dir, ["commit", "-q", "-m", "the files", "--", ".claude"]);
     expect(ownFilesToCommit(dir, changedBefore).commit).toEqual(["repos.json", "aidlc/repos.json"]);
-    const yes = run(UNIT, ["commit-record", "--update"], dir);
+    drafted(dir);
+    const yes = run(UNIT, ["commit-record", "--update", "--commit-message-file", draft], dir);
     expect(yes.status, yes.out).toBe(0);
     expect(shown(dir)).toEqual(["aidlc/repos.json", "repos.json"]);
+  });
+
+  // The refresh leaves a list git tracks at the root; the yes to the offer that named the move makes it, in the
+  // commit's own index, so nothing is staged before the yes or after it, and a file staged elsewhere stays staged.
+  test("the yes to the offer moves the list into aidlc/ and commits it with the files; nothing is staged before or after", () => {
+    const { dir } = projectBehind("claude", (d) => writeFileSync(join(d, "repos.json"), LIST));
+    refresh(dir, "claude");
+    expect(existsSync(join(dir, "repos.json"))).toBe(true);
+    expect(git(dir, ["diff", "--cached", "--name-only"])).toBe("");
+    writeFileSync(join(dir, "notes.txt"), "mine\n");
+    git(dir, ["add", "notes.txt"]);
+    drafted(dir);
+    const yes = run(UNIT, ["commit-record", "--update", "--commit-message-file", draft], dir);
+    expect(yes.status, yes.out).toBe(0);
+    expect(yes.json?.committed).toBe(true);
+    expect(git(dir, ["show", "--name-status", "--format=", "HEAD", "--", "repos.json", "aidlc/repos.json"]))
+      .toMatch(/^R\d*\trepos\.json\taidlc\/repos\.json$/);
+    expect(readFileSync(join(dir, "aidlc", "repos.json"), "utf-8")).toBe(LIST);
+    expect(existsSync(join(dir, "repos.json"))).toBe(false);
+    expect(git(dir, ["status", "--porcelain", "--", "repos.json", "aidlc/repos.json"])).toBe("");
+    expect(git(dir, ["diff", "--cached", "--name-only"])).toBe("notes.txt");
+    const again = run(UNIT, ["commit-record", "--update"], dir);
+    expect(again.json?.committed).toBe(false);
+  });
+
+  // With no offer drafted, nothing named the move, so the yes leaves the list where it is.
+  test("asked with no offer drafted, a list git tracks stays at the root and nothing of it is staged", () => {
+    const { dir } = projectBehind("claude", (d) => writeFileSync(join(d, "repos.json"), LIST));
+    refresh(dir, "claude");
+    const yes = run(UNIT, ["commit-record", "--update"], dir);
+    expect(yes.status, yes.out).toBe(0);
+    expect(shown(dir)).not.toContain("repos.json");
+    expect(shown(dir)).not.toContain("aidlc/repos.json");
+    expect(readFileSync(join(dir, "repos.json"), "utf-8")).toBe(LIST);
+    expect(git(dir, ["status", "--porcelain", "--", "repos.json", "aidlc/repos.json"])).toBe("");
+  });
+
+  // The answer "commit them, but leave repos.json": the offer's command with --leave for the list takes the files
+  // and leaves the list at the root. That commit spends the offer's draft, so a later move on their word is git's own.
+  test("commit them but leave repos.json: the files go in, the list stays at the root; a later move is git's own two commands", () => {
+    const { dir } = projectBehind("claude", (d) => writeFileSync(join(d, "repos.json"), LIST));
+    refresh(dir, "claude");
+    drafted(dir);
+    const kept = run(UNIT, ["commit-record", "--update", "--leave", "repos.json", "--commit-message-file", draft], dir);
+    expect(kept.status, kept.out).toBe(0);
+    const commit = git(dir, ["rev-parse", "--short", "HEAD"]);
+    expect(kept.json).toEqual({
+      committed: true,
+      commit,
+      notice: `AI-DLC's own files are committed on main as ${commit} (${shown(dir).length} files); nothing is pushed.`,
+    });
+    expect(shown(dir)).not.toContain("repos.json");
+    expect(readFileSync(join(dir, "repos.json"), "utf-8")).toBe(LIST);
+    expect(git(dir, ["status", "--porcelain", "--", "repos.json", "aidlc/repos.json"])).toBe("");
+    expect(git(dir, ["diff", "--cached", "--name-only"])).toBe("");
+    expect(existsSync(join(dir, ...draft.split("/")))).toBe(false);
+    // Later, "move it now", with the draft spent: AI-DLC's command has nothing to take, and git's own two do it.
+    const later = run(UNIT, ["commit-record", "--update"], dir);
+    expect(later.json).toEqual({ committed: false, notice: "AI-DLC's own files here have nothing new to commit." });
+    expect(existsSync(join(dir, "repos.json"))).toBe(true);
+    writeFileSync(join(dir, "notes.txt"), "mine\n");
+    git(dir, ["add", "notes.txt"]);
+    git(dir, ["mv", "repos.json", "aidlc/repos.json"]);
+    git(dir, ["commit", "-q", "-m", "Move repos.json into aidlc/", "--", "repos.json", "aidlc/repos.json"]);
+    expect(git(dir, ["show", "--name-status", "--format=", "HEAD"])).toMatch(/^R\d*\trepos\.json\taidlc\/repos\.json$/);
+    expect(git(dir, ["diff", "--cached", "--name-only"])).toBe("notes.txt");
+  });
+
+  // The list's two paths go together: naming either one with --leave leaves the whole list where it is.
+  test("--leave with either of the list's paths leaves the list at the root, and HEAD still has it", () => {
+    const { dir } = projectBehind("claude", (d) => writeFileSync(join(d, "repos.json"), LIST));
+    refresh(dir, "claude");
+    drafted(dir);
+    const kept = run(UNIT, ["commit-record", "--update", "--leave", "aidlc/repos.json", "--commit-message-file", draft], dir);
+    expect(kept.status, kept.out).toBe(0);
+    expect(kept.json?.committed).toBe(true);
+    // Nothing of the list changed, so the notice says nothing of it.
+    expect(String(kept.json?.notice)).toEndWith("; nothing is pushed.");
+    expect(shown(dir)).not.toContain("repos.json");
+    expect(git(dir, ["show", "HEAD:repos.json"])).toBe(LIST.trimEnd());
+    expect(readFileSync(join(dir, "repos.json"), "utf-8")).toBe(LIST);
+    expect(existsSync(join(dir, "aidlc", "repos.json"))).toBe(false);
+    expect(git(dir, ["status", "--porcelain", "--", "repos.json", "aidlc/repos.json"])).toBe("");
+  });
+
+  // A change of the person's to the list stays theirs: staged, with the working file put back as HEAD has it, it
+  // is neither moved nor committed, and their staged bytes stay staged.
+  test("a list the person staged a change to is not moved or committed, and stays staged as they left it", () => {
+    const { dir } = projectBehind("claude", (d) => writeFileSync(join(d, "repos.json"), LIST));
+    writeFileSync(join(dir, "repos.json"), `${JSON.stringify({ repos: [{ name: "billing" }, { name: "ledger" }] }, null, 2)}\n`);
+    git(dir, ["add", "repos.json"]);
+    const staged = git(dir, ["rev-parse", ":repos.json"]);
+    writeFileSync(join(dir, "repos.json"), LIST);
+    const changedBefore = refresh(dir, "claude");
+    expect(ownFilesToCommit(dir, changedBefore).commit).not.toContain("repos.json");
+    drafted(dir);
+    const yes = run(UNIT, ["commit-record", "--update", "--commit-message-file", draft], dir);
+    expect(yes.status, yes.out).toBe(0);
+    expect(shown(dir)).not.toContain("repos.json");
+    expect(git(dir, ["rev-parse", ":repos.json"])).toBe(staged);
+    expect(existsSync(join(dir, "aidlc", "repos.json"))).toBe(false);
+  });
+
+  // Their hook refusing the commit, or git refusing it for want of a name: the list goes back where it was.
+  test("a commit that does not go through leaves the list at the root, as it was", () => {
+    const { dir } = projectBehind("claude", (d) => writeFileSync(join(d, "repos.json"), LIST));
+    refresh(dir, "claude");
+    const head = git(dir, ["rev-parse", "HEAD"]);
+    drafted(dir);
+    const status = git(dir, ["status", "--porcelain"]);
+    writeFileSync(join(dir, ".git", "hooks", "pre-commit"), "#!/bin/sh\necho no commits today >&2\nexit 1\n", { mode: 0o755 });
+    const refused = run(UNIT, ["commit-record", "--update", "--commit-message-file", draft], dir);
+    expect(refused.status).not.toBe(0);
+    expect(refused.out).toContain("no commits today");
+    expect(git(dir, ["rev-parse", "HEAD"])).toBe(head);
+    expect(readFileSync(join(dir, "repos.json"), "utf-8")).toBe(LIST);
+    expect(existsSync(join(dir, "aidlc", "repos.json"))).toBe(false);
+    expect(git(dir, ["status", "--porcelain"])).toBe(status);
+    unlinkSync(join(dir, ".git", "hooks", "pre-commit"));
+    git(dir, ["config", "--unset", "user.name"]);
+    git(dir, ["config", "--unset", "user.email"]);
+    git(dir, ["config", "user.useConfigOnly", "true"]);
+    const noName: NodeJS.ProcessEnv = { ...ENV, GIT_CONFIG_GLOBAL: join(dir, "no-global-gitconfig") };
+    for (const key of ["GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL", "EMAIL"]) delete noName[key];
+    const nameless = run(UNIT, ["commit-record", "--update", "--commit-message-file", draft], dir, noName);
+    expect(nameless.status).not.toBe(0);
+    expect(nameless.out).toContain("Git has no name and email for your commits yet.");
+    expect(readFileSync(join(dir, "repos.json"), "utf-8")).toBe(LIST);
+    expect(existsSync(join(dir, "aidlc", "repos.json"))).toBe(false);
+    expect(git(dir, ["status", "--porcelain"])).toBe(status);
   });
 
   test("with two harnesses, --leave keeps out the settings file that held their words and the clean one goes in", () => {
@@ -489,10 +630,11 @@ describe("on opencode, the engine's next step puts the update's question", () =>
 
   // A project the earlier release set up, with work under way in it, just refreshed by the session start, which
   // wrote the update's draft as its sign that it worked the offer out.
-  function updatedWithWork(): string {
+  function updatedWithWork(list = false): string {
     const { dir } = projectBehind("claude", (d) => {
       seedWorkspaceShell(d);
       writeFileSync(seededStateFile(d), readFileSync(join(FIXTURES_DIR, "state-construction.md"), "utf-8"));
+      if (list) writeFileSync(join(d, "repos.json"), `${JSON.stringify({ repos: [{ name: "billing" }] }, null, 2)}\n`);
     });
     refresh(dir, "claude");
     mkdirSync(join(dir, "aidlc", ".aidlc-engine", "request-text"), { recursive: true });
@@ -516,7 +658,7 @@ describe("on opencode, the engine's next step puts the update's question", () =>
     const first = step(dir);
     expect(first.kind, JSON.stringify(first)).toBe("print");
     const message = String(first.message);
-    expect(message).toContain(String(catchUpChangedLine(AIDLC_VERSION, own.commit, false, true, true, { branch: "main", left: own.left })));
+    expect(message).toContain(String(catchUpChangedLine(AIDLC_VERSION, own.commit, false, true, { branch: "main", left: own.left })));
     expect(message).toContain(`over the message in \`${draft}\``);
     expect(message).toContain("with the message from that file after it");
     expect(message).toContain("When they give their own commit message, write it to that file first");
@@ -537,6 +679,18 @@ describe("on opencode, the engine's next step puts the update's question", () =>
     expect(String(step(dir).message)).toContain("AI-DLC updated its own files");
   });
 
+  test("with a list git tracks, the question names the move its yes makes, and the yes makes it", () => {
+    const dir = updatedWithWork(true);
+    expect(existsSync(join(dir, "repos.json"))).toBe(true);
+    const message = String(step(dir).message);
+    expect(message).toContain(", and it now keeps repos.json in aidlc/. Want me to commit them on main, as one commit of their own, " +
+      "and move repos.json into aidlc/ in that commit? Nothing is pushed.");
+    const yes = run(UNIT, ["commit-record", "--update", "--commit-message-file", draft], dir);
+    expect(yes.status, yes.out).toBe(0);
+    expect(git(dir, ["show", "--name-status", "--format=", "HEAD", "--", "repos.json", "aidlc/repos.json"]))
+      .toMatch(/^R\d*\trepos\.json\taidlc\/repos\.json$/);
+  });
+
   test("with no draft from the session start, nothing is put", () => {
     const dir = updatedWithWork();
     unlinkSync(join(dir, ...draft.split("/")));
@@ -547,16 +701,16 @@ describe("on opencode, the engine's next step puts the update's question", () =>
 describe("the question after an update", () => {
   const head = "AI-DLC updated its own files in this project to 2.12.1:";
   test("the files, as one commit of their own on the branch, with what it leaves and the message after it", () => {
-    expect(catchUpChangedLine("2.12.1", [".claude/a.md"], false, true, true, { branch: "main", left: [] })).toBe(
+    expect(catchUpChangedLine("2.12.1", [".claude/a.md"], false, true, { branch: "main", left: [] })).toBe(
       `${head} 1 file under .claude changed. Want me to commit it on main, as one commit of its own? Nothing is pushed. ` +
         "I'd use this commit message:",
     );
-    expect(catchUpChangedLine("2.12.1", [".claude/a.md", ".claude/b.md", "AGENTS.md"], false, true, false, { branch: "work", left: ["AGENTS.md"] })).toBe(
+    expect(catchUpChangedLine("2.12.1", [".claude/a.md", ".claude/b.md", "AGENTS.md"], false, false, { branch: "work", left: ["AGENTS.md"] })).toBe(
       `${head} 2 files under .claude and its part of AGENTS.md changed. Want me to commit them on work, as one commit of their own? ` +
         "Nothing is pushed. I'd leave AGENTS.md out, as I cannot be sure it holds only AI-DLC's changes: it is yours to look over and commit.",
     );
     const many = Array.from({ length: 12 }, (_, at) => `.claude/f${at}.md`);
-    expect(catchUpChangedLine("2.12.1", many, false, true, true, { branch: "main", left: many })).toContain(
+    expect(catchUpChangedLine("2.12.1", many, false, true, { branch: "main", left: many })).toContain(
       "I'd leave .claude/f0.md, .claude/f1.md, .claude/f2.md, .claude/f3.md, .claude/f4.md, .claude/f5.md, .claude/f6.md, .claude/f7.md, " +
         ".claude/f8.md, .claude/f9.md and 2 more out, as I cannot be sure they hold only AI-DLC's changes: they are yours to look over and commit. " +
         "I'd use this commit message:",
@@ -564,36 +718,38 @@ describe("the question after an update", () => {
   });
 
   // Where no question is put: what AI-DLC did, and where the commit can run later (no branch, a git operation of
-  // theirs under way, once it is over), that it can make it when they say.
-  test("the line where no question is put, with the offer for later where the commit can run then", () => {
+  // theirs under way, once it is over), that it can make it when they say. The list's move is made only by the
+  // question's yes, so no line without that question says it.
+  test("the line where no question is put, with the offer for later where the commit can run then, and no move", () => {
     expect(catchUpChangedLine("2.12.1", [".claude/a.md"], false)).toBe(`${head} 1 file under .claude changed. AI-DLC did not commit it.`);
-    expect(catchUpChangedLine("2.12.1", [".claude/a.md", ".claude/b.md"], false, false, false, undefined, true)).toBe(
+    expect(catchUpChangedLine("2.12.1", [".claude/a.md", ".claude/b.md"], false, false, undefined, true)).toBe(
       `${head} 2 files under .claude changed. AI-DLC did not commit them. Say when you want me to commit them.`,
     );
-    expect(catchUpChangedLine("2.12.1", [".claude/a.md"], true, false, false, undefined, true)).toBe(
-      `${head} 1 file under .claude changed, and repos.json moved into aidlc/. AI-DLC committed none of it. ` +
-        "Teammates need AI-DLC 2.12 or newer to find repos.json there. Say when you want me to commit them.",
+    expect(catchUpChangedLine("2.12.1", [".claude/a.md"], true, false, undefined, true)).toBe(
+      `${head} 1 file under .claude changed. AI-DLC did not commit it. Say when you want me to commit it.`,
     );
-    expect(catchUpChangedLine("2.12.1", [], true)).toBe(
-      "AI-DLC moved repos.json into aidlc/ and did not commit the move. Teammates need AI-DLC 2.12 or newer to find it there.",
-    );
-    expect(catchUpChangedLine("2.12.1", [], true, false, false, undefined, true)).toBe(
-      "AI-DLC moved repos.json into aidlc/ and did not commit the move. Teammates need AI-DLC 2.12 or newer to find it there. " +
-        "Say when you want me to commit it.",
+    expect(catchUpChangedLine("2.12.1", [], true)).toBeNull();
+    expect(catchUpChangedLine("2.12.1", [], true, false, undefined, true)).toBeNull();
+  });
+
+  test("the move alone where the record's commit does not run: the yes makes it", () => {
+    expect(catchUpChangedLine("2.12.1", [], true, true, { branch: "refunds", left: [] })).toBe(
+      "AI-DLC now keeps repos.json in aidlc/, and this project's is at the root. Want me to move it there on refunds, as one " +
+        "commit of its own? Nothing is pushed. Teammates need AI-DLC 2.12 or newer to find it there. I'd use this commit message:",
     );
   });
 
-  test("the move alone where the record's commit does not run", () => {
-    expect(catchUpChangedLine("2.12.1", [], true, true, true, { branch: "refunds", left: [] })).toBe(
-      "AI-DLC moved repos.json into aidlc/. Want me to commit the move on refunds, as one commit of its own? Nothing is pushed. " +
-        "Teammates need AI-DLC 2.12 or newer to find it there. I'd use this commit message:",
+  test("with the repo list's move, the yes makes it with them and teammates are told what they need", () => {
+    expect(catchUpChangedLine("2.12.1", [".claude/a.md", ".claude/b.md"], true, true, { branch: "refunds", left: [] })).toBe(
+      `${head} 2 files under .claude changed, and it now keeps repos.json in aidlc/. Want me to commit them on refunds, as one ` +
+        "commit of their own, and move repos.json into aidlc/ in that commit? Nothing is pushed. Teammates need AI-DLC 2.12 or " +
+        "newer to find repos.json there. I'd use this commit message:",
     );
-  });
-
-  test("with the repo list's move, the move is in them and teammates are told what they need", () => {
-    expect(catchUpChangedLine("2.12.1", [".claude/a.md"], true, true, true, { branch: "refunds", left: [] })).toBe(
-      `${head} 1 file under .claude changed, and repos.json moved into aidlc/. Want me to commit them on refunds, as one commit of ` +
-        "their own? Nothing is pushed. Teammates need AI-DLC 2.12 or newer to find repos.json there. I'd use this commit message:",
+    expect(catchUpChangedLine("2.12.1", [".claude/a.md"], true, false, { branch: "main", left: [".claude/a.md"] })).toBe(
+      `${head} 1 file under .claude changed, and it now keeps repos.json in aidlc/. Want me to commit them on main, as one ` +
+        "commit of their own, and move repos.json into aidlc/ in that commit? Nothing is pushed. I'd leave .claude/a.md out, as I " +
+        "cannot be sure it holds only AI-DLC's changes: it is yours to look over and commit. Teammates need AI-DLC 2.12 or newer " +
+        "to find repos.json there.",
     );
   });
 });

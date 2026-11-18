@@ -1,12 +1,14 @@
-// covers: function:catchUpChangedLine, function:workspaceManifestAt, function:reposManifestPath, function:moveReposManifestIntoAidlc, function:trackedReposManifestAtRoot, function:reposManifestMovedIntoAidlc, function:reposListGoingBackLine, function:readWorkspaceRepos, function:repoNotThereLine, function:aidlcOwnedSourceKey, function:sourceChangedOutsideAidlc, function:workspaceManifestChecks, subcommand:aidlc-unit:share, file:core/tools/aidlc-workspace-manifest.ts
+// covers: function:catchUpChangedLine, function:workspaceManifestAt, function:reposManifestPath, function:moveReposManifestIntoAidlc, function:reposMoveToCommit, function:trackedReposManifestAtRoot, function:reposManifestMovedIntoAidlc, function:reposListGoingBackLine, function:readWorkspaceRepos, function:repoNotThereLine, function:aidlcOwnedSourceKey, function:sourceChangedOutsideAidlc, function:workspaceManifestChecks, subcommand:aidlc-unit:share, file:core/tools/aidlc-workspace-manifest.ts
 //
 // The workspace's repo list lives in aidlc/repos.json from 2.12, checked in with
 // the team's record; a root repos.json an older AI-DLC wrote is still read. One
 // order of places for every reader, on disk and at a commit of a workspace that
-// is not here. Config's refresh moves a root list into aidlc/ (a staged rename
-// when git tracks it, so a teammate who made the same move still pulls cleanly),
-// says so only when a tracked file moved, and a rerun finds nothing to do; an
-// earlier release's files never get the move. The move is nobody's change to the
+// is not here. Config's refresh moves a root list git does not track into
+// aidlc/ and says nothing of it; one git tracks stays at the root, nothing
+// staged, until the update's own commit moves it on the person's yes, so their
+// own next commit carries nothing of it and a teammate who said no pulls the
+// lead's commit of the move cleanly. A rerun finds nothing to do; an earlier
+// release's files never get the move. The move is nobody's change to the
 // source. The plan's share commits the list wherever it is. A person who sets a
 // project to an earlier release hears that it reads the list only at the root.
 
@@ -21,11 +23,11 @@ import {
   readWorkspaceRepos,
   REPOS_LOCAL_PLACE,
   REPOS_MANIFEST_PLACES,
-  REPOS_MOVED_LINE,
   repoNotThereLine,
   reposListGoingBackLine,
   reposManifestMovedIntoAidlc,
   reposManifestPath,
+  reposMoveToCommit,
   trackedReposManifestAtRoot,
   workspaceManifestAt,
 } from "../../dist/claude/.claude/tools/aidlc-workspace-manifest.ts";
@@ -98,10 +100,11 @@ describe("where the repo list is read", () => {
   });
 
   // The catch-up after an update: one line for what it changed that git
-  // tracks, by folder and count, the list's move in the same line.
-  test("the catch-up's line names each folder with its count, AI-DLC's part of a shared file, and the move in one line", () => {
+  // tracks, by folder and count. The list's move is said only in the question
+  // whose yes makes it; nothing else moved it.
+  test("the catch-up's line names each folder with its count and AI-DLC's part of a shared file, and no move", () => {
     expect(catchUpChangedLine("9.9.9", [], false)).toBeNull();
-    expect(catchUpChangedLine("9.9.9", [], true)).toBe(REPOS_MOVED_LINE);
+    expect(catchUpChangedLine("9.9.9", [], true)).toBeNull();
     expect(catchUpChangedLine("9.9.9", [".claude/tools/data/aidlc-stamp.json"], false)).toBe(
       "AI-DLC updated its own files in this project to 9.9.9: 1 file under .claude changed. AI-DLC did not commit it.",
     );
@@ -113,8 +116,7 @@ describe("where the repo list is read", () => {
       "AI-DLC updated its own files in this project to 9.9.9: its part of AGENTS.md changed. AI-DLC did not commit it.",
     );
     expect(catchUpChangedLine("9.9.9", [".claude/a.md", ".claude/b.md"], true)).toBe(
-      "AI-DLC updated its own files in this project to 9.9.9: 2 files under .claude changed, and repos.json moved into aidlc/. " +
-        "AI-DLC committed none of it. Teammates need AI-DLC 2.12 or newer to find repos.json there.",
+      "AI-DLC updated its own files in this project to 9.9.9: 2 files under .claude changed. AI-DLC did not commit them.",
     );
   });
 
@@ -162,26 +164,58 @@ describe("where the repo list is read", () => {
 });
 
 describe("the one move into aidlc/", () => {
-  test("a list git tracks moves as a staged rename with its bytes, CRLF kept, and says so", () => {
+  test("a list git tracks stays at the root, nothing staged; moved as the update's own commit moves it, its bytes and CRLF kept", () => {
     const dir = workspace();
     const text = list("billing", "storefront").replaceAll("\n", "\r\n");
     writeFileSync(join(dir, "repos.json"), text);
     git(dir, ["add", "repos.json"]);
     git(dir, ["commit", "-q", "-m", "lead"]);
     expect(trackedReposManifestAtRoot(dir)).toBe(true);
-    expect(moveReposManifestIntoAidlc(dir)).toEqual({ moved: true, tracked: true });
+    expect(moveReposManifestIntoAidlc(dir)).toEqual({ moved: false, tracked: false });
+    expect(readFileSync(join(dir, "repos.json"), "utf-8")).toBe(text);
+    expect(existsSync(join(dir, "aidlc", "repos.json"))).toBe(false);
+    expect(git(dir, ["status", "--porcelain"])).toBe("");
+    expect(readWorkspaceRepos(dir).manifest?.repos.map((repo) => repo.name)).toEqual(["billing", "storefront"]);
+    // The move still to make, which the update's own commit takes.
+    expect(reposMoveToCommit(dir)).toEqual(["repos.json", "aidlc/repos.json"]);
+    expect(moveReposManifestIntoAidlc(dir, true)).toEqual({ moved: true, tracked: true });
     expect(readFileSync(join(dir, "aidlc", "repos.json"), "utf-8")).toBe(text);
     expect(existsSync(join(dir, "repos.json"))).toBe(false);
-    expect(git(dir, ["status", "--porcelain"])).toContain("R  repos.json -> aidlc/repos.json");
+    // The commit that takes it is built in an index of its own, so nothing is staged here.
+    expect(git(dir, ["diff", "--cached", "--name-only"])).toBe("");
     expect(reposManifestMovedIntoAidlc(dir)).toBe(true);
-    expect(REPOS_MOVED_LINE).toBe(
-      "AI-DLC moved repos.json into aidlc/ and did not commit the move. Teammates need AI-DLC 2.12 or newer to find it there.",
-    );
+    expect(reposMoveToCommit(dir)).toEqual(["repos.json", "aidlc/repos.json"]);
     // A second run finds nothing to move.
-    expect(moveReposManifestIntoAidlc(dir)).toEqual({ moved: false, tracked: false });
+    expect(moveReposManifestIntoAidlc(dir, true)).toEqual({ moved: false, tracked: false });
   });
 
-  test("a teammate whose AI-DLC made the same move pulls the lead's commit of it cleanly", () => {
+  // Read from git, index included, so a change of the person's to the list, staged or not, is never moved or
+  // committed for them, and never unstaged.
+  test("the move to make is the list exactly as HEAD has it, never one the person changed or staged", () => {
+    const dir = workspace();
+    writeFileSync(join(dir, "repos.json"), list("billing"));
+    git(dir, ["add", "repos.json"]);
+    git(dir, ["commit", "-q", "-m", "lead"]);
+    writeFileSync(join(dir, "repos.json"), list("billing", "ledger"));
+    expect(reposMoveToCommit(dir)).toEqual([]);
+    git(dir, ["add", "repos.json"]);
+    const staged = git(dir, ["rev-parse", ":repos.json"]);
+    // Staged, with the working file put back as HEAD has it.
+    writeFileSync(join(dir, "repos.json"), list("billing"));
+    expect(reposMoveToCommit(dir)).toEqual([]);
+    expect(moveReposManifestIntoAidlc(dir)).toEqual({ moved: false, tracked: false });
+    expect(git(dir, ["rev-parse", ":repos.json"])).toBe(staged);
+    expect(existsSync(join(dir, "aidlc", "repos.json"))).toBe(false);
+    // Where git would not take aidlc/repos.json, the move is not offered either.
+    const ignored = workspace();
+    writeFileSync(join(ignored, "repos.json"), list("billing"));
+    writeFileSync(join(ignored, ".gitignore"), "aidlc/\n");
+    git(ignored, ["add", "repos.json", ".gitignore"]);
+    git(ignored, ["commit", "-q", "-m", "lead"]);
+    expect(reposMoveToCommit(ignored)).toEqual([]);
+  });
+
+  test("a teammate who said no pulls the lead's commit of the move cleanly", () => {
     const host = tempDir("host");
     git(host, ["init", "-q", "--bare", "-b", "main"]);
     const lead = workspace();
@@ -193,12 +227,18 @@ describe("the one move into aidlc/", () => {
     git(lead, ["push", "-q", "origin", "main"]);
     const mate = join(tempDir("mate"), "ws");
     git(host, ["clone", "-q", host, mate]);
-    moveReposManifestIntoAidlc(lead);
+    // The lead's yes: the move made and committed.
+    expect(moveReposManifestIntoAidlc(lead, true).moved).toBe(true);
+    git(lead, ["add", "-A"]);
     git(lead, ["commit", "-q", "-m", "move"]);
     git(lead, ["push", "-q", "origin", "main"]);
-    expect(moveReposManifestIntoAidlc(mate).tracked).toBe(true);
+    // The teammate's own refresh, and their no: the list stays as their HEAD has it.
+    expect(moveReposManifestIntoAidlc(mate)).toEqual({ moved: false, tracked: false });
+    expect(git(mate, ["status", "--porcelain"])).toBe("");
     git(mate, ["pull", "-q", "--ff-only", "origin", "main"]);
     expect(git(mate, ["status", "--porcelain"])).toBe("");
+    expect(readFileSync(join(mate, "aidlc", "repos.json"), "utf-8")).toBe(list("billing"));
+    expect(existsSync(join(mate, "repos.json"))).toBe(false);
   });
 
   test("an untracked list moves by a plain rename and says nothing; outside git too", () => {
@@ -319,31 +359,31 @@ function projectBehind(): string {
   return dir;
 }
 
-describe("config's refresh moves the list", () => {
-  test("into aidlc/ when it puts this release's files in, says so once at the person's terminal with the command that shares it, and a rerun changes nothing", () => {
+describe("config's refresh and the list", () => {
+  test("a list git tracks stays at the root, read there, with nothing staged or said at the terminal, and a rerun changes nothing", () => {
     const dir = projectBehind();
     const first = config(dir, ["--harness", "claude", "--from", COPY]);
     expect(first.status, first.out).toBe(0);
-    expect(first.out).toContain("AI-DLC moved repos.json into aidlc/ and did not commit the move; `git commit -m " +
-      '"AI-DLC moved repos.json into aidlc/" repos.json aidlc/repos.json` commits it. Teammates need AI-DLC 2.12 or newer to find it there.');
-    expect(first.out).not.toContain(REPOS_MOVED_LINE);
-    expect(git(dir, ["status", "--porcelain"])).toContain("R  repos.json -> aidlc/repos.json");
+    expect(first.out).not.toContain("repos.json");
+    expect(existsSync(join(dir, "repos.json"))).toBe(true);
+    expect(existsSync(join(dir, "aidlc", "repos.json"))).toBe(false);
+    expect(git(dir, ["diff", "--cached", "--name-only"])).toBe("");
+    expect(git(dir, ["status", "--porcelain", "--", "repos.json", "aidlc/repos.json"])).toBe("");
+    expect(readWorkspaceRepos(dir).manifest?.repos.map((repo) => repo.name)).toEqual(["billing"]);
     const status = git(dir, ["status", "--porcelain"]);
     const again = config(dir, ["--harness", "claude", "--from", COPY]);
     expect(again.status, again.out).toBe(0);
     expect(again.out).not.toContain("repos.json");
     expect(git(dir, ["status", "--porcelain"])).toBe(status);
     expect(existsSync(join(dir, ".mcp.json"))).toBe(false);
-    // The command it names commits the move alone; a file the person staged stays staged and out of it.
-    writeFileSync(join(dir, "notes.md"), "Staged, not committed.\n");
+    // The person's own next commit carries nothing of the list.
+    writeFileSync(join(dir, "notes.md"), "Mine.\n");
     git(dir, ["add", "notes.md"]);
-    git(dir, ["commit", "-q", "-m", "AI-DLC moved repos.json into aidlc/", "repos.json", "aidlc/repos.json"]);
-    expect(git(dir, ["show", "--name-status", "--format=", "HEAD"])).toMatch(/^R\d*\trepos\.json\taidlc\/repos\.json$/);
-    expect(git(dir, ["diff", "--cached", "--name-only"])).toBe("notes.md");
+    git(dir, ["commit", "-q", "-m", "notes"]);
+    expect(git(dir, ["show", "--name-only", "--format=", "HEAD"])).toBe("notes.md");
   });
 
-  // The command it names commits a move git made; a list git never tracked moves by a plain rename, which that
-  // command would not find, so nothing is said of it.
+  // A list git never tracked is nobody's to commit, so its move says nothing.
   test("an untracked list moves with nothing said at the terminal", () => {
     const dir = workspace();
     const setup = config(dir, ["--harness", "claude", "--mcp", "none", "--yes", "--quiet", "--from", earlierTree()]);

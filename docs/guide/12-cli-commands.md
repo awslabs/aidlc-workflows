@@ -1258,19 +1258,19 @@ repository, while a rebase, merge, cherry-pick or revert of yours is under way
 a clone of a workspace that holds the lead's work too, where `aidlc/` holds the
 lead's record. In a Unit's build in your team's own workspace it commits that
 build's own record: its own folder, and its space's own folders while git has
-none of that space yet, never another work's folder. `/aidlc` offers it once when an
-update moved `repos.json` into `aidlc/` and when the repo list changed and is
-not committed yet.
+none of that space yet, never another work's folder. `/aidlc` offers it once when
+the repo list changed and is not committed yet.
 
 With `--update` it commits AI-DLC's own files an update changed instead, in a
 Unit's build too: each one that still holds exactly what AI-DLC wrote, as its
 install record (`<harness folder>/tools/data/aidlc-manifest.json`) says, with
 nothing of yours changed in it since your last commit (a file it shares with
 you, such as `AGENTS.md` or `.gitignore`, only when your own part is as last
-committed), a file the update removed, and the update's move of `repos.json`
-into `aidlc/` outside a Unit's build; nothing else of `aidlc/`. A settings file
-AI-DLC merges with your own settings goes in only when the offer after the
-update drafted the commit's message. `--leave <path>`, once for each settings file
+committed), a file the update removed, and the move of a `repos.json` git
+tracks at the project root into `aidlc/`, made by this commit; nothing else of
+`aidlc/`. A settings file AI-DLC merges with your own settings, and that move,
+go in only when the offer after the update drafted the commit's message; a
+commit that does not go through leaves the list at the root. `--leave <path>`, once for each settings file
 that held changes of yours before the update (the offer writes the whole command),
 leaves that file out; a path that starts with `-` or is not inside the project is
 refused before git is asked anything. Without a message file the commit says

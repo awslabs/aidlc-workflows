@@ -351,18 +351,17 @@ an ownership baseline. It does not create a workflow intent.
 
 The workspace's repo list lives in `aidlc/repos.json`, checked in with the
 team's record. A refresh that puts this release's files in moves a `repos.json`
-at the project root there with its contents kept (only a file that reads as the
-repo list; any other `repos.json` stays the project's): a `git mv` when git tracks it,
-so the rename is staged; `aidlc config` at a terminal names the git command that
-commits it, and in the next chat after an update AI-DLC asks once
-whether to commit the move with its record in `aidlc/`
-(`AI-DLC moved repos.json into aidlc/. Want me to commit the move, with AI-DLC's
-record in aidlc/, using this commit message? Teammates need AI-DLC 2.12 or newer
-to find it there.`, with the message the agent drafted in your repo's own style
-after it; on
-opencode it says the move and to commit it), and a plain rename otherwise. Running config again changes nothing. A refresh
-to an earlier release's files (a pin, `--from`) leaves it at the root, where
-those releases read it; with a list in both places, `aidlc/repos.json` is read.
+at the project root that git does not track there, with its contents kept (only
+a file that reads as the repo list; any other `repos.json` stays the project's).
+One git tracks stays at the root, where it is still read, with nothing staged:
+in the next chat after an update, AI-DLC's question to commit its own files also
+offers to move it into `aidlc/` in that commit, and only that yes moves it, so a
+no leaves your index and files as they were. `aidlc config` at a terminal, a
+pinned project, the copy channel and a chat that puts no question (unattended,
+or on no branch) leave it at the root.
+Running config again changes nothing. A refresh to an earlier release's files (a
+pin, `--from`) leaves it at the root, where those releases read it; with a list
+in both places, `aidlc/repos.json` is read.
 
 Every harness runtime is installed, so outside a terminal a first setup or a
 preview names its harness with `--harness <name>`; at a terminal, config uses
@@ -1529,7 +1528,8 @@ commit them on main, as one commit of their own? Nothing is pushed.", with the
 commit message drafted in your repo's style after it (your own words replace
 it). A yes commits only AI-DLC's own files that still hold exactly what it
 wrote, with nothing of yours changed in them since your last commit, and
-`repos.json`'s move into `aidlc/` with them when the refresh made it, through
+the move of a `repos.json` git tracks at the root into `aidlc/` when the question
+named it, through
 your own git (hooks and signing), on your branch. The question names any file it
 leaves out, as it cannot be sure they hold only AI-DLC's changes: they are yours
 to look over and commit. A settings file the refresh merged that held your own
@@ -1543,7 +1543,8 @@ file the refresh merged. opencode starts a chat without this
 context, so there the question comes with AI-DLC's next step in that chat, once a
 commit can run, and leaves out every settings file the refresh merged that git
 shows changed; the line comes with the next step too. Nothing is said when
-nothing git tracks changed or the project is not in git. A pinned
+nothing git tracks changed (in a Unit's build, the move of a `repos.json` git
+tracks at the root is still offered on its own) or the project is not in git. A pinned
 project runs its pinned release and is left as it is. A refresh that cannot
 finish says nothing in the chat and is tried again when the next chat starts;
 `aidlc doctor` shows the project still on the earlier release, and

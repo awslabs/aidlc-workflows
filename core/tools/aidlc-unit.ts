@@ -13,6 +13,7 @@ import {
   readdirSync,
   readFileSync,
   realpathSync,
+  renameSync,
   rmdirSync,
   rmSync,
   unlinkSync,
@@ -262,7 +263,7 @@ import {
 } from "./aidlc-unit-teams.js";
 import { gitOperationUnderWay, rebaseUnderWay, recordChanged, recordCommitBlock, recordPaths, submoduleLeavesProjectRepo } from "./aidlc-git.ts";
 import { ownFilesToCommit } from "./aidlc-brought-files.ts";
-import { commitOwnCommand, displayRepoPath, leftFilesNamed, type WorkspaceRepoEntry, UPDATE_COMMIT_MESSAGE, UPDATE_MESSAGE_KEY, reposManifestPath, localUnreadableLine, readWorkspaceRepos, parseWorkspaceManifest, repoCloneable, repoCloneOfferLine, repoClonePath, repoNotThereLine, REPOS_MANIFEST_PLACES, workspaceManifestWith, withoutCredentials, workspaceManifestAt } from "./aidlc-workspace-manifest.js";
+import { commitOwnCommand, displayRepoPath, leftFilesNamed, moveReposManifestIntoAidlc, REPOS_FILE, type WorkspaceRepoEntry, UPDATE_COMMIT_MESSAGE, UPDATE_MESSAGE_KEY, reposManifestPath, localUnreadableLine, readWorkspaceRepos, parseWorkspaceManifest, repoCloneable, repoCloneOfferLine, repoClonePath, repoNotThereLine, REPOS_MANIFEST_PLACES, workspaceManifestWith, withoutCredentials, workspaceManifestAt } from "./aidlc-workspace-manifest.js";
 import { maskUserinfo, workspaceCloneUrl } from "./aidlc-workspace-sync.ts";
 import { gitAddressKey } from "./aidlc-workspace-repos.ts";
 import { loadGraph } from "./aidlc-graph.ts";
@@ -7137,10 +7138,12 @@ export function reposCommitOffer(pd: string, unitBuild: boolean): { mark: string
 // commit it made is in its output. `--update`: AI-DLC's own files after an
 // update in its place (ownFilesToCommit), in a Unit's build too. A settings
 // file config merges goes in only where the session start's offer for this
-// release drafted its message; asked any other way, it is left. `--leave`,
-// once per file the session start saw changed before the refresh (it writes the
-// whole command), leaves that file; a path that is not one inside the project
-// is refused before git is asked anything.
+// release drafted its message; asked any other way, it is left, and so is the
+// move of a root repos.json git tracks, which that offer named: made here, last,
+// and put back when nothing is committed. `--leave`, once per file the session
+// start saw changed before the refresh (it writes the whole command), leaves
+// that file; a path that is not one inside the project is refused before git
+// is asked anything.
 function commitRecord(args: string[], projectDir?: string): void {
   const update = parseArgs(args).bareFlags.has("update");
   const leave: string[] = [];
@@ -7173,9 +7176,15 @@ function commitRecord(args: string[], projectDir?: string): void {
   const buildOwn = build !== null && !update && leadWorkHere(pd, build.homeWork) === null ? buildRecordPaths(pd) : undefined;
   const offered = existsSync(join(pd, ...unitWordsFile("record-message", UPDATE_MESSAGE_KEY).split("/")));
   const found = update ? ownFilesToCommit(pd, offered ? () => false : null) : null;
+  // The list still at the root: its move goes in only where the offer named it, and its two paths go together, so
+  // leaving either leaves both.
+  const listPaths = [REPOS_FILE, `aidlc/${REPOS_FILE}`];
+  const toMove = existsSync(join(pd, REPOS_FILE)) && found?.commit.includes(REPOS_FILE) === true;
+  const keepList = (offered || !toMove) && !listPaths.some((path) => leave.includes(path));
   const own = found && {
-    commit: found.commit.filter((path) => !leave.includes(path)),
-    left: [...found.left, ...found.commit.filter((path) => leave.includes(path))].sort(),
+    commit: found.commit.filter((path) => !leave.includes(path) && (keepList || !listPaths.includes(path))),
+    // A list left at the root has nothing changed to look over, so it is not named.
+    left: [...found.left, ...found.commit.filter((path) => leave.includes(path) && !(toMove && listPaths.includes(path)))].sort(),
   };
   const block = recordCommitBlock(pd, build !== null, own?.commit ?? buildOwn);
   const what = own ? "AI-DLC's own files" : "AI-DLC's record";
@@ -7191,12 +7200,17 @@ function commitRecord(args: string[], projectDir?: string): void {
       : "This folder is not in a git repository, so nothing was committed.");
   }
   const given = givenCommitMessage(pd, args, "commit-record");
-  let files: number;
+  // Once nothing above can stop the commit: the list moved into aidlc/ for it to take.
+  const moved = toMove && own?.commit.includes(REPOS_FILE) === true && moveReposManifestIntoAidlc(pd, true).moved;
+  let files = 0;
   try {
     files = commitPlanHere(pd, given?.text ?? (own ? UPDATE_COMMIT_MESSAGE : RECORD_COMMIT_MESSAGE), false, own?.commit ?? buildOwn);
   } catch (error) {
     if (error instanceof CommitRefused) fail(`${error.message} ${messageWayOn(false)}`);
     throw error;
+  } finally {
+    // Nothing committed: the list goes back where it was.
+    if (moved && files === 0) renameSync(join(pd, "aidlc", REPOS_FILE), join(pd, REPOS_FILE));
   }
   // The build's own record with nothing new in it: its paths are its folders, so git is the one to tell.
   if (files === 0) {

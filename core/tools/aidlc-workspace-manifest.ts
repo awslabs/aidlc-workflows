@@ -57,11 +57,8 @@ export function reposManifestPath(root: string): string {
 }
 
 // The release whose readers first look in aidlc/; one before it reads only the
-// root. The two lines below are the only words about the move.
+// root.
 const REPOS_IN_AIDLC_SINCE = { major: 2, minor: 12 };
-export const REPOS_MOVED_LINE =
-  `AI-DLC moved repos.json into aidlc/ and did not commit the move. Teammates need AI-DLC ` +
-  `${REPOS_IN_AIDLC_SINCE.major}.${REPOS_IN_AIDLC_SINCE.minor} or newer to find it there.`;
 
 // The update's own commit (unit commit-record --update): the message it takes
 // when none was drafted, and the key of the file its message is drafted in.
@@ -81,8 +78,10 @@ export function commitOwnCommand(message: string, paths: readonly string[]): str
   return `git commit -m "${message}" ${paths.join(" ")}`;
 }
 
-// The move said at the person's own terminal (aidlc config), with the command
-// that shares it.
+// The move of a list git tracks as config's refresh would say it at the
+// person's own terminal, with the command that shares it. That refresh leaves
+// such a list at the root (moveReposManifestIntoAidlc), so aidlc-init.ts's
+// branch that says it is not taken.
 export function reposMovedAtTerminalLine(): string {
   return `AI-DLC moved repos.json into aidlc/ and did not commit the move; ` +
     `\`${commitOwnCommand("AI-DLC moved repos.json into aidlc/", [REPOS_FILE, `aidlc/${REPOS_FILE}`])}\` commits it. Teammates need AI-DLC ` +
@@ -121,35 +120,31 @@ export function leftFilesNamed(paths: readonly string[]): string {
 
 // The catch-up's one line after an update: the files of the project git tracks
 // that the refresh changed (paths relative to the project, "/"-separated), by
-// folder with each folder's count, a root file by its name, and the list's move
-// in the same line when it moved; the move alone keeps its own line. Null when
-// nothing git tracks changed. `asking` with the move alone: the question that
-// offers the move with AI-DLC's record (`unit commit-record`). `update`: the
-// question that offers the update's own commit (`unit commit-record --update`)
-// on that branch, the move with it, naming the files it leaves. `later`, where
-// no question is put: the commit can run once their own git is ready, so the
-// line says AI-DLC makes it when they say.
+// folder with each folder's count, a root file by its name. Null when nothing
+// git tracks changed and no question is put. `update`: the question that offers
+// the update's own commit (`unit commit-record --update`) on that branch,
+// naming the files it leaves; with `moved`, that commit also moves the root
+// repos.json into aidlc/, which nothing else moves, so only this question says
+// it, and the move alone is a question of its own. `later`, where no question is
+// put: the commit can run once their own git is ready, so the line says AI-DLC
+// makes it when they say.
 export function catchUpChangedLine(
   version: string,
   paths: readonly string[],
   moved: boolean,
-  asking = false,
   withMessage = false,
   update?: { branch: string; left: readonly string[] },
   later = false,
 ): string | null {
-  const whenSaid = (one: boolean): string => (later ? ` Say when you want me to commit ${one ? "it" : "them"}.` : "");
   const since = `${REPOS_IN_AIDLC_SINCE.major}.${REPOS_IN_AIDLC_SINCE.minor}`;
-  // With the commit message the hook drafts for the move, which the agent shows after the question.
-  const offer = `Want me to commit the move, with AI-DLC's record in aidlc/${withMessage ? ", using this commit message" : ""}?`;
+  // With the commit message the hook drafts, which the agent shows after the question.
+  const message = withMessage ? " I'd use this commit message:" : "";
   if (paths.length === 0) {
-    if (!moved) return null;
-    // The move alone where the record's commit does not run (a Unit's build): the update's own commit takes it.
-    if (update !== undefined) {
-      return `AI-DLC moved repos.json into aidlc/. Want me to commit the move on ${update.branch}, as one commit of its own? ` +
-        `Nothing is pushed. Teammates need AI-DLC ${since} or newer to find it there.${withMessage ? " I'd use this commit message:" : ""}`;
-    }
-    return asking ? `AI-DLC moved repos.json into aidlc/. ${offer} Teammates need AI-DLC ${since} or newer to find it there.` : `${REPOS_MOVED_LINE}${whenSaid(true)}`;
+    // The move alone where the record's commit does not run (a Unit's build): the update's own commit makes it.
+    if (!moved || update === undefined) return null;
+    return `AI-DLC now keeps repos.json in aidlc/, and this project's is at the root. Want me to move it there on ` +
+      `${update.branch}, as one commit of its own? Nothing is pushed. Teammates need AI-DLC ${since} or newer to find it ` +
+      `there.${message}`;
   }
   const folders = new Map<string, number>();
   const roots: string[] = [];
@@ -169,15 +164,12 @@ export function catchUpChangedLine(
     const single = update.left.length === 1;
     const left = update.left.length === 0 ? "" : ` I'd leave ${leftFilesNamed(update.left)} out, as I cannot be sure ` +
       `${single ? "it holds" : "they hold"} only AI-DLC's changes: ${single ? "it is" : "they are"} yours to look over and commit.`;
-    return `${head}${moved ? ", and repos.json moved into aidlc/" : ""}. Want me to commit ${one ? "it" : "them"} on ${update.branch}, ` +
-      `as one commit of ${one ? "its" : "their"} own? Nothing is pushed.${left}` +
-      `${moved ? ` Teammates need AI-DLC ${since} or newer to find repos.json there.` : ""}${withMessage ? " I'd use this commit message:" : ""}`;
+    return `${head}${moved ? ", and it now keeps repos.json in aidlc/" : ""}. Want me to commit ${one ? "it" : "them"} on ` +
+      `${update.branch}, as one commit of ${one ? "its" : "their"} own${moved ? ", and move repos.json into aidlc/ in that commit" : ""}? ` +
+      `Nothing is pushed.${left}${moved ? ` Teammates need AI-DLC ${since} or newer to find repos.json there.` : ""}${message}`;
   }
-  if (moved) {
-    return `${head}, and repos.json moved into aidlc/. AI-DLC committed none of it. Teammates need AI-DLC ${since} or newer ` +
-      `to find repos.json there.${whenSaid(false)}`;
-  }
-  return `${head}. AI-DLC did not commit ${paths.length === 1 ? "it" : "them"}.${whenSaid(paths.length === 1)}`;
+  const one = paths.length === 1;
+  return `${head}. AI-DLC did not commit ${one ? "it" : "them"}.${later ? ` Say when you want me to commit ${one ? "it" : "them"}.` : ""}`;
 }
 
 // Said when the person sets a project to an earlier release (a pin, `aidlc
@@ -211,14 +203,17 @@ function gitTracks(root: string, path: string): boolean {
     .status === 0;
 }
 
-// The one move, for config's refresh: a root repos.json goes into aidlc/ with
-// its bytes kept. A file git tracks moves by `git mv`, so the rename is staged
-// and a teammate whose AI-DLC made the same move still pulls the lead's commit
-// cleanly (a plain rename leaves an untracked aidlc/repos.json that blocks it);
-// when git refuses, the list stays at the root, where it is still read. With a
-// list already in aidlc/, both stay as they are and aidlc/'s is read; a root
-// repos.json that does not read as the list stays the project's.
-export function moveReposManifestIntoAidlc(root: string): { moved: boolean; tracked: boolean } {
+// The one move: a root repos.json goes into aidlc/ with its bytes kept, by a
+// plain rename. Config's refresh moves one git does not track. One git tracks
+// moves only with `tracked`: the update's own commit makes it on the person's
+// yes and takes it in an index of its own (commitRecord). Until then, and after
+// a no, the list stays at the root, where it is still read, with nothing staged,
+// so the person's own next commit carries nothing of it, and a teammate pulls
+// the lead's commit of the move cleanly (an untracked aidlc/repos.json, or a
+// staged one, would stop that pull). With a list already in aidlc/, both stay as
+// they are and aidlc/'s is read; a root repos.json that does not read as the
+// list stays the project's.
+export function moveReposManifestIntoAidlc(root: string, tracked = false): { moved: boolean; tracked: boolean } {
   const from = join(root, REPOS_FILE);
   const to = join(root, "aidlc", REPOS_FILE);
   if (
@@ -227,37 +222,46 @@ export function moveReposManifestIntoAidlc(root: string): { moved: boolean; trac
   ) {
     return { moved: false, tracked: false };
   }
-  if (gitTracks(root, REPOS_FILE)) {
-    const moved = spawnSync("git", ["-C", root, "mv", "--", REPOS_FILE, `aidlc/${REPOS_FILE}`], {
-      stdio: "ignore",
-      timeout: 10_000,
-    }).status === 0;
-    return { moved, tracked: moved };
-  }
+  const inGit = gitTracks(root, REPOS_FILE);
+  if (inGit && !tracked) return { moved: false, tracked: false };
   try {
     renameSync(from, to);
-    return { moved: true, tracked: false };
+    return { moved: true, tracked: inGit };
   } catch {
     return { moved: false, tracked: false };
   }
 }
 
-// For a refresh run in another process: whether a root repos.json git tracks is
-// here now, and afterwards whether that move happened (REPOS_MOVED_LINE's case).
+// Whether a root repos.json git tracks is here now, read before a refresh run
+// in another process, so the update's own commit can offer its move.
 export function trackedReposManifestAtRoot(root: string): boolean {
   return entryAt(join(root, REPOS_FILE))?.isFile() === true && rootFileIsTheList(root) && gitTracks(root, REPOS_FILE);
 }
 
-// The move as a refresh made it, not committed yet: HEAD has the list at the
-// root and none in aidlc/, the root has none now, and aidlc/'s holds HEAD's
-// bytes. Its two paths, for the update's own commit; none otherwise.
+// The move the update's own commit takes, by its two paths; none otherwise.
+// HEAD has the list at the root and none in aidlc/, and either the move is
+// still to make (git shows the root list as HEAD has it, in the index and the
+// working tree, nothing is at aidlc/repos.json and git would take it there), so
+// a change of the person's to the list, staged or not, is never moved or
+// committed for them; or it was made and not committed (the root has none now
+// and aidlc/'s holds HEAD's bytes).
 export function reposMoveToCommit(root: string): string[] {
-  const id = (args: string[]): string =>
-    spawnSync("git", ["-C", root, ...args], { encoding: "utf-8", timeout: 10_000 }).stdout?.trim() ?? "";
-  if (entryAt(join(root, REPOS_FILE)) || !entryAt(join(root, "aidlc", REPOS_FILE))?.isFile()) return [];
+  const paths = [REPOS_FILE, `aidlc/${REPOS_FILE}`];
+  // No optional locks: a commit the person starts meanwhile never meets this one's index lock.
+  const run = (args: string[]) =>
+    spawnSync("git", ["--no-optional-locks", "-C", root, ...args], { encoding: "utf-8", timeout: 10_000 });
+  const id = (args: string[]): string => run(args).stdout?.trim() ?? "";
   const was = id(["rev-parse", "--verify", "--quiet", `HEAD:./${REPOS_FILE}`]);
   if (was === "" || id(["rev-parse", "--verify", "--quiet", `HEAD:./aidlc/${REPOS_FILE}`]) !== "") return [];
-  return id(["hash-object", "--", `aidlc/${REPOS_FILE}`]) === was ? [REPOS_FILE, `aidlc/${REPOS_FILE}`] : [];
+  if (entryAt(join(root, REPOS_FILE))) {
+    const status = run(["status", "--porcelain", "--", ...paths]);
+    const toMake = status.status === 0 && status.stdout === "" && !entryAt(join(root, "aidlc", REPOS_FILE)) &&
+      entryAt(join(root, "aidlc"))?.isDirectory() === true && rootFileIsTheList(root) &&
+      run(["check-ignore", "-q", "--", paths[1]]).status === 1;
+    return toMake ? paths : [];
+  }
+  if (!entryAt(join(root, "aidlc", REPOS_FILE))?.isFile()) return [];
+  return id(["hash-object", "--", paths[1]]) === was ? paths : [];
 }
 
 export function reposManifestMovedIntoAidlc(root: string): boolean {
