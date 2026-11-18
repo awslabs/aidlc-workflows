@@ -1943,15 +1943,16 @@ function candidateEvidence(
   // so every real receipt would miss the floor; a file in this checkout that
   // was never committed does not move it. A gate sent back is a floor boundary
   // too, numbered among every send-back of its stages, so main's send-backs
-  // stay (earlier attempts' too); the candidate's own shard is new, so its
-  // send-backs come only with the transported rows.
+  // stay (earlier attempts' too); the candidate's own shard is read only with
+  // the transported rows, also where main already holds it (a land resumed
+  // after its merge commit), so its send-backs count once.
   const mainShards = gitOutput(
     projectDir,
     ["ls-tree", "--name-only", liveIntegrationOid, "--", `${recordPrefix}/audit/`],
     "Cannot list the integration audit shards",
   )
     .split(/\r?\n/)
-    .filter((path) => isActiveIntentAuditPath(path, recordPrefix));
+    .filter((path) => isActiveIntentAuditPath(path, recordPrefix) && !changedAudit.includes(path));
   const floorRows = candidateAuditEvents(projectDir, liveIntegrationOid, mainShards).filter((row) =>
     row.event === "GATE_REJECTED" ||
     (!TRANSPORTED_ATTEMPT_EVENTS.has(row.event) && !TRANSPORTED_DATA_EVENTS.has(row.event))

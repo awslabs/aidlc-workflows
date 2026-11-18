@@ -2,7 +2,7 @@
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -16,6 +16,7 @@ import {
 import { seededAuditDir, seededRecordDir, seededStateFile } from "../harness/fixtures.ts";
 import {
   UNIT,
+  approveMerge,
   tempDirs,
   cleanupTempDirs,
   git,
@@ -613,6 +614,38 @@ describe("t326 pinned team Unit merge", () => {
     const repin = runMergeTool(UNIT, ["pin", "alpha"], seed);
     expect(repin.status).not.toBe(0);
     expect(repin.out).toContain("recover it with aidlc unit land alpha");
+    const lost = JSON.parse(readFileSync(journalPath, "utf-8"));
+    lost.status = "approved";
+    delete lost.git_commit_oid;
+    writeFileSync(journalPath, `${JSON.stringify(lost, null, 2)}\n`);
+    const recovered = runMergeTool(UNIT, ["land", "alpha", "--step", "git"], seed);
+    expect(recovered.status, recovered.out).toBe(0);
+    expect(JSON.parse(recovered.stdout).git_commit_oid).toBe(mergeOid);
+  });
+
+  // A resumed land reads the evidence on a main that already holds the merge,
+  // and so the Unit's own shard: a send-back the clone made counts once there,
+  // as the clone counted it.
+  test("a lost post-merge journal update recovers for a Unit sent back once in its clone", () => {
+    const { seed, remote } = makeSeed();
+    const sentBack = "2026-08-20T00:30:00Z";
+    const stages = "functional-design, nfr-requirements, nfr-design, infrastructure-design, code-generation";
+    prepareCandidate(remote, "alpha", "resume-team", {
+      afterClaim: (checkout) => {
+        appendFileSync(
+          join(seededAuditDir(checkout), auditShardName(checkout)),
+          `## Gate Rejected\n**Timestamp**: ${sentBack}\n**Event**: GATE_REJECTED\n**Stage**: functional-design\n` +
+            `**Gate Stages**: ${stages}\n**Gate Scope**: per-stage\n**Unit**: alpha\n**Attempt Generation**: 1\n` +
+            "**Reopen**: jump\n\n---\n",
+        );
+      },
+      runFloor: `GATE_REJECTED:${sentBack}#1`,
+    });
+    approveMerge(seed, "alpha");
+    const landed = runMergeTool(UNIT, ["land", "alpha", "--step", "git"], seed);
+    expect(landed.status, landed.out).toBe(0);
+    const mergeOid = JSON.parse(landed.stdout).git_commit_oid;
+    const journalPath = unitMergeTransactionPath(seed, "alpha");
     const lost = JSON.parse(readFileSync(journalPath, "utf-8"));
     lost.status = "approved";
     delete lost.git_commit_oid;
