@@ -746,6 +746,41 @@ describe("t-team-unit-end-gate-findings: a Unit worked alone shows at its checkp
     ]);
   });
 
+  // A Unit the walk does not ask at its own checkpoint is decided at its
+  // stages' gates, or at its swarm batch's, which records Code Generation's
+  // findings only: its Code Generation brief shows that stage's review alone,
+  // as before. alpha's work and reviews stand; the walk around it changes.
+  const ownReviewOnly = (shown: string) => {
+    expect(shown).toStartWith("**Stage:** Code Generation\n**Review outcome:** No blocking concerns were found.\n");
+    expect(shown).not.toContain("nfr-design");
+    expect(shown).toContain("- **Approve** - continue; no findings are open.");
+  };
+  const walkedAs = (proj: string, fields: Record<string, string>) => {
+    let state = readFileSync(seededStateFile(proj), "utf-8");
+    for (const [name, value] of Object.entries(fields)) {
+      const line = new RegExp(`^- \\*\\*${name}\\*\\*: .*$`, "m");
+      expect(state).toMatch(line);
+      state = state.replace(line, `- **${name}**: ${value}`);
+    }
+    writeFileSync(seededStateFile(proj), state);
+    // A skeleton Unit ahead of alpha, so alpha's checkpoint is an ordinary Unit's.
+    seedBoltDag(proj, ["skeleton", "alpha"]);
+  };
+
+  test("a Unit worked stage by stage after the skeleton keeps the brief of its own review only", () => {
+    const proj = seedSoloProject();
+    soloCheckpointBrief(proj, { "nfr-design": NFR_DESIGN_FINDINGS });
+    walkedAs(proj, { "Construction Iteration": "stage-major", "Skeleton Stance": "on" });
+    ownReviewOnly(brief(proj, "code-generation"));
+  });
+
+  test("a Unit of a swarm batch keeps the brief of its own review only", () => {
+    const proj = seedSoloProject();
+    soloCheckpointBrief(proj, { "nfr-design": NFR_DESIGN_FINDINGS });
+    walkedAs(proj, { "Construction Iteration": "stage-major", "Skeleton Stance": "on", "Construction Execution": "swarm" });
+    ownReviewOnly(brief(proj, "code-generation"));
+  });
+
   test("with no open findings the checkpoint's brief reads as before and records none", () => {
     const proj = seedSoloProject();
     const shown = soloCheckpointBrief(proj, {});
