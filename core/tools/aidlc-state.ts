@@ -309,6 +309,7 @@ import { generateFireId, recordUnfinishedFire, sensorMatchesPath, unfinishedFire
 import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
 import { aidlcDispatcherInvocation, aidlcToolInvocation, compiledExecutable, entrySkillInvocation, syncFolderClause } from "./aidlc-runtime-paths.ts";
 import { markdownBlocks, projectVisibleMarkdownLines } from "./aidlc-markdown.ts";
+import { newlineOf } from "./aidlc-distribution.ts";
 import { type EngineUnitDirective, readEngineUnitDirective, routesUnitStep, routesWave } from "./aidlc-log.ts";
 import {
   stageLabel,
@@ -9934,8 +9935,8 @@ function handlePracticesPromote(args: string[]): void {
   let teamPracticesDraft: string;
   let discoveredRulesDraft: string;
   try {
-    teamPracticesDraft = readFileSync(teamPracticesPath, "utf-8");
-    discoveredRulesDraft = readFileSync(discoveredRulesPath, "utf-8");
+    teamPracticesDraft = readFileSync(teamPracticesPath, "utf-8").replaceAll("\r\n", "\n");
+    discoveredRulesDraft = readFileSync(discoveredRulesPath, "utf-8").replaceAll("\r\n", "\n");
   } catch (e) {
     fail(`could not read drafts: ${errorMessage(e)}`);
     return;
@@ -9948,9 +9949,15 @@ function handlePracticesPromote(args: string[]): void {
 
   let teamMd: string;
   let guardrailsMd: string;
+  let teamNewline: string;
+  let guardrailsNewline: string;
   try {
     teamMd = readFileSync(teamMdPath, "utf-8");
     guardrailsMd = readFileSync(guardrailsPath, "utf-8");
+    teamNewline = newlineOf(teamMd);
+    guardrailsNewline = newlineOf(guardrailsMd);
+    teamMd = teamMd.replaceAll("\r\n", "\n");
+    guardrailsMd = guardrailsMd.replaceAll("\r\n", "\n");
   } catch (e) {
     fail(`could not read targets: ${errorMessage(e)}`);
     return;
@@ -10025,13 +10032,13 @@ function handlePracticesPromote(args: string[]): void {
   // the user re-enters the gate. Identical project rules are deduplicated
   // above, so a retry cannot accumulate copies after this partial-write path.
   try {
-    writeFileSync(guardrailsPath, newGuardrailsMd, "utf-8");
+    writeFileSync(guardrailsPath, newGuardrailsMd.replaceAll("\n", guardrailsNewline), "utf-8");
   } catch (e) {
     fail(`writing project.md failed: ${errorMessage(e)}`);
     return;
   }
   try {
-    writeFileSync(teamMdPath, newTeamMd, "utf-8");
+    writeFileSync(teamMdPath, newTeamMd.replaceAll("\n", teamNewline), "utf-8");
   } catch (e) {
     fail(
       `writing team.md failed AFTER project.md was written: ${errorMessage(e)}`
