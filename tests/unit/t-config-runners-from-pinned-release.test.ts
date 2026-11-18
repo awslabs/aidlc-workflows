@@ -1,10 +1,10 @@
-// covers: file:tools/aidlc-release-runners.ts
+// covers: function:runnerGenerator, function:regenerateRunnersFor, function:pinnedRunnersFailure, function:runnersFallbackLine
 
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { regenerateRunnersFor, runnerGenerator } from "../../core/tools/aidlc-release-runners.ts";
+import { pinnedRunnersFailure, regenerateRunnersFor, runnerGenerator, runnersFallbackLine } from "../../core/tools/aidlc-init.ts";
 import { AIDLC_VERSION } from "../../core/tools/aidlc-version.ts";
 
 const PINNED = "2.10.0";
@@ -95,20 +95,40 @@ describe("config writes the runner skills with the release its files come from",
     expect(readFileSync(log, "utf-8")).toBe(`engine gen runners @ ${root}\nengine gen runner-scopes @ ${root}\n`);
   });
 
-  test("a pinned release missing from a native install stops with the step that installs it", () => {
+  test("a pinned release missing from a native install leaves its runners to the running release, and the refresh says so", () => {
     const { harness } = staged(PINNED);
     nativeInstall();
-    expect(() => runnerGenerator(harness, true)).toThrow(`aidlc versions install ${PINNED}`);
+    expect(runnerGenerator(harness, true)).toEqual({ release: PINNED, missing: true });
+    expect(runnersFallbackLine(PINNED, null)).toBe(
+      `AI-DLC ${PINNED} is not installed on this computer, so AI-DLC ${AIDLC_VERSION} wrote the runner skills.`,
+    );
   });
 
-  test("a source without the release's runner tool stops instead of writing another release's text", () => {
-    const { harness } = staged(PINNED, false);
-    expect(() => runnerGenerator(harness, true)).toThrow(`the ${PINNED} source has no tools/aidlc-runner-gen.ts`);
+  test("a pinned release of any age writes its own runners with its own installed aidlc", () => {
+    const { harness } = staged("2.9.0");
+    const install = nativeInstall();
+    const executable = join(install, "versions", "2.9.0", process.platform === "win32" ? "aidlc.exe" : "aidlc");
+    mkdirSync(join(install, "versions", "2.9.0"), { recursive: true });
+    writeFileSync(executable, "");
+    expect(runnerGenerator(harness, true)).toEqual({
+      release: "2.9.0",
+      commands: [[executable, "engine", "gen", "runners"], [executable, "engine", "gen", "runner-scopes"]],
+    });
   });
 
-  test("a failing generator names its release", () => {
+  test("a source without the release's runner tool writes them in this process", () => {
+    expect(runnerGenerator(staged(PINNED, false).harness, true)).toBeNull();
+  });
+
+  test("a failing generator leaves the runners to the running release, in one line", () => {
     const { root, harness } = staged(PINNED);
     process.env.T_RUNNER_EXIT = "3";
-    expect(() => regenerateRunnersFor(root, harness, true)).toThrow(`${PINNED}'s runner generator failed`);
+    const generator = runnerGenerator(harness, true);
+    expect(generator).toEqual({ release: PINNED, commands: [[process.execPath, join(harness, "tools", "aidlc-runner-gen.ts"), "write"], [process.execPath, join(harness, "tools", "aidlc-runner-gen.ts"), "scopes"]] });
+    const failure = pinnedRunnersFailure(root, (generator as { commands: string[][] }).commands);
+    expect(failure).toBe("exit 3");
+    expect(runnersFallbackLine(PINNED, failure)).toBe(
+      `AI-DLC ${PINNED} could not write its runner skills (exit 3), so AI-DLC ${AIDLC_VERSION} wrote them.`,
+    );
   });
 });
