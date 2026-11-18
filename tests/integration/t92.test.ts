@@ -2050,4 +2050,19 @@ describe("t92 Group R: a check whose output passes 1 MiB is read whole", () => {
     expect(auditField(proj, "SENSOR_FAILED", "Findings count")).toBe("30000");
     expect(readFileSync(join(proj, verdict.detail_path as string), "utf-8")).toContain('"line": 30000');
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // 4,000 lint errors in one file are about 1.45 MB of ESLint output.
+  test("56: a file with 4,000 lint errors of its own gets every one as a finding", () => {
+    const proj = makeProj();
+    const sub = join(proj, "failing-linter");
+    cpSync(join(FIXTURES_ROOT, "failing-linter"), sub, { recursive: true });
+    const sample = join(sub, "sample.ts");
+    writeFileSync(sample, Array.from({ length: 4000 }, (_, i) => `const unused${i + 1} = ${i + 1};\n`).join(""), "utf-8");
+    requireLocalSensorDependency("linter", sub);
+    const res = fire(["linter", "--stage", "code-generation", "--output-path", sample], realSensorEnv("linter", proj));
+    const verdict = verdictOf(res.out);
+    expect(verdict.result, readAudit(proj)).toBe("failed");
+    expect(auditField(proj, "SENSOR_FAILED", "Findings count")).toBe("4000");
+    expect(readFileSync(join(proj, verdict.detail_path as string), "utf-8")).toContain("unused4000");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

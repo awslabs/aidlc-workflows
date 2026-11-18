@@ -200,6 +200,7 @@ export function forwardJumpNotice(
   skipped: readonly { slug: string; name: string; plugin?: string }[],
   cameFrom: string,
   units: ForwardJumpUnitSteps | null = null,
+  wayBack = true,
 ): string {
   const and = (names: readonly string[]): string =>
     names.length <= 1 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
@@ -234,7 +235,7 @@ export function forwardJumpNotice(
   return [
     `Moved to ${stageLabel(target, target.slug) ?? "that stage"}${list ? `; skipped ${list}` : ""}.`,
     ...sentences,
-    `You can go back to ${stageLabel(stageOrNone(back), back) ?? "where you were"} any time.`,
+    ...(wayBack ? [`You can go back to ${stageLabel(stageOrNone(back), back) ?? "where you were"} any time.`] : []),
   ].join(" ");
 }
 
@@ -883,7 +884,9 @@ async function handleExecute(args: string[]): Promise<void> {
   // Under team ownership each Unit's per-Unit work belongs to its claim: going
   // back to a stage before the per-Unit block (the Unit plan changing) keeps
   // it, and a Unit goes back to work only by its own reopen (`jump reopen
-  // --units`). The row says so; stageJumpReaches reads it.
+  // --units`). The row says so, as does the move past the block that keeps
+  // its stages open (`keepsUnitStages`); stageJumpReaches and
+  // hasCurrentTeamUnitActivity (aidlc-state.ts) read it.
   const keepsTeamUnitWork = direction === "backward" && isTeamUnitOwnership(content) &&
     beforePerUnitBlock(graph, targetSlug);
   const downstreamStages = direction === "backward"
@@ -961,7 +964,7 @@ async function handleExecute(args: string[]): Promise<void> {
               JSON.stringify(invalidatedDownstreamReviews),
           }
         : {}),
-      ...(keepsTeamUnitWork ? { "Unit Work": "kept" } : {}),
+      ...(keepsTeamUnitWork || keepsUnitStages ? { "Unit Work": "kept" } : {}),
       ...jumpSourceBaseline,
       ...(theirs ? personGitNameField(pd) : {}),
     });
@@ -989,7 +992,10 @@ async function handleExecute(args: string[]): Promise<void> {
   let notice: string | undefined;
   if (direction === "forward") {
     const skipped = graph.filter((node) => stagesSkipped.includes(node.slug));
-    notice = forwardJumpNotice(targetStage, skipped, cameFrom, unitSteps) + (stillOpen ? ` ${stillOpen}` : "");
+    // Going back after a move that kept the Unit stages reopens only the Units
+    // this checkout builds (teamRedoNarrowed), so the line names no way back.
+    notice = forwardJumpNotice(targetStage, skipped, cameFrom, unitSteps, !keepsUnitStages) +
+      (stillOpen ? ` ${stillOpen}` : "");
   } else if (direction === "redo" && targetSlug === "reverse-engineering" && from && from.slug !== targetSlug) {
     notice = reverseEngineeringRedoNotice(from);
   } else if (direction === "backward" && from && !addedBack) {

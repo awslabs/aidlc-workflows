@@ -165,8 +165,7 @@ aidlc/spaces/default/
     inception/
       requirements-analysis/ # requirements.md + questions
     construction/
-      bugfix-null-display-name/
-        code-generation/     # plan + summary
+      code-generation/       # plan + summary
       build-and-test/        # instructions + test results
     operation/
       deployment-pipeline/   # CD config + strategy + rollback runbook

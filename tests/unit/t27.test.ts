@@ -549,6 +549,30 @@ describe("t27 aidlc-utility doctor", () => {
     expect(out.slice(row).split("\n").find((line) => /^ {2}ok {4}\d+ checks passed$/.test(line))).toBeDefined();
   });
 
+  // An installed project with no failed check: the workflow findings alone
+  // decide the status a script reads, and warnings never fail doctor.
+  test("70c: with no failed check, workflow findings alone make doctor --json say warning, and doctor still exits 0", () => {
+    const p = installedProj(withStatusLineOn);
+    seedStateFile(p, STATE_FIXTURE);
+    seedAuditFile(p);
+    // Its hooks ran: a heartbeat newer than the workflow's last step.
+    const health = join(recordDirOf(p), ".aidlc-engine", "hooks-health");
+    mkdirSync(health, { recursive: true });
+    writeFileSync(join(health, "write-audit-log.last"), `${new Date().toISOString()}\n`, "utf-8");
+    const human = util(["doctor"], p, { NO_COLOR: "1" });
+    expect(human.stdout).toContain("  warn  [runtime-graph-missing] ");
+    expect(human.stdout, human.stdout).toMatch(/\n0 problems, [1-9]\d* warnings?\.\n/);
+    const run = util(["doctor", "--json"], p);
+    const json = JSON.parse(run.stdout.trim().split("\n").at(-1) ?? "{}");
+    expect(json.status).toBe("warning");
+    expect(json.ok).toBe(true);
+    expect(json.code).toBe(0);
+    expect(run.status).toBe(0);
+    const quiet = util(["doctor", "--quiet"], p);
+    expect(quiet.status).toBe(0);
+    expect(quiet.stdout.trim()).toMatch(/, [1-9]\d* warnings, 0 failed$/);
+  });
+
   // COLD-SAFE contract (#4): on a project with NO audit shard, --doctor is
   // read-only - it prints the health report (exit code aside) but creates no
   // audit side effect. bareProj() makes the workspace shell but NOT an audit
