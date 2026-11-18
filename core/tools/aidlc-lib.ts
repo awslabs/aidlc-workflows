@@ -14591,35 +14591,17 @@ const UNSAVED_REASONS = {
 } as const;
 type UnsavedReason = keyof typeof UNSAVED_REASONS;
 
-function unrecordedWriteHint(projectDir: string): string {
-  let notFiring: boolean;
-  try {
-    notFiring = hooksNeverRanHere(projectDir) || hookLiveness(projectDir).stale;
-  } catch {
-    return "";
-  }
-  if (!notFiring) return "";
-  let recovery: string;
-  try {
-    recovery = hookExecutionRecoveryText(projectDir);
-  } catch {
-    recovery = HOOK_EXECUTION_RECOVERY_OTHER;
-  }
-  return " No save can be recorded in this session: AI-DLC's hooks are not firing here, so saving the " +
-    `document again cannot produce the write this step waits for. ${recovery}`;
-}
-
 // The outputs the current summary confirmation does not authorize, in one
 // refusal sentence; one output reads as it always has.
 function unsavedOutputsMessage(
   slug: string,
   unsaved: ReadonlyArray<{ artifact: string; reason: UnsavedReason }>,
-  projectDir: string,
+  saveStep: (save: string) => string,
 ): string {
   if (unsaved.length === 1) {
     return `Refusing to continue "${slug}": this stage's output document ${unsaved[0].artifact} ` +
-      `${UNSAVED_REASONS[unsaved[0].reason].one}. Save the document again, so its write descends from the current ` +
-      `confirmation, then continue.${unrecordedWriteHint(projectDir)}`;
+      `${UNSAVED_REASONS[unsaved[0].reason].one}. ` +
+      saveStep("Save the document again, so its write descends from the current confirmation, then continue.");
   }
   const reasons = new Set(unsaved.map((entry) => entry.reason));
   const names = reasons.size === 1
@@ -14629,8 +14611,8 @@ function unsavedOutputsMessage(
   const why = reasons.size === 1
     ? UNSAVED_REASONS[unsaved[0].reason].many
     : "were not saved under the current confirmation";
-  return `Refusing to continue "${slug}": this stage's output documents ${list} ${why}. Save each ` +
-    `of them again, so each write descends from the current confirmation, then continue.${unrecordedWriteHint(projectDir)}`;
+  return `Refusing to continue "${slug}": this stage's output documents ${list} ${why}. ` +
+    saveStep("Save each of them again, so each write descends from the current confirmation, then continue.");
 }
 
 export function checkSummaryConfirmationEvidence(
@@ -14649,6 +14631,17 @@ export function checkSummaryConfirmationEvidence(
     confirmationOnly?: boolean;
   } = {},
 ): SummaryConfirmationEvidence {
+  // Where no hook ever ran here, a save makes no write, so saving again would
+  // loop: the step is the hooks-off way back, under the same test the presence
+  // refusal uses (unattendedHumanPresenceHint). Anywhere else, the save.
+  const saveStep = (save: string): string => {
+    try {
+      if (!hooksNeverRanHere(projectDir) || personAtOwnTerminal(projectDir)) return save;
+      return hooksOffAgentStep(projectDir) ?? save;
+    } catch {
+      return save;
+    }
+  };
   const failure = (
     code: string,
     message: string,
@@ -15214,14 +15207,14 @@ export function checkSummaryConfirmationEvidence(
         return failure(
           "SUMMARY_ARTIFACT_ORDER_INVALID",
           `Refusing to continue "${stage.slug}": this stage's output document ` +
-            `${artifact} was not saved after the confirmed answers. Save the ` +
-            `document after confirmation, then continue.${unrecordedWriteHint(projectDir)}`,
+            `${artifact} was not saved after the confirmed answers. ` +
+            saveStep("Save the document after confirmation, then continue."),
           "stale",
         );
       }
     }
     if (unsaved.length > 0) {
-      return failure("SUMMARY_ARTIFACT_UNAUTHORIZED", unsavedOutputsMessage(stage.slug, unsaved, projectDir), "stale");
+      return failure("SUMMARY_ARTIFACT_UNAUTHORIZED", unsavedOutputsMessage(stage.slug, unsaved, saveStep), "stale");
     }
   }
 
@@ -28339,10 +28332,12 @@ const HOOKS_OFF_AGENT_RULES =
 /**
  * What the agent does, then the one line it shows the person, when this
  * harness's hooks are not running here; null for a harness that declares no
- * such step. `next` stops with it before any work, and a refusal for a reply
- * that was not recorded carries it. `keep` is the stop's: asked only when the
- * step has the person type the entry in a new chat, it keeps the stopped
- * command and returns its id, or null to leave the entry bare.
+ * such step. `next` stops with it before any work, a refusal for a reply that
+ * was not recorded carries it, and a save-again refusal of the summary evidence
+ * (checkSummaryConfirmationEvidence) gives it in place of the save, with no
+ * question waiting. `keep` is the stop's: asked only when the step has the
+ * person type the entry in a new chat, it keeps the stopped command and returns
+ * its id, or null to leave the entry bare.
  */
 export function hooksOffAgentStep(projectDir?: string, next?: string, keep?: () => string | null): string | null {
   const activation = hookActivation();

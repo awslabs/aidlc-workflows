@@ -1,4 +1,4 @@
-// covers: function:checkSummaryConfirmationEvidence, function:hookLiveness, function:hookExecutionRecoveryText, function:hooksNeverRanHere, subcommand:aidlc-log:review
+// covers: function:checkSummaryConfirmationEvidence, function:hookLiveness, function:hooksOffAgentStep, function:hooksNeverRanHere, subcommand:aidlc-log:review
 
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
@@ -31,9 +31,12 @@ const ENV: NodeJS.ProcessEnv = {
   ...testGuardEnvironment(process.env, "production"),
   AIDLC_UNATTENDED: "0",
 };
-const NO_SAVE = "No save can be recorded in this session: AI-DLC's hooks are not firing here";
 const SAVE_AGAIN = "Save each of them again, so each write descends from the current confirmation, then continue.";
-const ACP_WAY = "From an ACP client, start `kiro-cli acp --agent-engine v2`";
+const SAVE_ONE_AGAIN = "Save the document again, so its write descends from the current confirmation, then continue.";
+// The hooks-off step Kiro CLI ships (harness/kiro/manifest.ts, hookActivation.agentStep), as the presence refusal gives it.
+const HOOKS_OFF_RULES = "Do not run AI-DLC's hook scripts yourself";
+const KIRO_STEP = "Kiro is not running this project's aidlc agent in this session.";
+const KIRO_WAY = "Type /agent and pick aidlc, then carry on.";
 
 const dirs: string[] = [];
 afterAll(() => {
@@ -117,52 +120,52 @@ function hooksStopped(w: Work, minutesAgo: number): void {
   writeFileSync(join(hooksHealthDir(w.proj), "audit-and-sensors.last"), `${at}\n`);
 }
 
-describe("t-relayed-session-names-no-hook-write: a save no hook can record says so", () => {
-  test("a relayed Kiro CLI session names the missing write, the harness's way back, and the files", () => {
+describe("t-relayed-session-names-no-hook-write: where no hook runs, a save the hooks cannot record gives the way back", () => {
+  test("a Kiro CLI session no hook ran in names the missing write and the files, and the way back in place of a save", () => {
     const w = project();
     relayedSummary(w);
     savedWithoutAWrite(w);
     const error = requestReview(w);
     expect(error).toContain("have no recorded write");
-    expect(error).toContain(SAVE_AGAIN);
-    expect(error).toContain(NO_SAVE);
-    expect(error).toContain("saving the document again cannot produce the write this step waits for");
-    expect(error).toContain(ACP_WAY);
     expect(error).toContain("requirements.md");
     expect(error).toContain("traceability.json");
+    expect(error).not.toContain(SAVE_AGAIN);
+    expect(error).toContain(HOOKS_OFF_RULES);
+    expect(error).toContain(KIRO_STEP);
+    expect(error).toContain(KIRO_WAY);
   });
 
-  test("one output with no recorded write gets the same sentence, not only the save-again step", () => {
+  test("one output with no recorded write gets the same way back, in place of the save", () => {
     const w = project();
     relayedSummary(w);
     writeFileSync(w.requirements, "# Requirements\n\n- FR1 Keep the login flow.\n");
     const error = requestReview(w);
     expect(error).toContain("requirements.md has no recorded write");
-    expect(error).toContain("Save the document again, so its write descends from the current confirmation");
-    expect(error).toContain(NO_SAVE);
+    expect(error).not.toContain(SAVE_ONE_AGAIN);
+    expect(error).toContain(KIRO_STEP);
   });
 
-  test("while the hooks run, the refusal stays the agent's save: no session-wide claim", () => {
+  test("while the hooks run, the refusal is the agent's save, word for word", () => {
     const w = project();
     relayedSummary(w);
     savedWithoutAWrite(w);
     mkdirSync(hooksHealthDir(w.proj), { recursive: true });
     writeFileSync(join(hooksHealthDir(w.proj), "audit-and-sensors.last"), `${new Date().toISOString()}\n`);
     const error = requestReview(w);
-    expect(error).toContain("have no recorded write");
-    expect(error).not.toContain(NO_SAVE);
-    expect(error).not.toContain(ACP_WAY);
+    expect(error).toContain(`have no recorded write. ${SAVE_AGAIN}`);
+    expect(error.split("\n")[0].endsWith(SAVE_AGAIN)).toBe(true);
+    expect(error).not.toContain(KIRO_STEP);
   });
 
-  test("hooks that stopped after the workflow advanced get the same sentence", () => {
+  test("hooks that ran here once and stopped keep the save step, word for word", () => {
     const w = project();
     relayedSummary(w);
     savedWithoutAWrite(w);
     hooksStopped(w, 40);
     appendAuditEntry("STAGE_STARTED", { Stage: "feasibility" }, w.proj);
     const error = requestReview(w);
-    expect(error).toContain("have no recorded write");
-    expect(error).toContain(NO_SAVE);
-    expect(error).toContain(ACP_WAY);
+    expect(error).toContain(`have no recorded write. ${SAVE_AGAIN}`);
+    expect(error.split("\n")[0].endsWith(SAVE_AGAIN)).toBe(true);
+    expect(error).not.toContain(KIRO_STEP);
   });
 });
