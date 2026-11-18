@@ -166,6 +166,7 @@ import {
   canonicalPathKey,
   chatAwaitsFirstStep,
   type CheckboxState,
+  claudeChatRecord,
   claudeNamedChat,
   clearSessionProcessTable,
   cloneIdentity,
@@ -7634,12 +7635,8 @@ function hostChatStartFolder(projectDir: string): string | null {
     switch (runtimeHarnessDir(projectDir)) {
       case ".claude": {
         const chat = claudeNamedChat();
-        if (chat === null) return null;
-        const config = process.env.CLAUDE_CONFIG_DIR?.trim() || join(homedir(), ".claude");
-        const record = JSON.parse(readFileSync(join(config, "sessions", `${chat.pid}.json`), "utf-8")) as
-          | { pid?: unknown; sessionId?: unknown; cwd?: unknown }
-          | null;
-        return record?.pid === chat.pid && record.sessionId === chat.session ? absolute(record.cwd) : null;
+        const record = chat === null ? null : claudeChatRecord(chat.pid, chat.session);
+        return record === null ? null : absolute(record.cwd);
       }
       case ".codex": {
         const thread = validSessionId(process.env.CODEX_THREAD_ID);
