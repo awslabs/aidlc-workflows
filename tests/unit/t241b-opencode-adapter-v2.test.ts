@@ -265,19 +265,19 @@ describe("t241b OpenCode 2 entry point", () => {
 
   test("a plugin tool engine plugin sync wrote runs, and its record still decides the rest", async () => {
     const root = freshProject();
-    const tool = join(root, ".aidlc", "tools", "apex-govcloud-target.ts");
+    const tool = join(root, ".aidlc", "tools", "sample-tools-target.ts");
     writeFileSync(tool, 'console.log("apply");\n');
     const dataDir = join(root, ".aidlc", "tools", "data");
     mkdirSync(dataDir, { recursive: true });
-    const record = join(dataDir, "plugin-owned-apex-govcloud.json");
+    const record = join(dataDir, "plugin-owned-sample-tools.json");
     const writeRecord = () =>
       writeFileSync(
         record,
         JSON.stringify({
           schemaVersion: 1,
-          name: "apex-govcloud",
+          name: "sample-tools",
           files: [{
-            path: ".aidlc/tools/apex-govcloud-target.ts",
+            path: ".aidlc/tools/sample-tools-target.ts",
             sha256: `sha256:${createHash("sha256").update(readFileSync(tool)).digest("hex")}`,
           }],
         }),
@@ -286,7 +286,7 @@ describe("t241b OpenCode 2 entry point", () => {
     const v2 = await setup(root);
     const shell = (id: string, command: string) =>
       v2.before({ tool: "shell", sessionID: "ses_main", agent: "build", id, input: { command } });
-    const applied = "bun .aidlc/tools/apex-govcloud-target.ts apply --record r";
+    const applied = "bun .aidlc/tools/sample-tools-target.ts apply --record r";
     await shell("call_ok", applied);
     await expect(shell("call_chain", `${applied} && echo done`)).rejects.toThrow(
       /AIDLC bash permission allows one direct invocation/,
@@ -294,9 +294,9 @@ describe("t241b OpenCode 2 entry point", () => {
     await expect(shell("call_redirect", `${applied} > out.json`)).rejects.toThrow(
       /AIDLC bash permission allows one direct invocation/,
     );
-    writeFileSync(join(root, ".aidlc", "tools", "apex-govcloud-extra.ts"), 'console.log("hand");\n');
-    await expect(shell("call_hand_written", "bun .aidlc/tools/apex-govcloud-extra.ts apply")).rejects.toThrow(
-      /\.aidlc\/tools\/apex-govcloud-extra\.ts is neither: no `engine plugin sync` record lists it/,
+    writeFileSync(join(root, ".aidlc", "tools", "sample-tools-extra.ts"), 'console.log("hand");\n');
+    await expect(shell("call_hand_written", "bun .aidlc/tools/sample-tools-extra.ts apply")).rejects.toThrow(
+      /\.aidlc\/tools\/sample-tools-extra\.ts is neither: no `engine plugin sync` record lists it/,
     );
     writeFileSync(tool, 'console.log("edited");\n');
     await expect(shell("call_edited", applied)).rejects.toThrow(
@@ -304,8 +304,47 @@ describe("t241b OpenCode 2 entry point", () => {
     );
     rmSync(record, { force: true });
     await expect(shell("call_unrecorded", applied)).rejects.toThrow(
-      /\.aidlc\/tools\/apex-govcloud-target\.ts is neither: no `engine plugin sync` record lists it/,
+      /\.aidlc\/tools\/sample-tools-target\.ts is neither: no `engine plugin sync` record lists it/,
     );
+  });
+
+  // A synced tool in a checkout that writes CRLF (Git for Windows' default): the
+  // record holds the committed text, as the sync wrote it.
+  async function crlfSyncedTool(committed: Buffer): Promise<void> {
+    const root = freshProject();
+    const tools = join(root, ".aidlc", "tools");
+    writeFileSync(
+      join(tools, "sample-tools-target.ts"),
+      Buffer.from(committed.toString("latin1").replaceAll("\n", "\r\n"), "latin1"),
+    );
+    mkdirSync(join(tools, "data"), { recursive: true });
+    writeFileSync(
+      join(tools, "data", "plugin-owned-sample-tools.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        name: "sample-tools",
+        files: [{
+          path: ".aidlc/tools/sample-tools-target.ts",
+          sha256: `sha256:${createHash("sha256").update(committed).digest("hex")}`,
+        }],
+      }),
+    );
+    const v2 = await setup(root);
+    await v2.before({
+      tool: "shell",
+      sessionID: "ses_main",
+      agent: "build",
+      id: "call_crlf",
+      input: { command: "bun .aidlc/tools/sample-tools-target.ts apply" },
+    });
+  }
+
+  test("a synced plugin tool checked out with CRLF runs", async () => {
+    await crlfSyncedTool(Buffer.from('console.log("apply");\n'));
+  });
+
+  test("a synced plugin tool checked out with CRLF runs when its text is not UTF-8", async () => {
+    await crlfSyncedTool(Buffer.from('// caf\xe9\nconsole.log("apply");\n', "latin1"));
   });
 
   test("a subagent dispatch gets the stage-rules rewrite in its input", async () => {

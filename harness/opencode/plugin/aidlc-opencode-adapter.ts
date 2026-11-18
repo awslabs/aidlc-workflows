@@ -56,12 +56,15 @@
 //     but never scopes the main session.
 
 import { spawn } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 // emit.ts points this at the projected .aidlc/tools/ copy.
 import { windowsScriptLaunch } from "../../../core/tools/aidlc-executable-path.ts";
 import { patchTargets } from "../../../core/hooks/review-freeze-command.ts";
+// The plugin sync's own reading of its record and of a file's fingerprint.
+import { PLUGIN_OWNERSHIP_FILE, parseOwnership } from "../../../core/tools/aidlc-plugin-rules.ts";
+import { recordedDigestMatches } from "../../../core/tools/aidlc-review-manifest.ts";
 
 const PROJECTED_INVOKE = "{{INVOKE}}";
 const TRUSTED_NAMESPACE = "{{TRUSTED_NAMESPACE}}";
@@ -211,11 +214,13 @@ const PROJECTED_BUN_TOOLS = DEFAULT_AIDLC_COMMAND[0] === "bun"
   : null;
 
 const PROJECTED_HARNESS_DIR = PROJECTED_BUN_TOOLS?.split("/")[0] ?? null;
-const PLUGIN_OWNERSHIP_FILE = /^plugin-owned-([a-z][a-z0-9-]*)\.json$/;
-const RECORDED_DIGEST = /^sha256:[0-9a-f]{64}$/;
 
 type PluginSyncEntry = "written" | "unrecorded" | "changed";
 
+// Whether an entrypoint is a file a plugin sync installed and nobody changed
+// since, decided as the sync decides it: any record that lists the path with a
+// digest naming the file admits it; a listed file that cannot be read is not
+// installed.
 function pluginSyncEntry(
   projectDir: string,
   entrypoint: string,
@@ -226,31 +231,14 @@ function pluginSyncEntry(
   const digests: string[] = [];
   try {
     for (const name of readdirSync(dataDir)) {
-      const key = name.match(PLUGIN_OWNERSHIP_FILE);
-      if (key === null) continue;
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(readFileSync(join(dataDir, name), "utf-8"));
-      } catch {
-        continue;
-      }
-      if (typeof parsed !== "object" || parsed === null) continue;
-      const record = parsed as { schemaVersion?: unknown; name?: unknown; files?: unknown };
-      if (record.schemaVersion !== 1 || record.name !== key[1] || !Array.isArray(record.files)) continue;
-      for (const file of record.files as Array<{ path?: unknown; sha256?: unknown }>) {
-        if (file?.path !== recordedPath) continue;
-        if (typeof file.sha256 === "string" && RECORDED_DIGEST.test(file.sha256)) digests.push(file.sha256);
-      }
+      const key = name.match(PLUGIN_OWNERSHIP_FILE)?.[1];
+      const record = key === undefined ? null : parseOwnership(join(dataDir, name));
+      if (record === null || record.name !== key) continue;
+      for (const file of record.files) if (file.path === recordedPath) digests.push(file.sha256);
     }
     if (digests.length === 0) return "unrecorded";
-    const written = readFileSync(join(projectDir, PROJECTED_HARNESS_DIR, entrypoint));
-    if (digests.includes(`sha256:${createHash("sha256").update(written).digest("hex")}`)) return "written";
-    const text = written.includes(13) ? Buffer.from(written.toString("utf-8").replace(/\r\n/g, "\n")) : null;
-    if (
-      text !== null &&
-      digests.includes(`sha256:${createHash("sha256").update(text).digest("hex")}`)
-    ) return "written";
-    return "changed";
+    const target = join(projectDir, PROJECTED_HARNESS_DIR, entrypoint);
+    return digests.some((digest) => recordedDigestMatches(target, digest)) ? "written" : "changed";
   } catch {
     return "unrecorded";
   }
