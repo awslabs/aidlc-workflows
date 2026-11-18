@@ -1359,7 +1359,11 @@ change. See
    review with an open finding or that did not finish, ahead of the last
    stage's own, with the line naming what its one Approve accepts
    (`teamUnitGateStages` gives both the brief and the approval the same
-   stages), and the line after Approve names each review that did not finish. Reviewer dispatch context is always Unit-filtered.
+   stages), and the line after Approve names each review that did not finish.
+   So does the Construction checkpoint of a Unit worked alone Unit by Unit, or of
+   the skeleton, whose one approval decides its whole walk
+   (`checkpointGateStages` gives both the brief and the approval the same
+   stages); there the brief's Approve option says what it accepts. Reviewer dispatch context is always Unit-filtered.
    On `adversarial`: READY → run the learnings ritual only when its module is listed, then proceed to the gate.
    NOT-READY with iterations remaining below `reviewer_max_iterations` (default
    2) → the lead agent re-runs to address the findings and the reviewer
