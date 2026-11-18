@@ -149,8 +149,12 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
   *{box-sizing:border-box}
   body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;background:var(--bg);color:var(--ink)}
   .top{background:var(--card);border-bottom:1px solid var(--line);padding:18px 32px 16px;position:sticky;top:0;z-index:5}
-  h1{margin:0 0 12px;font-size:22px}
+  h1{margin:0 0 4px;font-size:22px}
   h1 a{font-size:13px;font-weight:400;color:var(--muted);margin-left:12px}
+  .lede{margin:0 0 16px;font-size:15px;color:var(--ink2)}
+  .step{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 10px;font-size:16px;font-weight:700}
+  .step .num{flex:none;width:24px;height:24px;border-radius:50%;background:var(--accent);color:#232F3E;display:grid;place-items:center;font-size:14px}
+  .step .sub{font-weight:400;font-size:13.5px;color:var(--muted)}
   .pills{display:flex;flex-wrap:wrap;gap:8px}
   .pill{border:1.5px solid var(--line);background:var(--card);color:var(--ink);border-radius:999px;padding:6px 13px;font:inherit;font-size:14px;cursor:pointer;display:flex;gap:8px;align-items:center;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
   .pill:hover{border-color:var(--ink2)}
@@ -166,15 +170,18 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
   .meta{font-size:14px;color:var(--ink2)}
   .meta em{font-style:normal;color:var(--muted)}
   .reset{font:inherit;font-size:13px;border:1.5px solid var(--ink2);background:var(--card);color:var(--ink);border-radius:8px;padding:3px 10px;cursor:pointer;margin-left:6px}
-  .cmd{margin-top:12px;display:flex;gap:10px;flex-wrap:wrap}
+  .bottom{position:sticky;bottom:0;z-index:5;background:var(--card);border-top:1px solid var(--line);box-shadow:0 -4px 14px rgba(0,0,0,.06);padding:14px 32px}
+  .cmd{display:flex;gap:10px;flex-wrap:wrap;align-items:stretch}
+  .what{flex:1 1 100%;display:flex;gap:10px;align-items:center;font-size:14px;font-weight:600}
+  .what input{flex:1;font:inherit;font-weight:400;font-size:14px;border:1.5px solid var(--line);background:var(--card);color:var(--ink);border-radius:9px;padding:8px 12px}
+  .what input:focus{outline:none;border-color:var(--accent)}
   .cmd code{flex:1 1 520px;background:var(--code);color:var(--code-ink);border-radius:9px;padding:10px 14px;font:13.5px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre-wrap;word-break:break-word}
   .cmd code .k{color:var(--accent)}
   .cmd code .d{color:#9FB3C8;font-style:italic}
-  .cmd input{flex:0 1 280px;font:inherit;font-size:14px;border:1.5px solid var(--line);background:var(--card);color:var(--ink);border-radius:9px;padding:8px 12px}
   .copy{font:inherit;font-size:14px;font-weight:600;border:0;background:var(--accent);color:#232F3E;border-radius:9px;padding:0 18px;cursor:pointer;min-width:92px}
   .copy.done{background:#1D8102;color:#fff}
-  main{padding:20px 32px 32px}
-  .hint{font-size:13px;color:var(--muted);margin:0 0 14px}
+  .note{margin:8px 0 0;font-size:12.5px;color:var(--muted)}
+  main{padding:20px 32px 24px}
   .board{display:grid;grid-template-columns:.8fr 1fr 1fr 1fr 1fr;gap:14px;align-items:start}
   .phase{background:var(--card);border-radius:12px;box-shadow:0 1px 2px rgba(0,0,0,.06),0 4px 14px rgba(0,0,0,.05);overflow:hidden}
   .phase-head{padding:12px 14px;color:#fff;display:flex;justify-content:space-between;align-items:center;cursor:pointer;user-select:none}
@@ -200,22 +207,19 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
   .sw{width:22px;height:14px;border-radius:4px;border:1.5px solid var(--ink2);display:inline-block}
   .sw.d{border-style:dashed}
   @media (max-width:1100px){.board{grid-template-columns:1fr 1fr}}
-  @media (max-width:640px){.board{grid-template-columns:1fr}.top,main{padding-left:14px;padding-right:14px}}
+  @media (max-width:640px){.board{grid-template-columns:1fr}.top,main,.bottom{padding-left:14px;padding-right:14px}}
 </style>
 </head>
 <body>
 <section class="top">
   <h1>AI-DLC scope explorer <a href="../05-scopes-and-depth/">Scopes, Depth, and Test Strategy</a></h1>
+  <p class="lede">Build the <code>/aidlc</code> command that starts your work with exactly the stages you want.</p>
+  <div class="step"><span class="num">1</span>Pick a scope<span class="sub">Each button is a ready-made plan for one kind of work; the number is how many stages it runs.</span></div>
   <div class="pills" id="pills"></div>
   <div class="summary" id="summary"></div>
-  <div class="cmd">
-    <code id="cmd"></code>
-    <input id="what" type="text" placeholder="What to build (optional)" aria-label="What to build">
-    <button class="copy" id="copy" type="button">Copy</button>
-  </div>
 </section>
 <main>
-  <p class="hint">Pick a scope, tick or untick stages, and copy the <code>/aidlc</code> command that runs that plan. Click a phase header to toggle the whole phase. The page address keeps your selection.</p>
+  <div class="step"><span class="num">2</span>Tick or untick stages<span class="sub">Optional: tailor the plan. Click a phase header to toggle the whole phase. Initialization always runs.</span></div>
   <div class="board" id="board"></div>
   <div class="legend">
     <span><i class="sw"></i>ALWAYS stage</span>
@@ -223,6 +227,15 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
     <span><i class="unit">per Unit</i>Repeated for each Unit of Work</span>
   </div>
 </main>
+<section class="bottom">
+  <div class="step"><span class="num">3</span>Say what to build and copy the command</div>
+  <div class="cmd">
+    <label class="what">What to build <input id="what" type="text" placeholder="Example: a Hello World application in JavaScript"></label>
+    <code id="cmd"></code>
+    <button class="copy" id="copy" type="button">Copy</button>
+  </div>
+  <p class="note">Paste the command into your AI-DLC chat. The page address keeps your selection, so you can share this plan as a link.</p>
+</section>
 <script>
 const DATA = __DATA__;
 const STAGES = DATA.stages, SCOPES = DATA.scopes;
@@ -264,6 +277,7 @@ for (const s of SCOPES) {
   const b = document.createElement("button");
   b.className = "pill"; b.type = "button"; b.dataset.scope = s.name;
   b.innerHTML = esc(s.name)+'<span class="n">'+s.stages.length+'</span>';
+  b.title = s.description + " (" + s.stages.length + " stages)";
   b.onclick = () => select(s.name);
   pills.appendChild(b);
 }
