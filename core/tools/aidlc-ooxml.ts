@@ -159,7 +159,8 @@ function cell(text: string): string {
   return text.replace(/\s*\n\s*/g, " / ").replace(/\|/g, "\\|").trim();
 }
 
-function table(rows: string[][]): string[] {
+/** Rows as a Markdown table, the first row its header: the HTML reader's tables read as a Word file's do. */
+export function table(rows: string[][]): string[] {
   if (rows.length === 0) return [];
   const width = Math.max(...rows.map((row) => row.length));
   const line = (row: string[]) => `| ${Array.from({ length: width }, (_, i) => cell(row[i] ?? "")).join(" | ")} |`;
