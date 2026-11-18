@@ -31834,9 +31834,10 @@ export function memoryStrictHoldsGuardPolicy(
 /**
  * Whether the person's own approval may go over a review that did not finish
  * (asked for, with no verdict yet), at a stage gate and at a Unit checkpoint
- * alike. Off, relaxed and a strict set for this piece of work let it; only a
- * strict the team locks in memory keeps the review required. The one place
- * that says which setting counts.
+ * alike, and over a Unit's check that did not pass. Off, relaxed and a strict
+ * set for this piece of work let it; only a strict the team locks in memory
+ * keeps the review, or the check, required. The one place that says which
+ * setting counts.
  */
 export function personMayApproveOverUnfinishedReview(
   projectDir: string,

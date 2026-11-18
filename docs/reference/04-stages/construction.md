@@ -55,8 +55,9 @@ as one question.
 For eligible checkpoint work with skeleton-on, the first DAG Unit is the
 smallest working integrated slice. It completes its applicable stages, including
 Code Generation, before later Units even with stage-major selected. Its real
-end-to-end project check must pass, and a human must approve that verified
-skeleton. A legacy first Construction-stage approval is only a stage review;
+end-to-end project check must pass, unless the person says to approve the
+skeleton as it is over that check (`verify --over-failed-check`), and a human
+must approve it. A legacy first Construction-stage approval is only a stage review;
 it does not establish that an integrated skeleton has been built.
 
 All Unit/batch checkpoints reuse the intent's recorded, human-authorized

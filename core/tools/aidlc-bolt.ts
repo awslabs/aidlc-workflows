@@ -1356,7 +1356,7 @@ const FINDING_FLAGS_USAGE = "--fix-finding <review-artifact>#R-NN (approve), --r
   "<review-artifact>#R-NN=<the person's reason> (reject), once per finding";
 const CHECKPOINT_FLAGS: readonly string[] = [
   "unit", "kind", "action", "session", "user-input", "reason", "message", "timeout-ms", "over-unfinished-review",
-  "fix-finding", "reject-finding", "reopen-finding",
+  "over-failed-check", "fix-finding", "reject-finding", "reopen-finding",
 ];
 const SWARM_CHECKPOINT_FLAGS: readonly string[] = [
   "batch", "units", "action", "session", "user-input", "reason", "message", "fix-finding", "reject-finding", "reopen-finding",
@@ -1402,15 +1402,21 @@ async function handleCheckpoint(args: string[]): Promise<void> {
   // The person said to approve the Unit as it is over a review that did not
   // finish; verify reads it, and the engine checks their words are on record.
   const overUnfinishedReview = args.includes("--over-unfinished-review");
+  // The same over the Unit's check that did not pass.
+  const overFailedCheck = args.includes("--over-failed-check");
   // The person's Override at a blocking check on the Unit, retried as the refusal names it.
   const overrideBlockingSensors = args.includes("--override-blocking-sensors");
-  const flagArgs = args.filter((arg) => arg !== "--over-unfinished-review" && arg !== "--override-blocking-sensors");
+  const flagArgs = args.filter((arg) =>
+    arg !== "--over-unfinished-review" && arg !== "--over-failed-check" && arg !== "--override-blocking-sensors");
   const flags = parseFlags(flagArgs);
   if (overrideBlockingSensors && flags.action !== "verify") {
     error("checkpoint --override-blocking-sensors goes with --action verify.");
   }
   if (overUnfinishedReview && flags.action !== "verify") {
     error("checkpoint --over-unfinished-review goes with --action verify.");
+  }
+  if (overFailedCheck && flags.action !== "verify") {
+    error("checkpoint --over-failed-check goes with --action verify.");
   }
   if (flags["timeout-ms"] !== undefined && flags.action !== "verify") {
     error("checkpoint --timeout-ms goes with --action verify.");
@@ -1439,7 +1445,7 @@ async function handleCheckpoint(args: string[]): Promise<void> {
     case "verify":
       result = await verifyConstructionCheckpoint(
         pd, flags.unit, checkpointKind, {
-          overUnfinishedReview, message: flags.message,
+          overUnfinishedReview, overFailedCheck, message: flags.message,
           overrideBlockingSensors, userInput: flags["user-input"],
           timeoutMs: flags["timeout-ms"] === undefined ? undefined : Number(flags["timeout-ms"]),
         },
@@ -1461,7 +1467,7 @@ async function handleCheckpoint(args: string[]): Promise<void> {
       error(`checkpoint --action must be one of: ${CHECKPOINT_ACTIONS.join(", ")}`);
   }
   console.log(JSON.stringify(result));
-  if (flags.action === "verify" && !result.verified) process.exitCode = 1;
+  if (flags.action === "verify" && !result.verified && !result.check_not_passed) process.exitCode = 1;
 }
 
 function handleSwarmCheckpoint(args: string[]): void {
@@ -1541,7 +1547,7 @@ function boltUsage(subcommand: string | undefined): string {
     checkpoint: [
       `${invoke("checkpoint")} --unit <name> [--action ${CHECKPOINT_ACTIONS.join("|")}] [--override-blocking-sensors --user-input <choice>]`,
       "  The Unit's Construction checkpoint. Required: --unit. --action defaults to status.",
-      `  --kind: ${CHECKPOINT_KINDS.join(", ")} (default unit). --over-unfinished-review and --timeout-ms <milliseconds> go with --action verify.`,
+      `  --kind: ${CHECKPOINT_KINDS.join(", ")} (default unit). --over-unfinished-review, --over-failed-check and --timeout-ms <milliseconds> go with --action verify.`,
       "  Options: --session <id>, --user-input <the person's words>, --reason <text> (reject),",
       "  --message <id> (approve, reject: the person's message the choice was read from)",
       `  ${FINDING_FLAGS_USAGE}`,

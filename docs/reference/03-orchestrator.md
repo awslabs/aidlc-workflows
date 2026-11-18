@@ -779,7 +779,10 @@ when the current review is that re-check. A `rereview` with `unfinished`
 review instead; after the person's "approve it as it is" (`verify
 --over-unfinished-review`, any Guard Policy but a team-locked `strict`), `review_not_finished`
 (`{stages, approved_in_words}`) says their words are the approval, so `approve`
-runs with no question. For stages whose review ended in the reviewer module's
+runs with no question. After their "approve it as it is" over a check that ran and did not pass (`verify
+--over-failed-check`, the same Guard Policies), `verify`'s own result carries `check_not_passed`
+(`{approved_in_words}`) and `next_step`, the `approve` to run at once, while `verified` stays false and the
+directive is unchanged. For stages whose review ended in the reviewer module's
 NOT-READY fallback (no reviewer gave that verdict) it carries `{stages, question}`,
 the one approval question, under every Guard Policy, with readiness unchanged. A `rereview` with
 `first` is the first request of a Unit review never asked for in this run of the
