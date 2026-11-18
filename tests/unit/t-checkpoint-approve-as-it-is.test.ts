@@ -735,6 +735,57 @@ describe("approving a Unit as it is over a check that did not pass", () => {
     expect(refusalOf(checkpoint(p, "alpha", "approve").out)).toBe(refusal(String(other.json?.verification_command)));
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // A change to the Unit's files after the lift is read by the Guard Policy's
+  // one rule for a change after the review, as for a passing check: under
+  // relaxed and off it is accepted with its one line and the lift stands;
+  // under strict the change is re-checked first, and the lift is gone after it.
+  for (const policy of ["off", "relaxed"] as const) {
+    test(`Guard Policy ${policy}: a change to the Unit's files after their words is accepted with its one line, and the lift stands`, () => {
+      const { p, command } = failedCheck(policy);
+      const message = says(p, AS_IT_IS_CHECK);
+      expect(checkpoint(p, "alpha", "verify", ["--over-failed-check", "--message", message]).status).toBe(0);
+      writeFileSync(join(p, "src", "alpha.ts"), "export const alpha = 2;\n");
+      expect(checkpoint(p, "alpha", "status").json).toMatchObject({ ready: true, check_not_passed: { approved_in_words: true } });
+      const plain = checkpoint(p, "alpha", "verify");
+      expect(plain.status, plain.out).toBe(0);
+      expect(plain.json?.change_notices).toEqual(["src/alpha.ts changed after the alpha Unit was reviewed; carrying on."]);
+      expect(auditBlockField(verifications(p).at(-1)!.block, "Check Not Passed")).toBe("approved in words");
+      const approved = checkpoint(p, "alpha", "approve");
+      expect(approved.json?.approved, approved.out).toBe(true);
+      expect(approved.json?.change_notices).toEqual([notPassed(command)]);
+      expect(unitApprovals(p, "alpha")).toHaveLength(1);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+  }
+
+  test("Guard Policy strict: a change to the Unit's files after their words is re-checked first, and the lift is gone after it", () => {
+    const { p, command } = failedCheck("strict");
+    const message = says(p, AS_IT_IS_CHECK);
+    expect(checkpoint(p, "alpha", "verify", ["--over-failed-check", "--message", message]).status).toBe(0);
+    const rows = verifications(p).length;
+    writeFileSync(join(p, "src", "alpha.ts"), "export const alpha = 2;\n");
+    const status = checkpoint(p, "alpha", "status");
+    expect(status.json).toMatchObject({ ready: false, verified: false, approved: false });
+    expect(status.json?.check_not_passed).toBeUndefined();
+    expect(status.json?.next_step).toBeUndefined();
+    const recheck = reviewArgs("alpha", 2).join(" ");
+    expect(String((status.json?.rereview as { command?: string } | null)?.command)).toContain(recheck);
+    for (const action of ["verify", "approve"]) {
+      const refused = checkpoint(p, "alpha", action);
+      expect(refused.status).not.toBe(0);
+      expect(refusalOf(refused.out)).toContain(`What ${CG} reviewed changed since its review: request the re-check with`);
+    }
+    expect(verifications(p)).toHaveLength(rows);
+    expect(unitApprovals(p, "alpha")).toHaveLength(0);
+    review(p, "alpha", 2, "READY");
+    expect(checkpoint(p, "alpha", "status").json?.check_not_passed).toBeUndefined();
+    const plain = checkpoint(p, "alpha", "verify");
+    expect(plain.status, plain.out).toBe(1);
+    expect(plain.json?.check_not_passed).toBeUndefined();
+    expect(auditBlockField(verifications(p).at(-1)!.block, "Check Not Passed")).toBeNull();
+    expect(refusalOf(checkpoint(p, "alpha", "approve").out)).toBe(refusal(command));
+    expect(unitApprovals(p, "alpha")).toHaveLength(0);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("the agent cannot lift the check on its own: no message named, or one that is not the person's", () => {
     const { p } = failedCheck("off");
     const unnamed = checkpoint(p, "alpha", "verify", ["--over-failed-check"]);
