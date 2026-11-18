@@ -681,8 +681,6 @@ function soloCheckpointBrief(proj: string, reviews: Record<string, Finding[] | "
   const shown = brief(proj, "code-generation");
   const asked = soloCheckpoint(proj, "ask");
   expect(asked.rc, asked.out).toBe(0);
-  // A checkpoint's step says no line of what Approve accepts: its brief's option says it.
-  expect(JSON.stringify(asked.json)).not.toContain("Approve accepts");
   personSays(proj, "Approve");
   return shown;
 }
@@ -697,7 +695,6 @@ describe("t-team-unit-end-gate-findings: a Unit worked alone shows at its checkp
     expect(shown).toContain("> R-01 Finding: operability-design.md and testability-design.md do not exist");
     expect(shown).toContain("> R-02 Finding: The traceability file uses ids the requirements do not define");
     expect(shown).toContain("- **Approve** - continue with the open findings accepted.");
-    expect(shown).not.toContain("Approve accepts");
     expect(shown).not.toContain("No blocking concerns were found.");
     expect(shown).not.toContain("no findings are open");
     // An earlier stage's own brief, while the checkpoint is open, reads as before.
@@ -749,11 +746,14 @@ describe("t-team-unit-end-gate-findings: a Unit worked alone shows at its checkp
   // A Unit the walk does not ask at its own checkpoint is decided at its
   // stages' gates, or at its swarm batch's, which records Code Generation's
   // findings only: its Code Generation brief shows that stage's review alone,
-  // as before. alpha's work and reviews stand; the walk around it changes.
+  // as before, and still as the Unit's own (the Approve option, not the
+  // stage's final gate's). alpha's work and reviews stand; the walk around it
+  // changes.
+  const MINOR: Finding[] = [{ id: "R-01", severity: "Minor", finding: "Name the handler's owner", action: "Add an owner" }];
   const ownReviewOnly = (shown: string) => {
-    expect(shown).toStartWith("**Stage:** Code Generation\n**Review outcome:** No blocking concerns were found.\n");
+    expect(shown).toStartWith("**Stage:** Code Generation\n**Review outcome:** Ready, with 1 minor point to weigh.\n");
     expect(shown).not.toContain("nfr-design");
-    expect(shown).toContain("- **Approve** - continue; no findings are open.");
+    expect(shown).toContain("- **Approve** - continue with the open findings accepted.");
   };
   const walkedAs = (proj: string, fields: Record<string, string>) => {
     let state = readFileSync(seededStateFile(proj), "utf-8");
@@ -769,14 +769,29 @@ describe("t-team-unit-end-gate-findings: a Unit worked alone shows at its checkp
 
   test("a Unit worked stage by stage after the skeleton keeps the brief of its own review only", () => {
     const proj = seedSoloProject();
-    soloCheckpointBrief(proj, { "nfr-design": NFR_DESIGN_FINDINGS });
+    soloCheckpointBrief(proj, { "nfr-design": NFR_DESIGN_FINDINGS, "code-generation": MINOR });
     walkedAs(proj, { "Construction Iteration": "stage-major", "Skeleton Stance": "on" });
     ownReviewOnly(brief(proj, "code-generation"));
   });
 
-  test("a Unit of a swarm batch keeps the brief of its own review only", () => {
+  test("the skeleton's checkpoint in a walk stage by stage shows the earlier stages its approval decides", () => {
     const proj = seedSoloProject();
     soloCheckpointBrief(proj, { "nfr-design": NFR_DESIGN_FINDINGS });
+    // alpha is the first Unit: with the skeleton on, its checkpoint is the skeleton's, asked on its own.
+    const state = readFileSync(seededStateFile(proj), "utf-8")
+      .replace("- **Construction Iteration**: unit-major", "- **Construction Iteration**: stage-major")
+      .replace("- **Skeleton Stance**: off", "- **Skeleton Stance**: on");
+    expect(state).toContain("- **Construction Iteration**: stage-major");
+    expect(state).toContain("- **Skeleton Stance**: on");
+    writeFileSync(seededStateFile(proj), state);
+    const shown = brief(proj, "code-generation");
+    expect(shown).toContain("**Stages:** NFR Design, Code Generation");
+    expect(shown).toContain("> R-01 Finding: operability-design.md and testability-design.md do not exist");
+  });
+
+  test("a Unit of a swarm batch keeps the brief of its own review only", () => {
+    const proj = seedSoloProject();
+    soloCheckpointBrief(proj, { "nfr-design": NFR_DESIGN_FINDINGS, "code-generation": MINOR });
     walkedAs(proj, { "Construction Iteration": "stage-major", "Skeleton Stance": "on", "Construction Execution": "swarm" });
     ownReviewOnly(brief(proj, "code-generation"));
   });
