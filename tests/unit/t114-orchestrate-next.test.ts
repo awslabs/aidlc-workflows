@@ -1847,7 +1847,7 @@ describe("t114 Branch 9c: replies that are not new work", () => {
     expect(d.message).toContain(`(their words: ${JSON.stringify(OTHER_ANSWER)})`);
   });
 
-  test("words the agent passes on as something else: once the request they became starts work, prose gets no step for the old question, and its own answer still finds its request", () => {
+  test("words the agent passes on as something else: once the request they became starts work, prose gets no step for the old question, and its own answers still reach its request", () => {
     proj = createOrchestrationTestProject();
     seedStateFile(proj, MID_IDEATION);
     const ask = routingAsk();
@@ -1869,8 +1869,13 @@ describe("t114 Branch 9c: replies that are not new work", () => {
     expect(made.status, `${made.stdout}${made.stderr}`).toBe(0);
     const later = directive(["also add a CSV export"]);
     expect(String(later.message ?? JSON.stringify(later))).not.toContain(ROUTING_STEP);
-    // The old question's own continue answer still finds its request.
-    expect(JSON.stringify(runCommand(ask.continue_command!))).not.toContain("no longer available");
+    // Its own continue and reshape answers still reach the request it kept: with other work selected now, each asks
+    // where that request belongs again, as a late answer does.
+    for (const command of [ask.continue_command!, ask.compose_command!]) {
+      const late = runCommand(command);
+      expect(late.ask_type, JSON.stringify(late).slice(0, 300)).toBe("new-work-routing");
+      expect(late.new_work_description).toBe(NEW_WORK);
+    }
   });
 
   for (const reply of ["1", "2", "Separate new piece of work"]) {

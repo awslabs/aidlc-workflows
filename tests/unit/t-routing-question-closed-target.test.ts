@@ -133,7 +133,7 @@ describe("t-routing-question-closed-target: a routing question the person's word
       .toContain(`intent create --scope bugfix --request ${question.id}`);
   });
 
-  test("a plain reply the engine takes behind the delimiter itself, for a bare next while a stage question waits, leaves the question as it was", async () => {
+  test("a plain chat reply while a stage question waits leaves the which-work question as it was", async () => {
     const proj = await projectAt("stage-question-asked");
     projects.push(proj);
     expect((await say(proj, "/aidlc fix the login", "claude")).status).toBe(0);
@@ -145,7 +145,9 @@ describe("t-routing-question-closed-target: a routing question the person's word
     const question = latestQuestion(proj);
     expect(question?.origin).toBe("routing");
     expect((await say(proj, "2", "claude")).status).toBe(0);
+    // The agent runs a bare `next`; the engine takes their reply behind `--` itself and keeps a newer copy of it.
     expect((await next(proj, [])).status).toBe(0);
+    expect(latestQuestion(proj)?.id).not.toBe(question!.id);
     expect(readQuestion(proj, question!.id)?.replacedBy).toBeUndefined();
   });
 });

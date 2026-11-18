@@ -12076,9 +12076,9 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       key === "intent" || key === "markedWords" || value === undefined || value === false);
   const unmarkedProse = onlyProse && flags.markedWords !== true;
   const openRouting = unmarkedProse ? openRoutingQuestion(questionDir) : null;
-  // Their words alone, marked as their request in the line the agent ran (the step below's "something else" command,
-  // or another step's that hands their words on), are passed on beside the open routing question; a line the engine
-  // took from their chat itself (takePersonsOwnLine) was passed on by no one.
+  // Their words alone, marked as their request in the line the agent ran (the "something else" command of
+  // routingQuestionReplyDirective, or another step's that hands their words on), are passed on beside the open
+  // routing question; a line the engine took from their chat itself (takePersonsOwnLine) was passed on by no one.
   if (onlyProse && flags.markedWords === true && taken === agentArgs) {
     passedOnRoutingQuestion ??= openRoutingQuestion(questionDir)?.id ?? null;
   }
