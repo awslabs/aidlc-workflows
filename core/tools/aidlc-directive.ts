@@ -787,6 +787,15 @@ export interface TeamHandoverAskDirective extends AskDirectiveBase {
   unit?: string;
 }
 
+// The work selected was set up with a newer AI-DLC than this build reads, on an
+// install that updates itself: update and carry on, or not now. Each choice is
+// one complete command; neither has an id on the record.
+export interface AiDlcUpdateAskDirective extends AskDirectiveBase {
+  ask_type: "ai-dlc-update";
+  response_route: "command";
+  choices: AskChoice[];
+}
+
 export interface NewWorkRoutingAskDirective extends AskDirectiveBase {
   ask_type: "new-work-routing";
   response_route: "next";
@@ -896,6 +905,7 @@ export type AskDirective =
   | UnitsReposAskDirective
   | UnitPlanChangeAskDirective
   | TeamHandoverAskDirective
+  | AiDlcUpdateAskDirective
   | NewWorkRoutingAskDirective
   | UnitClaimAskDirective
   | LegacyPlanApprovalRecoveryAskDirective
@@ -2106,7 +2116,8 @@ export function validateDirective(obj: unknown): ValidationResult {
         kind,
         errors,
         o.ask_type === "scope-confirm" || o.ask_type === "construction-staffing" || o.ask_type === "repo-scope" ||
-          o.ask_type === "units-repos" || o.ask_type === "unit-plan-change" || o.ask_type === "team-handover",
+          o.ask_type === "units-repos" || o.ask_type === "unit-plan-change" || o.ask_type === "team-handover" ||
+          o.ask_type === "ai-dlc-update",
       );
       checkOptionalString(o, "recovery_choice", kind, errors);
       checkOptionalString(o, "existing_code_command", kind, errors);
@@ -2129,10 +2140,11 @@ export function validateDirective(obj: unknown): ValidationResult {
           "units-repos",
           "unit-plan-change",
           "team-handover",
+          "ai-dlc-update",
         ].includes(o.ask_type)
       ) {
         errors.push(
-          `${kind}: ask_type must be one of scope-confirm | compose-offer | intent-pick | unit-paused | new-work-routing | unit-claim | legacy-plan-approval-recovery | guard-recovery | plan-approval | project-type | construction-staffing | repo-scope | units-repos | unit-plan-change | team-handover, got ${String(o.ask_type)}`,
+          `${kind}: ask_type must be one of scope-confirm | compose-offer | intent-pick | unit-paused | new-work-routing | unit-claim | legacy-plan-approval-recovery | guard-recovery | plan-approval | project-type | construction-staffing | repo-scope | units-repos | unit-plan-change | team-handover | ai-dlc-update, got ${String(o.ask_type)}`,
         );
       }
       if ("plan_approval" in o && o.ask_type !== "plan-approval") {
@@ -2265,6 +2277,11 @@ export function validateDirective(obj: unknown): ValidationResult {
         }
         checkOptionalString(o, "unit", kind, errors);
         rejectUnexpected("team-handover", { handovers: true, unit: true });
+      } else if (o.ask_type === "ai-dlc-update") {
+        if (o.response_route !== "command") {
+          errors.push(`${kind}: ai-dlc-update response_route must be "command"`);
+        }
+        rejectUnexpected("ai-dlc-update", {});
       } else if (o.ask_type === "unit-plan-change") {
         if (o.response_route !== "command") {
           errors.push(`${kind}: unit-plan-change response_route must be "command"`);

@@ -383,7 +383,7 @@ Machine
 Project (.claude, Claude Code)
   warn  AIDLC hooks have not run in this project yet
         fix: This is expected before your first Claude Code chat in this folder. ...
-  warn  Workspace records: 8 uncommitted change(s) under aidlc/ (advisory - the shared records travel by git; commit & push so teammates get them: `git add aidlc/ && git commit && git push`)
+  warn  Workspace records: 8 uncommitted change(s) under aidlc/ (advisory - the shared records travel by git; commit & push so teammates get them: `git add aidlc/`, `git commit`, `git push`)
         fix: add --verbose to see the details, correct the named condition, then run doctor again
   ok    49 checks passed
 

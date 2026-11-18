@@ -115,20 +115,42 @@ open, unanswered code plan question alone, offering its choices, the group
 answers with `updatedInput` (no permission decision, no reason text) that puts
 the plan's summary lines and its `Full plan:` path under the agent's own
 question, the lines the engine hands over in `plan_approval.targets` and writes
-in the questions file, and the line naming source that already changed when the
-engine adds one. A question about several Units gets each Unit's name and its
-`Full plan:` path, with the changed-source line once, and no summaries: the box
+in the questions file, the line naming the repositories the plan names files in
+(work with several repositories) and the line naming source that already changed
+when the engine adds them. A question about several Units gets each Unit's name
+and its `Full plan:` path, with those two lines once, and no summaries: the box
 does not scroll, and a short window (an editor's terminal panel) would show the
 last plan alone as if it were the only one, so each Unit's summary, an Adds line
 among them, is read in the plan file the box names. A line (or the plan's path)
 the agent's question already shows is not added again. Claude Code shows 2,000
 characters of a box's question, so past that a plan shows only its path (with
-the changed-source line), and past that nothing is added. The choices, their descriptions and the
+the repositories line and the changed-source line), and past that nothing is added. The choices, their descriptions and the
 engine's `question` stay as they were. The human-turn hook takes the lines off
 again when the answer comes back, so the pick, the person's own words and
 `QUESTION_REPLIED` read the box as the agent asked it. Any other box, another
 harness, and any failure leave the call as the agent wrote it, with nothing
 printed. The rule is `planQuestionBoxInput` and `planQuestionBoxAsAsked` in
+`core/tools/aidlc-plan-approval-ask.ts`.
+
+**A stage gate's box shows the gate's own lines (Claude Code).** In Claude
+Code's interactive CLI (`CLAUDE_CODE_ENTRYPOINT` is `cli`, not unattended), the
+step that shows a stage's approval gate hands the agent none of the gate's own
+lines for the person (the state tool's notices for the gate, the no-git line,
+what Approve accepts): they are kept for the chat, and the same row puts them
+under the agent's question when the box asks this work's open gate, each after a
+blank line, word for word. A review check offer and a line kept from elsewhere
+stay on the step for the agent to say. When the step is written the agent's
+question does not exist yet, so the lines kept are the whole ones that fit in
+2,000 characters beside a 500-character room for it (`gateLinesThatFit`); the
+rest stay on the step, said before the question. A box that is the code plan
+question, an engine ask or a logged decision is left alone, and an agent
+question past the room leaves the box as written, the lines waiting for the
+next step. The human-turn hook takes the lines off the list when the box's
+answer comes back, and `QUESTION_REPLIED` keeps the box as the person saw it.
+The no-git line counts as said for the project only once a box's answer or a
+written step carried it. Under the SDK, `claude -p`, unattended and on every
+other harness the step carries the lines as before. The rule is
+`gateNoticesInBox`, `gateNoticeBoxInput` and `gateNoticeBoxShown` in
 `core/tools/aidlc-plan-approval-ask.ts`.
 
 Before probing `next` in a shared engine session, the Stop hook preserves a
@@ -400,6 +422,27 @@ verbatim before its subagent starts: in the launching chat in VS Code, in any
 chat on the project on the CLI, where a launch's brief arrives about a second
 after the dispatch.
 
+A chat that compacts is handed the workflow contract back with its next tool
+result. Copilot runs no `sessionStart` for a compaction (its sources are `new`,
+`startup` and `resume`), does not process `preCompact` output, and drops the
+`additionalContext` a session start injected, because compaction rebuilds the
+message list from the summary and a token-bounded tail
+(`github/copilot-cli#5225`, measured on 1.0.99-2 and 1.0.100-1). So the
+"AIDLC WORKFLOW ACTIVE" block, the engine route and the CLI rules the chat was
+working from would otherwise be gone until the session resumed. Its
+`postToolUse` output is delivered to the model, so the adapter writes
+`aidlc/.aidlc-sessions/copilot-compacted` at the PreCompact it does receive and,
+on the next tool result, spends it: it runs the core SessionStart hook with
+`source: "compact"` and prints that render as the event's `additionalContext`.
+Only a successful call spends it (a failed one fires `PostToolUseFailure`,
+which the install does not register), and a call the adapter can place inside a
+live subagent does not, so the contract reaches the chat rather than the helper
+it dispatched. The stamp is the project's, not one chat's, because Copilot's
+tool-call payloads carry a per-call session id where a chat id is needed. Once
+per compaction the model reads the state block, the engine route and the CLI
+rules as the pre-compaction chat held them, and the chat's own sessionStart
+(when it comes) renders the same thing and drops any stamp still waiting.
+
 #### Codex adapter
 
 Codex starts every handler that matches an event at once. Before a shell
@@ -585,7 +628,10 @@ shared default. A pinned dispatch waits 30 seconds to reserve its release,
 because hooks make one on every tool call; other machine reservations, such as
 install and pin, keep the five-minute default. The dispatch checks the
 release's integrity once, under the machine lock as the reservation lands (or
-just before it runs unreserved). A launched release that includes this change
+just before it runs unreserved), and in full once per session: a later call of
+the same chat in the same session process runs every check but the hashing
+(`aidlc/.aidlc-sessions/pids/<pid>.release-check`, see the architecture
+reference). A launched release that includes this change
 does not check itself again; an older pinned release still does. The
 environment controls are:
 
@@ -2111,7 +2157,7 @@ usable when recomputation matches; only a mismatch requires the existing
 re-save / re-review recovery, with parser-semantics changes as a possible cause.
 No receipt format change or evidence rewrite is involved.
 
-**Shell writes.** The write-audit-log hook that feeds the engine's invalidation scan is a Write/Edit PostToolUse hook, so a file mutation delivered as a shell command would otherwise be invisible and leave a stale terminal receipt covering changed bytes. The freeze therefore extracts output-redirection targets and operands of common mutation commands before Bash executes. Read-only shell calls produce no targets and pass. The parser lives in `hooks/review-freeze-command.ts`; the Cursor adapter reuses its command and target result within one PreToolUse invocation, and launches the full freeze hook only when a target exists or classification could not complete.
+**Shell writes.** The write-audit-log hook that feeds the engine's invalidation scan is a Write/Edit PostToolUse hook, so a file mutation delivered as a shell command would otherwise be invisible and leave a stale terminal receipt covering changed bytes. The freeze therefore extracts output-redirection targets and operands of common mutation commands before Bash executes. Read-only shell calls produce no targets and pass. The parser lives in `hooks/review-freeze-command.ts`; the Cursor adapter reuses its command and target result within one PreToolUse invocation, and runs the full freeze hook only when a target exists or classification could not complete.
 
 **Identity: none.** Unlike reviewer-scope there is no agent gate - the freeze protects reviewed outputs regardless of who writes them (conductor applying suggestions, a re-dispatched lead, a stray subagent).
 

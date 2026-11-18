@@ -1079,8 +1079,9 @@ The report contains:
 audit trail (stage durations, gates, revisions, gaps, and long-duration,
 incomplete or skipped flags; a skipped stage shows its skip time as Completed),
 then runs **deterministic** condition→remedy rules (no LLM) for the
-common "it will not advance" causes: unresolved approval gates, state/audit
-drift, and a missing runtime graph / cold or frozen hook heartbeats.
+common "it will not advance" causes: state/audit drift, and a missing runtime
+graph / cold or frozen hook heartbeats. A stage waiting at its approval gate is
+shown in the timeline's Gate column and is no warning.
 Findings come from the same shared `DoctorFinding` model the
 live `--doctor` uses, so the command and the report can never diverge. A remedy
 that names a recovery bypass (for example an `AIDLC_DISABLE_*` env var or an
@@ -3235,8 +3236,10 @@ Every line that sends you to sync there (this one, a sync refused over a file
 you changed, and doctor's composed-surface and uncompiled-stage fixes) names
 the same command, with the plugin's real folder when the line knows it. In a
 native Claude Code project before Claude Code has a plugin registry
-(`~/.claude/plugins/installed_plugins.json`) it says
-`host inventory unavailable; run sync through an installed plugin's host hook`.
+(`~/.claude/plugins/installed_plugins.json`), sync says
+`no installed plugins; nothing to sync` while no plugin is composed in the
+project, and `host inventory unavailable; run sync through an installed plugin's host hook`
+once one is.
 Re-run it after every engine reinstall or upgrade: copying a fresh
 `dist/<harness>/` restores the shipped graph and core stage sources, so
 previously composed plugin graph entries and contribution merges must be

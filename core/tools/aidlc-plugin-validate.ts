@@ -1672,9 +1672,11 @@ export function formatPluginValidation(
 const USAGE =
   "Usage: bun <tools-dir>/aidlc-plugin-validate.ts <plugin-root> [--with <base-root>] [--json]";
 
-export function main(argv: string[]): number {
+// The `aidlc plugin validate` verb passes its own usage line, so a usage
+// error names the command the person ran.
+export function main(argv: string[], usage = USAGE): number {
   if (argv.includes("--help") || argv.includes("-h")) {
-    process.stdout.write(`${USAGE}\n`);
+    process.stdout.write(`${usage}\n`);
     return 0;
   }
   const withAt = argv.indexOf("--with");
@@ -1688,7 +1690,7 @@ export function main(argv: string[]): number {
     (withAt >= 0 && (!baseRoot || baseRoot.startsWith("-"))) ||
     rest.some((arg) => arg.startsWith("-") && arg !== "--json")
   ) {
-    process.stderr.write(`${USAGE}\n`);
+    process.stderr.write(`${usage}\n`);
     return 2;
   }
 

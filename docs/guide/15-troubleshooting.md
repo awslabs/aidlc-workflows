@@ -940,7 +940,7 @@ To have the stage that was in progress done again, say "redo this stage".
 
 **Symptom** (GitHub Copilot): you approved the code plan, the build started, and after the chat compacted every build step the assistant tries is refused.
 
-Your approval, the workflow state, and every file already written are kept; only what the assistant had not yet written to a file is gone from the chat. After a compaction the assistant must read its step again before it builds anything. It runs `next` as its own command, which hands the approved build straight back without asking you again. `/aidlc --doctor` shows the step as out of date, with the time and the reason (the chat was compacted, or the workflow state changed after the step was issued, naming what changed when it is known), until that `next` runs.
+Your approval, the workflow state, and every file already written are kept; only what the assistant had not yet written to a file is gone from the chat. After a compaction the assistant must read its step again before it builds anything. It runs `next` as its own command, which hands the approved build straight back without asking you again. The chat is also handed the workflow contract and its current position back with the next tool result it gets, so the commands it issues keep their flags and names. `/aidlc --doctor` shows the step as out of date, with the time and the reason (the chat was compacted, or the workflow state changed after the step was issued, naming what changed when it is known), until that `next` runs.
 
 ---
 
@@ -1072,15 +1072,16 @@ intent ids and Unit names are hashed, and secret-like values are scrubbed.
 The report reconstructs the workflow timeline from the audit trail and runs
 deterministic condition→remedy rules. The two most common causes it catches:
 
-- **Unresolved approval gates** — a stage whose gate never resolved is the single
-  most common "it will not advance" cause.
-- **Missing runtime graph / cold hooks**: a runtime graph that is absent, or a
-  hook that last fired more than a day before the newest stage or approval step
-  recorded on the intent, points at a recompile that did not run. Opening a chat,
+- **A stage waiting at its approval gate**: the single most common reason the
+  work does not advance. The report's timeline shows its Gate as `unresolved`;
+  it is no warning, since the workflow is waiting for your answer.
+- **Missing runtime graph / cold hooks**: a runtime graph that is absent, or
+  hooks that all last fired more than a day before the newest stage or approval
+  step recorded on the intent, point at a recompile that did not run. Opening a chat,
   a prompt and doctor's own audit rows are not counted as work, so an intent
   nobody is working on does not read as having cold hooks.
 
-`report.md` inside the report lists every finding with a remedy; a remedy that
+`report.md` inside the report lists every error and warning with a remedy (`report.json` also keeps the informational findings); a remedy that
 names a recovery bypass (such as an `AIDLC_DISABLE_*` env var) is flagged
 as not safe to automate. See [CLI Commands](12-cli-commands.md#aidlc-doctor-export-write-a-diagnostic-report)
 for the full report contents and safety model.

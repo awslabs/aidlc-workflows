@@ -135,17 +135,17 @@ stateDiagram-v2
     InProgress --> Skipped : Cut mid-flight
     Revising --> Skipped : Abandon after rejection
     Awaiting --> Skipped : Forward jump
-    Completed --> NotStarted : Redo (artifacts deleted)
+    Completed --> NotStarted : Redo
 ```
 
-<!-- Text fallback: [ ] Not Started transitions to [-] In Progress when a stage begins. [-] In Progress transitions to [?] Awaiting Approval when stage work is done and the gate opens. [?] Awaiting Approval transitions to [x] Completed when you approve, or to [R] Revising when you request changes. [R] Revising transitions back to [?] Awaiting Approval when revision is complete. [ ] Not Started, [-] In Progress, [?] Awaiting Approval, and [R] Revising can each transition to [S] Skipped via a skip, a jump, or abandonment. [x] Completed transitions back to [ ] Not Started on redo (artifacts deleted). -->
+<!-- Text fallback: [ ] Not Started transitions to [-] In Progress when a stage begins. [-] In Progress transitions to [?] Awaiting Approval when stage work is done and the gate opens. [?] Awaiting Approval transitions to [x] Completed when you approve, or to [R] Revising when you request changes. [R] Revising transitions back to [?] Awaiting Approval when revision is complete. [ ] Not Started, [-] In Progress, [?] Awaiting Approval, and [R] Revising can each transition to [S] Skipped via a skip, a jump, or abandonment. [x] Completed transitions back to [ ] Not Started on redo. -->
 
 ### Normal, revision, skip, redo, and jump flows
 
 - **Normal flow**: `[ ]` -> `[-]` -> `[?]` -> `[x]` (stage begins, work completes, gate opens, you approve)
 - **Revision flow**: `[?]` -> `[R]` -> `[?]` -> `[x]` (you reject, stage is revised, gate re-opens, you approve)
 - **Scope skip flow**: none: a stage not in the plan stays `[ ]`, marked `SKIP` when the work is created
-- **Redo flow**: `[x]` or `[-]` -> `[ ]` -> `[-]` (you request redo, artifacts are deleted, stage re-executes)
+- **Redo flow**: `[x]` or `[-]` -> `[ ]` -> `[-]` (you request redo, stage re-executes)
 - **Jump flow**: `[-]` at stage A, you request jump to stage B, intervening stages are marked `[S]`
 
 ---

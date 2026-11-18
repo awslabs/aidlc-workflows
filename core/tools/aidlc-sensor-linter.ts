@@ -226,7 +226,7 @@ function invokeEslint(args: string[], cwd: string, filePath: string) {
 	// neither the pin nor a project without jiti provides, and natively under
 	// Bun. Only a copy install runs on Bun; a native one keeps Node.
 	const underBun = /\.[mc]?ts$/.test(governing ?? "") && !(local && jitiBeside(local));
-	const options = { encoding: "utf-8" as const, timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS, cwd };
+	const options = { encoding: "utf-8" as const, maxBuffer: 64 * 1024 * 1024, timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS, cwd };
 	// ESLint's published executable uses Node too. Naming its installed file
 	// avoids both PATH-shadowed eslint binaries and per-TMPDIR bunx installs.
 	if (local) return spawnSync(underBun && !compiledExecutable() ? process.execPath : "node", [local, ...args], options);

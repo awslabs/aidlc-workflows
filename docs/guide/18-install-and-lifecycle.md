@@ -372,7 +372,10 @@ When the files passed to `--from` hold that harness, the command reuses them.
 Otherwise a copied project's line says to get that release's copy runtime file
 first, because `--download` on a copied harness that is already installed
 fetches the release it already has, and a native project's line names the
-`aidlc config --pin` that installs that release.
+`aidlc config --pin` that installs that release. A harness set up with a
+release newer than this computer's is not taken down by a plain refresh, so on
+a native install its line names the update and the refresh that bring the
+harness just written up to it.
 A git worktree of a checkout that is registered on the machine is the same
 project: its pinned commands run the release its own `.aidlc-version` names,
 when the machine holds it, and register it, so a worktree a host makes per
@@ -405,7 +408,7 @@ numbered harness picker first; no detected harness gets the complete picker
 without a default. A Kiro CLI at 2.24.1 or later counts for both Kiro
 harnesses. The picker lists Kiro CLI (V2) (`--harness kiro-v2`): it pins no
 engine and is built for Kiro CLI's v2 engine. It lists Kiro (`--harness kiro`),
-for Kiro IDE and Kiro CLI on its v3 engine. Of the two, Kiro CLI (V2) comes first, so Enter
+for Kiro IDE and Kiro CLI on its v3 engine. Of the two, Kiro is the default, so Enter
 takes it unless an earlier detected harness leads the list or setup runs in a
 harness editor's own terminal, whose harness comes first.
 
@@ -486,7 +489,7 @@ interactive wizard.
 | `--from <dir-or-tgz>` | Use local release files instead of an installed runtime: `aidlc-copy-runtime-X.Y.Z.tar.gz` (checked against a `.sha256` beside it), its extracted `runtime/` folder, or one projection directory or archive |
 | `--download` | Fetch and verify the release the project needs when this machine lacks it, then finish the command; applying a dry run's plan token needs it again |
 | `--mcp defaults\|none` | Add or omit Claude's optional shipped MCP entries |
-| `--dry-run` | Calculate the complete plan without creating the target directory or changing bytes |
+| `--dry-run` | Calculate the complete plan without creating the target directory or changing bytes; in a project set up with a release newer than this computer's, it plans nothing and names the update and the pin instead |
 | `--plan-token <token>` | Apply only the exact plan approved from a JSON dry run |
 | `--show` | Show settings without changing anything: with no section, every section in turn (`aidlc config --show`; `--json` prints one object keyed by section, each value what that section's `--show --json` prints); with a section, that section alone |
 | `--force` | Replace locally modified framework-owned files and managed blocks where that policy permits |
@@ -509,7 +512,9 @@ you typed kept.
 plan, confirmation, and transaction. It never contacts a model
 provider. On Kiro CLI, choosing a session model asks Kiro CLI for your account's
 model list and that model's effort levels; with `--yes`, only `--session-model`
-does.
+does among the session settings. On Kiro, `config models`, `--check` and
+`aidlc doctor` can also read that list to name an agent model it does not have
+([One agent on its own model and effort](harnesses/kiro.md#one-agent-on-its-own-model-and-effort)).
 
 The public groups are:
 
@@ -544,7 +549,8 @@ aidlc config models --session-model claude-opus-4.8   # Kiro CLI: your personal 
 ```
 
 A change ends with what changed, its undo command and who picks it up (plus
-any setup step still outstanding); `--json` and `--quiet` output are unchanged.
+any setup step still outstanding); `--json` and `--quiet` output are unchanged,
+except for what Kiro's agent model check adds.
 
 On Claude Code, Codex, opencode and Kiro CLI, while no policy is recorded, setup
 asks about models at each refresh until you answer (on Kiro IDE, Cursor and
@@ -1134,6 +1140,11 @@ is done too, and says so:
   Updated. Your open work (default/add-login) carries on.
 ```
 
+One refresh is not done: in a project set up with a release newer than this
+computer's, a refresh that would bring in this computer's older release files
+changes nothing and names the step instead: the update to that release, or the
+pin, which takes the project down to this computer's release.
+
 When the new release does a stage you already finished differently and nothing
 of yours changed, your work stands and nothing asks you to redo it. If the stage
 now needs a document it did not need before, your next step says so once, for
@@ -1507,9 +1518,9 @@ back, see [Go Back to an Earlier Version](#go-back-to-an-earlier-version).
 To put this machine back on an earlier release, run `aidlc use <version>`, for
 example `aidlc use 2.10.0`. It downloads that release if the machine does not
 have it, then says `Now using aidlc 2.10.0 (was 2.11.0; retained locally, no
-project changes).` Every project without a pin now runs on 2.10.0; run
-`aidlc config` in a project to bring its files to 2.10.0 as well.
-`aidlc use 2.11.0` goes forward again.
+project changes).` Every project without a pin now runs on 2.10.0; to put a
+project's files back too, pin it, as below. `aidlc use 2.11.0` goes forward
+again.
 
 To put one project back for everyone on it, pin it, then refresh it:
 
@@ -1606,9 +1617,14 @@ exact retained version whatever the machine follows.
 
 Previews are `main` as it stands, including project state-schema changes. A
 preview that raises the state schema writes project state a stable build does
-not understand, and the code refuses to open state newer than the build; that
-project cannot be walked back to stable until a stable release ships the same
-schema. Use the preview channel on projects you can recreate, or pin them.
+not understand. A build never advances work newer than it reads: on a native
+install it asks once whether to update AI-DLC and carry on ("This plan was set
+up with AI-DLC 2.12 or newer, and this computer has 2.11.5. Want me to update
+AI-DLC now and carry on?"), and on yes runs `aidlc update` and the project's
+refresh and carries on with what you asked; a copied, pinned or
+package-managed install says its own one step instead. That project cannot be
+walked back to stable until a stable release ships the same schema. Use the
+preview channel on projects you can recreate, or pin them.
 
 ## Project Pins and CI
 
@@ -1628,7 +1644,10 @@ keys with the same version collapse; conflicting equivalents fail closed until
 
 Commit only `.aidlc-version`. The stable `aidlc` launcher starts the
 integrity-checked active binary, whose dispatcher validates the complete pinned
-binary and runtime before selecting it. A missing, malformed, tampered, or
+binary and runtime before selecting it: in full at the start of each session, and
+on later calls of that chat every check but the hashing, so damage made during a
+session is caught in the next one. `aidlc update`, `aidlc use`,
+`aidlc config --pin` and `aidlc doctor` always check in full. A missing, malformed, tampered, or
 unavailable target fails closed with `aidlc config --pin <version>` remediation, and
 `aidlc doctor` reports the same condition. Machine lifecycle commands use the
 active binary; `doctor`, `config`, and `use` are never trapped behind a broken

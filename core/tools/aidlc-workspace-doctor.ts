@@ -24,6 +24,7 @@ import {
   errorMessage,
   REQUEST_TEXT_DIR,
 } from "./aidlc-lib.ts";
+import { inProject, projectInRepo } from "./aidlc-git.ts";
 import { committedRecordIgnoreConflicts } from "./aidlc-gitignore.ts";
 import { aidlcToolInvocation } from "./aidlc-runtime-paths.ts";
 import {
@@ -218,7 +219,7 @@ export function workspaceManifestChecks(projectDir: string): DoctorCheck[] {
         if (!AUDIT_LOG_PATH.test(change.path)) return true;
         // Porcelain paths start at the repository root, which may sit above
         // the project folder.
-        prefix ??= new TextDecoder().decode(git(["rev-parse", "--show-prefix"]).stdout).replace(/\r?\n$/, "");
+        prefix ??= projectInRepo(projectDir)?.prefix ?? "";
         return !onlyDoctorRunRows(projectDir, prefix, change, git);
       });
       if (dirty.length === 0) {
@@ -236,7 +237,7 @@ export function workspaceManifestChecks(projectDir: string): DoctorCheck[] {
             `Workspace records: ${dirty.length} uncommitted change(s) under aidlc/ (advisory - the shared records travel by git; ` +
             (blockers !== ""
               ? `commit & push them so teammates get them once the ${blockers} steps below are done)`
-              : "commit & push so teammates get them: `git add aidlc/ && git commit && git push`)"),
+              : "commit & push so teammates get them: `git add aidlc/`, `git commit`, `git push`)"),
           ...(blockers !== "" ? { fix: `do the ${blockers} steps below first; then this row names the commit` } : {}),
         });
       }
@@ -379,9 +380,10 @@ function onlyDoctorRunRows(
   change: { status: string; path: string },
   git: GitRun,
 ): boolean {
-  if ((change.status !== " M" && change.status !== "??") || !change.path.startsWith(prefix)) return false;
+  const own = inProject(prefix, change.path);
+  if ((change.status !== " M" && change.status !== "??") || own === null) return false;
   try {
-    const file = join(projectDir, ...change.path.slice(prefix.length).split("/"));
+    const file = join(projectDir, ...own.split("/"));
     if (!lstatSync(file).isFile()) return false;
     let committed = "";
     if (change.status === " M") {

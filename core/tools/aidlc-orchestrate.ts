@@ -700,7 +700,14 @@ import {
 } from "./aidlc-audit.ts";
 import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
 import { unitMemoryPath, unitStageMemoryPath } from "./aidlc-stage-diary.ts";
-import { bringStateUpToDate } from "./aidlc-state-upgrade.ts";
+import {
+  bringStateUpToDate,
+  newerStateRelease,
+  newerStateStep,
+  newerWorkInstall,
+  newerWorkLead,
+  newerWorkRefresh,
+} from "./aidlc-state-upgrade.ts";
 import { renderEngineInvocation, sameGuardOperation } from "./aidlc-guard-operation.ts";
 import { claimedCheckoutMovesElsewhere, claimedCheckoutReopens, completedUnits } from "./aidlc-unit-landing.ts";
 import { isHookPreDispatch, withAuditLock } from "./aidlc-locks.ts";
@@ -723,7 +730,12 @@ import {
   isPlanApprovalBeat,
   codeGenerationBuildFinishes,
   codeGenerationFinishedBuild,
+  gateLinesThatFit,
+  gateNoticesInBox,
   keepRoutedPlanApprovalReply,
+  NO_GIT_LINE,
+  noGitLineSaid,
+  writeNoGitLineSaid,
   legacyPlanApprovalOffNotice,
   noteOpenEngineQuestion,
   openPlanApprovalQuestion,
@@ -885,15 +897,11 @@ function broughtFilesGateLine(
 // meeting it. Silent when the project folder, a repo of the work or a git
 // checkout in the workspace is in git (those files have their undo). `git init`
 // alone puts nothing back, so the line names the commit.
-export const NO_GIT_LINE =
-  "This project has no git, so AI-DLC can't undo the changes it makes to your files; " +
-  "to get an undo, run `git init` and commit them.";
-const NO_GIT_SAID_FILE = "no-git-said";
 let noGitLineHanded: string | null = null;
 
 function addNoGitLine(reply: { kind: string; change_notices?: string[] }, projectDir: string): void {
   try {
-    if (existsSync(join(sessionsDir(projectDir), NO_GIT_SAID_FILE))) return;
+    if (noGitLineSaid(projectDir)) return;
     const repos = [...intentRepos(projectDir), ...discoverSiblingRepos(projectDir)];
     if (isGitRepo(projectDir) || repos.some((name) => isGitRepo(repoDir(projectDir, name)))) return;
   } catch {
@@ -904,24 +912,19 @@ function addNoGitLine(reply: { kind: string; change_notices?: string[] }, projec
   if (!isReadOnlyEngineProbe() && process.env.AIDLC_UNATTENDED !== "1") noGitLineHanded = projectDir;
 }
 
-// Kept as said once the step that carries it is written (writePrepared). A
+// Kept as said once the step that carries it is written (writePrepared): the
+// step that added it, or a later one carrying it from the chat's kept lines. A
 // rules part carries it too, but it is said with the step after the parts,
 // which still carries it (the record waits), so it is recorded there.
 function recordNoGitLineSaid(written: { kind?: unknown; change_notices?: unknown }): void {
-  const projectDir = noGitLineHanded;
+  const projectDir = noGitLineHanded ??
+    (isReadOnlyEngineProbe() || process.env.AIDLC_UNATTENDED === "1" ? null : engineProjectDir ?? null);
   noGitLineHanded = null;
   const notices = written.change_notices;
   if (projectDir === null || written.kind === "load-steering" || !Array.isArray(notices) || !notices.includes(NO_GIT_LINE)) {
     return;
   }
-  try {
-    const dir = sessionsDir(projectDir);
-    assertNoSymlinkInChainOrThrow(projectDir, relative(projectDir, dir));
-    mkdirSync(dir, { recursive: true });
-    writeFileAtomic(join(dir, NO_GIT_SAID_FILE), `${isoTimestamp()}\n`);
-  } catch {
-    // Unrecorded: the next gate says it once more.
-  }
+  writeNoGitLineSaid(projectDir);
 }
 
 // " (3 questions, 2 answered)" for a questions file: its `[Answer]:` lines
@@ -1491,7 +1494,7 @@ function namedRestartRequest(
     return {
       directive: errorDirective(
         `AI-DLC could not read the work this request was kept for (${errorMessage(e)}), so it was not run. ` +
-          `Run \`${aidlcDispatcherInvocation("doctor")}\` to see why.`,
+          `Run \`${entrySkillInvocation()} --doctor\` to see why.`,
       ),
     };
   }
@@ -1598,6 +1601,14 @@ const CLEAN_CHAT_LEAD = "To start this in a clean chat instead, ";
 // a stage's gate, before the gate is shown, and a reading it may answer from
 // (saysWaitingLines).
 const leadsToSpeech = new WeakSet<Directive>();
+// The lines a gate step built for the person, for a question box to show
+// (keepGateLinesForTheBox); never a review check offer, a question of its own.
+const gateBoxLines = new WeakMap<Directive, string[]>();
+const reviewCheckOffers = new Set<string>();
+function markGateBoxLines(gate: Directive): void {
+  const lines = (gate.change_notices ?? []).filter((line) => !reviewCheckOffers.has(line));
+  if (lines.length > 0) gateBoxLines.set(gate, lines);
+}
 
 // A step the agent speaks from: one that ends its turn, or one with its own
 // line or a line for the person. A rules part never is; its run-stage is.
@@ -1619,6 +1630,36 @@ function speaksToPerson(directive: Directive): boolean {
 function withPersonLines(transported: Directive, lines: readonly string[]): Directive | null {
   const carried = withChangeNotices(transported, [...new Set([...lines, ...(transported.change_notices ?? [])])]);
   return Buffer.byteLength(JSON.stringify(carried), "utf-8") <= directiveMaxBytes() ? carried : null;
+}
+
+// Where the question box carries them (gateNoticesInBox), a gate step's own
+// lines that fit (gateLinesThatFit) are kept for the chat for the box to show.
+// After sayPendingPersonLines: before, it would read them back onto this step;
+// after, its said() leaves an entry written after its read as it is. A step
+// issued again unchanged (retainedIssuedDirective) hands nothing over, so the
+// lines its first issue kept are not kept twice.
+function keepGateLinesForTheBox(
+  requested: Directive,
+  carried: { directive: Directive; said?: () => void },
+): { directive: Directive; said?: () => void } {
+  const own = gateBoxLines.get(requested);
+  const step = carried.directive;
+  const projectDir = engineProjectDir;
+  const sessionId = engineSessionId;
+  if (
+    !own || !projectDir || !sessionId || step.kind === "load-steering" || isReadOnlyEngineProbe() ||
+    !gateNoticesInBox(projectDir)
+  ) return carried;
+  const lines = gateLinesThatFit((step.change_notices ?? []).filter((line) => own.includes(line)));
+  const kept = carried.said ? [] : pendingPersonLines(projectDir, sessionId, { ordinaryOnly: true }).lines;
+  const fresh = lines.filter((line) => !kept.includes(line));
+  if (lines.length === 0 || (fresh.length > 0 && !addPendingPersonLines(projectDir, sessionId, fresh))) return carried;
+  const directive = { ...step, change_notices: (step.change_notices ?? []).filter((line) => !lines.includes(line)) };
+  if (directive.change_notices.length === 0) {
+    delete (directive as Directive).change_notices;
+    delete directive.change_notices_note;
+  }
+  return { directive, said: carried.said };
 }
 
 // A chat picking the work back up (`next --resume`) hears where it picks up and
@@ -2097,13 +2138,17 @@ function prepareEmission(directive: Directive): PreparedEmission {
     transported, aidlcToolInvocation("orchestrate"), aidlcToolInvocation("log"), undefined,
     switchBackOnFollowUps(transported),
   );
-  const personLines = sayPendingPersonLines(requested, transported);
+  const personLines = keepGateLinesForTheBox(requested, sayPendingPersonLines(requested, transported));
   transported = personLines.directive;
   const personLinesSaid = personLines.said;
   // The bytes the host's tool panel shows first are the person's words.
   transported = withPersonsWordsFirst(transported);
   // A question for the person goes out with its id on the record (aidlc-questions.ts).
-  if (transported.kind === "ask" && transported.question_id === undefined && askState !== null && engineProjectDir) {
+  // The AI-DLC update question has none: the record it is about is one this build cannot read.
+  if (
+    transported.kind === "ask" && transported.question_id === undefined && askState !== null && engineProjectDir &&
+    transported.ask_type !== AI_DLC_UPDATE_ASK_TYPE
+  ) {
     const id = askQuestionId(engineProjectDir, transported, askState);
     if (id !== null) transported.question_id = id;
   }
@@ -5965,26 +6010,26 @@ function observedClaimActivity(
 ): string {
   if (claim.movementObserved) {
     return claim.observedAt
-      ? `observed ref movement since ${claim.observedAt}`
-      : "observed ref movement since the prior snapshot";
+      ? `branch moved since ${claim.observedAt}`
+      : "branch moved since the last look";
   }
   return claim.observedAt
-    ? `last observed ref movement ${claim.observedAt}`
-    : "no ref movement observation recorded";
+    ? `no move seen since ${claim.observedAt}`
+    : "no activity seen yet";
 }
 
 function mergeReadiness(status: string): string {
   switch (status) {
     case "pinned":
-      return "pinned and ready for merge gate";
+      return "ready for the merge decision";
     case "approved":
-      return "merge gate approved; ready to land";
+      return "merge approved; ready to land";
     case "rejected":
-      return "merge gate rejected; revise and re-pin";
+      return "merge turned down; revise it and pin it again";
     case "git-landed":
-      return "content landed; state fold pending";
+      return "merged; the workflow record is not updated yet";
     case "state-folded":
-      return "state folded; audit finalization pending";
+      return "merged; the audit record is not finished yet";
     default:
       return status;
   }
@@ -6220,9 +6265,9 @@ export function renderTeamConstructionBoard(
 ): string {
   const title = mode === "snapshot"
     ? "# Team Construction Snapshot"
-    : "# Team Construction Dispatcher";
+    : "# Team Construction Board";
   const claimRows = board.claims.length === 0
-    ? ["| - | - | - | - | no claim refs observed |"]
+    ? ["| - | - | - | - | no claims seen |"]
     : board.claims.map(
       (claim) =>
         `| ${claim.unit} | ${claim.status} | ${claim.owner} | ${claim.generation} | ${claim.observedActivity} |`,
@@ -6259,7 +6304,7 @@ export function renderTeamConstructionBoard(
   for (const row of board.awaitingMerge) {
     if (row.status === "pinned") {
       nextActions.push(
-        `- Record the pinned merge decision for \`${row.unit}\` with \`aidlc unit gate ${row.unit}\`.`,
+        `- Record the pinned merge decision for \`${row.unit}\` with \`${aidlcInvocation()} unit gate ${row.unit}\`.`,
       );
     } else if (
       row.status === "approved" ||
@@ -6274,8 +6319,8 @@ export function renderTeamConstructionBoard(
         released &&
             row.status === "git-landed" &&
             !row.releasedAfterGitAccepted
-          ? `- The landed attempt for \`${row.unit}\` was released. Inspect the merge commit, then run \`aidlc unit land ${row.unit} --accept-released-attempt --user-input '<human acknowledgment>'\`.`
-          : `- Resume \`${row.unit}\` with \`aidlc unit land ${row.unit}\`.`,
+          ? `- The landed attempt for \`${row.unit}\` was released. Inspect the merge commit, then run \`${aidlcInvocation()} unit land ${row.unit} --accept-released-attempt --user-input '<human acknowledgment>'\`.`
+          : `- Resume \`${row.unit}\` with \`${aidlcInvocation()} unit land ${row.unit}\`.`,
       );
     } else if (row.status === "rejected") {
       nextActions.push(
@@ -6298,11 +6343,11 @@ export function renderTeamConstructionBoard(
   if (nextActions.length === 0) {
     nextActions.push(
       claimedUnits.length === 0 && board.walked.length === 0
-        ? "- No dispatcher action is pending; main may resume the normal Construction walk."
+        ? "- Nothing waits on the teams: the main checkout can go on with Construction as usual."
         : mode === "dispatcher"
         ? "- Nothing runs from this checkout: every Unit not yet merged is claimed, waits on one, or is built " +
           "where it was started. Each claimed Unit is worked in its own checkout:"
-        : "- No dispatcher action is pending. Each claimed Unit is worked in its own checkout:",
+        : "- Nothing waits on this checkout. Each claimed Unit is worked in its own checkout:",
     );
   } else if (claimedUnits.length > 0 || board.walked.length > 0) {
     nextActions.push("- Each claimed Unit is worked in its own checkout:");
@@ -6322,28 +6367,28 @@ export function renderTeamConstructionBoard(
   return [
     title,
     mode === "snapshot"
-      ? "_Read-only local snapshot; observed activity is not a remote push time._"
-      : "_Turn-terminal dispatcher view; observed activity is not a remote push time._",
+      ? "_Read-only snapshot; last activity is what this checkout has seen, not when a team pushed._"
+      : "_Last activity is what this checkout has seen, not when a team pushed._",
     `**Claimed:** ${claimedSummary}. **Claimable:** ${
       board.claimable.join(", ") || "none"
     }. **Waiting:** ${blockedSummary}.`,
     "",
     board.grid,
     "",
-    "## Claim Registry",
-    "| unit | status | owner | attempt | observed activity |",
+    "## Claims",
+    "| unit | status | owner | attempt | last activity |",
     "| --- | --- | --- | ---: | --- |",
     ...claimRows,
     "",
     "## Awaiting Merge",
-    "| unit | transaction | pinned OID | readiness |",
+    "| unit | step | commit | what is next |",
     "| --- | --- | --- | --- |",
     ...mergeRows,
     "",
     `## Claimable Units\n${board.claimable.length > 0 ? board.claimable.map((unit) => `- ${unit}`).join("\n") : "- none"}`,
     "",
     "## Blocked Units",
-    "| unit | blockers |",
+    "| unit | waits on |",
     "| --- | --- |",
     ...blockedRows,
     "",
@@ -6369,6 +6414,111 @@ function errorDirective(message: string): ErrorDirective {
 function staleStateVersionError(stateContent: string): string | null {
   const verdict = classifyStateVersion(stateContent);
   return verdict.kind === "ok" ? null : verdict.message;
+}
+
+// The State Version of a record a newer AI-DLC wrote, which this build cannot
+// read; null for any other record, or none.
+function newerStateVersion(stateContent: string | null): string | null {
+  if (stateContent === null) return null;
+  const verdict = classifyStateVersion(stateContent);
+  return verdict.kind === "future" ? verdict.version : null;
+}
+
+export const AI_DLC_UPDATE_ASK_TYPE = "ai-dlc-update";
+const UPDATE_ANSWERS = ["now", "later", "done"] as const;
+type UpdateAnswer = (typeof UPDATE_ANSWERS)[number];
+// The answer `next --update-ai-dlc` carried in this command (see takeUpdateAnswer).
+let updateAnswer: UpdateAnswer | null = null;
+const NOT_NOW_LINE = "Leaving it as it is. Ask me to update AI-DLC whenever you're ready, and I'll carry on.";
+
+function tellAndStop(line: string): PrintDirective {
+  return turnEndingPrint(`Tell the person in one line: ${JSON.stringify(line)} Then stop.`);
+}
+
+// The step for a record a newer AI-DLC wrote, in place of next's or report's
+// refusal (#2783 calls it too): on a native install, which updates itself, one
+// question, whose yes carries on with `carried`, the `next` arguments as they
+// were typed, kept under an id for the command after the update. Every other
+// install, and an unattended run, where nobody is there to answer, hears its
+// own one step. The question writes nothing into the record, which this build
+// cannot read: no question row, and the kept request lives in this machine's
+// own folder. After an update that left this build in place (`done`), the
+// person hears that once, never the question again.
+function newerWorkOffer(projectDir: string, version: string, carried: readonly string[], newWork = false): Directive {
+  if (updateAnswer === "done") {
+    // Nothing carried on, so the carry-on line is not said.
+    activeKeptRequestLine = null;
+    return tellAndStop(
+      `AI-DLC is still ${AIDLC_VERSION} on this computer, so this plan, set up with ${newerStateRelease(version)}, ` +
+        `cannot carry on here until \`aidlc update\` brings that release to this computer.`,
+    );
+  }
+  if (newerWorkInstall(projectDir).kind !== "native" || process.env.AIDLC_UNATTENDED === "1") {
+    return tellAndStop(newerStateStep(projectDir, version, newWork));
+  }
+  let id: string | null = null;
+  if (!isReadOnlyEngineProbe()) {
+    try {
+      const selection = engineSelection(projectDir);
+      const uuid = selection.intent === null ? null : intentUuidForSelection(projectDir, selection);
+      const workflow = selection.intent !== null && uuid !== null ? { intent: selection.intent, uuid } : null;
+      id = saveRestartRequest(projectDir, carried, selection.space, workflow, undefined, engineSessionId);
+    } catch {
+      // Not kept: the yes carries on with a bare `next`, and the person's words stay in this chat.
+      id = null;
+    }
+  }
+  const answer = (value: UpdateAnswer) =>
+    `${aidlcToolInvocation("orchestrate")} next --update-ai-dlc ${value}${id === null ? "" : ` --request ${id}`}`;
+  return {
+    kind: "ask",
+    ask_type: AI_DLC_UPDATE_ASK_TYPE,
+    response_route: "command",
+    question: `${newerWorkLead(version, newWork)}, and this computer has ${AIDLC_VERSION}. ` +
+      "Want me to update AI-DLC now and carry on?",
+    choices: [
+      {
+        label: "Update and carry on",
+        detail: "Updates AI-DLC on this computer to its newest release and this project's AI-DLC files, then carries " +
+          "on with what you asked.",
+        command: answer("now"),
+      },
+      { label: "Not now", detail: "Leaves this work as it is.", command: answer("later") },
+    ],
+  };
+}
+
+// `next --update-ai-dlc <now|later|done> [--request <id>]`: the AI-DLC update
+// question's answer, read before the kept request it names runs and never part
+// of it. A string is the refusal; null when the flag is not there.
+function takeUpdateAnswer(args: readonly string[]): { answer: UpdateAnswer; rest: string[] } | string | null {
+  const at = beforeDelimiter(args).indexOf("--update-ai-dlc");
+  if (at < 0) return null;
+  const value = args[at + 1];
+  const rest = [...args.slice(0, at), ...args.slice(at + 2)];
+  if (!(UPDATE_ANSWERS as readonly string[]).includes(value ?? "") || !(rest.length === 0 || keptRestartLine(rest) !== null)) {
+    return "--update-ai-dlc answers the AI-DLC update question; run the command that question supplied.";
+  }
+  return { answer: value as UpdateAnswer, rest };
+}
+
+// What an answer does before its kept request runs: Not now says its line;
+// yes, while this build still cannot read the record, hands the agent the
+// update, the project's refresh and the command that carries on. Null runs the
+// kept request (or a bare `next`): `done`, or a yes once the record reads here.
+function updateAnswerStep(projectDir: string, answer: UpdateAnswer, rest: readonly string[]): Directive | null {
+  if (answer === "later") return tellAndStop(NOT_NOW_LINE);
+  if (answer === "done") return null;
+  const version = newerStateVersion(loadStateFileIfPresent(projectDir));
+  if (version === null) return null;
+  if (newerWorkInstall(projectDir).kind !== "native" || process.env.AIDLC_UNATTENDED === "1") {
+    return tellAndStop(newerStateStep(projectDir, version));
+  }
+  const carryOn = `${aidlcToolInvocation("orchestrate")} next --update-ai-dlc done${rest.length > 0 ? ` ${rest.join(" ")}` : ""}`;
+  return printDirective(
+    `The person chose to update AI-DLC and carry on. Run \`${aidlcInvocation()} update\`, then ` +
+      `\`${newerWorkRefresh(projectDir)}\`, then \`${carryOn}\`, and follow what it returns.`,
+  );
 }
 
 // parked - the terminal directive a parked workflow emits (issue #367). Carries
@@ -11187,12 +11337,15 @@ export function unitsStillOpenLine(projectDir: string): string | null {
 // Generation reopened to change the Unit plan): its own step runs, whatever
 // the team's claims; the dispatcher board holds main again from the block on.
 // Only the checkout that went back runs it, the one whose own audit shard
-// holds that jump (`Unit Work: kept`, aidlc-jump.ts): a teammate's clone that
-// pulls main mid-replan came for a Unit, so it keeps the board.
+// holds that jump (`Unit Work: kept` on a jump to before the block,
+// aidlc-jump.ts; a kept move on past the block is not one): a teammate's clone
+// that pulls main mid-replan came for a Unit, so it keeps the board.
 function beforeTeamUnitWork(projectDir: string, stateContent: string): boolean {
-  return beforePerUnitBlock(loadGraph(), getField(stateContent, "Current Stage")?.trim() ?? "") &&
+  const graph = loadGraph();
+  return beforePerUnitBlock(graph, getField(stateContent, "Current Stage")?.trim() ?? "") &&
     ownShardRows(projectDir).mine.some((row) =>
-      row.event === "STAGE_JUMPED" && auditBlockField(row.block, "Unit Work") === "kept"
+      row.event === "STAGE_JUMPED" && auditBlockField(row.block, "Unit Work") === "kept" &&
+      beforePerUnitBlock(graph, auditBlockField(row.block, "Target") ?? "")
     );
 }
 
@@ -12140,6 +12293,12 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   }
 
   if (flags.claim || flags.release) {
+    // A Unit of work a newer AI-DLC wrote is never claimed or released here.
+    const newer = newerStateVersion(loadStateFileIfPresent(resolveProjectDir(projectDir)));
+    if (newer !== null) {
+      emit(newerWorkOffer(resolveProjectDir(projectDir), newer, args));
+      return;
+    }
     if (flags.claim && flags.release) {
       emit(errorDirective("Cannot combine --claim and --release."));
       return;
@@ -12292,7 +12451,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     // into the named command so the documented export surface reaches the tool
     // through the real routing path, not just a direct invocation.
     const extra = flags.readOnlyArgs && flags.readOnlyArgs.length > 0
-      ? ` ${flags.readOnlyArgs.join(" ")}`
+      ? ` ${flags.readOnlyArgs.map((arg) => quoteCommandArgument(arg)).join(" ")}`
       : "";
     const readOnly = "This is a read-only utility, NOT workflow work: do NOT run `next` and do NOT advance, resume, or run any workflow stage.";
     // Here the project's pin launched this engine, and `aidlc version` would
@@ -12677,6 +12836,11 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   // archived never stands in its way.
   if (question?.newWork && stateContent !== null) flags.newIntent = true;
   if (stateContent !== null) {
+    const newer = newerStateVersion(stateContent);
+    if (newer !== null) {
+      emit(newerWorkOffer(pd, newer, args, flags.newIntent === true));
+      return;
+    }
     const stale = staleStateVersionError(stateContent);
     if (stale) {
       emit(errorDirective(stale));
@@ -14513,6 +14677,7 @@ function applyGateOnlyShape(
     // Counted as the gate is reported: a Unit's own only at a team Unit gate.
     addRevisionCycle(directive, projectDir, directive.stage, directive.unit_gate ? unit : null);
     addApproveAcceptsLine(directive, projectDir, gateNode, directive.unit_gate ? unit : null);
+    if (!directive.unit_gate) markGateBoxLines(directive);
   }
   directive.protocol_modules = (directive.protocol_modules ?? []).filter(
     (module) =>
@@ -17908,23 +18073,89 @@ function unitOutsideWork(
   return { said: `${unit} is not one of this work's units (${units.join(", ")}).`, nameOne: "Name one of them" };
 }
 
+// Once a team has taken a Unit, a redo of a Unit stage for every Unit (or a move
+// back to one, or ahead within them) on a checkout with no claim is the reopen of
+// the Units this checkout builds (unitsHeldHere), or with none nothing, said in
+// one line naming the Units left and why. Null where nothing is narrowed: solo, a
+// claimed checkout, no team has taken a Unit, a target outside the Unit stages on
+// the plan (an earlier release's skip of them included), or with `fromThem` a
+// move from before them (a jump into them goes as before). Its callers fetch the
+// teams' claims first (teamClaimsNow).
+function teamRedoNarrowed(
+  projectDir: string,
+  scope: string,
+  stateContent: string,
+  targetSlug: string,
+  fromThem = false,
+): { held: boolean; directive: PrintDirective } | null {
+  if (!isTeamUnitOwnership(stateContent) || readApplicableTeamUnitScopeStamp(projectDir, stateContent)) return null;
+  const block = constructionUnitMajorBlock(scope, stateContent, true).map((stage) => stage.slug);
+  if (!block.includes(targetSlug)) return null;
+  if (fromThem && getField(stateContent, "Current Stage")?.trim() !== block[0] && !cursorPastStage(stateContent, block[0])) {
+    return null;
+  }
+  const dag = resolveBoltBatches(projectDir);
+  if (!cachedClaimFanoutActive(projectDir) || dag.state !== "ok") return null;
+  const held = unitsHeldHere(projectDir) ?? new Set<string>();
+  let owners = new Map<string, string>();
+  let walked = new Set<string>();
+  try {
+    const overview = cachedUnitClaimOverview(projectDir, { writeCache: false });
+    owners = new Map(overview.claimed.map((c) => [c.unit, c.owner]));
+    walked = new Set(overview.walked ?? []);
+  } catch {
+    // An unreadable claim registry names no team.
+  }
+  // A Unit another checkout walks without a claim is that checkout's: not named.
+  const here = dag.batches.flat().filter((unit) => held.has(unit));
+  const left = dag.batches.flat().filter((unit) => !held.has(unit) && !walked.has(unit));
+  if (left.length === 0) return null;
+  // The person's words, all here: finished Units, then each team's, then the untaken.
+  const and = (items: readonly string[]): string =>
+    items.length < 2 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items.at(-1)}`;
+  const whyOf = (unit: string): string => completedUnits(stateContent).has(unit)
+    ? "finished"
+    : owners.has(unit) ? `built by ${owners.get(unit)}` : "not taken yet";
+  const rank = (why: string): number => why === "finished" ? 0 : why === "not taken yet" ? 2 : 1;
+  const groups = new Map<string, string[]>();
+  for (const unit of [...left].sort((a, b) => rank(whyOf(a)) - rank(whyOf(b)))) {
+    groups.set(whyOf(unit), [...(groups.get(whyOf(unit)) ?? []), unit]);
+  }
+  const why = and([...groups].map(([what, names]) => `${and(names)} ${names.length === 1 ? "is" : "are"} ${what}`));
+  const name = nodeForSlug(targetSlug)?.name || targetSlug;
+  if (here.length === 0) {
+    const said = `${name} is not redone for every unit once a team has taken a unit: ${why}.`;
+    return { held: false, directive: turnEndingPrint(`Run nothing. Tell the person in one line: "${said}"`) };
+  }
+  const line = `Redoing ${name} for unit${here.length === 1 ? "" : "s"} ${and(here)}. ${why}, so ` +
+    `${left.length === 1 ? "it is" : "they are"} not redone here.`;
+  const jump = [
+    "reopen", "--target", targetSlug, "--stages", block.slice(block.indexOf(targetSlug)).join(","),
+    "--units", here.join(","), "--via", "redo", "--scope", scope,
+  ];
+  const message = `Run \`${jumpCommandText(jump)}\`, then tell the person in one line: "${line}" Then re-run \`next\`.`;
+  return { held: true, directive: jumpStepPrint(`${message} ${OTHER_UNITS_KEPT}`, jump) };
+}
+
+// The teams' claims as the remote has them now, before a redo or a move reads
+// them (the board's own one fetch); outside team work and in a probe, no fetch.
+function teamClaimsNow(projectDir: string, stateContent: string): void {
+  if (isTeamUnitOwnership(stateContent) && !isReadOnlyEngineProbe()) refreshClaimRefs(projectDir);
+}
+
 // A team checkout that holds no claim and no Unit once a team has claimed one
 // builds none (validateLiveUnitScope), so a finished Unit named for a redo of
 // one of the Units' own stages there is not reopened, for one Unit or for every
 // Unit. A stage done once for all Units keeps its question. Null elsewhere.
 function finishedUnitNotRedoneHere(
-  projectDir: string,
+  narrowed: ReturnType<typeof teamRedoNarrowed>,
   stateContent: string,
-  targetSlug: string,
   unit: string,
 ): Directive | null {
-  const node = nodeForSlug(targetSlug);
-  if (
-    !node || !isPerUnit(node) ||
-    !isTeamUnitOwnership(stateContent) || readApplicableTeamUnitScopeStamp(projectDir, stateContent) ||
-    !cachedClaimFanoutActive(projectDir) || unitsHeldHere(projectDir) !== null || !completedUnits(stateContent).has(unit)
-  ) return null;
-  return errorDirective(`${unit} is finished, so it is not redone here; this checkout builds no Unit now.`);
+  if (narrowed === null || narrowed.held || !completedUnits(stateContent).has(unit)) return null;
+  return turnEndingPrint(
+    `Run nothing. Tell the person in one line: "${unit} is finished, so it is not redone here; this checkout builds no Unit now."`,
+  );
 }
 
 // A move to a stage or phase in a checkout that claimed a Unit (`next --stage`,
@@ -18063,6 +18294,41 @@ function walkStepUnit(step: UnitJumpStep): string | null {
   return step.kind === "paused" ? step.checkpoint.unit : step.kind === "covered" ? null : step.unit;
 }
 
+function unitStepOwedOnlyReceipt(
+  projectDir: string,
+  scope: string,
+  stateContent: string,
+  walk: { step: UnitJumpStep; block: GraphStage[]; context: UnitWorkContext },
+  stageSlug: string,
+  unit: string,
+): boolean {
+  const step = walk.step;
+  if (step.kind !== "work" || step.stage.slug !== stageSlug || step.unit !== unit) return false;
+  const target = walk.block.find((stage) => stage.slug === stageSlug);
+  if (target === undefined) return false;
+  return unitReceiptOnlyStep(
+    projectDir, target, unit, walk.context.recordPrefix, walk.context.codekbCtx,
+    walk.context.kinds?.get(unit) ?? null, unitLedgerFor(projectDir, stageSlug), stateContent, scope,
+  )?.receipt === true;
+}
+
+function unitStepChangeReopen(
+  projectDir: string,
+  scope: string,
+  stateContent: string,
+  flags: ReportFlags,
+): PrintDirective | null {
+  const unit = flags.unit?.trim();
+  const stageSlug = flags.stage?.trim();
+  if (!unit || !stageSlug || !validScopes().has(scope)) return null;
+  const walk = unitJumpWalk(projectDir, scope, stateContent, true);
+  if (walk === null || !unitStepOwedOnlyReceipt(projectDir, scope, stateContent, walk, stageSlug, unit)) return null;
+  const reopen = unitMajorReopen(projectDir, scope, stateContent, stageSlug, {
+    stage: stageSlug, jumpUnit: unit, everyUnit: false, change: true,
+  });
+  return reopen !== null && reopen !== "route" && reopen.kind === "print" ? reopen : null;
+}
+
 function unitMajorReopen(
   projectDir: string,
   scope: string,
@@ -18141,7 +18407,10 @@ function unitMajorReopen(
       };
     }
     // The Unit in flight on the target itself: that is where the walk already is.
-    if (named === inFlight && liveStage === targetSlug) return "route";
+    // Asked for by name with no change, it carries on there; only the person's
+    // change reopens it, once nothing but its completion is left.
+    if (named === inFlight && liveStage === targetSlug &&
+      (!flags.change || !unitStepOwedOnlyReceipt(projectDir, scope, stateContent, walk, targetSlug, named))) return "route";
     // A Unit set aside on the target is picked up where it stopped.
     const parked = open.get(named);
     if (named !== inFlight && parked?.stage === targetSlug && parked.checkpoint.setAsideFor !== null) {
@@ -19536,6 +19805,7 @@ function emitJumpDirective(
       return;
     }
     const unitMajorState = loadStateFileIfPresent(projectDir) ?? "";
+    teamClaimsNow(projectDir, unitMajorState);
     // A jump back to a per-unit step reopens it for chosen Units, whichever way
     // the jump resolves: forward or redo while Current Stage is on the first
     // per-unit stage, backward once the stage gates have moved it on.
@@ -19549,8 +19819,11 @@ function emitJumpDirective(
     // redoes the step for every unit. `--every-unit` asks for exactly what the
     // jump below does here, so it goes through and says so in one line.
     if (flags.jumpUnit !== undefined) {
-      emit(finishedUnitNotRedoneHere(projectDir, unitMajorState, targetSlug, flags.jumpUnit) ??
-        turnEndingPrint(unitChoiceRefusal(unitMajorState, targetSlug)));
+      // The offer to reopen it for every unit is not made where its yes would
+      // change nothing.
+      const narrowed = teamRedoNarrowed(projectDir, scope, unitMajorState, targetSlug);
+      emit(finishedUnitNotRedoneHere(narrowed, unitMajorState, flags.jumpUnit) ??
+        (narrowed?.held === false ? narrowed.directive : turnEndingPrint(unitChoiceRefusal(unitMajorState, targetSlug))));
       return;
     }
     const everyUnitSaid = flags.everyUnit && direction !== "forward"
@@ -19558,9 +19831,20 @@ function emitJumpDirective(
         `${direction === "backward" ? " and the steps after it" : ""} for every unit.`
       : "";
     const everyUnitLine = everyUnitSaid ? ` Then tell the person in one line: "${everyUnitSaid}"` : "";
+    // Once a team has taken a Unit, a move ahead for every Unit is for the ones
+    // this checkout builds: the one-Unit move, or at the step one is on its redo.
+    const teamTaken = flags.everyUnit === true && isTeamUnitOwnership(unitMajorState) && cachedClaimFanoutActive(projectDir);
     const unitMajor = direction === "forward"
-      ? unitMajorForwardJump(projectDir, scope, unitMajorState, targetSlug, flags.everyUnit === true)
+      ? unitMajorForwardJump(projectDir, scope, unitMajorState, targetSlug, flags.everyUnit === true && !teamTaken)
       : null;
+    if (unitMajor === "route" && !teamTaken) return "route";
+    const narrowed = unitMajor === null || unitMajor === "route"
+      ? teamRedoNarrowed(projectDir, scope, unitMajorState, targetSlug, true)
+      : null;
+    if (narrowed !== null) {
+      emit(narrowed.directive);
+      return;
+    }
     if (unitMajor === "route") return "route";
     // The jump the person asked for, with nothing to run or say around it, is
     // made here with the command the print below names, and the caller routes
@@ -20194,7 +20478,10 @@ function addReviewCheckOffer(
   const found = reviewCheckOffer(projectDir, node, unit);
   if (found === null) return;
   const at = reply.change_notices?.lastIndexOf(found.change) ?? -1;
-  if (at >= 0) reply.change_notices![at] = `${found.change} ${found.offer}`;
+  if (at >= 0) {
+    reply.change_notices![at] = `${found.change} ${found.offer}`;
+    reviewCheckOffers.add(reply.change_notices![at]);
+  }
   else reply.narration = reply.narration ? `${reply.narration}\n${found.offer}` : found.offer;
 }
 
@@ -21472,8 +21759,11 @@ function redoCurrentStage(pd: string, scope: string, stateContent: string, slug:
       `This workflow's scope is not one AI-DLC knows, so its stage cannot be redone from here. Run \`${entrySkillInvocation()} --status\` to see where it stands.`,
     );
   }
+  teamClaimsNow(pd, stateContent);
   const unitRedo = unitMajorRedo(pd, scope, stateContent, slug);
   if (unitRedo !== null) return jumpStepPrint(unitRedo.message, unitRedo.jump);
+  const narrowed = teamRedoNarrowed(pd, scope, stateContent, slug);
+  if (narrowed !== null) return narrowed.directive;
   const jump = ["execute", "--target", slug, "--direction", "redo", "--scope", scope];
   return jumpStepPrint(
     `Redo accepted at "${slug}". Run \`${jumpCommandText(jump)}\` to reset the current stage, then re-run \`next\` to start it over.`,
@@ -21597,12 +21887,15 @@ function emitTypedResumeChoice(
   // "... and stop there": the move is made, then the workflow is parked in
   // place of the `next` that would carry on with it. --park says the person
   // asked for that; without it, the conductor still reads their words for it.
+  // A print that ends the turn moved nothing, so it goes as it is.
   const stopThere = `${flags.park === true
     ? " The person also asked to stop there for now: make"
     : " If the person also asked to stop there for now, make"} the move, following each print up to where it says ` +
     `to re-run \`next\`, then run \`${aidlcToolInvocation("orchestrate")} park --person-asked\` in place of that \`next\` and act on its \`parked\` directive.`;
   const move = (directive: PrintDirective | ErrorDirective): PrintDirective | ErrorDirective =>
-    directive.kind === "print" ? jumpStepPrint(`${directive.message}${stopThere}`, namedJumps.get(directive)) : directive;
+    directive.kind === "print" && !turnEndingPrints.has(directive)
+      ? jumpStepPrint(`${directive.message}${stopThere}`, namedJumps.get(directive))
+      : directive;
   if (choice === "resume") {
     emit(move(printDirective(
       `Resume choice accepted at "${slug}". Re-run \`next\` to continue from the last checkpoint.`,
@@ -21830,6 +22123,11 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     // `!== null` (not truthiness): a present but zero-byte state file returns ""
     // and must still be refused, not treated as an absent file.
     if (sc !== null) {
+      const newer = newerStateVersion(sc);
+      if (newer !== null) {
+        emit(newerWorkOffer(pd, newer, []));
+        return;
+      }
       const stale = staleStateVersionError(sc);
       if (stale) {
         emit(errorDirective(stale));
@@ -22431,6 +22729,11 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     // The person's decision (their approval, or the changes they asked for)
     // is the stage's in a solo walk: it is recorded for the stage, as the same
     // report without --unit would be, so it is never lost.
+    const change = flags.result === "rejected" ? unitStepChangeReopen(pd, scope, stateContent, flags) : null;
+    if (change !== null) {
+      emit(change);
+      return;
+    }
     flags.unit = undefined;
   } else if (flags.unit) {
     // A solo Unit cannot be reported on its own; when its work is done and
@@ -22764,6 +23067,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         addContextParkOffer(gateReply, pd);
         addRevisionCycle(gateReply, pd, slug, unit);
         addApproveAcceptsLine(gateReply, pd, node, unit);
+        if (!agentApproves) markGateBoxLines(gateReply);
       }
     }
     emit(gateReply);
@@ -23898,6 +24202,23 @@ export function main(argv: string[]): void {
   let restart: RestartRequest | null = null;
   // The command as it was run, which the host claimed: a kept stop's id, not its arguments.
   const ranArgs = subArgs;
+  // The AI-DLC update question's answer comes off before the kept request it names runs.
+  if (subcommand === "next") {
+    const taken = takeUpdateAnswer(subArgs);
+    if (typeof taken === "string") {
+      emit(errorDirective(taken));
+      return;
+    }
+    if (taken !== null) {
+      const step = updateAnswerStep(resolvedProjectDir, taken.answer, taken.rest);
+      if (step !== null) {
+        emit(step);
+        return;
+      }
+      updateAnswer = taken.answer;
+      subArgs = taken.rest;
+    }
+  }
   if (subcommand === "next") {
     const named = namedRestartRequest(resolvedProjectDir, resolvedSelection, subArgs, unjoined);
     if (named !== null && "directive" in named) {
@@ -23940,7 +24261,12 @@ export function main(argv: string[]): void {
       return;
     }
     if (keptRequest(resolvedProjectDir, restart.space)?.restart === restart.id) dropKeptRequest(resolvedProjectDir);
-    noteRestartRequest(subArgs, true);
+    // The chat it was kept in saw the words, and the AI-DLC update question's
+    // carry-on always runs in the chat that answered it.
+    noteRestartRequest(
+      subArgs,
+      updateAnswer !== "done" && (restart.session === undefined || restart.session !== engineSessionId),
+    );
   }
   spendRequestFile();
   restoreSpentRequestFile = restoreRequestFile;
@@ -24001,6 +24327,7 @@ export function main(argv: string[]): void {
     activeCutMessageLine = null;
     pendingCutMessageStep = null;
     overCapRequest = null;
+    updateAnswer = null;
     activeRestartWords = null;
     activeRestartAsked = null;
     restartUnmarkedNotice = false;

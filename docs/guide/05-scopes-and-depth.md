@@ -44,17 +44,17 @@ Each scope's stage count below is the stages it runs after Initialization's thre
 
 - **Stages:** 5 of 30
 - **Default depth:** Minimal
-- **Skips:** Market Research, Feasibility, Team Formation, Mockups, User Stories, most Operation stages
+- **Skips:** Market Research, Feasibility, Team Formation, Mockups, User Stories, all Operation stages
 - **Plan approval:** Off. Once a code plan is written you see one line naming it, code generation starts, and the line says you can ask to go over the plan at any time; you can also ask to see a plan before it is built, or to be asked about every plan
 
 ### bugfix
 
-**Use when:** Fixing a specific bug. Streamlined path from intent capture through code generation and testing.
+**Use when:** Fixing a specific bug. Streamlined path through code generation and testing.
 
 - **Stages:** 6 of 30
 - **Default depth:** Minimal
 - **Includes:** Deployment Pipeline and Deployment Execution so the verified fix ships
-- **Skips:** Market Research, Feasibility, Team Formation, Mockups, most design and architecture stages, environment provisioning, and broader operational readiness
+- **Skips:** Market Research, Feasibility, Team Formation, Mockups, design and architecture stages, environment provisioning, and broader operational readiness
 - **Ceremony:** No stage diary and no "Keep that for next time?" question after a correction, and no summary to confirm before an artifact is written. Sensors, every stage approval, and plan approval stay on, and each stage runs with its lead agent only; type `/aidlc --learnings on`, `/aidlc --summary-confirmation on`, or `/aidlc --collaborators on` to bring one back for this piece of work
 
 ### refactor
