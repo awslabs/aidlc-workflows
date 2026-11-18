@@ -1756,7 +1756,7 @@ function landingsSquashedOnIntegration(
   const squashed = new Set<string>();
   for (const merge of merges.ok ? merges.stdout.split(/\r?\n/).filter(Boolean) : []) {
     const claimed = localGit(projectDir, ["rev-parse", "--verify", "--quiet", `${merge}^2`]);
-    const payload = claimed.ok ? readPayload(projectDir, claimed.stdout.trim(), { localOnly: true }) : null;
+    const payload = claimed.ok ? readPayload(projectDir, claimed.stdout.trim()) : null;
     if (!payload || payload.unit === unit) continue;
     if (landingRecorded(projectDir, integrationOid, { unit: payload.unit, mergeOid: merge })) squashed.add(payload.unit);
   }
