@@ -1132,7 +1132,7 @@ export const ROUTES: readonly Route[] = [
       "continue <token>",
       "report [args]",
       "park [args]",
-      "wait --stage <slug> --for collaborators|artifacts|review [--unit <unit>] [--review-file <path>] [--timeout <seconds>]",
+      "wait --stage <slug> --for collaborators|artifacts|review [--unit <unit>] [--review-file <path>] [--agent-id <id>] [--timeout <seconds>]",
       "team-board [--snapshot] [--space <name>] [--intent <name>]",
     ],
   },
