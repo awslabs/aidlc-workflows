@@ -3,10 +3,10 @@ import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
-import { cleanupTestProject, intentsDirOf } from "../harness/fixtures.ts";
+import { cleanupTestProject, intentsDirOf, proposalFollowUp } from "../harness/fixtures.ts";
 import { intentsRegistryPath, sessionsDir } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { latestQuestion, type StoredQuestion } from "../../dist/claude/.claude/tools/aidlc-question-store.ts";
-import { next, projectAt, say } from "../harness/aidlc-input-corpus.ts";
+import { DISPATCHER, env, exec, next, projectAt, SECOND_SESSION, say } from "../harness/aidlc-input-corpus.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -67,6 +67,43 @@ describe("t-routing-question-closed-target: a routing question never offers fini
     const out = await step(proj, space);
     expect(out).toContain(STILL_OPEN);
     expect(out).toContain(`--continue --request ${question.id}`);
+  });
+
+  test("the agent passes their words on as something else: once that request starts work, the question is not asked again, in that chat or a new one, and its own commands still answer it", async () => {
+    const { proj, question, space } = await asked();
+    editQuestion(proj, question, (stored) => ({ ...stored, askedAbout: { ...stored.askedAbout!, pick: true } }));
+    editRegistry(proj, space, withStatus(question.askedAbout!.targets[0].uuid, "complete"));
+    rmSync(join(intentsDirOf(proj, space), "active-intent"), { force: true });
+    const chat = { session: SECOND_SESSION };
+    const later = { session: "01995000-7a11-7000-8000-00000000d003" };
+    const words = async (line: string, at: { session: string }): Promise<{ out: string; message: string }> => {
+      expect((await say(proj, `/aidlc ${line}`, "claude", at)).status).toBe(0);
+      const { directive, out } = await next(proj, line.split(" "), at);
+      return { out, message: String(directive?.message ?? "") };
+    };
+    const shown = await words("let start", chat);
+    expect(shown.out).toContain(STILL_OPEN);
+    // The agent reads "let start" as something else and runs the step's own command for that.
+    const other = /If they are asking for something else, run `[^`]* next (--request-file [^`]+)`/.exec(shown.message)?.[1];
+    expect(other, shown.out).toBeDefined();
+    const proposal = await next(proj, other!.split(" "), chat);
+    const offer = await next(proj, proposalFollowUp(proposal.directive, "express") ?? [], chat);
+    const pick = offer.directive?.confirm_command as string | undefined;
+    expect(pick, offer.out).toBeDefined();
+    expect((await say(proj, "express", "claude", chat)).status).toBe(0);
+    const creation = await next(proj, pick!.slice(pick!.indexOf(" next ") + " next ".length).split(" "), chat);
+    const create = /engine intent create (--scope \S+ --request [0-9a-f]{8})/.exec(creation.directive?.message ?? "")?.[1];
+    expect(create, creation.out).toBeDefined();
+    const made = await exec([process.execPath, DISPATCHER, "engine", "intent", "create", ...create!.split(" "), "--label", "let-start", "--project-dir", proj], { cwd: proj, env: env(proj, chat) });
+    expect(made.status, made.stdout + made.stderr).toBe(0);
+    // Their next words, in that chat and in a new one with no work selected.
+    expect((await words("add a chart", chat)).out).not.toContain(STILL_OPEN);
+    rmSync(join(intentsDirOf(proj, space), "active-intent"), { force: true });
+    expect((await words("add a chart", later)).out).not.toContain(STILL_OPEN);
+    // The request it kept still starts from its own separate-work command.
+    expect((await say(proj, "2", "claude")).status).toBe(0);
+    expect((await next(proj, ["--new-intent", "--scope", "bugfix", "--request", question.id])).out)
+      .toContain(`intent create --scope bugfix --request ${question.id}`);
   });
 
   test("its target still in flight: the question stays open", async () => {
