@@ -276,8 +276,8 @@ describe("a build step the chat compaction set aside, before any next", () => {
 });
 
 // The Testing Contract moved under an approved build, before any `next`: every
-// refusal names a way past the guard admits, on every shape, and taking it
-// does not bring the same refusal back.
+// refusal names a way past the guard admits, on every shape. The build waits
+// for the person's approval of the plan again, so a door gets no retry.
 describe("the Testing Contract moved after the approval, before any next", () => {
   test("strict: each refusal names a way past that is admitted", async () => {
     const state = STATES.find((builder) => builder.id === "S13")!.build();
@@ -294,7 +294,7 @@ describe("the Testing Contract moved after the approval, before any next", () =>
       for (const door of doors) {
         const verdict = await shape.call(state.proj, state.session, door);
         if (verdict.code === 0) continue;
-        await wayPastIsAdmitted(state, shape, door, verdict, problems, true);
+        await wayPastIsAdmitted(state, shape, door, verdict, problems, false);
       }
     }
     expect(problems).toEqual([]);
