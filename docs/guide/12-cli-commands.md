@@ -689,7 +689,9 @@ Unit gate rhythm is used. Claims are refused until dependencies and any required
 walking skeleton are complete, and a checkout with a live claim routes only its
 stamped Unit. While main is back at Units Generation changing the Unit plan, a
 claim still goes ahead, and its result says once that if the approved plan
-changes that Unit's own entry, pin asks for a rebase onto main.
+changes that Unit's own entry, pin asks for a rebase onto main. A step you
+skipped on main for every Unit before this claim stays skipped for the claimed
+Unit: its walk goes on past it, and the merge question says it was skipped.
 
 ### `/aidlc unit adopt <unit>` — Adopt a teammate's live claim
 
