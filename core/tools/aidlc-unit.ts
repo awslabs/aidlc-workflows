@@ -104,7 +104,10 @@ import {
   UNIT_MERGE_DIR,
   type UnitScopeStamp,
   unitGateStatus,
+  unitLifecycleRunFloorForProject,
   unitLifecycleSnapshot,
+  unitScopedLifecycleFloors,
+  unitSkippedUnits,
   unitDependencyPath,
   unitMergedReceipts,
   unitMergeTransactions,
@@ -1690,6 +1693,12 @@ function outsideUnitTreePaths(violations: string[]): string[] {
     .map((violation) => violation.slice(0, -OUTSIDE_UNIT_SUFFIX.length));
 }
 
+// Where a step from main sends the Unit's owner: pin and land run in a
+// checkout that holds no claim.
+function claimedCheckout(owner: string, unit: string): string {
+  return `the checkout where ${owner} claimed ${unit} (not this one)`;
+}
+
 // The one text publish, pin and land give for a record outside the Unit's
 // tree, so the three cannot drift apart. It starts mid-sentence: publish puts
 // it after "Pin will refuse this candidate:", pin and land after their refusal.
@@ -1698,7 +1707,7 @@ function outsideUnitTreePaths(violations: string[]): string[] {
 function outsideUnitTreeNextStep(unit: string, integrationRef: string, owner?: string): string {
   const where = owner === undefined
     ? "Take these out of this branch"
-    : `In the checkout where ${owner} claimed ${unit} (not this one), take these out of its branch`;
+    : `In ${claimedCheckout(owner, unit)}, take these out of its branch`;
   return "a claimed Unit lands only " +
     `construction/${unit}/ and its own audit shard, and a shared record (an Inception artifact ` +
     `such as contract-summary.md, or a stage-level file) is changed on main. ${where} ` +
@@ -1991,17 +2000,21 @@ function candidateEvidence(
   // rows, as the commit this evidence is read against holds them, with the
   // transported rows on top. Transported rows alone hold no WORKFLOW_STARTED,
   // so every real receipt would miss the floor; a file in this checkout that
-  // was never committed does not move it.
+  // was never committed does not move it. A gate sent back is a floor boundary
+  // too, numbered among every send-back of its stages, so main's send-backs
+  // stay (earlier attempts' too); the candidate's own shard is read only with
+  // the transported rows, also where main already holds it (a land resumed
+  // after its merge commit), so its send-backs count once.
   const mainShards = gitOutput(
     projectDir,
     ["ls-tree", "--name-only", liveIntegrationOid, "--", `${recordPrefix}/audit/`],
     "Cannot list the integration audit shards",
   )
     .split(/\r?\n/)
-    .filter((path) => isActiveIntentAuditPath(path, recordPrefix));
+    .filter((path) => isActiveIntentAuditPath(path, recordPrefix) && !changedAudit.includes(path));
   const floorRows = candidateAuditEvents(projectDir, liveIntegrationOid, mainShards).filter((row) =>
-    !TRANSPORTED_ATTEMPT_EVENTS.has(row.event) &&
-    !TRANSPORTED_DATA_EVENTS.has(row.event)
+    row.event === "GATE_REJECTED" ||
+    (!TRANSPORTED_ATTEMPT_EVENTS.has(row.event) && !TRANSPORTED_DATA_EVENTS.has(row.event))
   );
   const snapshotRows = [...floorRows, ...authorityRows];
   const snapshots = new Map(stages.map((stage) => [
@@ -2196,8 +2209,8 @@ function candidateEvidence(
   const reviewStep = unreviewed.length === 0
     ? ""
     : `${namesInProse(unreviewed)} ${unreviewed.length === 1 ? "has" : "have"} no review that stands for ` +
-      `${unreviewed.length === 1 ? "it" : "them"} as published: in the checkout where ${claim.owner} claimed ` +
-      `${claim.unit} (not this one), have ${unreviewed.length === 1 ? "it" : "them"} reviewed again, then publish ` +
+      `${unreviewed.length === 1 ? "it" : "them"} as published: in ${claimedCheckout(claim.owner, claim.unit)}, ` +
+      `have ${unreviewed.length === 1 ? "it" : "them"} reviewed again, then publish ` +
       `${claim.unit} again.`;
   if (incomplete.length > 0 || reviewStep) {
     fail(
@@ -2774,6 +2787,15 @@ function pinUnit(args: string[], projectDir?: string): void {
     claim.payload.base_oid,
     integration.oid,
   );
+  // The merge question is asked only for a candidate that lands on main as it
+  // stands; land still refuses a conflict a Unit landed after this pin brings.
+  const conflicts = trialMergeConflicts(pd, "HEAD", claim.oid) ?? [];
+  if (conflicts.length > 0) {
+    fail(
+      `${sourceConflictsRefusal(unit, conflicts)} Nothing was pinned. ` +
+        sourceConflictsNextStep(pd, unit, claim.owner, integration.ref),
+    );
+  }
   const mainBefore = gitOutput(pd, ["rev-parse", "HEAD"], "Cannot resolve main HEAD");
   const transaction: UnitMergeTransaction = {
     version: 1,
@@ -3155,6 +3177,39 @@ function conflictFiles(projectDir: string): string[] {
     : [];
 }
 
+// The files landing `candidateOid` on `targetOid` would leave in conflict,
+// from a merge git makes of the objects alone (merge-tree --write-tree), so no
+// checkout, index or ref moves. The engine's own metadata is left out, as land
+// leaves it out. Null when this git cannot make one (before 2.38).
+function trialMergeConflicts(projectDir: string, targetOid: string, candidateOid: string): string[] | null {
+  const merged = localGit(projectDir, [
+    "merge-tree", "--write-tree", "--name-only", "--no-messages", "-z", targetOid, candidateOid,
+  ]);
+  if (merged.ok) return [];
+  if (merged.code !== 1) return null;
+  const paths = merged.stdout.split("\0").slice(1).filter(Boolean);
+  return [...new Set(paths)].filter((path) => !isEngineMergeMetadata(projectDir, path));
+}
+
+function sourceConflictsRefusal(unit: string, conflicts: string[]): string {
+  return `Unit "${unit}" source conflicts: ${conflicts.join(", ")}.`;
+}
+
+// What the Unit's owner does about a conflict pin or land found with main as
+// this checkout holds it. The owner merges the integration branch, so when
+// main here is ahead of it (a landing the lead has not pushed yet), main goes
+// there first; otherwise the owner's merge brings nothing and pin refuses again.
+function sourceConflictsNextStep(projectDir: string, unit: string, owner: string, integrationRef: string): string {
+  const ref = integrationRef.replace(/^refs\/(remotes|heads)\//, "");
+  const remote = /^refs\/remotes\/([^/]+)\/(.+)$/.exec(integrationRef);
+  const push = remote && !localGit(projectDir, ["merge-base", "--is-ancestor", "HEAD", integrationRef]).ok
+    ? `Main here has commits ${ref} does not have yet, and the merge was tried with main here: push main ` +
+      `first (${aidlcInvocation()} unit share, or git push ${remote[1]} HEAD:${remote[2]}). Then, in`
+    : "In";
+  return `${push} ${claimedCheckout(owner, unit)}, merge ${ref}, resolve these files and publish ${unit} again; ` +
+    "then pin it again here.";
+}
+
 function checkpointMainMetadata(
   projectDir: string,
   message: string,
@@ -3410,7 +3465,6 @@ function assertLandCandidateBoundary(
     transaction.audit_shard,
   );
   if (boundary.violations.length > 0) {
-    const remote = repositoryRemote(projectDir);
     fail(
       refuseWithNextStep(
         `Unit "${transaction.unit}" landing violates claimed Unit ownership at: ${
@@ -3418,13 +3472,17 @@ function assertLandCandidateBoundary(
         }.`,
         boundary.violations,
         transaction.unit,
-        remote
-          ? `refs/remotes/${remote}/${transaction.integration_branch}`
-          : transaction.integration_branch,
+        landIntegrationRef(projectDir, transaction),
         transaction.owner,
       ),
     );
   }
+}
+
+// The integration branch a landing's next step names, as publish names it.
+function landIntegrationRef(projectDir: string, transaction: UnitMergeTransaction): string {
+  const remote = repositoryRemote(projectDir);
+  return remote ? `refs/remotes/${remote}/${transaction.integration_branch}` : transaction.integration_branch;
 }
 
 function validateLandedMerge(
@@ -3694,7 +3752,10 @@ function landGit(
         ...working,
         conflict_files: conflicts,
       });
-      fail(`Unit "${transaction.unit}" source conflicts: ${conflicts.join(", ")}.`);
+      fail(
+        `${sourceConflictsRefusal(transaction.unit, conflicts)} ` +
+          sourceConflictsNextStep(projectDir, transaction.unit, transaction.owner, landIntegrationRef(projectDir, transaction)),
+      );
     }
     if (!merged.ok && !git(projectDir, ["rev-parse", "-q", "--verify", "MERGE_HEAD"]).ok) {
       working = rollbackMetadataCheckpoint(projectDir, working);
@@ -4524,6 +4585,7 @@ function claimUnit(args: string[], projectDir?: string): void {
     current?.status === "released"
       ? current.generation
       : (current?.generation ?? 0) + 1;
+  const skippedOnMain = stepsSkippedOnMain(pd, state, unit);
   const nonce = randomUUID();
   const owner = claimOwnerLabel(pd, team);
   // Pin takes exactly one newly added team shard (candidateBoundary). A
@@ -4597,9 +4659,74 @@ function claimUnit(args: string[], projectDir?: string): void {
   if (recordPrefix && auditShard !== ownShard) {
     moveClaimTurnRows(pd, `${recordPrefix}/audit/${ownShard}`, `${recordPrefix}/${ENGINE_DIR}/audit/${auditShard}`, integration.oid);
   }
+  const carryWarning = carrySkipsIntoClaim(pd, state, unit, generation, skippedOnMain);
   spend();
-  const warning = [planWarning, walkedWarning].filter((line): line is string => !!line).join(" ");
+  const warning = [planWarning, walkedWarning, carryWarning].filter((line): line is string => !!line).join(" ");
   console.log(JSON.stringify({ claimed: true, ...stamp, ...(warning ? { warning } : {}) }));
+}
+
+// The Unit's steps skipped on main before any team took it: the person's skip
+// with no Unit named reaches every Unit, and main records it with no attempt.
+// Read before the claim scopes this checkout, from main's own rows for the
+// Unit; an earlier attempt's rows (stamped with its generation) are that
+// attempt's, not main's.
+function stepsSkippedOnMain(projectDir: string, state: string, unit: string): Map<string, MainSkip> {
+  const rows = readAuditShardEvents(projectDir).filter((row) =>
+    auditBlockField(row.block, "Unit") !== unit || auditBlockField(row.block, "Attempt Generation") === null
+  );
+  const skipped = new Map<string, MainSkip>();
+  for (const slug of unitMajorConstructionStageSlugs(getField(state, "Scope") ?? "", state, true)) {
+    const reason = unitSkippedUnits(projectDir, slug, rows, state).get(unit);
+    if (reason === undefined) continue;
+    // Who skipped it is main's row's to say, never the claimer's.
+    const row = rows.filter((r) => r.event === "UNIT_SKIPPED" && auditBlockField(r.block, "Unit") === unit &&
+      auditBlockField(r.block, "Stage") === slug).sort((a, b) => a.timestamp.localeCompare(b.timestamp)).at(-1);
+    const name = row ? auditBlockField(row.block, "Git Name") : null;
+    skipped.set(slug, { reason, gitName: name === null ? {} : { "Git Name": name } });
+  }
+  return skipped;
+}
+
+type MainSkip = { reason: string; gitName: Record<string, string> };
+
+// The UNIT_SKIPPED row, for its two writers: the state tool's skip of one
+// Unit's step and the claim's record of a skip main made before it. The
+// caller gives the attempt and the git name of the person who skipped.
+export function unitSkippedFields(
+  projectDir: string, slug: string, unit: string, reason: string, unitScoped: boolean,
+  attempt: Record<string, string>, gitName: Record<string, string>,
+): Record<string, string> {
+  const floor = unitLifecycleRunFloorForProject(projectDir, slug, true, unit, undefined, unitScoped);
+  return { Stage: slug, Unit: unit, Reason: reason, "Run floor": floor, ...attempt, ...gitName };
+}
+
+// A claimed checkout reads only its own attempt's rows, so main's skip would
+// not reach it and the step would be handed out again. The claim records each
+// such skip for its attempt, at the floor main's row was read against, so the
+// Unit's walk passes the step and publish and the merge question read it as
+// skipped. The claim already holds, so a skip that cannot be written is said
+// once with its way back rather than undoing the claim.
+function carrySkipsIntoClaim(
+  projectDir: string,
+  state: string,
+  unit: string,
+  generation: number,
+  skipped: ReadonlyMap<string, MainSkip>,
+): string | null {
+  const lost: string[] = [];
+  const unitScoped = unitScopedLifecycleFloors(state);
+  for (const [slug, { reason, gitName }] of skipped) {
+    try {
+      const attempt = { "Attempt Generation": String(generation) };
+      appendAuditEntry("UNIT_SKIPPED", unitSkippedFields(projectDir, slug, unit, reason, unitScoped, attempt, gitName), projectDir);
+    } catch {
+      // The stage as the merge question names it (skippedStepsLine).
+      lost.push(loadStageGraphAll().find((entry) => entry.slug === slug)?.name || slug);
+    }
+  }
+  return lost.length === 0 ? null
+    : `The skip of ${lost.join(", ")} recorded on main did not reach this claim; skip ${lost.length === 1 ? "it" : "them"} ` +
+      `again here when Unit "${unit}" reaches ${lost.length === 1 ? "it" : "them"}.`;
 }
 
 // A checkout whose own shard main already holds claims into a shard of the

@@ -227,9 +227,9 @@ describe.skipIf(process.platform === "win32")("t-knowledge-pdf-fallback: pdftote
       expect(onboard(p, DEFAULT_SPACE, undefined, NOW).refused).toBeUndefined();
       const row = readIndex(p, DEFAULT_SPACE).documents[0];
       expect(row.extraction.extractor).toEqual({ name: "builtin-pdf", version: "1" });
-      expect(shouldRetryExtraction(row)).toBe(false);
+      expect(shouldRetryExtraction(row, join(documentsDir(p, DEFAULT_SPACE), "handbook.pdf"))).toBe(false);
       process.env.PATH = stubPdftotextPath(p, 1);
-      expect(shouldRetryExtraction(row)).toBe(true);
+      expect(shouldRetryExtraction(row, join(documentsDir(p, DEFAULT_SPACE), "handbook.pdf"))).toBe(true);
       expect(syncDocuments(p, DEFAULT_SPACE, NOW).changes.filter((c) => c.change === "retried").length).toBe(1);
       expect(readIndex(p, DEFAULT_SPACE).documents[0].extraction.extractor?.name).toBe("pdftotext");
       expect(syncDocuments(p, DEFAULT_SPACE, NOW).changes.some((c) => c.change === "retried")).toBe(false);

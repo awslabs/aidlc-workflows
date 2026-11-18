@@ -56,8 +56,8 @@
 //     but never scopes the main session.
 
 import { spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { readFileSync, readdirSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 // emit.ts points this at the projected .aidlc/tools/ copy.
 import { windowsScriptLaunch } from "../../../core/tools/aidlc-executable-path.ts";
@@ -209,6 +209,52 @@ const shippedAidlcEntrypoints: ReadonlySet<string> = new Set<string>(
 const PROJECTED_BUN_TOOLS = DEFAULT_AIDLC_COMMAND[0] === "bun"
   ? (DEFAULT_AIDLC_COMMAND[1] ?? "").replace(/aidlc\.ts$/, "")
   : null;
+
+const PROJECTED_HARNESS_DIR = PROJECTED_BUN_TOOLS?.split("/")[0] ?? null;
+const PLUGIN_OWNERSHIP_FILE = /^plugin-owned-([a-z][a-z0-9-]*)\.json$/;
+const RECORDED_DIGEST = /^sha256:[0-9a-f]{64}$/;
+
+type PluginSyncEntry = "written" | "unrecorded" | "changed";
+
+function pluginSyncEntry(
+  projectDir: string,
+  entrypoint: string,
+): PluginSyncEntry {
+  if (PROJECTED_HARNESS_DIR === null) return "unrecorded";
+  const recordedPath = `${PROJECTED_HARNESS_DIR}/${entrypoint}`;
+  const dataDir = join(projectDir, PROJECTED_HARNESS_DIR, "tools", "data");
+  const digests: string[] = [];
+  try {
+    for (const name of readdirSync(dataDir)) {
+      const key = name.match(PLUGIN_OWNERSHIP_FILE);
+      if (key === null) continue;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(readFileSync(join(dataDir, name), "utf-8"));
+      } catch {
+        continue;
+      }
+      if (typeof parsed !== "object" || parsed === null) continue;
+      const record = parsed as { schemaVersion?: unknown; name?: unknown; files?: unknown };
+      if (record.schemaVersion !== 1 || record.name !== key[1] || !Array.isArray(record.files)) continue;
+      for (const file of record.files as Array<{ path?: unknown; sha256?: unknown }>) {
+        if (file?.path !== recordedPath) continue;
+        if (typeof file.sha256 === "string" && RECORDED_DIGEST.test(file.sha256)) digests.push(file.sha256);
+      }
+    }
+    if (digests.length === 0) return "unrecorded";
+    const written = readFileSync(join(projectDir, PROJECTED_HARNESS_DIR, entrypoint));
+    if (digests.includes(`sha256:${createHash("sha256").update(written).digest("hex")}`)) return "written";
+    const text = written.includes(13) ? Buffer.from(written.toString("utf-8").replace(/\r\n/g, "\n")) : null;
+    if (
+      text !== null &&
+      digests.includes(`sha256:${createHash("sha256").update(text).digest("hex")}`)
+    ) return "written";
+    return "changed";
+  } catch {
+    return "unrecorded";
+  }
+}
 
 // opencode runs bash-tool commands with its `shell` setting, else /bin/sh on
 // POSIX and COMSPEC (cmd.exe) on Windows. The boundary reads a command the way
@@ -444,6 +490,7 @@ function aidlcBashBoundaryViolation(
   command: string,
   allowedEntrypoints: ReadonlySet<string> = shippedAidlcEntrypoints,
   dialect: ShellDialect = "posix",
+  projectDir: string | null = null,
 ): string | null {
   if (/^aidlc(?:[ \t]|$)/.test(command)) {
     if (dialect === "strict") return UNKNOWN_SHELL;
@@ -467,12 +514,21 @@ function aidlcBashBoundaryViolation(
   if (dialect === "strict") return UNKNOWN_SHELL;
   const words = directShellWords(command, dialect);
   const target = words?.[1]?.match(AIDLC_ENTRYPOINT);
-  if (
-    words?.[0] === "bun" &&
-    target &&
-    allowedEntrypoints.has(`${target[1]}/${target[2]}`)
-  ) {
-    return null;
+  if (words?.[0] === "bun" && target) {
+    const entrypoint = `${target[1]}/${target[2]}`;
+    if (allowedEntrypoints.has(entrypoint)) return null;
+    if (projectDir !== null) {
+      const synced = pluginSyncEntry(projectDir, entrypoint);
+      if (synced === "written") return null;
+      return (
+        "AIDLC bash permission allows one direct invocation of a shipped tool or hook only. " +
+        `.aidlc/${entrypoint} is neither: ` +
+        (synced === "changed"
+          ? "`engine plugin sync` wrote it, but its bytes are no longer the ones the sync recorded, so the file on disk is not the one it installed."
+          : "no `engine plugin sync` record lists it, so the sync did not write that file.") +
+        " Run a shipped .aidlc entrypoint, or a plugin tool `engine plugin sync` installed."
+      );
+    }
   }
   if (words === null && dialect === "cmd" && NEXT_COMMAND.test(command) && cmdCannotCarry(command)) {
     return CMD_REQUEST_REFUSAL;
@@ -848,7 +904,12 @@ async function createV1Adapter({
           : null;
       if (input.tool === "bash") {
         const command = (args.command as string) ?? "";
-        const violation = aidlcBashBoundaryViolation(command, aidlcEntrypoints, await currentShellDialect());
+        const violation = aidlcBashBoundaryViolation(
+          command,
+          aidlcEntrypoints,
+          await currentShellDialect(),
+          directory,
+        );
         if (violation) throw new Error(violation);
         // State-transition guard, parallel to the Claude/Kiro/Codex PreToolUse
         // wiring: runtime integrity, and a named worker's lifecycle and routing

@@ -143,7 +143,7 @@ describe("t-knowledge-unread-line: documents the agents cannot read are named on
     writeIndex(proj, DEFAULT_SPACE, index);
     expect(unreadDocuments(proj, DEFAULT_SPACE).map((file) => file.reason)).toEqual(["office", "office"]);
     const line = unreadLine(nextDirective());
-    expect(line).toContain("were added before AI-DLC could read Word and Excel files.");
+    expect(line).toContain("were added before AI-DLC could read Word, Excel and HTML files.");
     expect(line).toContain("knowledge sync` to add them.");
   });
 

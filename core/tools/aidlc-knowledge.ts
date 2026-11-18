@@ -102,7 +102,7 @@ import {
   writeFileAtomic,
 } from "./aidlc-lib.ts";
 import { appendAuditEntryAtPathUnlocked } from "./aidlc-audit.ts";
-import { officeText, ooxmlKind, OoxmlError } from "./aidlc-ooxml.ts";
+import { officeText, ooxmlKind, OoxmlError, table } from "./aidlc-ooxml.ts";
 import {
   DOCUMENTKB_SCHEMA_VERSION,
   type DocumentIndex,
@@ -321,6 +321,10 @@ export const WORD_DOCX_MIME =
 
 /** The MIME `detectMimeType` reports for a modern (OOXML) Excel workbook. */
 export const XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+
+/** The MIME `detectMimeType` reports for a page saved as HTML, and the names such a page has. */
+const HTML_MIME = "text/html";
+const HTML_NAME = /\.html?$/i;
 
 /**
  * Whether `buf` is a zip whose central directory names both
@@ -574,9 +578,10 @@ export interface ExtractionOutcome {
 
 /** The argv for a MIME type: a harness-configured one, else the default when the
  *  type is one this release knows. Null means no extractor program, which is
- *  `unsupported_type` rather than `extractor_unavailable` -- except for Word and
- *  Excel, which `extractDocument` reads itself (builtin-ooxml) unless the
- *  harness configured an extractor for that MIME, as text needs none. */
+ *  `unsupported_type` rather than `extractor_unavailable` -- except for Word,
+ *  Excel and HTML, which `extractDocument` reads itself (builtin-ooxml,
+ *  builtin-html) unless the harness configured an extractor for that MIME, as
+ *  text needs none. */
 export function extractorArgvFor(mime: string): readonly string[] | null {
   const configured = documentExtractors();
   const spec = configured?.get(mime);
@@ -593,46 +598,271 @@ function configuredTimeoutFor(mime: string): number {
   return documentExtractors()?.get(mime)?.timeoutMs ?? EXTRACT_TIMEOUT_MS;
 }
 
+const BUILTIN_TEXT = Object.freeze({ name: "builtin-text", version: "1" });
 const BUILTIN_OOXML = Object.freeze({ name: "builtin-ooxml", version: "1" });
+const BUILTIN_HTML = Object.freeze({ name: "builtin-html", version: "1" });
 const OFFICE_NAME = /\.(docx|xlsx)$/i;
 
-function builtinOfficeKind(mime: string): "word" | "excel" | null {
-  return mime === WORD_DOCX_MIME ? "word" : mime === XLSX_MIME ? "excel" : null;
+type BuiltinKind = "word" | "excel" | "html";
+
+/** The one owner of which types the engine reads itself. */
+function builtinKind(mime: string): BuiltinKind | null {
+  return mime === WORD_DOCX_MIME ? "word" : mime === XLSX_MIME ? "excel" : mime === HTML_MIME ? "html" : null;
 }
 
-/** Whether the built-in reader takes this row's document on a retry: its kind, or an Office name recorded as octet-stream before Excel was recognised. */
-function builtinReadsRow(row: DocumentRow): boolean {
+/**
+ * Whether the next sync reads this row's document again though it is
+ * unchanged, because it was recorded before AI-DLC read its kind: a Word or
+ * Excel file left `unsupported_type` (or an Office name recorded as
+ * octet-stream before Excel was recognised), or an HTML page stored as its
+ * markup, or as no type when it was not UTF-8. A page is judged by its bytes
+ * at `abs`, so an .html that holds plain text is never read again; a file that
+ * cannot be read here answers false, and a sync goes on.
+ */
+function builtinReadsRow(row: DocumentRow, abs: string): boolean {
+  const rec = row.extraction;
   const mime = detectMimeFromRow(row);
-  const office = builtinOfficeKind(mime) !== null || (mime === "application/octet-stream" && OFFICE_NAME.test(row.source.path));
-  return office && documentExtractors()?.get(mime) === undefined;
+  if (rec.state === "unsupported_type" && documentExtractors()?.get(mime) === undefined &&
+      (builtinKind(mime) !== null || (mime === "application/octet-stream" && OFFICE_NAME.test(row.source.path)))) {
+    return true;
+  }
+  const beforeHtml = rec.state === "extracted"
+    ? rec.extractor?.name === BUILTIN_TEXT.name
+    : rec.state === "unsupported_type" && mime === "application/octet-stream";
+  if (!beforeHtml || !HTML_NAME.test(row.source.path)) return false;
+  try {
+    return detectMimeType(abs, readRegularFileNoFollowOrThrow(abs, "document", EXTRACT_INPUT_BYTE_CAP)) === HTML_MIME;
+  } catch {
+    return false;
+  }
 }
 
-function extractOffice(absPath: string, kind: "word" | "excel", sourceRevision: string): ExtractionOutcome {
+// --- An HTML page's text ---
+//
+// The tokenizer is Bun's HTMLRewriter (lol-html); this code only lays its text
+// out the way docxText lays out a Word file's: block elements as lines, tables
+// as Markdown tables, no heading or list marks.
+
+/** Text a reader never sees: script and style bodies, templates, the title
+ *  (Word writes a stale Title property there), and the fallbacks a browser with
+ *  scripts and frames never shows. lol-html hands their bodies to a text
+ *  handler as text, so they are skipped by count. */
+const HTML_HIDDEN = "script, style, template, title, noscript, iframe, noembed, noframes";
+/** Elements that end a line; SVG `text` is a diagram's label. */
+const HTML_LINES = "address, article, aside, blockquote, br, caption, center, dd, details, dialog, dir, div, dl, dt, " +
+  "fieldset, figcaption, figure, footer, form, h1, h2, h3, h4, h5, h6, header, hgroup, hr, legend, li, main, menu, " +
+  "nav, ol, optgroup, option, p, section, summary, text, ul";
+/** A `<meta>` charset is looked for in the head, the text before `<body`, within this many bytes. */
+const HTML_HEAD_BYTES = 64 * 1024;
+const WINDOWS_1252 = new TextDecoder("windows-1252");
+
+/** A page's characters: UTF-8 when the bytes are UTF-8, which never reads worse
+ *  than the text reader did; else the charset its head declares, when Bun
+ *  knows the label; else Windows-1252, the web's default for an undeclared
+ *  8-bit page. */
+function htmlSource(buf: Buffer): string {
+  if (decodesAsUtf8(buf)) return new TextDecoder("utf-8").decode(buf);
+  const head = buf.subarray(0, HTML_HEAD_BYTES).toString("latin1");
+  const body = head.search(/<body[\s>]/i);
+  const declared = (body < 0 ? head : head.slice(0, body)).match(/<meta\b[^>]*?charset\s*=\s*["']?\s*([\w.:-]+)/i)?.[1];
+  if (declared !== undefined) {
+    try {
+      const decoder = new TextDecoder(declared);
+      // Eight-bit bytes with no NUL are not UTF-16, whatever the meta says.
+      if (!decoder.encoding.startsWith("utf-16")) return decoder.decode(buf);
+    } catch {
+      // A label Bun does not know: the default below.
+    }
+  }
+  return WINDOWS_1252.decode(buf);
+}
+
+const HTML_REFERENCE = /&(?:#[xX][0-9a-fA-F]+|#[0-9]+|[A-Za-z][A-Za-z0-9]*);/g;
+
+/** Character references decoded. Bun ships no HTML reference decoder, but its
+ *  Markdown renderer carries the HTML5 table, so each reference the pattern
+ *  matched, alone, goes through it; no Markdown is read, since nothing else of
+ *  the text reaches it. A code in 0x80..0x9F is Windows-1252, as in HTML. The
+ *  cache is one page's, so it holds at most that page's distinct references. */
+function htmlReferences(text: string, cache: Map<string, string>): string {
+  return text.replace(HTML_REFERENCE, (ref) => {
+    let decoded = cache.get(ref);
+    if (decoded === undefined) {
+      decoded = Bun.markdown.render(ref, { paragraph: (children) => children, text: (chars) => chars });
+      if (decoded.length === 1 && decoded.charCodeAt(0) >= 0x80 && decoded.charCodeAt(0) <= 0x9f) {
+        decoded = WINDOWS_1252.decode(Uint8Array.of(decoded.charCodeAt(0)));
+      }
+      cache.set(ref, decoded);
+    }
+    return decoded;
+  });
+}
+
+/** An HTML page's text: block elements as lines, `pre` as written, tables as
+ *  the Word reader writes them. */
+function htmlText(html: string): string {
+  const out: string[] = [];
+  const references = new Map<string, string>();
+  let line = "";
+  let hidden = 0;
+  let pre = 0;
+  let depth = 0;
+  let rows: string[][] = [];
+  let row: string[] | null = null;
+  let cell: string[] | null = null;
+  // Rows still covered by a `rowspan`, by column: the markup leaves those cells out.
+  let spans: number[] = [];
+  const emit = (text: string): void => {
+    (cell ?? out).push(text);
+  };
+  const flush = (): void => {
+    if (line.length === 0) return;
+    const text = htmlReferences(line, references);
+    line = "";
+    if (pre === 0) {
+      const flat = text.replace(/\s+/g, " ").trim();
+      if (flat.length > 0) emit(flat);
+      return;
+    }
+    const kept = text.replace(/\r\n?/g, "\n").replace(/^\n/, "").trimEnd();
+    if (kept.length > 0) for (const each of kept.split("\n")) emit(each.trimEnd());
+  };
+  const closeCell = (): void => {
+    flush();
+    if (cell === null) return;
+    row ??= [];
+    row.push(cell.join("\n"));
+    cell = null;
+  };
+  // An empty cell under a spanning one, as Word writes a merged cell.
+  const spanned = (): void => {
+    while (row !== null && (spans[row.length] ?? 0) > 0) {
+      spans[row.length]--;
+      row.push("");
+    }
+  };
+  const closeRow = (): void => {
+    closeCell();
+    spanned();
+    if (row !== null) rows.push(row);
+    row = null;
+  };
+  new HTMLRewriter()
+    // canHaveContent is false for a void or self-closing element (an SVG
+    // `<style/>`), which has no end tag to count back down on.
+    .on(HTML_HIDDEN, {
+      element(e) {
+        if (!e.canHaveContent) return;
+        hidden++;
+        e.onEndTag(() => {
+          hidden--;
+        });
+      },
+    })
+    .on(HTML_LINES, {
+      element(e) {
+        flush();
+        if (e.canHaveContent) e.onEndTag(flush);
+      },
+    })
+    .on("pre", {
+      element(e) {
+        flush();
+        if (!e.canHaveContent) return;
+        pre++;
+        e.onEndTag(() => {
+          flush();
+          pre--;
+        });
+      },
+    })
+    .on("table", {
+      element(e) {
+        flush();
+        if (!e.canHaveContent) return;
+        if (++depth === 1) {
+          rows = [];
+          spans = [];
+        }
+        e.onEndTag(() => {
+          if (depth === 1) {
+            closeRow();
+            out.push(...table(rows), "");
+          } else {
+            flush();
+          }
+          depth--;
+        });
+      },
+    })
+    // A nested table's text joins its outer cell, as in the Word reader.
+    .on("tr", {
+      element(e) {
+        if (depth !== 1) return flush();
+        closeRow();
+        row = [];
+        if (e.canHaveContent) e.onEndTag(closeRow);
+      },
+    })
+    .on("td, th", {
+      element(e) {
+        if (depth !== 1) return flush();
+        closeCell();
+        spanned();
+        const span = Number(e.getAttribute("rowspan") ?? 1);
+        if (span > 1 && row !== null) spans[row.length] = span - 1;
+        cell = [];
+        if (e.canHaveContent) e.onEndTag(closeCell);
+      },
+    })
+    .onDocument({
+      text(chunk) {
+        if (hidden === 0) line += chunk.text;
+      },
+    })
+    .transform(html);
+  if (depth > 0) {
+    closeRow();
+    out.push(...table(rows));
+  }
+  flush();
+  return out.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+function builtinText(buf: Buffer, kind: BuiltinKind): string {
+  return kind === "html" ? htmlText(htmlSource(buf)) : officeText(buf, kind);
+}
+
+const BUILTIN_NAMES: Readonly<Record<BuiltinKind, string>> = { word: "a Word", excel: "an Excel", html: "an HTML" };
+const BUILTIN_MIMES: Readonly<Record<BuiltinKind, string>> = { word: WORD_DOCX_MIME, excel: XLSX_MIME, html: HTML_MIME };
+
+function extractBuiltin(absPath: string, kind: BuiltinKind, sourceRevision: string): ExtractionOutcome {
   const buf = readRegularFileNoFollowOrThrow(absPath, "document");
+  const extractor = kind === "html" ? BUILTIN_HTML : BUILTIN_OOXML;
   let full: string;
   try {
-    full = officeText(buf, kind);
+    full = builtinText(buf, kind);
   } catch (e) {
     return {
       record: {
         state: "extraction_failed",
-        extractor: { ...BUILTIN_OOXML },
+        extractor: { ...extractor },
         reason: e instanceof OoxmlError
-          ? `AI-DLC could not read it as ${kind === "word" ? "a Word" : "an Excel"} file: ${e.message}`
-          : `AI-DLC could not read it as ${kind === "word" ? "a Word" : "an Excel"} file`,
-        detectedType: kind === "word" ? WORD_DOCX_MIME : XLSX_MIME,
+          ? `AI-DLC could not read it as ${BUILTIN_NAMES[kind]} file: ${e.message}`
+          : `AI-DLC could not read it as ${BUILTIN_NAMES[kind]} file`,
+        detectedType: BUILTIN_MIMES[kind],
         source_revision: sourceRevision,
       },
     };
   }
   if (full.trim().length === 0) {
-    return { record: { state: "no_extractable_text", extractor: { ...BUILTIN_OOXML }, source_revision: sourceRevision } };
+    return { record: { state: "no_extractable_text", extractor: { ...extractor }, source_revision: sourceRevision } };
   }
   const truncated = full.length > EXTRACT_OUTPUT_CHAR_CAP;
   return {
     record: {
       state: "extracted",
-      extractor: { ...BUILTIN_OOXML },
+      extractor: { ...extractor },
       chars: Math.min(full.length, EXTRACT_OUTPUT_CHAR_CAP),
       truncated,
       source_revision: sourceRevision,
@@ -667,7 +897,7 @@ export function extractDocument(
     return {
       record: {
         state: "extracted",
-        extractor: { name: "builtin-text", version: "1" },
+        extractor: { ...BUILTIN_TEXT },
         chars: Math.min(full.length, EXTRACT_OUTPUT_CHAR_CAP),
         truncated,
         source_revision: sourceRevision,
@@ -676,10 +906,11 @@ export function extractDocument(
     };
   }
 
-  // Word and Excel are read in-process unless the harness configured its own
-  // extractor for the MIME (the team's choice wins).
-  if (builtinOfficeKind(mime) !== null && documentExtractors()?.get(mime) === undefined) {
-    return extractOffice(absPath, builtinOfficeKind(mime)!, sourceRevision);
+  // Word, Excel and HTML are read in-process unless the harness configured its
+  // own extractor for the MIME (the team's choice wins).
+  const kind = builtinKind(mime);
+  if (kind !== null && documentExtractors()?.get(mime) === undefined) {
+    return extractBuiltin(absPath, kind, sourceRevision);
   }
   // A .docx or .xlsx name on bytes that are not an Office zip (a password-
   // protected workbook is an OLE file, or the name is wrong): recorded once as
@@ -804,10 +1035,20 @@ export function extractDocument(
   };
 }
 
+/** Whether the bytes open with markup: after an optional UTF-8 BOM and whitespace, a `<`. */
+function opensWithMarkup(buf: Buffer): boolean {
+  let at = buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf ? 3 : 0;
+  while (at < buf.length && (buf[at] === 0x20 || (buf[at] >= 0x09 && buf[at] <= 0x0d))) at++;
+  return buf[at] === 0x3c;
+}
+
 /** Best-effort MIME for a document, from its magic bytes then its extension.
  *  Magic first: an extension is a claim, and the bytes are evidence. */
 export function detectMimeType(absPath: string, buf: Buffer): string {
   if (hasPdfMagicInWindow(buf)) return "application/pdf";
+  // Before the text branch: a page Word saves is often Windows-1252, which is
+  // not UTF-8. An .html that holds plain text, or a NUL (UTF-16), keeps its type.
+  if (HTML_NAME.test(absPath) && opensWithMarkup(buf) && !hasNulByte(buf)) return HTML_MIME;
   if (!looksBinary(buf)) {
     return absPath.toLowerCase().endsWith(".md") ? "text/markdown" : "text/plain";
   }
@@ -2961,15 +3202,15 @@ export interface UnreadDocument {
   reason: UnreadReason;
 }
 
-function unreadReason(row: DocumentRow): UnreadReason | null {
+function unreadReason(row: DocumentRow, abs: string): UnreadReason | null {
   switch (effectiveExtractionState(row)) {
     case "extracted":
       return null;
     case "invalidated":
       return "changed";
     case "unsupported_type":
-      // A Word or Excel file added before AI-DLC read them is read on the next sync.
-      return builtinReadsRow(row) ? "office" : "no-reader";
+      // A Word, Excel or HTML file added before AI-DLC read them is read on the next sync.
+      return builtinReadsRow(row, abs) ? "office" : "no-reader";
     case "extractor_unavailable":
       // A PDF added when the computer had no PDF reader: AI-DLC reads it itself on the next sync (the rule
       // shouldRetryExtraction uses). A team's own extractor that is missing stays a program to install.
@@ -3010,7 +3251,7 @@ export function unreadDocuments(projectDir: string, space: string): UnreadDocume
   const found = walkDocuments(folder).map((abs) => {
     const path = portableSourcePath(projectDir, space, abs);
     const row = rows.get(path);
-    return { path, reason: row === undefined ? "new" as const : unreadReason(row) };
+    return { path, reason: row === undefined ? "new" as const : unreadReason(row, abs) };
   });
   const readable = found.filter((file) => file.reason === null).map((file) => file.path);
   return found.filter((file): file is UnreadDocument =>
@@ -3029,7 +3270,7 @@ const UNREAD_SENTENCES: Readonly<Record<UnreadReason, (names: string, one: boole
   changed: (names, one) => `${names} changed since ${one ? "it was" : "they were"} added.`,
   "no-reader": (names, one) =>
     `The knowledge base has no reader for ${names}: save ${one ? "it" : "each"} as .md, .txt or .csv beside ${one ? "it" : "the original"}.`,
-  office: (names, one) => `${names} ${one ? "was" : "were"} added before AI-DLC could read Word and Excel files.`,
+  office: (names, one) => `${names} ${one ? "was" : "were"} added before AI-DLC could read Word, Excel and HTML files.`,
   pdf: (names, one) => `${names} ${one ? "was" : "were"} added before AI-DLC could read a PDF without pdftotext.`,
   "no-extractor": (names, one) =>
     `The program set up to read ${names} is not installed on this computer: install it, or save ${one ? "the file" : "each"} as .md beside ${one ? "it" : "the original"}.`,
@@ -3337,7 +3578,7 @@ export function syncDocuments(
       }
       // Digest unchanged. Normally nothing to do -- EXCEPT when the environment
       // is what changed.
-      if (shouldRetryExtraction(row) ||
+      if (shouldRetryExtraction(row, here.abs) ||
           (row.extraction.state === "extracted" &&
             verifiedContentBytes(projectDir, space, row) === null)) {
         needsRetry.push({ row, here });
@@ -3410,6 +3651,22 @@ export function syncDocuments(
   // extracting) while 21 BRAND-NEW documents in one pathless sync still hit
   // the same cap onboard's pathless walk would refuse -- same batch-scope
   // hazard, now measured against the right quantity.
+  // A row read again though unchanged is the engine's own catch-up, which the
+  // person cannot make smaller (onboard answers `already`): retries take only
+  // the room both caps leave after new and edited files, and the rest stay as
+  // they are for a later sync.
+  let roomDocs = EXTRACT_BATCH_DOC_CAP - needsChanged.length - needsNew.length;
+  let roomBytes = EXTRACT_BATCH_BYTE_CAP -
+    [...needsChanged.map(({ here }) => here.bytes), ...needsNew.map((n) => n.bytes)].reduce((sum, b) => sum + b, 0);
+  for (const item of needsRetry.splice(0)) {
+    if (roomDocs > 0 && item.here.bytes <= roomBytes) {
+      needsRetry.push(item);
+      roomDocs--;
+      roomBytes -= item.here.bytes;
+    } else {
+      plans.push({ row: item.row, change: "unchanged" });
+    }
+  }
   const workItems = [...needsChanged, ...needsRetry, ...needsNew.map((n) => ({ here: n }))];
   if (workItems.length > EXTRACT_BATCH_DOC_CAP) {
     throw new Error(
@@ -3800,11 +4057,15 @@ export function syncDocuments(
  * already equal to the current digest. There is no further condition to check
  * -- the row's own message says the next sync re-extracts, so this is that
  * promise kept, not a second gate re-litigating it.
+ *
+ * A row recorded before AI-DLC read its kind is `builtinReadsRow`'s to answer,
+ * the same answer doctor's unread line gives; `abs` is the document on disk,
+ * which it reads for an HTML page.
  */
-export function shouldRetryExtraction(row: DocumentRow): boolean {
+export function shouldRetryExtraction(row: DocumentRow, abs: string): boolean {
   const rec = row.extraction;
   if (rec.state === "invalidated") return true;
-  if (rec.state === "unsupported_type" && builtinReadsRow(row)) return true;
+  if (builtinReadsRow(row, abs)) return true;
   if (rec.state === "extractor_unavailable" || rec.state === "unsupported_type") {
     const argv = extractorArgvFor(detectMimeFromRow(row));
     if (argv === null) return false; // still nothing configured for this type

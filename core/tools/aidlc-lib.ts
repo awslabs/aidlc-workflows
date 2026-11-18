@@ -166,6 +166,7 @@ import {
   canonicalPathKey,
   chatAwaitsFirstStep,
   type CheckboxState,
+  claudeChatRecord,
   claudeNamedChat,
   clearSessionProcessTable,
   cloneIdentity,
@@ -4790,7 +4791,11 @@ function sourceKeysChangedOutsideAidlc(
 // The paths outside AI-DLC's own files that moved since a kept listing (a
 // review's `Source Listing`, kept at the row `from`), as `<repo>\0<path>` keys;
 // a repo that joined the work since counts from what it held when it joined
-// (withRepoBaselineAdditions). Null when no listing was kept or it does not
+// (withRepoBaselineAdditions). A path Git ignores and HEAD does not track (a
+// tool's cache) is left out, as no Unit can claim it; a path in a checkout
+// nested in the project, a link's target or a recorded checkout is that
+// checkout's own source (sourceClaimCheckout judges it there), so the project's
+// .gitignore never leaves it out. Null when no listing was kept or it does not
 // read back exactly: the caller then compares fingerprints.
 export function sourceKeysChangedOutsideAidlcSince(
   projectDir: string,
@@ -4804,7 +4809,18 @@ export function sourceKeysChangedOutsideAidlcSince(
   if (recorded === null) return null;
   const joined = withRepoBaselineAdditions(projectDir, stageSlug, { state: "ready", listing: recorded }, rows, from);
   const start = joined.state === "ready" ? joined.listing : recorded;
-  return sourceKeysChangedOutsideAidlc(projectDir, recordedSourceListingForCompare(projectDir, start, current), current.listing);
+  const changed = sourceKeysChangedOutsideAidlc(projectDir, recordedSourceListingForCompare(projectDir, start, current), current.listing);
+  if (changed.size === 0) return changed;
+  const checkouts = readRecordedSourceCheckouts(projectDir);
+  const rootsOwn = [...changed].filter((key) => {
+    const parsed = splitSourcePathKey(key);
+    if (parsed === null) return false;
+    if (parsed.repo !== "") return true;
+    const claim = sourceClaimCheckout(projectDir, parsed.path, true, checkouts);
+    return claim.reason === undefined && claim.dir === projectDir;
+  });
+  for (const key of unclaimableIgnoredSourceKeys(projectDir, rootsOwn, false)) changed.delete(key);
+  return changed;
 }
 
 // A kept listing as the walk would list it now, to compare with `current`.
@@ -7191,7 +7207,8 @@ export function addPendingPersonLines(
 }
 
 // The lines waiting for the next step the agent speaks from; with `replyOnly`
-// (a question the agent logs before asking it) only those kept for the reply.
+// (a question the agent logs before asking it) only those kept for the reply,
+// with `ordinaryOnly` (the question box at a gate) only the others.
 // `said()` clears the ordinary lines handed out once the step carries them and
 // marks the reply lines carried, which keep riding the steps until the person
 // writes; until then every line stays waiting. What was written to the record
@@ -7200,7 +7217,7 @@ export function addPendingPersonLines(
 export function pendingPersonLines(
   projectDir: string,
   sessionId: string,
-  options: { replyOnly?: boolean } = {},
+  options: { replyOnly?: boolean; ordinaryOnly?: boolean } = {},
 ): { lines: string[]; reply: boolean; said(): void } {
   const path = pendingPersonLinesPath(projectDir, sessionId);
   const none = { lines: [], reply: false, said: () => {} };
@@ -7215,7 +7232,8 @@ export function pendingPersonLines(
   };
   const read = record();
   const saved = readPendingPersonLines(path, turn, work, read);
-  const handed = saved.lines.filter((entry) => entry.reply === true || options.replyOnly !== true);
+  const handed = saved.lines.filter((entry) =>
+    options.ordinaryOnly === true ? entry.reply !== true : entry.reply === true || options.replyOnly !== true);
   return {
     lines: handed.map((entry) => entry.line),
     // Whether a line kept for the reply is among them.
@@ -7617,12 +7635,8 @@ function hostChatStartFolder(projectDir: string): string | null {
     switch (runtimeHarnessDir(projectDir)) {
       case ".claude": {
         const chat = claudeNamedChat();
-        if (chat === null) return null;
-        const config = process.env.CLAUDE_CONFIG_DIR?.trim() || join(homedir(), ".claude");
-        const record = JSON.parse(readFileSync(join(config, "sessions", `${chat.pid}.json`), "utf-8")) as
-          | { pid?: unknown; sessionId?: unknown; cwd?: unknown }
-          | null;
-        return record?.pid === chat.pid && record.sessionId === chat.session ? absolute(record.cwd) : null;
+        const record = chat === null ? null : claudeChatRecord(chat.pid, chat.session);
+        return record === null ? null : absolute(record.cwd);
       }
       case ".codex": {
         const thread = validSessionId(process.env.CODEX_THREAD_ID);
@@ -14600,11 +14614,12 @@ type UnsavedReason = keyof typeof UNSAVED_REASONS;
 function unsavedOutputsMessage(
   slug: string,
   unsaved: ReadonlyArray<{ artifact: string; reason: UnsavedReason }>,
+  saveStep: (save: string) => string,
 ): string {
   if (unsaved.length === 1) {
     return `Refusing to continue "${slug}": this stage's output document ${unsaved[0].artifact} ` +
-      `${UNSAVED_REASONS[unsaved[0].reason].one}. Save the document again, so its write descends from the current ` +
-      "confirmation, then continue.";
+      `${UNSAVED_REASONS[unsaved[0].reason].one}. ` +
+      saveStep("Save the document again, so its write descends from the current confirmation, then continue.");
   }
   const reasons = new Set(unsaved.map((entry) => entry.reason));
   const names = reasons.size === 1
@@ -14614,8 +14629,8 @@ function unsavedOutputsMessage(
   const why = reasons.size === 1
     ? UNSAVED_REASONS[unsaved[0].reason].many
     : "were not saved under the current confirmation";
-  return `Refusing to continue "${slug}": this stage's output documents ${list} ${why}. Save each ` +
-    "of them again, so each write descends from the current confirmation, then continue.";
+  return `Refusing to continue "${slug}": this stage's output documents ${list} ${why}. ` +
+    saveStep("Save each of them again, so each write descends from the current confirmation, then continue.");
 }
 
 export function checkSummaryConfirmationEvidence(
@@ -14634,6 +14649,17 @@ export function checkSummaryConfirmationEvidence(
     confirmationOnly?: boolean;
   } = {},
 ): SummaryConfirmationEvidence {
+  // Where no hook ever ran here, a save makes no write, so saving again would
+  // loop: the step is the hooks-off way back, under the same test the presence
+  // refusal uses (unattendedHumanPresenceHint). Anywhere else, the save.
+  const saveStep = (save: string): string => {
+    try {
+      if (!hooksNeverRanHere(projectDir) || personAtOwnTerminal(projectDir)) return save;
+      return hooksOffAgentStep(projectDir) ?? save;
+    } catch {
+      return save;
+    }
+  };
   const failure = (
     code: string,
     message: string,
@@ -15199,14 +15225,14 @@ export function checkSummaryConfirmationEvidence(
         return failure(
           "SUMMARY_ARTIFACT_ORDER_INVALID",
           `Refusing to continue "${stage.slug}": this stage's output document ` +
-            `${artifact} was not saved after the confirmed answers. Save the ` +
-            "document after confirmation, then continue.",
+            `${artifact} was not saved after the confirmed answers. ` +
+            saveStep("Save the document after confirmation, then continue."),
           "stale",
         );
       }
     }
     if (unsaved.length > 0) {
-      return failure("SUMMARY_ARTIFACT_UNAUTHORIZED", unsavedOutputsMessage(stage.slug, unsaved), "stale");
+      return failure("SUMMARY_ARTIFACT_UNAUTHORIZED", unsavedOutputsMessage(stage.slug, unsaved, saveStep), "stale");
     }
   }
 
@@ -25999,6 +26025,7 @@ function ignoredPathClaimable(
 export function unclaimableIgnoredSourceKeys(
   projectDir: string,
   keys: readonly string[],
+  includeRecordedCheckouts = true,
 ): Set<string> {
   const unclaimable = new Set<string>();
   if (keys.length === 0) return unclaimable;
@@ -26009,7 +26036,7 @@ export function unclaimableIgnoredSourceKeys(
     return unclaimable;
   }
   const carriesWorkspaceShell = recordedRepos.length === 0;
-  const checkouts = readRecordedSourceCheckouts(projectDir);
+  const checkouts = includeRecordedCheckouts ? readRecordedSourceCheckouts(projectDir) : [];
   const sourceClaimValidation: GitSourceClaimValidationCache = new Map();
   const candidates: { key: string; sourceRepoDir: string; path: string }[] = [];
   for (const key of keys) {
@@ -28324,10 +28351,12 @@ const HOOKS_OFF_AGENT_RULES =
 /**
  * What the agent does, then the one line it shows the person, when this
  * harness's hooks are not running here; null for a harness that declares no
- * such step. `next` stops with it before any work, and a refusal for a reply
- * that was not recorded carries it. `keep` is the stop's: asked only when the
- * step has the person type the entry in a new chat, it keeps the stopped
- * command and returns its id, or null to leave the entry bare.
+ * such step. `next` stops with it before any work, a refusal for a reply that
+ * was not recorded carries it, and a save-again refusal of the summary evidence
+ * (checkSummaryConfirmationEvidence) gives it in place of the save, with no
+ * question waiting. `keep` is the stop's: asked only when the step has the
+ * person type the entry in a new chat, it keeps the stopped command and returns
+ * its id, or null to leave the entry bare.
  */
 export function hooksOffAgentStep(projectDir?: string, next?: string, keep?: () => string | null): string | null {
   const activation = hookActivation();
@@ -31851,9 +31880,10 @@ export function memoryStrictHoldsGuardPolicy(
 /**
  * Whether the person's own approval may go over a review that did not finish
  * (asked for, with no verdict yet), at a stage gate and at a Unit checkpoint
- * alike. Off, relaxed and a strict set for this piece of work let it; only a
- * strict the team locks in memory keeps the review required. The one place
- * that says which setting counts.
+ * alike, and over a Unit's check that did not pass. Off, relaxed and a strict
+ * set for this piece of work let it; only a strict the team locks in memory
+ * keeps the review, or the check, required. The one place that says which
+ * setting counts.
  */
 export function personMayApproveOverUnfinishedReview(
   projectDir: string,

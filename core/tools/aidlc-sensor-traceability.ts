@@ -943,6 +943,20 @@ function readTable(path: string, label: string): { data?: TraceabilityData; reas
   return validated.ok ? { data: validated.data } : { reason: `${label}: ${validated.reason}` };
 }
 
+// The IDs Units Generation keeps out of every Unit on purpose, each with its
+// reason: no Unit's story-map row names it (`unassigned`, the stage's
+// `extraGaps`) and its own row is `Deferred` with the reason as its target.
+// Units Generation's check and Build and Test's coverage both read it here.
+function keptOutOfEveryUnit(unassigned: readonly string[], coverage: readonly CoverageEntry[]): Map<string, string> {
+  const ids = new Set(unassigned);
+  const kept = new Map<string, string>();
+  for (const entry of coverage) {
+    const reason = entry.status === "Deferred" ? entry.target?.trim() : "";
+    if (reason && ids.has(entry.id)) kept.set(entry.id, reason);
+  }
+  return kept;
+}
+
 // Build and Test's cross-Unit coverage: every requirement Requirements Analysis
 // recorded (without a record, every one the FR and NFR patterns find in
 // requirements.md and every one User Stories traced, or when it did not run
@@ -955,10 +969,11 @@ function readTable(path: string, label: string): { data?: TraceabilityData; reas
 // by its own row; else, with stories, through every criterion of the stories
 // User Stories traced it to, because Code Generation then traces criteria.
 // One nothing builds is settled when the latest stage that traced it (User
-// Stories, then NFR Requirements, then Code Generation) marked it `N/A` with its
-// reason in every table there that lists it; any other row there, or an `N/A`
-// with no reason, leaves it unbuilt. A Unit's own Code Generation `N/A` settles
-// a sub-requirement it owes.
+// Stories, then Units Generation's `Deferred` row for a story it kept out of
+// every Unit, then NFR Requirements, then Code Generation) marked it `N/A` with
+// its reason in every table there that lists it; any other row there, or an
+// `N/A` with no reason, leaves it unbuilt. A Unit's own Code Generation `N/A`
+// settles a sub-requirement it owes.
 // `uncovered` comes before the per-ID rows so a host that cuts long output keeps it.
 function finalCoverage(projectDir: string): FinalCoverage {
   const docsDir = recordDir(projectDir);
@@ -1001,6 +1016,25 @@ function finalCoverage(projectDir: string): FinalCoverage {
       const stories = storyTargets.get(entry.id) ?? new Set<string>();
       for (const story of extractIds(entry.target ?? "", [ID_PATTERNS.US])) stories.add(story);
       storyTargets.set(entry.id, stories);
+    }
+  }
+
+  // A story with no criteria cannot show it is built, so it stands for itself.
+  const criteriaOrStory = (story: string): string[] => {
+    const criteria = storyContent === null ? [] : [...criteriaOfStories(storyContent, new Set([story]))];
+    return criteria.length > 0 ? criteria : [story];
+  };
+
+  // A story Units Generation kept out of every Unit settles its criteria (the
+  // requirement itself in work without stories) ahead of NFR Requirements and
+  // Code Generation, so a Unit whose table lists one still decides it. A table
+  // that cannot be read settles nothing.
+  const unitsTable = join(docsDir, "inception", "units-generation", "traceability.json");
+  const planned = existsSync(unitsTable) ? readTable(unitsTable, "Units Generation traceability.json").data : undefined;
+  if (planned) {
+    const unassigned = resolveUpstream("units-generation", projectDir, unitsTable, planned.upstream_ids).extraGaps;
+    for (const [id, reason] of keptOutOfEveryUnit(unassigned, planned.coverage)) {
+      for (const part of criteriaOrStory(id)) traced(0.5, "units-generation", { id: part, status: "N/A", target: reason });
     }
   }
 
@@ -1083,11 +1117,6 @@ function finalCoverage(projectDir: string): FinalCoverage {
   ];
   const reported = [...new Set([...withoutTracedParents(new Set(requirementIds), recorded), ...criteria, ...experience])];
 
-  // A story with no criteria cannot show it is built, so it stands for itself.
-  const criteriaOrStory = (story: string): string[] => {
-    const criteria = storyContent === null ? [] : [...criteriaOfStories(storyContent, new Set([story]))];
-    return criteria.length > 0 ? criteria : [story];
-  };
   const coverage: FinalRow[] = [];
   for (const id of reported) {
     const parts: string[] = [];
@@ -1315,7 +1344,11 @@ export function main(argv: string[]): void {
   }
 
   reasons.push(...upstream.reasons);
-  gaps.push(...upstream.extraGaps);
+  // Units Generation: a story the team keeps out of every Unit is settled by its own
+  // `Deferred` row, whose target says where it is handled. `N/A` is not enough: it is
+  // also how a story is handed to another Unit, and that Unit must then be on the row.
+  const keptOut = stage === "units-generation" ? keptOutOfEveryUnit(upstream.extraGaps, data.coverage) : new Map<string, string>();
+  gaps.push(...upstream.extraGaps.filter((id) => !keptOut.has(id)));
   const missingFromUpstreamIds = [...required].filter((id) => !declared.has(id));
   if (upstream.ids.size === 0 && upstream.reasons.length === 0) {
     reasons.push(`upstream ID set is empty for stage "${stage}"`);

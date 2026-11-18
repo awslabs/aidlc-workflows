@@ -319,7 +319,12 @@ with git object plumbing, not by merging or creating a worktree:
   approval recorded for it;
 - Plan Approval fingerprint and explicit approval;
 - the candidate state row;
-- the transportable team audit shard.
+- the transportable team audit shard;
+- a merge with main that leaves no file in conflict, tried with
+  `git merge-tree` (no checkout or index moves); a conflict is refused before
+  the merge question, with the files and the Unit owner's next step (push main
+  first when a landing here is not on origin yet: merging origin/main would
+  bring the owner nothing).
 
 **Trust model.** The claim-bound team shard may carry that team's own
 attempt-keyed `UNIT_COMPLETED`, team-gate, and reviewer receipts. Those rows are
@@ -384,8 +389,9 @@ Landing is ordered and resumable:
    drift refuses before mutation and requires rebase, republish, re-pin, and a
    new merge gate. Main's
    `aidlc-state.md`, runtime graph, cursors, and engine markers are retained; the team's new
-   audit shard and per-Unit artifacts/source land. Real source conflicts abort
-   back to a clean checkout and list the files. A clean automatic merge of a
+   audit shard and per-Unit artifacts/source land. Pin already refused a
+   conflict with main as it stood; real source conflicts with a Unit landed
+   since abort back to a clean checkout and list the files. A clean automatic merge of a
    shared file is also refused when its result differs from the pinned candidate;
    rebase and republish. No Unit row has been folded. A Unit lands only after
    every Unit it depends on has landed.

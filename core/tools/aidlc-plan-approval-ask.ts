@@ -18,13 +18,14 @@
 // (generation start, the worker brief, the swarm, team merge, worktree
 // delegation) reads this one unchanged. What changed is who writes them.
 
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import { appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import { personGitNameField } from "./aidlc-git-name.ts";
 import {
   activeIntentUuid,
+  assertNoSymlinkInChainOrThrow,
   auditBlockField,
   auditMark,
   type AuditMark,
@@ -44,6 +45,8 @@ import {
   personsGateReply,
   latestMainWorkflowStageRunFloorForProject,
   memoryStrictHoldsGuardPolicy,
+  parseCheckboxes,
+  pendingPersonLines,
   GUARD_RECOVERY_ASK_TYPE,
   PLAN_APPROVAL_ASK_TYPE,
   planApprovalRuntimeFile,
@@ -52,12 +55,14 @@ import {
   readBaselineSourceSnapshot,
   readPlanApprovalReceipt,
   readPlanApprovalRuntimeRecord,
+  readProtectedQuestion,
   readWorkspaceSourceSnapshot,
   recordedSourceListingUnderCurrentBoundary,
   rejectionAtRunFloor,
   rejectionIsFreshAttempt,
   removePlanApprovalRuntimeRecord,
   runStateContent,
+  sessionsDir,
   renderChangedPaths,
   sourceChangedOutsideAidlc,
   stalePlanApprovalReceiptsForTarget,
@@ -103,6 +108,7 @@ import {
   planWithTestingContract,
   readPlanApprovalSettingWith,
   readTestingContract,
+  recordedApprovalFingerprint,
   replaceTestingContractSection,
   resolveCodeGenerationAuthority,
   resolveTestingPosture,
@@ -117,6 +123,7 @@ import {
 import { QUESTION_ASKED_EVENTS, readMessage } from "./aidlc-message-store.ts";
 import {
   askedQuestionFields,
+  boxQuestionId,
   newQuestionId,
   openSlotQuestionId,
   QUESTION_TEXT_FIELD,
@@ -126,7 +133,7 @@ import {
   shownAgainFields,
 } from "./aidlc-questions.ts";
 import { exactOptionPick, isNonAnswer, pickerOffersChoices } from "./aidlc-reply-reader.ts";
-import { aidlcDispatcherInvocation, aidlcToolInvocation } from "./aidlc-runtime-paths.ts";
+import { aidlcDispatcherInvocation, aidlcToolInvocation, runtimeHarnessName } from "./aidlc-runtime-paths.ts";
 import { type PlanApprovalSetting, resolvePlanApprovalSetting } from "./aidlc-guard-switch.ts";
 import type {
   CodeGenerationPlanApprovalState,
@@ -1023,6 +1030,107 @@ export function planQuestionBoxAsAsked(projectDir: string, payload: string): str
   }
 }
 
+// --- A stage gate's own lines in the question box (Claude Code) ---------------
+//
+// The agent retold a gate's lines for the person beside the box. Where the box
+// can carry them, the gate step keeps them for the chat (prepareEmission), the
+// box shows them under the agent's question and its answer takes them off the
+// list. Only the interactive CLI draws the box at a gate (no recorded SDK run
+// did); elsewhere, and unattended, the step carries them as before.
+export function gateNoticesInBox(projectDir: string): boolean {
+  return runtimeHarnessName(projectDir) === "claude" && process.env.CLAUDE_CODE_ENTRYPOINT === "cli" &&
+    process.env.AIDLC_UNATTENDED !== "1";
+}
+
+// Room kept for the agent's own question when the gate step is written, before
+// the question exists (126 recorded interactive gate questions ran 30 to 77
+// characters). Of the gate's lines, in order, each whole one that fits beside
+// it goes to the box; the rest stay on the step, said before the question.
+const GATE_QUESTION_ROOM = 500;
+export function gateLinesThatFit(lines: readonly string[]): string[] {
+  let left = BOX_QUESTION_MAX_CHARS - GATE_QUESTION_ROOM;
+  return lines.filter((line) => {
+    if (line.length + 2 > left) return false;
+    left -= line.length + 2;
+    return true;
+  });
+}
+
+// Said once per project (addNoGitLine in aidlc-orchestrate.ts), counted when a
+// written step or the box's answer carried it; kept for a box is not said.
+export const NO_GIT_LINE =
+  "This project has no git, so AI-DLC can't undo the changes it makes to your files; " +
+  "to get an undo, run `git init` and commit them.";
+const NO_GIT_SAID_FILE = "no-git-said";
+export function noGitLineSaid(projectDir: string): boolean {
+  return existsSync(join(sessionsDir(projectDir), NO_GIT_SAID_FILE));
+}
+export function writeNoGitLineSaid(projectDir: string): void {
+  try {
+    const dir = sessionsDir(projectDir);
+    assertNoSymlinkInChainOrThrow(projectDir, relative(projectDir, dir));
+    mkdirSync(dir, { recursive: true });
+    writeFileAtomic(join(dir, NO_GIT_SAID_FILE), `${isoTimestamp()}\n`);
+  } catch {
+    // Unrecorded: the next gate says it once more.
+  }
+}
+
+// The box and the chat's kept lines, when it is one single-choice question while
+// a stage awaits approval, and none of the engine's own questions whose text a
+// reader matches (the code plan question, an engine ask, a logged decision).
+function gateNoticeLines(
+  projectDir: string,
+  toolInput: unknown,
+  session: unknown,
+): { box: BoxQuestion; lines: string[]; said: () => void } | null {
+  if (typeof session !== "string" || session === "" || !gateNoticesInBox(projectDir)) return null;
+  const box = singleBoxQuestion(toolInput);
+  if (box === null) return null;
+  return forPayloadChat(projectDir, session, () => {
+    const state = runStateContent(projectDir);
+    if (state === null || !parseCheckboxes(state).some((line) => line.state === "awaiting-approval")) return null;
+    if (
+      currentPlanApprovalAsk(projectDir) !== null || readProtectedQuestion(projectDir, session) !== null ||
+      boxQuestionId(projectDir, session, box.question) !== null
+    ) return null;
+    const kept = pendingPersonLines(projectDir, session, { ordinaryOnly: true });
+    return kept.lines.length === 0 ? null : { box, lines: kept.lines, said: kept.said };
+  });
+}
+
+// The box with the kept lines under the agent's question when they all fit;
+// null otherwise, so it goes out as written and the lines wait. Writes nothing.
+export function gateNoticeBoxInput(projectDir: string, toolInput: unknown, session: unknown): Record<string, unknown> | null {
+  try {
+    const found = gateNoticeLines(projectDir, toolInput, session);
+    if (found === null) return null;
+    const question = [found.box.question, ...found.lines].join("\n\n");
+    if (question.length > BOX_QUESTION_MAX_CHARS) return null;
+    return { ...(toolInput as Record<string, unknown>), questions: [{ ...found.box.entry, question }] };
+  } catch {
+    return null;
+  }
+}
+
+// The answer to a box gateNoticeBoxInput filled (its question ends with the
+// kept lines): they are said, so they come off the chat's list.
+export function gateNoticeBoxShown(projectDir: string, payload: string): void {
+  try {
+    const parsed = JSON.parse(payload) as Record<string, unknown> | null;
+    if (parsed === null || parsed.hook_event_name !== "PostToolUse" || parsed.tool_name !== "AskUserQuestion") return;
+    // What the box showed was said, whether or not its lines are still kept (they age out).
+    const shown = gateNoticesInBox(projectDir) ? singleBoxQuestion(parsed.tool_input) : null;
+    if (shown?.question.split("\n\n").slice(1).includes(NO_GIT_LINE)) writeNoGitLineSaid(projectDir);
+    const found = gateNoticeLines(projectDir, parsed.tool_input, parsed.session_id);
+    const tail = found === null ? "" : ["", ...found.lines].join("\n\n");
+    if (found === null || !found.box.question.endsWith(tail) || found.box.question.length <= tail.length) return;
+    found.said();
+  } catch {
+    // The lines stay for the next step.
+  }
+}
+
 // The person's own answer on the `[Answer]:` line, as the file's instructions
 // invite ("write your answer after `[Answer]:` and tell me in chat when you
 // are done"). Empty when they
@@ -1557,9 +1665,10 @@ export function publishPlanApprovalAsk(
       const onDisk = readText(path);
       if (onDisk === content) return;
       // The file invites the person to answer on its `[Answer]:` line. While
-      // the same question stands, their answer is the only difference from the
-      // template, so it stays: the engine never erases what they wrote. A new
-      // question, or a file changed in any other way, is written as usual.
+      // the same question stands, the engine never erases what they wrote: a
+      // file where only their answer differs stays as it is, and a file
+      // written again for another line carries their answer (below). A new
+      // question is written fresh.
       if (same && onlyTheirAnswerDiffers(onDisk, content)) return;
       // Nor is it rewritten for the repos line alone: a file an earlier AI-DLC
       // wrote without it (a teammate's clone included) is kept wherever the file
@@ -1567,7 +1676,18 @@ export function publishPlanApprovalAsk(
       const named = underSummary(projectDir, [view.unit], null);
       const without = named.length === 0 ? null : fileWith(view.summary.filter((line) => !named.includes(line)));
       if (without !== null && (onDisk === without || (same && onlyTheirAnswerDiffers(onDisk, without)))) return;
-      writeFileAtomic(path, content);
+      // Their answer is the `[Answer]:` line and whatever they wrote under it:
+      // the template ends with that line. It is carried whole, and only out of
+      // the file about this plan; the engine's record of a plan built without
+      // asking holds no answer of theirs.
+      const at = onDisk.search(/^\[Answer\]:/m);
+      const theirs = at < 0 ? "" : onDisk.slice(at).replace(/\r\n/g, "\n");
+      const written = theirs.slice("[Answer]:".length).trim();
+      const carry = same && written !== "" && !onDisk.slice(0, at).includes(BUILT_WITHOUT_ASKING_INTRO[0]) &&
+        recordedApprovalFingerprint(onDisk) === targets[index].fingerprint;
+      const file = carry ? `${content.slice(0, content.lastIndexOf("[Answer]:"))}${theirs}` : content;
+      // The same bytes are not written again: an editor holding the file open would ask about a change on disk.
+      if (file !== onDisk) writeFileAtomic(path, file);
     });
   });
 }
