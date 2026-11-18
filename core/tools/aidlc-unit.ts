@@ -4537,16 +4537,34 @@ function claimUnit(args: string[], projectDir?: string): void {
 // Read before the claim scopes this checkout, from main's own rows for the
 // Unit; an earlier attempt's rows (stamped with its generation) are that
 // attempt's, not main's.
-function stepsSkippedOnMain(projectDir: string, state: string, unit: string): Map<string, string> {
+function stepsSkippedOnMain(projectDir: string, state: string, unit: string): Map<string, MainSkip> {
   const rows = readAuditShardEvents(projectDir).filter((row) =>
     auditBlockField(row.block, "Unit") !== unit || auditBlockField(row.block, "Attempt Generation") === null
   );
-  const skipped = new Map<string, string>();
+  const skipped = new Map<string, MainSkip>();
   for (const slug of unitMajorConstructionStageSlugs(getField(state, "Scope") ?? "", state, true)) {
     const reason = unitSkippedUnits(projectDir, slug, rows, state).get(unit);
-    if (reason !== undefined) skipped.set(slug, reason);
+    if (reason === undefined) continue;
+    // Who skipped it is main's row's to say, never the claimer's.
+    const row = rows.filter((r) => r.event === "UNIT_SKIPPED" && auditBlockField(r.block, "Unit") === unit &&
+      auditBlockField(r.block, "Stage") === slug).sort((a, b) => a.timestamp.localeCompare(b.timestamp)).at(-1);
+    const name = row ? auditBlockField(row.block, "Git Name") : null;
+    skipped.set(slug, { reason, gitName: name === null ? {} : { "Git Name": name } });
   }
   return skipped;
+}
+
+type MainSkip = { reason: string; gitName: Record<string, string> };
+
+// The UNIT_SKIPPED row, for its two writers: the state tool's skip of one
+// Unit's step and the claim's record of a skip main made before it. The
+// caller gives the attempt and the git name of the person who skipped.
+export function unitSkippedFields(
+  projectDir: string, slug: string, unit: string, reason: string, unitScoped: boolean,
+  attempt: Record<string, string>, gitName: Record<string, string>,
+): Record<string, string> {
+  const floor = unitLifecycleRunFloorForProject(projectDir, slug, true, unit, undefined, unitScoped);
+  return { Stage: slug, Unit: unit, Reason: reason, "Run floor": floor, ...attempt, ...gitName };
 }
 
 // A claimed checkout reads only its own attempt's rows, so main's skip would
@@ -4560,21 +4578,17 @@ function carrySkipsIntoClaim(
   state: string,
   unit: string,
   generation: number,
-  skipped: ReadonlyMap<string, string>,
+  skipped: ReadonlyMap<string, MainSkip>,
 ): string | null {
   const lost: string[] = [];
   const unitScoped = unitScopedLifecycleFloors(state);
-  for (const [slug, reason] of skipped) {
+  for (const [slug, { reason, gitName }] of skipped) {
     try {
-      appendAuditEntry("UNIT_SKIPPED", {
-        Stage: slug,
-        Unit: unit,
-        Reason: reason,
-        "Run floor": unitLifecycleRunFloorForProject(projectDir, slug, true, unit, undefined, unitScoped),
-        "Attempt Generation": String(generation),
-      }, projectDir);
+      const attempt = { "Attempt Generation": String(generation) };
+      appendAuditEntry("UNIT_SKIPPED", unitSkippedFields(projectDir, slug, unit, reason, unitScoped, attempt, gitName), projectDir);
     } catch {
-      lost.push(slug);
+      // The stage as the merge question names it (skippedStepsLine).
+      lost.push(loadStageGraphAll().find((entry) => entry.slug === slug)?.name || slug);
     }
   }
   return lost.length === 0 ? null
