@@ -112,6 +112,7 @@ import {
   replaceTestingContractSection,
   resolveCodeGenerationAuthority,
   resolveTestingPosture,
+  testingContractCurrent,
   codeGenerationFinishedUnderPlanContract,
   stepNextCommand,
   testingContractDefectMessage,
@@ -522,7 +523,7 @@ export function codeGenerationPlanReadiness(
     try {
       const current = resolveTestingPosture(projectDir);
       const written = usableTestingContract(current) &&
-          ("defect" in read || read.contract.contract_sha256 !== current.contract_sha256)
+          ("defect" in read || !testingContractCurrent(projectDir, read.contract, current))
         ? planWithTestingContract(plan, current, theirEdit)
         : null;
       if (written !== null) {
@@ -537,8 +538,7 @@ export function codeGenerationPlanReadiness(
   if ("defect" in read) {
     return { ready: false, note: testingContractDefectMessage(read.defect, "run next") };
   }
-  const current = resolveTestingPosture(projectDir);
-  if (read.contract.contract_sha256 !== current.contract_sha256) {
+  if (!testingContractCurrent(projectDir, read.contract)) {
     return {
       ready: false,
       note: "The plan's Testing Contract is out of date: memory, scope, test strategy, project type, or the " +
@@ -2012,7 +2012,7 @@ function approveTarget(
   const posture = resolveTestingPosture(projectDir);
   let contractHash = read.contract.contract_sha256;
   let rendered: string | null = null;
-  if (contractHash !== posture.contract_sha256) {
+  if (!testingContractCurrent(projectDir, read.contract, posture)) {
     const refreshed = usableTestingContract(posture) ? replaceTestingContractSection(plan, posture, theirEdit) : null;
     if (refreshed === null) {
       return repair(`the Testing Contract in ${view.plan_path} is out of date and needs to be rendered again.`);

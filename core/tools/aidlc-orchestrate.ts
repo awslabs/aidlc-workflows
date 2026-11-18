@@ -279,6 +279,7 @@ import {
   openReviewRequests,
   latestReviewerRowAfter,
   hooksHealthReadDir,
+  issuedStepIsIsolatedRun,
   personMayApproveOverUnfinishedReview,
   personSpokeSinceReviewRequest,
   type GuardAttemptState,
@@ -23939,7 +23940,8 @@ function handleContinue(line: string[], projectDir: string | undefined): void {
 // A harness that returns from an Agent/Task dispatch before the worker finishes
 // leaves the conductor with nothing to read. This verb is the sanctioned wait:
 // it polls the same on-disk evidence the engine itself checks (collaborator
-// contribution files, the stage's required artifacts, or the reviewer's review
+// contribution files, the stage's required artifacts or, given the host's own id
+// for the lead it started, that helper's finish row, or the reviewer's review
 // file) and always returns within the bound, so the conductor re-runs one bare
 // engine command instead of minting its own shell loop. Read-only: it publishes
 // no directive, touches no marker, and writes no audit row.
@@ -23948,13 +23950,14 @@ interface WaitFlags {
   unit?: string;
   for?: string;
   reviewFile?: string;
+  agentId?: string;
   timeout?: number;
 }
 
 const WAIT_TARGETS = ["collaborators", "artifacts", "review"] as const;
 const WAIT_USAGE =
   "Usage: wait --stage <slug> --for collaborators|artifacts|review " +
-  "[--unit <unit>] [--review-file <path>] [--timeout <seconds>]";
+  "[--unit <unit>] [--review-file <path>] [--agent-id <id>] [--timeout <seconds>]";
 const WAIT_DEFAULT_SECONDS = 90;
 const WAIT_MAX_SECONDS = 540;
 // A review file unchanged this long ends the wait for a reviewer whose finish left no trace.
@@ -23970,9 +23973,35 @@ function parseWaitFlags(args: string[]): WaitFlags {
     else if (a === "--unit") { flags.unit = v; i++; }
     else if (a === "--for") { flags.for = v; i++; }
     else if (a === "--review-file") { flags.reviewFile = v; i++; }
+    else if (a === "--agent-id") { flags.agentId = v; i++; }
     else if (a === "--timeout") { flags.timeout = Number(v); i++; }
   }
   return flags;
+}
+
+// Whether the selected record holds the finish of the helper the host started
+// under `agentId` (SUBAGENT_COMPLETED's Agent ID, from the SubagentStop payload).
+// While it does not, the wait holds: the host's own notice of the finish, or of a
+// helper that stopped, is the agent's way on.
+function leadFinishRecorded(pd: string, agentId: string): boolean {
+  try {
+    const { intent: chosen, space: chosenSpace } = engineSelection(pd);
+    const intent = chosen ?? undefined;
+    return readAuditShardEvents(pd, intent, intent ? chosenSpace : undefined).some((row) =>
+      row.event === "SUBAGENT_COMPLETED" && auditBlockField(row.block, "Agent ID") === agentId);
+  } catch {
+    return false;
+  }
+}
+
+// The engine call that picks this work up again: the stage run on its own when
+// the step issued last is one (`--single`), else the workflow's own next.
+function resumeNext(pd: string, stage: string): string {
+  try {
+    return issuedStepIsIsolatedRun(pd, stage) ? `orchestrate next --stage ${stage} --single` : "orchestrate next";
+  } catch {
+    return "orchestrate next";
+  }
 }
 
 function fileHasBytes(path: string): boolean {
@@ -24000,6 +24029,15 @@ function handleWait(args: string[], projectDir: string | undefined): void {
     console.error(`--for review needs --review-file <path>. ${WAIT_USAGE}`);
     process.exit(1);
   }
+  if (args.includes("--agent-id") && (!flags.agentId || flags.agentId.startsWith("-"))) {
+    console.error(`--agent-id needs the id the dispatch's answer gave the helper. ${WAIT_USAGE}`);
+    process.exit(1);
+  }
+  if (flags.agentId !== undefined && target !== "artifacts") {
+    console.error(`--agent-id goes with --for artifacts (the lead's finish). ${WAIT_USAGE}`);
+    process.exit(1);
+  }
+  const leadFinish = flags.agentId;
   const seconds =
     flags.timeout !== undefined && Number.isFinite(flags.timeout) && flags.timeout > 0
       ? Math.min(flags.timeout, WAIT_MAX_SECONDS)
@@ -24071,6 +24109,12 @@ function handleWait(args: string[], projectDir: string | undefined): void {
           missing.push(`${agent} (missing identity-marker first line)`);
         }
       }
+    } else if (leadFinish !== undefined) {
+      // The host's id for the lead it started in the background, as its answer
+      // to the dispatch named it: the finish under that id is the hand-back. The
+      // stage's files are no sign of it, because some of them (Code Generation's
+      // summary and traceability) are the conductor's to write after the lead returns.
+      if (!leadFinishRecorded(pd, leadFinish)) missing.push(`lead ${node.lead_agent ?? "agent"} (no finish recorded yet)`);
     } else {
       for (const entry of reviewArtifactEntries(pd, node, flags.unit) ?? []) {
         if (!entry.required) continue;
@@ -24098,8 +24142,16 @@ function handleWait(args: string[], projectDir: string | undefined): void {
     waited_ms: Date.now() - started,
     missing,
     next: settled
-      ? "The dispatched work has landed: read its outputs and continue the stage body."
-      : "Not yet: run this same command again. Never replace it with a shell loop or a sleep.",
+      ? leadFinish !== undefined
+        ? "The lead's finish is recorded: read its summary (the host's notice brings it) and continue the stage body."
+        : "The dispatched work has landed: read its outputs and continue the stage body."
+      : leadFinish !== undefined
+        ? "Not yet: run this same command again. No finish of the lead is recorded yet: keep running this command " +
+          "in this same turn until it settles, rather than ending your turn to wait for it. When the host's own " +
+          "notice says this helper finished or stopped, stop waiting and read what it reports. When this chat was " +
+          "resumed after the host quit while the helper worked, that helper is gone: run " +
+          `\`${aidlcDispatcherInvocation(resumeNext(pd, node.slug))}\` instead. Never replace it with a shell loop or a sleep.`
+        : "Not yet: run this same command again. Never replace it with a shell loop or a sleep.",
   }));
 }
 

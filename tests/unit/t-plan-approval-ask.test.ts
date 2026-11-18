@@ -5254,6 +5254,36 @@ describe("the engine writes the plan's Testing Contract itself", () => {
     expect(next(proj).plan_approval).toEqual({ status: "approved" });
   });
 
+  // A plan approved before the update carries its contract read the earlier
+  // way (over the raw section text). While that text is the same the engine
+  // leaves the block as it is, the answer records it as it is, and the
+  // fingerprint command prints the approval's own fingerprint.
+  test("a contract rendered before the update is left as it is while its text is the same", () => {
+    const proj = project("strict");
+    writePlan(proj);
+    const earlier = renderTestingContract(resolveTestingPosture(proj, "raw"));
+    expect(earlier).not.toBe(contract(proj));
+    writeFileSync(planPath(proj), STEPS + earlier, "utf-8");
+    expect(next(proj)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
+    expect(planText(proj)).toBe(STEPS + earlier);
+    replyAndRecord(proj, "1", "Approve Plan");
+    expect(planText(proj)).toBe(STEPS + earlier);
+    expect(next(proj).plan_approval).toEqual({ status: "approved" });
+    const recorded = /^\[Approval Fingerprint\]: (\S+)$/m
+      .exec(readFileSync(join(stageDir(proj), "code-generation-questions.md"), "utf-8"))?.[1];
+    expect(recorded).toBeDefined();
+    const printed = spawnSync(BUN, [
+      join(AIDLC_SRC, "tools", "aidlc-testing-posture.ts"), "fingerprint", "--stage-level", "--project-dir", proj,
+    ], {
+      cwd: proj,
+      env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj },
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(printed.status, printed.stderr).toBe(0);
+    expect(printed.stdout.split("\n")[0]).toBe(`[Approval Fingerprint]: ${recorded}`);
+  });
+
   test("a plan that already carries the current contract is asked about as written", () => {
     const proj = project();
     writePlan(proj);

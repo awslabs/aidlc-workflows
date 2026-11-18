@@ -35156,9 +35156,9 @@ export function unitLifecycleRunFloorForProject(
 // a stage before the Target keeps its attempt: a jump back to Code Generation
 // leaves each Unit's Functional Design as it was. A row whose Target, or a
 // stage, the graph does not know, or a graph that cannot be read, reaches
-// every stage. A team-owned jump back before the per-Unit block records `Unit
-// Work: kept` (aidlc-jump.ts): it reaches no per-Unit stage, whose work is
-// each Unit's claim's.
+// every stage. A team-owned jump back before the per-Unit block, or a redo of
+// a stage there, records `Unit Work: kept` (aidlc-jump.ts): it reaches no
+// per-Unit stage, whose work is each Unit's claim's.
 export function stageJumpReaches(block: string, slug: string): boolean {
   const name = auditBlockField(block, "Target");
   if (!name || name === slug) return true;
