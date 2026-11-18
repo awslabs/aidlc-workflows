@@ -275,6 +275,32 @@ describe("a build step the chat compaction set aside, before any next", () => {
   });
 });
 
+// The Testing Contract moved under an approved build, before any `next`: every
+// refusal names a way past the guard admits, on every shape, and taking it
+// does not bring the same refusal back.
+describe("the Testing Contract moved after the approval, before any next", () => {
+  test("strict: each refusal names a way past that is admitted", async () => {
+    const state = STATES.find((builder) => builder.id === "S13")!.build();
+    created.push(state.proj);
+    const problems: string[] = [];
+    const doors: ToolCall[] = [
+      { tool: "Bash", command: "bun .claude/tools/aidlc-testing-posture.ts brief --stage-level" },
+      { tool: "Task", agent: DEVELOPER, prompt: developerBrief(state.proj) },
+      { tool: "Write", path: join(state.proj, "src", "slugify.ts") },
+      { tool: "Bash", command: "echo built > src/slugify.ts" },
+    ];
+    for (const shape of SHAPES) {
+      shape.install(state.proj);
+      for (const door of doors) {
+        const verdict = await shape.call(state.proj, state.session, door);
+        if (verdict.code === 0) continue;
+        await wayPastIsAdmitted(state, shape, door, verdict, problems, true);
+      }
+    }
+    expect(problems).toEqual([]);
+  });
+});
+
 // The person's lookup while the plan is written ran into a refusal on Kiro IDE;
 // on every harness and in every state an MCP call they ask for is theirs to make,
 // and the host's own card asks them.

@@ -378,6 +378,26 @@ describe("a testing practice kept at the gate is for the next build", () => {
     expect(readFileSync(planFile(proj), "utf-8")).toBe(plan);
   });
 
+  // A plan approved before the update carries its contract read the earlier
+  // way; the review recorded after the update keeps that contract as the one
+  // the build was finished under, so the practice is for the next build here too.
+  test("strict: a plan approved before the update, reviewed after it, then a practice kept: the gate opens", () => {
+    const proj = inProgress("strict");
+    writePlan(proj, "", null, resolveTestingPosture(proj, "raw"));
+    expect(next(proj).ask_type).toBe("plan-approval");
+    approvePlan(proj);
+    expect(next(proj).plan_approval?.status).toBe("approved");
+    const plan = readFileSync(planFile(proj), "utf-8");
+    expect(plan).toContain(resolveTestingPosture(proj, "raw").contract_sha256);
+    built(proj);
+    keepTestingPractice(proj);
+    const opened = lastStep(runNamed(proj, OPEN_GATE).stdout);
+    expect(opened.kind, JSON.stringify(opened)).toBe("print");
+    expect(opened.message, JSON.stringify(opened)).not.toBe(WAITS);
+    expect(stageLine(proj)).toContain("[?] code-generation");
+    expect(readFileSync(planFile(proj), "utf-8")).toBe(plan);
+  });
+
   // The chat compacts between the learnings step and the gate, so `next` comes
   // first: it hands over the finish of the reviewed build, not the build again,
   // and a write the agent tries meanwhile is refused toward that finish.

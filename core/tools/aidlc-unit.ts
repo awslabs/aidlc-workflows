@@ -131,6 +131,7 @@ import {
   parseTestingContract,
   recordedApprovalFingerprint,
   resolveTestingPosture,
+  testingContractCurrent,
 } from "./aidlc-testing-posture.ts";
 import { beforePerUnitBlock, memoryDirFor } from "./aidlc-graph.ts";
 import { planMadeElsewhere } from "./aidlc-record-core.ts";
@@ -2133,7 +2134,7 @@ function candidateEvidence(
     if (
       fingerprint &&
       instructions.trim().length > 0 &&
-      embedded?.contract_sha256 === currentContract.contract_sha256 &&
+      testingContractCurrent(projectDir, embedded, currentContract) &&
       approvalEvent &&
       auditBlockField(approvalEvent.block, "Details") ===
         (approvalEvent.event === "PLAN_APPROVAL_SKIPPED" ? "Plan approval off" : "Approve Plan") &&
