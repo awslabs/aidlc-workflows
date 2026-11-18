@@ -1041,7 +1041,7 @@ describe("t299 (6) what an approved plan's Testing Contract binds", () => {
     ["a blank line beside a blank line", (text) => text.replace("\n\n", "\n\n\n")],
     ["a blank line at the start", (text) => `\n${text}`],
     ["a blank line at the end", (text) => `${text}\n`],
-    ["trailing spaces, a hard break among them", (text) => text.replace(/^(.+)$/m, "$1  ")],
+    ["trailing spaces", (text) => text.replace(/^(.+)$/m, "$1  ")],
     ["a trailing tab", (text) => text.replace(/^(.+)$/m, "$1\t")],
     ["a comment line between two paragraphs", (text) => text.replace(/\n\n(?=[A-Z])/, "\n\n<!-- reviewed with the team -->\n\n")],
     ["a comment line after the heading", (text) => `\n<!-- reviewed with the team -->${text}`],
@@ -1071,6 +1071,12 @@ describe("t299 (6) what an approved plan's Testing Contract binds", () => {
       expect(hashWith(layer, edit)).not.toBe(before);
     });
   }
+
+  test("a hard break in the wrapped Ordering value the contract carries: the contract is the one approved", () => {
+    const wrapped = "\n- **Methodology**: tdd\n- **Ordering**: write the failing test first, then\n  the code that passes it.\n";
+    const plain = resolve({ ...BASE, team: wrapped });
+    expect(resolve({ ...BASE, team: wrapped.replace("then\n", "then  \n") }).contract_sha256).toBe(plain.contract_sha256);
+  });
 
   // The engine reads a wrapped value only up to a comment line inside it, so
   // in the layer the contract takes its Ordering from, that line moves it.

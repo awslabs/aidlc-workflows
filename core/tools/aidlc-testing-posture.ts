@@ -953,7 +953,7 @@ function visiblePostureText(section: string): string {
 // What an approved plan's contract binds of a Testing Posture section: the
 // text as the agent is handed it (the stage's rules drop comment blocks the
 // same way, readRuleBundle), its spacing aside: no blank line at either end or
-// after another, and no trailing space or tab outside code and HTML blocks,
+// after another, and no trailing whitespace outside code and HTML blocks,
 // whose bytes stay as written. A comment inside a line is handed to the agent,
 // so it is bound; `shown` cuts it, for the notes a person reads.
 function postureAsHanded(section: string): { handed: string; shown: string } {
