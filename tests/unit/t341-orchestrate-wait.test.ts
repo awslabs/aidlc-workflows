@@ -1,5 +1,6 @@
 // covers: subcommand:aidlc-orchestrate:wait, function:handleWait, function:unrecordedFinishSince,
-// hook:aidlc-log-subagent, hook:aidlc-deliver-stage-rules, audit:SUBAGENT_COMPLETED, audit:REVIEW_COMPLETED
+// hook:aidlc-log-subagent, hook:aidlc-deliver-stage-rules, audit:SUBAGENT_COMPLETED, audit:REVIEW_COMPLETED,
+// function:leadFinishRecorded
 
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
@@ -551,5 +552,87 @@ describe("t341 orchestrate wait: a review holds until its reviewer has finished"
     const file = requestReview();
     reviewerWrites(file.abs, review("READY"));
     settles(file.rel);
+  });
+});
+
+// Claude Code starts Code Generation's developer in the background and answers
+// the dispatch with the helper's own id, the one its SubagentStop carries. The
+// stage's summary and traceability are the conductor's to write after the
+// developer returns, so a wait on the files could not see it back; given that
+// id, the artifacts wait settles on that helper's finish instead.
+describe("t341 orchestrate wait: artifacts with the lead's host id", () => {
+  const SUBAGENT_HOOK = join(AIDLC_SRC, "hooks", "aidlc-log-subagent.ts");
+  const DEVELOPER = "aidlc-developer-agent";
+  const OUT = `lead ${DEVELOPER} (no finish recorded yet)`;
+
+  function run(args: string[], input?: string): { status: number; out: string } {
+    const r = spawnSync(process.execPath, args, {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      encoding: "utf-8",
+      env: { ...ownEnv(), CLAUDE_PROJECT_DIR: project, AIDLC_PROJECT_DIR: project },
+      ...(input === undefined ? {} : { input }),
+    });
+    return { status: r.status ?? -1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
+  }
+
+  /** This shell's environment without the marks of a Claude Code session the suite may be running in. */
+  function ownEnv(): NodeJS.ProcessEnv {
+    return Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("CLAUDE_CODE_")));
+  }
+
+  /** A helper finishes: the shipped SubagentStop hook, with the id Claude Code gave it. */
+  function returns(agentId: string, agentType = DEVELOPER): void {
+    expect(run([SUBAGENT_HOOK], JSON.stringify({ hook_event_name: "SubagentStop", agent_type: agentType, agent_id: agentId })).status).toBe(0);
+  }
+
+  function leadWait(agentId: string): Record<string, unknown> {
+    const r = run([ORCHESTRATE, "wait", "--stage", "code-generation", "--for", "artifacts", "--agent-id", agentId,
+      "--timeout", "1", "--project-dir", project]);
+    expect(r.status, r.out).toBe(0);
+    return JSON.parse(r.out.trim().split("\n").pop() ?? "") as Record<string, unknown>;
+  }
+
+  test("holds while that helper works and settles at its finish, before the conductor writes the summary", () => {
+    project = activeIntentProject("state-construction.md");
+    const working = leadWait("dev-1");
+    expect(working.status).toBe("waiting");
+    expect(working.missing).toEqual([OUT]);
+    expect(String(working.next)).toContain("keep running this command in this same turn until it settles");
+    expect(String(working.next)).toContain("When the host's own notice says this helper finished or stopped");
+    expect(String(working.next)).toContain("resumed after the host quit while the helper worked, that helper is gone");
+
+    returns("dev-1");
+    const back = leadWait("dev-1");
+    expect(back.status).toBe("settled");
+    expect(back.missing).toEqual([]);
+    expect(String(back.next)).toContain("The lead's finish is recorded");
+    // The same call without the id still waits on the files the conductor writes after the lead.
+    const files = run([ORCHESTRATE, "wait", "--stage", "code-generation", "--for", "artifacts", "--timeout", "1", "--project-dir", project]);
+    const fileWait = JSON.parse(files.out.trim().split("\n").pop() ?? "") as Record<string, unknown>;
+    expect(fileWait.status).toBe("waiting");
+    expect((fileWait.missing as string[]).some((entry) => entry.includes("code-generation/code-summary.md"))).toBe(true);
+  });
+
+  test("another helper's finish does not settle it", () => {
+    project = activeIntentProject("state-construction.md");
+    returns("dev-earlier");
+    expect(leadWait("dev-now").missing).toEqual([OUT]);
+    returns("dev-now");
+    expect(leadWait("dev-now").status).toBe("settled");
+  });
+
+  test("an --agent-id with no id, or with another target, is refused with the usage", () => {
+    project = activeIntentProject("state-construction.md");
+    for (const tail of [["--agent-id"], ["--agent-id", "--timeout", "1"]]) {
+      const r = run([ORCHESTRATE, "wait", "--stage", "code-generation", "--for", "artifacts", "--project-dir", project, ...tail]);
+      expect(r.status, r.out).toBe(1);
+      expect(r.out).toContain("--agent-id needs the id the dispatch's answer gave the helper.");
+    }
+    for (const target of ["collaborators", "review"]) {
+      const r = run([ORCHESTRATE, "wait", "--stage", "code-generation", "--for", target, "--review-file", "r.md", "--agent-id", "dev-1",
+        "--timeout", "1", "--project-dir", project]);
+      expect(r.status, r.out).toBe(1);
+      expect(r.out).toContain("--agent-id goes with --for artifacts");
+    }
   });
 });
