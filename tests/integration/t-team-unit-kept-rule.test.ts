@@ -8,7 +8,6 @@ import { dirname, join } from "node:path";
 import { AIDLC_SRC, DEFAULT_SPACE } from "../harness/fixtures.ts";
 import {
   UNIT,
-  approveMerge,
   cleanupTempDirs,
   gateAndLand,
   git,
@@ -89,7 +88,7 @@ describe("a rule kept in a claimed clone", () => {
 
   // Two teams each keep a rule in the same place: the second meets the file
   // as it meets any shared file main changed since its claim.
-  test("a second Unit's rule meets the first one's at land as a shared file does", () => {
+  test("a second Unit's rule meets the first one's at pin as a shared file does", () => {
     const { seed, remote } = makeSeed(parallelDependencyBody());
     prepareCandidate(remote, "alpha", "alpha-team", {
       beforeCommit: (checkout) => keepRule(checkout, "project", RULE),
@@ -100,11 +99,11 @@ describe("a rule kept in a claimed clone", () => {
     gateAndLand(seed, "alpha");
     git(seed, ["push", "origin", "main"]);
 
-    approveMerge(seed, "beta");
-    const landed = runMergeTool(UNIT, ["land", "beta"], seed);
-    expect(landed.status).not.toBe(0);
-    expect(landed.out).toContain(`source conflicts: ${PROJECT_RULES}`);
-    // Main is back where it was: alpha's rule, no merge left half done.
+    // Pin tries the merge before the merge question is asked.
+    const pinned = runMergeTool(UNIT, ["pin", "beta"], seed);
+    expect(pinned.status).not.toBe(0);
+    expect(pinned.out).toContain(`source conflicts: ${PROJECT_RULES}`);
+    // Main is as it was: alpha's rule, no merge started.
     expect(readFileSync(join(seed, PROJECT_RULES), "utf-8")).toContain(RULE);
     expect(git(seed, ["status", "--porcelain", "--", PROJECT_RULES, "src"])).toBe("");
     expect(spawnSync("git", ["rev-parse", "-q", "--verify", "MERGE_HEAD"], { cwd: seed }).status).not.toBe(0);
