@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { cleanupTestProject, intentsDirOf, proposalFollowUp } from "../harness/fixtures.ts";
 import { intentsRegistryPath, sessionsDir } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
-import { latestQuestion, type StoredQuestion } from "../../dist/claude/.claude/tools/aidlc-question-store.ts";
+import { latestQuestion, readQuestion, type StoredQuestion } from "../../dist/claude/.claude/tools/aidlc-question-store.ts";
 import { DISPATCHER, env, exec, next, projectAt, SECOND_SESSION, say } from "../harness/aidlc-input-corpus.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -69,6 +69,33 @@ describe("t-routing-question-closed-target: a routing question never offers fini
     expect(out).toContain(`--continue --request ${question.id}`);
   });
 
+  test("its target still in flight: the question stays open", async () => {
+    const { proj, space } = await asked();
+    expect(await step(proj, space)).toContain(STILL_OPEN);
+  });
+
+  test("its target missing from the registry: the question stays open", async () => {
+    const { proj, question, space } = await asked();
+    editRegistry(proj, space, (rows) => rows.filter((row) => row.uuid !== question.askedAbout!.targets[0].uuid));
+    expect(await step(proj, space)).toContain(STILL_OPEN);
+  });
+
+  test("one of two picked targets complete: only the open one is offered", async () => {
+    const { proj, question, space } = await asked();
+    const done = { intent: "finished-work", uuid: "00000000-0000-4000-8000-00000000d0e1" };
+    editRegistry(proj, space, (rows) => [...rows, { uuid: done.uuid, slug: done.intent, status: "complete" }]);
+    editQuestion(proj, question, (stored) => ({
+      ...stored,
+      askedAbout: { space, targets: [...stored.askedAbout!.targets, done], pick: true },
+    }));
+    const out = await step(proj, space);
+    expect(out).toContain(STILL_OPEN);
+    expect(out).toContain(`--pick ${question.askedAbout!.targets[0].intent}`);
+    expect(out).not.toContain(done.intent);
+  });
+});
+
+describe("t-routing-question-closed-target: a routing question the person's words were passed on beside", () => {
   test("the agent passes their words on as something else: once that request starts work, the question is not asked again, in that chat or a new one, and its own commands still answer it", async () => {
     const { proj, question, space } = await asked();
     editQuestion(proj, question, (stored) => ({ ...stored, askedAbout: { ...stored.askedAbout!, pick: true } }));
@@ -106,28 +133,19 @@ describe("t-routing-question-closed-target: a routing question never offers fini
       .toContain(`intent create --scope bugfix --request ${question.id}`);
   });
 
-  test("its target still in flight: the question stays open", async () => {
-    const { proj, space } = await asked();
-    expect(await step(proj, space)).toContain(STILL_OPEN);
-  });
-
-  test("its target missing from the registry: the question stays open", async () => {
-    const { proj, question, space } = await asked();
-    editRegistry(proj, space, (rows) => rows.filter((row) => row.uuid !== question.askedAbout!.targets[0].uuid));
-    expect(await step(proj, space)).toContain(STILL_OPEN);
-  });
-
-  test("one of two picked targets complete: only the open one is offered", async () => {
-    const { proj, question, space } = await asked();
-    const done = { intent: "finished-work", uuid: "00000000-0000-4000-8000-00000000d0e1" };
-    editRegistry(proj, space, (rows) => [...rows, { uuid: done.uuid, slug: done.intent, status: "complete" }]);
-    editQuestion(proj, question, (stored) => ({
-      ...stored,
-      askedAbout: { space, targets: [...stored.askedAbout!.targets, done], pick: true },
-    }));
-    const out = await step(proj, space);
-    expect(out).toContain(STILL_OPEN);
-    expect(out).toContain(`--pick ${question.askedAbout!.targets[0].intent}`);
-    expect(out).not.toContain(done.intent);
+  test("a plain reply the engine takes behind the delimiter itself, for a bare next while a stage question waits, leaves the question as it was", async () => {
+    const proj = await projectAt("stage-question-asked");
+    projects.push(proj);
+    expect((await say(proj, "/aidlc fix the login", "claude")).status).toBe(0);
+    const reading = await next(proj, ["fix", "the", "login"]);
+    const request = /next (--request [0-9a-f]{8})`/.exec(reading.directive?.message ?? "")?.[1];
+    expect(request, reading.out).toBeDefined();
+    const routing = await next(proj, [...request!.split(" "), "--propose", "bugfix"]);
+    expect(routing.directive?.ask_type, routing.out).toBe("new-work-routing");
+    const question = latestQuestion(proj);
+    expect(question?.origin).toBe("routing");
+    expect((await say(proj, "2", "claude")).status).toBe(0);
+    expect((await next(proj, [])).status).toBe(0);
+    expect(readQuestion(proj, question!.id)?.replacedBy).toBeUndefined();
   });
 });
