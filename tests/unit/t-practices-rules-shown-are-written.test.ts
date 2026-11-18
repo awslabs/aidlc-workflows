@@ -215,6 +215,50 @@ No exceptions were discussed.
     expect(stamped(proj, "## Forbidden")).toEqual(["- NEVER commit secrets"]);
   });
 
+  test("a None new note written as a list item keeps the gate shut and names the note", () => {
+    const { proj } = project(`# Discovered Rules
+
+## Mandated
+
+- None new beyond \`project.md\`. The existing ALWAYS rules stay in force.
+- Flag, not a new rule: the cache layer conflicts with this work.
+
+## Forbidden
+
+- None new beyond \`project.md\`. The existing NEVER rules stay in force.
+`);
+    const gate = openGate(proj);
+    expect(gate.kind).not.toBe("print");
+    expect(gate.message).toContain("In discovered-rules.md");
+    expect(gate.message).toContain('"Flag, not a new rule: the cache layer conflicts with this work." under ## Mandated');
+    expect(gate.message).toContain('"None new beyond `project.md`. The existing NEVER rules stay in force." under ## Forbidden');
+  });
+
+  test.each([
+    ["- None.", "None."],
+    ["- always run the test suite in CI", "always run the test suite in CI"],
+    ["- NEVER commit secrets", "NEVER commit secrets"],
+    ["- ALWAYS", "ALWAYS"],
+  ])("a Mandated item %p is no rule and keeps the gate shut", (item, named) => {
+    const { proj } = project(`# Discovered Rules\n\n## Mandated\n\n${item}\n\n## Forbidden\n\nNone.\n`);
+    const gate = openGate(proj);
+    expect(gate.kind).not.toBe("print");
+    expect(gate.message).toContain(`"${named}" under ## Mandated`);
+  });
+
+  test("indented rule items and an empty heading open the gate with those rules", () => {
+    const { proj, draftDir } = project(
+      "# Discovered Rules\n\n## Mandated\n\n   - ALWAYS run the test suite in CI\n  * ALWAYS   review every change\n\n## Forbidden\n",
+    );
+    const gate = openGate(proj);
+    expect(gate.kind, gate.message).toBe("print");
+    expect(shownRules(gate.narration)).toEqual([
+      "Mandated: ALWAYS run the test suite in CI",
+      "Mandated: ALWAYS   review every change",
+    ]);
+    expect(promote(proj, draftDir)).toMatchObject({ mandated_appended: 2, forbidden_appended: 0 });
+  });
+
   test("a rule already in the project's rules is neither shown nor written again", () => {
     const { proj, draftDir } = project(
       "# Discovered Rules\n\n## Mandated\n\n- ALWAYS run the test suite in CI\n- ALWAYS review every change\n\n## Forbidden\n",
