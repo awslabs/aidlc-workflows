@@ -5188,15 +5188,17 @@ function routingQuestionOptions(question: StoredQuestion): readonly RoutingOptio
 
 // The routing question the person was asked and has not answered: the latest
 // question this engine kept, asked with options (its digest marks that), with
-// nothing started from it, and no other question put to them or decision
-// recorded since. It answers however far the work it named has moved on (its
-// commands act on that work or ask again), and it never offers work that is
-// finished or archived. Words handed to `next` while it is open may be its
-// answer, which only the agent can tell.
+// nothing started from it, no words passed on as a request beside it (it is
+// then replaced by the request they became: handleNext), and no other question
+// put to them or decision recorded since. It answers however far the work it
+// named has moved on (its commands act on that work or ask again), and it never
+// offers work that is finished or archived. Words handed to `next` while it is
+// open may be its answer, which only the agent can tell.
 function openRoutingQuestion(projectDir: string): StoredQuestion | null {
   try {
     const question = latestQuestion(projectDir);
-    if (question?.origin !== "routing" || question.stateSha256 === undefined || !question.askedAbout) return null;
+    if (question?.origin !== "routing" || question.replacedBy !== undefined || question.stateSha256 === undefined ||
+      !question.askedAbout) return null;
     if (intentStartedByQuestion(projectDir, question.id) !== null) return null;
     if (question.approvedRequest && intentStartedByQuestion(projectDir, question.approvedRequest)) return null;
     const targets = openTargets(projectDir, question.askedAbout);
@@ -11390,6 +11392,11 @@ let settledNotices: string[] = [];
 // which the step's publication binds a tracked Copilot claim over.
 let jumpsMade = 0;
 let ownJumpMove: { from: string; to: string } | null = null;
+// The routing question open when the agent ran `next` with only the person's
+// words, marked as their request (routeNext): once the pass has kept the
+// request they became, the question is marked replaced by it, so it no longer
+// waits and its own commands still answer it.
+let passedOnRoutingQuestion: string | null = null;
 
 function handleNext(args: string[], projectDir: string | undefined): void {
   routingPassActive = true;
@@ -11398,9 +11405,15 @@ function handleNext(args: string[], projectDir: string | undefined): void {
   settledNotices = [];
   jumpsMade = 0;
   ownJumpMove = null;
+  passedOnRoutingQuestion = null;
   try {
     routeNext(args, projectDir);
+    const passed = passedOnRoutingQuestion;
+    const pd = resolveProjectDir(projectDir);
+    const newer = passed === null || isReadOnlyEngineProbe() ? null : latestQuestion(pd);
+    if (passed !== null && newer !== null && newer.id !== passed) markReplaced(pd, [passed], newer.id);
   } finally {
+    passedOnRoutingQuestion = null;
     routingEvidence = null;
     routingPassActive = false;
     routingArgs = null;
@@ -12063,6 +12076,12 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       key === "intent" || key === "markedWords" || value === undefined || value === false);
   const unmarkedProse = onlyProse && flags.markedWords !== true;
   const openRouting = unmarkedProse ? openRoutingQuestion(questionDir) : null;
+  // Their words alone, marked as their request in the line the agent ran (the "something else" command of
+  // routingQuestionReplyDirective, or another step's that hands their words on), are passed on beside the open
+  // routing question; a line the engine took from their chat itself (takePersonsOwnLine) was passed on by no one.
+  if (onlyProse && flags.markedWords === true && taken === agentArgs) {
+    passedOnRoutingQuestion ??= openRoutingQuestion(questionDir)?.id ?? null;
+  }
   const routingStep = openRouting === null ? null : routingQuestionReplyDirective(openRouting, flags.intent ?? "", questionDir);
   if (routingStep !== null) {
     emit(routingStep);
