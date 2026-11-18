@@ -132,6 +132,27 @@ harness, and any failure leave the call as the agent wrote it, with nothing
 printed. The rule is `planQuestionBoxInput` and `planQuestionBoxAsAsked` in
 `core/tools/aidlc-plan-approval-ask.ts`.
 
+**A stage gate's box shows the gate's own lines (Claude Code).** In Claude
+Code's interactive CLI (`CLAUDE_CODE_ENTRYPOINT` is `cli`, not unattended), the
+step that shows a stage's approval gate hands the agent none of the gate's own
+lines for the person (the state tool's notices for the gate, the no-git line,
+what Approve accepts): they are kept for the chat, and the same row puts them
+under the agent's question when the box asks this work's open gate, each after a
+blank line, word for word. A review check offer and a line kept from elsewhere
+stay on the step for the agent to say. When the step is written the agent's
+question does not exist yet, so the lines kept are the whole ones that fit in
+2,000 characters beside a 500-character room for it (`gateLinesThatFit`); the
+rest stay on the step, said before the question. A box that is the code plan
+question, an engine ask or a logged decision is left alone, and an agent
+question past the room leaves the box as written, the lines waiting for the
+next step. The human-turn hook takes the lines off the list when the box's
+answer comes back, and `QUESTION_REPLIED` keeps the box as the person saw it.
+The no-git line counts as said for the project only once a box's answer or a
+written step carried it. Under the SDK, `claude -p`, unattended and on every
+other harness the step carries the lines as before. The rule is
+`gateNoticesInBox`, `gateNoticeBoxInput` and `gateNoticeBoxShown` in
+`core/tools/aidlc-plan-approval-ask.ts`.
+
 Before probing `next` in a shared engine session, the Stop hook preserves a
 current guard-recovery question while the person selects a remedy or supplies
 required follow-up feedback. This wait also applies in autonomous Construction

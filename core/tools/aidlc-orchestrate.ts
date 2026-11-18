@@ -730,7 +730,12 @@ import {
   isPlanApprovalBeat,
   codeGenerationBuildFinishes,
   codeGenerationFinishedBuild,
+  gateLinesThatFit,
+  gateNoticesInBox,
   keepRoutedPlanApprovalReply,
+  NO_GIT_LINE,
+  noGitLineSaid,
+  writeNoGitLineSaid,
   legacyPlanApprovalOffNotice,
   noteOpenEngineQuestion,
   openPlanApprovalQuestion,
@@ -892,15 +897,11 @@ function broughtFilesGateLine(
 // meeting it. Silent when the project folder, a repo of the work or a git
 // checkout in the workspace is in git (those files have their undo). `git init`
 // alone puts nothing back, so the line names the commit.
-export const NO_GIT_LINE =
-  "This project has no git, so AI-DLC can't undo the changes it makes to your files; " +
-  "to get an undo, run `git init` and commit them.";
-const NO_GIT_SAID_FILE = "no-git-said";
 let noGitLineHanded: string | null = null;
 
 function addNoGitLine(reply: { kind: string; change_notices?: string[] }, projectDir: string): void {
   try {
-    if (existsSync(join(sessionsDir(projectDir), NO_GIT_SAID_FILE))) return;
+    if (noGitLineSaid(projectDir)) return;
     const repos = [...intentRepos(projectDir), ...discoverSiblingRepos(projectDir)];
     if (isGitRepo(projectDir) || repos.some((name) => isGitRepo(repoDir(projectDir, name)))) return;
   } catch {
@@ -911,24 +912,19 @@ function addNoGitLine(reply: { kind: string; change_notices?: string[] }, projec
   if (!isReadOnlyEngineProbe() && process.env.AIDLC_UNATTENDED !== "1") noGitLineHanded = projectDir;
 }
 
-// Kept as said once the step that carries it is written (writePrepared). A
+// Kept as said once the step that carries it is written (writePrepared): the
+// step that added it, or a later one carrying it from the chat's kept lines. A
 // rules part carries it too, but it is said with the step after the parts,
 // which still carries it (the record waits), so it is recorded there.
 function recordNoGitLineSaid(written: { kind?: unknown; change_notices?: unknown }): void {
-  const projectDir = noGitLineHanded;
+  const projectDir = noGitLineHanded ??
+    (isReadOnlyEngineProbe() || process.env.AIDLC_UNATTENDED === "1" ? null : engineProjectDir ?? null);
   noGitLineHanded = null;
   const notices = written.change_notices;
   if (projectDir === null || written.kind === "load-steering" || !Array.isArray(notices) || !notices.includes(NO_GIT_LINE)) {
     return;
   }
-  try {
-    const dir = sessionsDir(projectDir);
-    assertNoSymlinkInChainOrThrow(projectDir, relative(projectDir, dir));
-    mkdirSync(dir, { recursive: true });
-    writeFileAtomic(join(dir, NO_GIT_SAID_FILE), `${isoTimestamp()}\n`);
-  } catch {
-    // Unrecorded: the next gate says it once more.
-  }
+  writeNoGitLineSaid(projectDir);
 }
 
 // " (3 questions, 2 answered)" for a questions file: its `[Answer]:` lines
@@ -1605,6 +1601,14 @@ const CLEAN_CHAT_LEAD = "To start this in a clean chat instead, ";
 // a stage's gate, before the gate is shown, and a reading it may answer from
 // (saysWaitingLines).
 const leadsToSpeech = new WeakSet<Directive>();
+// The lines a gate step built for the person, for a question box to show
+// (keepGateLinesForTheBox); never a review check offer, a question of its own.
+const gateBoxLines = new WeakMap<Directive, string[]>();
+const reviewCheckOffers = new Set<string>();
+function markGateBoxLines(gate: Directive): void {
+  const lines = (gate.change_notices ?? []).filter((line) => !reviewCheckOffers.has(line));
+  if (lines.length > 0) gateBoxLines.set(gate, lines);
+}
 
 // A step the agent speaks from: one that ends its turn, or one with its own
 // line or a line for the person. A rules part never is; its run-stage is.
@@ -1626,6 +1630,36 @@ function speaksToPerson(directive: Directive): boolean {
 function withPersonLines(transported: Directive, lines: readonly string[]): Directive | null {
   const carried = withChangeNotices(transported, [...new Set([...lines, ...(transported.change_notices ?? [])])]);
   return Buffer.byteLength(JSON.stringify(carried), "utf-8") <= directiveMaxBytes() ? carried : null;
+}
+
+// Where the question box carries them (gateNoticesInBox), a gate step's own
+// lines that fit (gateLinesThatFit) are kept for the chat for the box to show.
+// After sayPendingPersonLines: before, it would read them back onto this step;
+// after, its said() leaves an entry written after its read as it is. A step
+// issued again unchanged (retainedIssuedDirective) hands nothing over, so the
+// lines its first issue kept are not kept twice.
+function keepGateLinesForTheBox(
+  requested: Directive,
+  carried: { directive: Directive; said?: () => void },
+): { directive: Directive; said?: () => void } {
+  const own = gateBoxLines.get(requested);
+  const step = carried.directive;
+  const projectDir = engineProjectDir;
+  const sessionId = engineSessionId;
+  if (
+    !own || !projectDir || !sessionId || step.kind === "load-steering" || isReadOnlyEngineProbe() ||
+    !gateNoticesInBox(projectDir)
+  ) return carried;
+  const lines = gateLinesThatFit((step.change_notices ?? []).filter((line) => own.includes(line)));
+  const kept = carried.said ? [] : pendingPersonLines(projectDir, sessionId, { ordinaryOnly: true }).lines;
+  const fresh = lines.filter((line) => !kept.includes(line));
+  if (lines.length === 0 || (fresh.length > 0 && !addPendingPersonLines(projectDir, sessionId, fresh))) return carried;
+  const directive = { ...step, change_notices: (step.change_notices ?? []).filter((line) => !lines.includes(line)) };
+  if (directive.change_notices.length === 0) {
+    delete (directive as Directive).change_notices;
+    delete directive.change_notices_note;
+  }
+  return { directive, said: carried.said };
 }
 
 // A chat picking the work back up (`next --resume`) hears where it picks up and
@@ -2104,7 +2138,7 @@ function prepareEmission(directive: Directive): PreparedEmission {
     transported, aidlcToolInvocation("orchestrate"), aidlcToolInvocation("log"), undefined,
     switchBackOnFollowUps(transported),
   );
-  const personLines = sayPendingPersonLines(requested, transported);
+  const personLines = keepGateLinesForTheBox(requested, sayPendingPersonLines(requested, transported));
   transported = personLines.directive;
   const personLinesSaid = personLines.said;
   // The bytes the host's tool panel shows first are the person's words.
@@ -14643,6 +14677,7 @@ function applyGateOnlyShape(
     // Counted as the gate is reported: a Unit's own only at a team Unit gate.
     addRevisionCycle(directive, projectDir, directive.stage, directive.unit_gate ? unit : null);
     addApproveAcceptsLine(directive, projectDir, gateNode, directive.unit_gate ? unit : null);
+    if (!directive.unit_gate) markGateBoxLines(directive);
   }
   directive.protocol_modules = (directive.protocol_modules ?? []).filter(
     (module) =>
@@ -20405,7 +20440,10 @@ function addReviewCheckOffer(
   const found = reviewCheckOffer(projectDir, node, unit);
   if (found === null) return;
   const at = reply.change_notices?.lastIndexOf(found.change) ?? -1;
-  if (at >= 0) reply.change_notices![at] = `${found.change} ${found.offer}`;
+  if (at >= 0) {
+    reply.change_notices![at] = `${found.change} ${found.offer}`;
+    reviewCheckOffers.add(reply.change_notices![at]);
+  }
   else reply.narration = reply.narration ? `${reply.narration}\n${found.offer}` : found.offer;
 }
 
@@ -22986,6 +23024,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         addContextParkOffer(gateReply, pd);
         addRevisionCycle(gateReply, pd, slug, unit);
         addApproveAcceptsLine(gateReply, pd, node, unit);
+        if (!agentApproves) markGateBoxLines(gateReply);
       }
     }
     emit(gateReply);
