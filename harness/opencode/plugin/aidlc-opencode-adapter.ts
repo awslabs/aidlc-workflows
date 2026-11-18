@@ -215,7 +215,8 @@ const PROJECTED_BUN_TOOLS = DEFAULT_AIDLC_COMMAND[0] === "bun"
 
 const PROJECTED_HARNESS_DIR = PROJECTED_BUN_TOOLS?.split("/")[0] ?? null;
 
-type PluginSyncEntry = "written" | "unrecorded" | "changed";
+// "changed" carries the plugin whose record lists the file.
+type PluginSyncEntry = "written" | "unrecorded" | { changed: string };
 
 // Whether an entrypoint is a file a plugin sync installed and nobody changed
 // since, decided as the sync decides it: any record that lists the path with a
@@ -228,17 +229,21 @@ function pluginSyncEntry(
   if (PROJECTED_HARNESS_DIR === null) return "unrecorded";
   const recordedPath = `${PROJECTED_HARNESS_DIR}/${entrypoint}`;
   const dataDir = join(projectDir, PROJECTED_HARNESS_DIR, "tools", "data");
-  const digests: string[] = [];
+  const listed: Array<{ plugin: string; sha256: string }> = [];
   try {
     for (const name of readdirSync(dataDir)) {
       const key = name.match(PLUGIN_OWNERSHIP_FILE)?.[1];
       const record = key === undefined ? null : parseOwnership(join(dataDir, name));
       if (record === null || record.name !== key) continue;
-      for (const file of record.files) if (file.path === recordedPath) digests.push(file.sha256);
+      for (const file of record.files) {
+        if (file.path === recordedPath) listed.push({ plugin: record.name, sha256: file.sha256 });
+      }
     }
-    if (digests.length === 0) return "unrecorded";
+    if (listed.length === 0) return "unrecorded";
     const target = join(projectDir, PROJECTED_HARNESS_DIR, entrypoint);
-    return digests.some((digest) => recordedDigestMatches(target, digest)) ? "written" : "changed";
+    return listed.some((entry) => recordedDigestMatches(target, entry.sha256))
+      ? "written"
+      : { changed: listed[0].plugin };
   } catch {
     return "unrecorded";
   }
@@ -508,21 +513,23 @@ function aidlcBashBoundaryViolation(
     if (projectDir !== null) {
       const synced = pluginSyncEntry(projectDir, entrypoint);
       if (synced === "written") return null;
-      return (
-        "AIDLC bash permission allows one direct invocation of a shipped tool or hook only. " +
-        `.aidlc/${entrypoint} is neither: ` +
-        (synced === "changed"
-          ? "`engine plugin sync` wrote it, but its bytes are no longer the ones the sync recorded, so the file on disk is not the one it installed."
-          : "no `engine plugin sync` record lists it, so the sync did not write that file.") +
-        " Run a shipped .aidlc entrypoint, or a plugin tool `engine plugin sync` installed."
-      );
+      // opencode keeps no list of plugins, so the sync is told the plugin's
+      // folder, in the placeholder syncCommand prints when it has none.
+      const sync = (plugin: string) =>
+        `\`${DEFAULT_AIDLC_COMMAND.join(" ")} plugin sync --plugin-root <${plugin}'s folder>\``;
+      return synced === "unrecorded"
+        ? `.aidlc/${entrypoint} is not an installed AI-DLC or plugin file, so it was not run. ` +
+            `Run a shipped tool, or run ${sync("plugin")} to install the plugin's tools.`
+        : `.aidlc/${entrypoint} has changed since the plugin sync installed it, so it was not run. ` +
+            `To keep the change, move the file somewhere else, then run ${sync(synced.changed)} again; ` +
+            "it puts the plugin's own version back.";
     }
   }
   if (words === null && dialect === "cmd" && NEXT_COMMAND.test(command) && cmdCannotCarry(command)) {
     return CMD_REQUEST_REFUSAL;
   }
   return (
-    "AIDLC bash permission allows one direct invocation of a shipped tool or hook only. " +
+    "AIDLC bash permission allows one direct invocation of an .aidlc tool or hook only. " +
     "Use an unchanged .aidlc entrypoint without chaining, redirection, expansion, or command substitution."
   );
 }

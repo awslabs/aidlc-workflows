@@ -287,24 +287,36 @@ describe("t241b OpenCode 2 entry point", () => {
     const shell = (id: string, command: string) =>
       v2.before({ tool: "shell", sessionID: "ses_main", agent: "build", id, input: { command } });
     const applied = "bun .aidlc/tools/sample-tools-target.ts apply --record r";
+    const oneCommand =
+      "AIDLC bash permission allows one direct invocation of an .aidlc tool or hook only. " +
+      "Use an unchanged .aidlc entrypoint without chaining, redirection, expansion, or command substitution.";
+    const notInstalled = (path: string) =>
+      `${path} is not an installed AI-DLC or plugin file, so it was not run. Run a shipped tool, or run ` +
+      "`bun .aidlc/tools/aidlc.ts engine plugin sync --plugin-root <plugin's folder>` to install the plugin's tools.";
     await shell("call_ok", applied);
-    await expect(shell("call_chain", `${applied} && echo done`)).rejects.toThrow(
-      /AIDLC bash permission allows one direct invocation/,
-    );
-    await expect(shell("call_redirect", `${applied} > out.json`)).rejects.toThrow(
-      /AIDLC bash permission allows one direct invocation/,
-    );
+    await expect(shell("call_chain", `${applied} && echo done`)).rejects.toThrow(new Error(oneCommand));
+    await expect(shell("call_redirect", `${applied} > out.json`)).rejects.toThrow(new Error(oneCommand));
     writeFileSync(join(root, ".aidlc", "tools", "sample-tools-extra.ts"), 'console.log("hand");\n');
     await expect(shell("call_hand_written", "bun .aidlc/tools/sample-tools-extra.ts apply")).rejects.toThrow(
-      /\.aidlc\/tools\/sample-tools-extra\.ts is neither: no `engine plugin sync` record lists it/,
+      new Error(notInstalled(".aidlc/tools/sample-tools-extra.ts")),
     );
     writeFileSync(tool, 'console.log("edited");\n');
     await expect(shell("call_edited", applied)).rejects.toThrow(
-      /its bytes are no longer the ones the sync recorded/,
+      new Error(
+        ".aidlc/tools/sample-tools-target.ts has changed since the plugin sync installed it, so it was not run. " +
+          "To keep the change, move the file somewhere else, then run " +
+          "`bun .aidlc/tools/aidlc.ts engine plugin sync --plugin-root <sample-tools's folder>` again; " +
+          "it puts the plugin's own version back.",
+      ),
     );
+    rmSync(tool, { force: true });
+    await expect(shell("call_moved_away", applied)).rejects.toThrow(
+      new Error(notInstalled(".aidlc/tools/sample-tools-target.ts")),
+    );
+    writeFileSync(tool, 'console.log("edited");\n');
     rmSync(record, { force: true });
     await expect(shell("call_unrecorded", applied)).rejects.toThrow(
-      /\.aidlc\/tools\/sample-tools-target\.ts is neither: no `engine plugin sync` record lists it/,
+      new Error(notInstalled(".aidlc/tools/sample-tools-target.ts")),
     );
   });
 
