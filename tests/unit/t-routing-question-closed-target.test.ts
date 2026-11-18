@@ -45,14 +45,29 @@ async function step(proj: string, space: string): Promise<string> {
 const withStatus = (uuid: string, status: string) => (rows: Row[]) =>
   rows.map((row) => row.uuid === uuid ? { ...row, status } : row);
 
-describe("t-routing-question-closed-target: a routing question closes with the work it named", () => {
+describe("t-routing-question-closed-target: a routing question never offers finished work", () => {
   for (const status of ["complete", "archived"]) {
-    test(`its only target ${status}: the words are a new request`, async () => {
+    test(`a pick question whose only target is ${status}: the step stays and names the question's own late answers, not the finished work`, async () => {
       const { proj, question, space } = await asked();
-      editRegistry(proj, space, withStatus(question.askedAbout!.targets[0].uuid, status));
-      expect(await step(proj, space)).not.toContain(STILL_OPEN);
+      const target = question.askedAbout!.targets[0];
+      editQuestion(proj, question, (stored) => ({ ...stored, askedAbout: { ...stored.askedAbout!, pick: true } }));
+      editRegistry(proj, space, withStatus(target.uuid, status));
+      const out = await step(proj, space);
+      expect(out).toContain(STILL_OPEN);
+      expect(out).not.toContain(`--pick ${target.intent}`);
+      expect(out).not.toMatch(/one of [;.]/);
+      expect(out).toContain(`--continue --request ${question.id}`);
+      expect(out).toContain("If they are asking for something else, run `");
     });
   }
+
+  test("a question about the active work whose target is archived: the step stays, so the agent reads the words", async () => {
+    const { proj, question, space } = await asked();
+    editRegistry(proj, space, withStatus(question.askedAbout!.targets[0].uuid, "archived"));
+    const out = await step(proj, space);
+    expect(out).toContain(STILL_OPEN);
+    expect(out).toContain(`--continue --request ${question.id}`);
+  });
 
   test("its target still in flight: the question stays open", async () => {
     const { proj, space } = await asked();

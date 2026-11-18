@@ -5155,8 +5155,10 @@ function routingQuestionOptions(question: StoredQuestion): readonly RoutingOptio
 // The routing question the person was asked and has not answered: the latest
 // question this engine kept, asked with options (its digest marks that), with
 // nothing started from it, and no other question put to them or decision
-// recorded since. Words handed to `next` while it is open may be its answer,
-// which only the agent can tell.
+// recorded since. It answers however far the work it named has moved on (its
+// commands act on that work or ask again), and it never offers work that is
+// finished or archived. Words handed to `next` while it is open may be its
+// answer, which only the agent can tell.
 function openRoutingQuestion(projectDir: string): StoredQuestion | null {
   try {
     const question = latestQuestion(projectDir);
@@ -5164,7 +5166,6 @@ function openRoutingQuestion(projectDir: string): StoredQuestion | null {
     if (intentStartedByQuestion(projectDir, question.id) !== null) return null;
     if (question.approvedRequest && intentStartedByQuestion(projectDir, question.approvedRequest)) return null;
     const targets = openTargets(projectDir, question.askedAbout);
-    if (targets.length === 0) return null;
     const asked = Date.parse(question.createdAt);
     const movedOn = readAuditShardEvents(projectDir).some((row) =>
       (row.event === "DECISION_RECORDED" || row.event === "STAGE_AWAITING_APPROVAL" ||
@@ -5204,7 +5205,8 @@ function routingQuestionReplyDirective(question: StoredQuestion, words: string, 
     question.id,
     question.proposedScope,
     carried,
-    pick ? question.askedAbout?.targets.map(({ intent }) => intent) : undefined,
+    // With none of the work it offered left open, its late answers stand in.
+    pick && question.askedAbout?.targets.length ? question.askedAbout.targets.map(({ intent }) => intent) : undefined,
     question.approvedRequest,
   );
   const named = (route: NewWorkRoute, command: string, record?: string): string =>
