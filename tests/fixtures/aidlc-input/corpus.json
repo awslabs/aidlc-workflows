@@ -1700,7 +1700,7 @@
           "ask",
           "print"
         ],
-        "words": "fix the login",
+        "words": "fix the\nlogin",
         "settings": []
       },
       "end": {
@@ -12442,7 +12442,7 @@
         "words": null,
         "settings": [],
         "names": [
-          "aidlc-knowledge.ts onboard docs"
+          "engine knowledge onboard docs"
         ],
         "no_ask": true
       },
@@ -12468,7 +12468,7 @@
         "words": null,
         "settings": [],
         "names": [
-          "aidlc-knowledge.ts onboard docs"
+          "engine knowledge onboard docs"
         ],
         "no_ask": true
       },
@@ -13097,7 +13097,7 @@
         "words": null,
         "settings": [],
         "names": [
-          "aidlc-knowledge.ts sync"
+          "engine knowledge sync"
         ],
         "no_ask": true
       },
@@ -13123,7 +13123,7 @@
         "words": null,
         "settings": [],
         "names": [
-          "aidlc-knowledge.ts sync"
+          "engine knowledge sync"
         ],
         "no_ask": true
       },
@@ -14022,7 +14022,7 @@
         "words": null,
         "settings": [],
         "names": [
-          "aidlc-knowledge.ts onboard"
+          "engine knowledge onboard"
         ],
         "no_ask": true
       },
@@ -14048,7 +14048,7 @@
         "words": null,
         "settings": [],
         "names": [
-          "aidlc-knowledge.ts onboard"
+          "engine knowledge onboard"
         ],
         "no_ask": true
       },
@@ -15171,7 +15171,7 @@
         "words": null,
         "settings": [],
         "names": [
-          "aidlc-knowledge.ts list"
+          "engine knowledge list"
         ],
         "no_ask": true
       },
@@ -15197,7 +15197,7 @@
         "words": null,
         "settings": [],
         "names": [
-          "aidlc-knowledge.ts list"
+          "engine knowledge list"
         ],
         "no_ask": true
       },
@@ -15223,7 +15223,7 @@
         "words": null,
         "settings": [],
         "names": [
-          "aidlc-knowledge.ts show docs"
+          "engine knowledge show docs"
         ],
         "no_ask": true
       },
@@ -15249,7 +15249,7 @@
         "words": null,
         "settings": [],
         "names": [
-          "aidlc-knowledge.ts show docs"
+          "engine knowledge show docs"
         ],
         "no_ask": true
       },
@@ -15275,7 +15275,7 @@
         "words": null,
         "settings": [],
         "names": [
-          "aidlc-knowledge.ts associate docs --intent"
+          "engine knowledge associate docs --intent"
         ],
         "no_ask": true
       },
@@ -15301,7 +15301,7 @@
         "words": null,
         "settings": [],
         "names": [
-          "aidlc-knowledge.ts associate docs --intent"
+          "engine knowledge associate docs --intent"
         ],
         "no_ask": true
       },
@@ -15327,7 +15327,7 @@
         "words": null,
         "settings": [],
         "names": [
-          "aidlc-knowledge.ts dissociate docs --intent"
+          "engine knowledge dissociate docs --intent"
         ],
         "no_ask": true
       },
@@ -15353,7 +15353,7 @@
         "words": null,
         "settings": [],
         "names": [
-          "aidlc-knowledge.ts dissociate docs --intent"
+          "engine knowledge dissociate docs --intent"
         ],
         "no_ask": true
       },
@@ -15379,7 +15379,7 @@
         "words": null,
         "settings": [],
         "names": [
-          "aidlc-knowledge.ts rebind docs --to docs"
+          "engine knowledge rebind docs --to docs"
         ],
         "no_ask": true
       },
@@ -15405,7 +15405,7 @@
         "words": null,
         "settings": [],
         "names": [
-          "aidlc-knowledge.ts rebind docs --to docs"
+          "engine knowledge rebind docs --to docs"
         ],
         "no_ask": true
       },
@@ -15431,7 +15431,7 @@
         "words": null,
         "settings": [],
         "names": [
-          "aidlc-knowledge.ts summarize docs --text-file docs --source-revision auth"
+          "engine knowledge summarize docs --text-file docs --source-revision auth"
         ],
         "no_ask": true
       },
@@ -15457,7 +15457,7 @@
         "words": null,
         "settings": [],
         "names": [
-          "aidlc-knowledge.ts summarize docs --text-file docs --source-revision auth"
+          "engine knowledge summarize docs --text-file docs --source-revision auth"
         ],
         "no_ask": true
       },
@@ -17416,7 +17416,7 @@
     "input": "build a to-do app",
     "state": "fresh",
     "meaning": "the person means: new work to build a to-do app",
-    "source": "docs/guide/harnesses/kiro-ide.md:279",
+    "source": "docs/guide/harnesses/kiro.md:328",
     "documented": "Example of typing the whole request then pressing Enter in a Kiro IDE chat.",
     "expected": {
       "engine": {

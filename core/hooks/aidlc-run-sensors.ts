@@ -23,6 +23,7 @@ import { isAbsolute, join } from "node:path";
 import { type GraphStage, loadGraph } from "../tools/aidlc-graph.ts";
 import { aidlcEngineCommand } from "../tools/aidlc-runtime-paths.ts";
 import { EXTENDED_SUBPROCESS_TIMEOUT_MS } from "../tools/aidlc-runtime-budget.ts";
+import { sensorMatchesPath } from "../tools/aidlc-sensor-record.ts";
 import {
   hookStandsOutside,
   enterHookWorkflow,
@@ -218,18 +219,15 @@ if (applicableSensors.length === 0) return 0;
 // (the per-intent record tree carries an `/intents/` segment; the legacy
 // `aidlc-docs/` arm stays so a pre-migration artifact still matches). The
 // gate-fired document-shape manifests add a `codekb` arm for the space-level
-// CodeKB that reverse-engineering writes (#771). The relaxed `**/<seg>/**`
-// form (vs `**/<seg>/**/*.md`) is load-bearing: the upstream dispatcher's
-// bespoke globToRegex rejects the *.md form even though
-// Bun.Glob accepts both — both engines agree on the relaxed form.
+// CodeKB that reverse-engineering writes (#771). The dispatcher re-checks the
+// glob with the same reader (sensorMatchesPath).
 const sensorTs = join(projectDir, harnessDir(), "tools", "aidlc-sensor.ts");
 for (const entry of applicableSensors) {
   // Gate-fired sensors run at gate-start, not on writes. Older compiled graphs
   // omit fire_on, which preserves the write default.
   if (entry.fire_on === "gate") continue;
   if (!entry.matches) continue;
-  const glob = new Bun.Glob(entry.matches);
-  if (!glob.match(filePath)) continue;
+  if (!sensorMatchesPath(entry.matches, filePath)) continue;
 
   // Sync subprocess; user pays wall-clock per Write inside an active
   // stage with applicable sensors.

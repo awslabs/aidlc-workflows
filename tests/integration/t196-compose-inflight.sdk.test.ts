@@ -124,15 +124,10 @@ describe("t196 in-flight recompose journey (/aidlc compose mid-workflow, sdk liv
         const skippedRow = /\*\*Stages skipped\*\*: (.*)/.exec(recomposed)?.[1] ?? "";
         expect(skippedRow.split(", ").sort()).toEqual(["market-research", "team-formation"]);
 
-        // The pending-proposal MARKER discipline (write before the gate,
-        // delete on resolve) is deliberately NOT asserted here: the direct
-        // route writes no marker, this drive stops once RECOMPOSED is on the
-        // record, and on the composer route whether the conductor's
-        // marker-deletion step has run by that instant is a live-timing race
-        // (both orders observed across runs). The deterministic halves are
-        // pinned elsewhere - t195 proves the Stop hook honours the marker and
-        // blocks again once it is gone; the dispatch print (t198's shape)
-        // carries the write/delete instruction verbatim.
+        // The open compose question is the engine's own record, pinned
+        // deterministically elsewhere: t195 proves the Stop hook honours it
+        // and blocks again once it closes, and t-compose-approve-carries-on
+        // that each answer closes it.
       } finally {
         cleanupTestProject(proj);
       }

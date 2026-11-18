@@ -1,5 +1,5 @@
 // covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:continue,
-// function:activeDirectiveStorageDir, function:copyFrameworkPhaseRules, hook:aidlc-deliver-stage-rules
+// function:activeDirectiveStorageDir, function:copyFrameworkPhaseRules, function:readIssuedDirectiveMarker, hook:aidlc-deliver-stage-rules
 //
 // Deterministic stage-rule delivery. Rules ride inside the run-stage directive
 // (rules_content) whenever run-stage plus rules fit the transport cap; a bundle
@@ -9,6 +9,7 @@
 // route; an unverifiable stateless route requires a fresh explicit `next`.
 // Optional persona/knowledge remains path-loaded with actionable warnings.
 
+import { readConductorSurface } from "../harness/conductor-skill.ts";
 import {
   NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
   NATIVE_STARTUP_TIMEOUT_MS,
@@ -53,6 +54,7 @@ import {
 import {
   cleanupTestProject,
   REPO_ROOT,
+  runOrchestrateNext,
   seededRecordDir,
   seededStateFile,
   setupIntegrationProject,
@@ -415,10 +417,39 @@ function runSubagentStart(
   };
 }
 
+// What a Claude Code agent is handed as it starts; empty when nothing is.
+function startContext(proj: string, agentType = "aidlc-developer-agent"): string {
+  const result = runSubagentStart(proj, agentType);
+  expect(result.code, result.stderr).toBe(0);
+  if (!result.stdout) return "";
+  return String((JSON.parse(result.stdout) as HookContext).hookSpecificOutput?.additionalContext ?? "");
+}
+
+// The engine issues a step as the conductor's `next` does (every rules part
+// continued), leaving its record of the step on disk.
+function issueStep(proj: string, args: string[]): void {
+  const run = runOrchestrateNext(join(proj, ".claude", "tools", "aidlc-orchestrate.ts"), proj, args);
+  expect(run.directive?.kind, `${JSON.stringify(run.directive)}\n${run.stderr}`).toBe("run-stage");
+}
+
+const PHASE_RULES = "aidlc/spaces/default/memory/phases";
+
+function phaseRules(proj: string, phase: string): string {
+  return join(proj, PHASE_RULES, `${phase}.md`);
+}
+
+// A rule the team wrote for Inception's stages, in the file they would write it in.
+function addTeamInceptionRule(proj: string): string {
+  const rule = "- List every vendored folder in the code knowledge base.";
+  appendFileSync(phaseRules(proj, "inception"), `\n${rule}\n`);
+  return rule;
+}
+
 // The persona text the harness actually loads. A Codex persona is the
 // `developer_instructions` string of its TOML role file, read through the
 // parser (the emitter escapes backslashes and quote runs in the raw bytes);
-// every other harness loads the Markdown file as it is.
+// every other harness loads the Markdown file as it is. opencode and Copilot
+// dispatch a reviewer from their own agent folder, not the engine's copy.
 function reviewerExecutionSurface(
   harness: (typeof HARNESS_MATRIX)[number],
   reviewer: (typeof REVIEWER_AGENTS)[number],
@@ -430,6 +461,9 @@ function reviewerExecutionSurface(
   }
   if (harness.name === "opencode") {
     return readFileSync(join(harness.distRoot, ".opencode", "agents", `${reviewer}.md`), "utf-8");
+  }
+  if (harness.name === "copilot") {
+    return readFileSync(join(harness.distRoot, ".github", "agents", `${reviewer}.md`), "utf-8");
   }
   return readFileSync(join(harness.engineRoot, "agents", `${reviewer}.md`), "utf-8");
 }
@@ -2306,6 +2340,70 @@ describe("t248 deterministic steering delivery", () => {
     expect(prompt).toContain("## Active AI-DLC Rule Bundle");
   });
 
+  // A stage run on its own (`--single`) leaves the work's Current Stage where it
+  // is, so its helpers' rules come from the engine's record of the step (#3660).
+  describe("a stage run on its own", () => {
+    test("on Claude Code its helper gets that stage's rules, the team's own included", () => {
+      const proj = statefulProject(); // Current Stage: feasibility (ideation)
+      const team = addTeamInceptionRule(proj);
+      issueStep(proj, ["--stage", "reverse-engineering", "--single"]);
+      const context = startContext(proj);
+      expect(context).toContain("stage:reverse-engineering");
+      expect(context).toContain(team);
+      expect(context).toContain(readFileSync(phaseRules(proj, "inception"), "utf-8"));
+      expect(context).not.toContain(`### ${PHASE_RULES}/ideation.md`);
+      expect(context.match(/AIDLC_DISPATCH_RULES_BEGIN/g)?.length).toBe(1);
+    });
+
+    test("a rewritten brief that names no stage file carries that stage's rules (Codex, opencode, Copilot)", () => {
+      const proj = statefulProject();
+      const team = addTeamInceptionRule(proj);
+      issueStep(proj, ["--stage", "reverse-engineering", "--single"]);
+      const result = runDispatchHook(proj, "Task", {
+        subagent_type: "aidlc-developer-agent",
+        prompt: "Scan the repository and write the code knowledge base files.",
+      }, undefined, "codex");
+      expect(result.code, result.stderr).toBe(0);
+      const prompt = String((JSON.parse(result.stdout) as HookRewrite).hookSpecificOutput?.updatedInput?.prompt ?? "");
+      expect(prompt).toContain("stage:reverse-engineering");
+      expect(prompt).toContain(team);
+      expect(prompt).not.toContain(`### ${PHASE_RULES}/ideation.md`);
+    });
+
+    test("with no work in progress its helper still gets that stage's rules", () => {
+      const proj = project();
+      issueStep(proj, ["--scope", "feature", "--stage", "reverse-engineering", "--single"]);
+      expect(startContext(proj)).toContain("stage:reverse-engineering");
+    });
+
+    test("a stage of another phase run on its own does the same", () => {
+      const proj = statefulProject(ONE_MESSAGE_STATE); // Current Stage: requirements-analysis (inception)
+      issueStep(proj, ["--stage", "feasibility", "--single"]);
+      const context = startContext(proj);
+      expect(context).toContain("stage:feasibility");
+      expect(context).toContain(readFileSync(phaseRules(proj, "ideation"), "utf-8"));
+      expect(context).not.toContain(`### ${PHASE_RULES}/inception.md`);
+    });
+
+    test("a step of the work itself hands its helpers the work's stage", () => {
+      const proj = statefulProject(ONE_MESSAGE_STATE);
+      issueStep(proj, []);
+      expect(startContext(proj)).toContain("stage:requirements-analysis");
+    });
+
+    test("once it is reported, a helper gets the work's stage again", () => {
+      const proj = statefulProject();
+      issueStep(proj, ["--stage", "requirements-analysis", "--single"]);
+      expect(startContext(proj)).toContain("stage:requirements-analysis");
+      const report = spawnSync(BUN, [
+        join(proj, ".claude", "tools", "aidlc-orchestrate.ts"),
+        "report", "--single", "--stage", "requirements-analysis", "--result", "completed", "--project-dir", proj,
+      ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
+      expect(report.status, `${report.stdout}${report.stderr}`).toBe(0);
+      expect(startContext(proj)).toContain("stage:feasibility");
+    });
+  });
+
   test("installed plugin agents receive the active-stage rule bundle", () => {
     const proj = project();
     cpSync(
@@ -2457,7 +2555,7 @@ describe("t248 reviewer knowledge absorption", () => {
 describe("t248 the shipped skill delivers the Stop-note step for its tool", () => {
   for (const harness of HARNESS_MATRIX) {
     test(`${harness.name} ships one carrying-on paragraph that says nothing about the note`, () => {
-      const skill = readFileSync(join(harness.skillsRoot, "aidlc", "SKILL.md"), "utf-8");
+      const skill = readConductorSurface(join(harness.skillsRoot, "aidlc", "SKILL.md"));
       const paragraphs = skill.split("\n").filter((line) => line.startsWith("**When AI-DLC carries on by itself.**"));
       expect(paragraphs.length).toBe(1);
       const paragraph = paragraphs[0] as string;

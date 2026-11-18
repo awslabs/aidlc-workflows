@@ -140,7 +140,7 @@ describe("t-no-git-said-once: a project with no git hears once, at its first gat
     const opened = await reportGate(proj);
     expect(opened.directive?.kind, opened.out).toBe("print");
     expect(said(opened.directive), JSON.stringify(opened.directive?.change_notices)).toHaveLength(1);
-    expect(opened.directive?.change_notices_note, opened.out).toStartWith("Say each change_notices line to the person once");
+    expect(opened.directive?.change_notices_note, opened.out).toStartWith("Say each notice listed beside this note to the person once");
     expect(String(opened.directive?.narration ?? "")).not.toContain("no git");
     expect(existsSync(join(proj, SAID))).toBe(true);
     const again = await next(proj, []);

@@ -80,6 +80,7 @@ import {
   NATIVE_STARTUP_TIMEOUT_MS,
   remainingOperationTimeoutMs,
 } from "../harness/test-budget.ts";
+import { envWithoutCommandOnPath } from "../harness/test-command-paths.ts";
 import { memoryTemplatesDir } from "../../dist/claude/.claude/tools/aidlc-graph.ts";
 import { auditLockDir, readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { resolveSensorScriptPath } from "../../dist/claude/.claude/tools/aidlc-sensor.ts";
@@ -141,6 +142,7 @@ const STUB_NAMES = [
   "aidlc-sensor-stub-slow.ts",
 ];
 const ARGV_STUB = "aidlc-sensor-stub-argv.ts";
+const LARGE_STUB = "aidlc-sensor-stub-large.ts";
 // Isolated dir holding the stub per-sensor scripts (populated in beforeAll).
 const STUB_SCRIPT_DIR = mkdtempSync(join(tmpdir(), "aidlc-t92-stubs-"));
 // Direct-spawn lock-orphan helper: a temp shim importing the real withAuditLock
@@ -188,6 +190,24 @@ beforeAll(() => {
       "if (out) writeFileSync(out, JSON.stringify(process.argv));",
       'process.stdout.write(JSON.stringify({ pass: true }) + "\\n");',
       "process.exit(0);",
+      "",
+    ].join("\n"),
+    "utf-8",
+  );
+  // Inline large-verdict stub (Group R): over 2 MB of findings, printed the way
+  // the sensors guide's worker prints (console.log, then it ends on its own;
+  // under Bun a process.exit straight after a large write drops its tail).
+  // AIDLC_T92_LARGE then makes it exit 2, outlive its budget, or kill itself.
+  writeFileSync(
+    join(STUB_SCRIPT_DIR, LARGE_STUB),
+    [
+      "// @ts-nocheck",
+      'const findings = Array.from({ length: 60000 }, (_, i) => "line " + (i + 1) + ": TBD left in the document");',
+      "console.log(JSON.stringify({ pass: false, findings, findings_count: findings.length }));",
+      "const mode = process.env.AIDLC_T92_LARGE;",
+      'if (mode === "exit-2") process.exitCode = 2;',
+      'if (mode === "slow") Bun.sleepSync(5000);',
+      'if (mode === "killed") process.kill(process.pid, "SIGKILL");',
       "",
     ].join("\n"),
     "utf-8",
@@ -1924,4 +1944,125 @@ describe("t92 Group Q: path argument follows the declared input_schema", () => {
     );
     expect(routedFlag("input_schema: {}")).toBe("--output-path");
   });
+});
+
+// ============================================================
+// Group R - a check whose output passes 1 MiB is read whole. The dispatcher
+// reads a sensor script's whole verdict (a team's own script prints over 2 MB
+// of findings), and the type-check reads tsc's whole output (a project whose
+// diagnostics pass 1 MiB); a script that exits non-zero, outlives its budget
+// or is killed after the same output still reads as it does with a short one.
+// ============================================================
+
+describe("t92 Group R: a check whose output passes 1 MiB is read whole", () => {
+  const fireLarge = (mode: string, timeout?: number): { proj: string; out: string } => {
+    const proj = makeProj();
+    writeFileSync(join(proj, "aidlc-docs", "test.md"), "stub\n", "utf-8");
+    const sensors = makeForkSensors("no-tbd", `bun .claude/tools/${LARGE_STUB}`, "", timeout);
+    const res = fire(["no-tbd", "--stage", "intent-capture", "--output-path", join(proj, "aidlc-docs", "test.md")], {
+      CLAUDE_PROJECT_DIR: proj,
+      AIDLC_SENSORS_DIR: sensors,
+      AIDLC_T92_LARGE: mode,
+    });
+    expect(res.rc, res.out).toBe(0);
+    return { proj, out: res.out };
+  };
+
+  test("49: a team sensor whose verdict passes 1 MiB reports its findings", () => {
+    const { proj, out } = fireLarge("findings");
+    const verdict = verdictOf(out);
+    expect(verdict.result, readAudit(proj)).toBe("failed");
+    expect(auditEventCount(proj, "SENSOR_COULD_NOT_RUN")).toBe(0);
+    expect(auditField(proj, "SENSOR_FAILED", "Findings count")).toBe("60000");
+    const detail = readFileSync(join(proj, verdict.detail_path as string), "utf-8");
+    expect(detail).toContain('"line 60000: TBD left in the document"');
+  });
+
+  test("50: the same output then exit 2 could not run, exit-2", () => {
+    const { proj, out } = fireLarge("exit-2");
+    expect(verdictOf(out).result).toBe("could-not-run");
+    expect(auditField(proj, "SENSOR_COULD_NOT_RUN", "Note")).toBe("script-error: exit-2");
+  });
+
+  test("51: the same output then past its budget is a budget override", () => {
+    const { proj } = fireLarge("slow", 1);
+    expect(auditEventCount(proj, "SENSOR_BUDGET_OVERRIDE"), readAudit(proj)).toBe(1);
+    expect(auditField(proj, "SENSOR_BUDGET_OVERRIDE", "Cap value")).toBe("1");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("52: the same output then killed could not run", () => {
+    const { proj, out } = fireLarge("killed");
+    expect(verdictOf(out).result).toBe("could-not-run");
+    // Windows has no signals: a killed process ends with an exit code.
+    expect(auditField(proj, "SENSOR_COULD_NOT_RUN", "Note")).toMatch(/^script-error: (signal-SIGKILL|exit-[1-9]\d*)$/);
+  });
+
+  const typeCheckProject = (others = 15000, own = 1): { proj: string; sample: string } => {
+    const proj = makeProj();
+    const sub = join(proj, "large-type-check");
+    mkdirSync(sub, { recursive: true });
+    // 15,000 diagnostics in another file: about 1.6 MB of tsc output, the
+    // target's own error last.
+    writeFileSync(
+      join(sub, "many-type-errors-in-another-file.ts"),
+      Array.from({ length: others }, (_, i) => `export const value_${i}: number = "not a number";\n`).join(""),
+      "utf-8",
+    );
+    const sample = join(sub, "sample.ts");
+    writeFileSync(sample, Array.from({ length: own }, (_, i) => `export const v${i}: number = "x";\n`).join(""), "utf-8");
+    writeFileSync(
+      join(sub, "tsconfig.json"),
+      `${JSON.stringify({ compilerOptions: { noEmit: true, strict: true, skipLibCheck: true }, include: ["*.ts"] }, null, 2)}\n`,
+      "utf-8",
+    );
+    writeFileSync(join(sub, "package.json"), `${JSON.stringify({ name: "aidlc-t92-large", type: "module", private: true })}\n`, "utf-8");
+    return { proj, sample };
+  };
+
+  test("53: a project whose tsc output passes 1 MiB gets the type-check's findings", () => {
+    const { proj, sample } = typeCheckProject();
+    const res = fire(["type-check", "--stage", "code-generation", "--output-path", sample], { CLAUDE_PROJECT_DIR: proj });
+    expect(verdictOf(res.out).result, readAudit(proj)).toBe("failed");
+    expect(auditEventCount(proj, "SENSOR_COULD_NOT_RUN")).toBe(0);
+    expect(auditField(proj, "SENSOR_FAILED", "Findings count")).toBe("1");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("54: the same project with no TypeScript to start is still tool-unavailable", () => {
+    const { proj, sample } = typeCheckProject();
+    const env = { ...envWithoutCommandOnPath("bunx"), ...realSensorEnv("type-check", proj) };
+    const res = spawnSync(BUN, [SENSOR_TS, "fire", "type-check", "--stage", "code-generation", "--output-path", sample], {
+      encoding: "utf-8",
+      env,
+      timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS),
+    });
+    expect(res.status, `${res.stdout}${res.stderr}`).toBe(0);
+    expect(auditEventCount(proj, "SENSOR_PASSED"), readAudit(proj)).toBe(1);
+    expect(auditField(proj, "SENSOR_PASSED", "Note")).toBe("tool-unavailable");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // A result of about 3 MB written straight before an exit lost its tail under
+  // Bun and read as bad-output; 6,000 errors is not cut on every run, 30,000 is.
+  test("55: a file with 30,000 of its own type errors gets every one as a finding", () => {
+    const { proj, sample } = typeCheckProject(0, 30000);
+    const res = fire(["type-check", "--stage", "code-generation", "--output-path", sample], { CLAUDE_PROJECT_DIR: proj });
+    const verdict = verdictOf(res.out);
+    expect(verdict.result, readAudit(proj)).toBe("failed");
+    expect(auditField(proj, "SENSOR_FAILED", "Findings count")).toBe("30000");
+    expect(readFileSync(join(proj, verdict.detail_path as string), "utf-8")).toContain('"line": 30000');
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // 4,000 lint errors in one file are about 1.45 MB of ESLint output.
+  test("56: a file with 4,000 lint errors of its own gets every one as a finding", () => {
+    const proj = makeProj();
+    const sub = join(proj, "failing-linter");
+    cpSync(join(FIXTURES_ROOT, "failing-linter"), sub, { recursive: true });
+    const sample = join(sub, "sample.ts");
+    writeFileSync(sample, Array.from({ length: 4000 }, (_, i) => `const unused${i + 1} = ${i + 1};\n`).join(""), "utf-8");
+    requireLocalSensorDependency("linter", sub);
+    const res = fire(["linter", "--stage", "code-generation", "--output-path", sample], realSensorEnv("linter", proj));
+    const verdict = verdictOf(res.out);
+    expect(verdict.result, readAudit(proj)).toBe("failed");
+    expect(auditField(proj, "SENSOR_FAILED", "Findings count")).toBe("4000");
+    expect(readFileSync(join(proj, verdict.detail_path as string), "utf-8")).toContain("unused4000");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

@@ -15,23 +15,24 @@
 //              mechanism).
 //   turn 1:    `/aidlc compose "drop market research and team formation ..."`.
 //              The engine's WITH-STATE dispatch names the composer; the
-//              conductor proposes SKIP flips for the two pending stages, writes
-//              the pending marker `aidlc/.aidlc-compose-pending`, and renders the
-//              approve/edit/reject gate as numbered prose. The marker is what
-//              lets the turn END at the gate (the Stop hook's pending-compose
-//              carve-out honours it, proven deterministically by t195). Nothing
+//              conductor proposes SKIP flips for the two pending stages and
+//              renders the approve/edit/reject gate as numbered prose. The
+//              engine's own open compose question lets the turn END at the
+//              gate (the Stop hook's pending-compose carve-out, proven
+//              deterministically by t195); no file is written for it. Nothing
 //              is applied yet: the state file is byte-unchanged, no RECOMPOSED.
 //   turn 2:    "1 (Approve ...)" on the SAME keepAlive session. The conductor
-//              runs the recompose verb and DELETES the marker. Because the
+//              runs the recompose verb, which closes the question. Because the
 //              ACP conductor's forwarding loop does not reliably end its turn on
 //              its own, the stop is a DISK-CONDITION cancel: poll until the
-//              RECOMPOSED audit event is present AND the marker is gone, then
+//              RECOMPOSED audit event is present AND the question is closed, then
 //              session/cancel (the pattern t-acp-kiro-reviewer uses for the
 //              in-turn forwarding hazard).
 //   disk:      market-research now carries the SKIP suffix, the cursor and every
 //              checkbox marker are byte-unchanged (a plan edit, not an advance),
 //              Total Stages shrank, Stages to Skip names market-research,
-//              RECOMPOSED is audited, and the marker is gone.
+//              RECOMPOSED is audited, and the question is closed with no file
+//              ever written.
 //
 // JOURNEY-LEVEL tolerance (mirrors t196): the live composer exercises judgment
 // over WHICH of the two named stages to flip (a run was observed keeping
@@ -50,6 +51,7 @@ import { beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+import { composeGateOpen } from "../../dist/kiro/.kiro/tools/aidlc-lib.ts";
 import { seededRecordDir } from "../harness/fixtures.ts";
 import {
   cleanupTuiProject,
@@ -98,9 +100,8 @@ function skipReason(): string | null {
 }
 const SKIP_REASON = skipReason();
 
-/** The pending-proposal marker the conductor writes before the gate and deletes
- *  on resolve (aidlc/.aidlc-compose-pending, project-root aidlc/). */
-function markerPath(proj: string): string {
+/** The file an earlier version had the agent write for the compose question: never written now. */
+function oldFilePath(proj: string): string {
   return join(proj, "aidlc", ".aidlc-compose-pending");
 }
 
@@ -147,8 +148,8 @@ describe("t-acp-kiro compose in-flight recompose journey (live Kiro ACP)", () =>
         const markersBefore = [...before.matchAll(/^- \[[ xSR?-]\] \S+/gm)].map((m) => m[0]);
         expect(markersBefore.length).toBeGreaterThan(0);
 
-        // --- turn 1: compose -> proposal -> marker + gate (turn ends there) ---
-        // No stop condition: the marker's Stop-hook carve-out lets the turn end
+        // --- turn 1: compose -> proposal -> gate (turn ends there) -----------
+        // No stop condition: the Stop hook's compose carve-out lets the turn end
         // AT the gate on its own (the same turn-end bet the front twin makes).
         const r1 = await driveKiroAcp({
           projectDir: root,
@@ -185,18 +186,19 @@ describe("t-acp-kiro compose in-flight recompose journey (live Kiro ACP)", () =>
             /(?:^|\s)--strict(?:\s|$)/.test(input?.command ?? "") &&
             /"valid"\s*:\s*true/.test(call.output.join(""));
         }), "composer must validate the proposed grid strictly before the approval gate").toBe(true);
-        expect(existsSync(markerPath(root))).toBe(true);
+        expect(composeGateOpen(root)).toBe(true);
+        expect(existsSync(oldFilePath(root))).toBe(false);
         expect(readState(root)).toBe(before);
         expect(recomposed(root)).toBe(false);
 
-        // --- turn 2: approve -> recompose applies -> marker deleted -----------
+        // --- turn 2: approve -> recompose applies -> the question closes ------
         // Disk-condition cancel: the ACP conductor's in-turn forwarding loop does
         // not reliably end on its own, so poll until the recompose fully resolved
-        // (RECOMPOSED audited AND marker gone), then session/cancel. Requiring
+        // (RECOMPOSED audited AND the question closed), then session/cancel. Requiring
         // BOTH sidesteps the write-then-delete race t196 documents.
         let cancelled = false;
         const poll = setInterval(() => {
-          if (!cancelled && session.sessionId && recomposed(root) && !existsSync(markerPath(root))) {
+          if (!cancelled && session.sessionId && recomposed(root) && !composeGateOpen(root)) {
             cancelled = true;
             session.notify("session/cancel", { sessionId: session.sessionId });
           }
@@ -236,11 +238,13 @@ describe("t-acp-kiro compose in-flight recompose journey (live Kiro ACP)", () =>
         expect(totalAfter).toBeLessThan(totalBefore);
         expect(after).toMatch(/- \*\*Stages to Skip\*\*: .*market-research/);
 
-        // RECOMPOSED audited and the marker gone (the poll only cancelled once
-        // both held, so this asserts the fully-resolved end state - the strongest
-        // proof the recompose verb ran, mirroring t196's audit assertion).
+        // RECOMPOSED audited, the question closed and no file ever written
+        // (the poll only cancelled once both held, so this asserts the
+        // fully-resolved end state - the strongest proof the recompose verb
+        // ran, mirroring t196's audit assertion).
         expect(recomposed(root)).toBe(true);
-        expect(existsSync(markerPath(root))).toBe(false);
+        expect(composeGateOpen(root)).toBe(false);
+        expect(existsSync(oldFilePath(root))).toBe(false);
       } finally {
         session.close();
         cleanupTuiProject(root);

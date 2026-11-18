@@ -263,6 +263,11 @@ at compile time.
 | `aidlc-linter.md` | `**/*.{ts,js}` |
 | `aidlc-type-check.md` | `**/*.{ts,tsx}` |
 
+The write hook, the gate and the dispatcher read the glob the same way
+(`sensorMatchesPath`, on Bun's built-in glob): `**/` also matches no folder, so
+`**/code-generation/**/code-summary.md` takes `code-generation/code-summary.md`;
+brace sets and `?` work as usual, and a Windows path is read with `/`.
+
 For `fire_on: write`, `matches` is the fire filter: the hook compares the path
 being written against the glob and an entry without a glob never fires. For
 `fire_on: gate`, `gate-start` and `revise` enumerate every existing declared
@@ -353,6 +358,44 @@ blocking check named in its latest result; a check that named no Unit's output,
 or stage-major work, starts every Unit again.
 A successful override records the sensor ids,
 optional detail paths, and evaluation reasons on `STAGE_AWAITING_APPROVAL`.
+
+In solo work built Unit by Unit with checkpoints, a Unit's checkpoint `verify`
+fires its stages' blocking gate checks on that Unit's own declared outputs
+(`aidlc-state.ts checkpoint-checks`), before the verification command runs and
+before the checkpoint question, with the same `fireGateSensors` and the same
+refusal; when the verification command changes the Unit's files, `verify` runs
+once more and the checks read them again, an Override from the first run covering
+only the check and file it was given for.
+The refusal names the Unit for `log decision` and `log answer`, and the retry is
+the checkpoint's `verify --override-blocking-sensors --user-input "Override
+blocking sensors"`; the pick is that Unit's and covers the findings shown with
+it, so a later Unit failing the same check is asked again, with one line saying
+at which Unit the person overrode it. A re-logged question does not spend a pick
+that still stands; a `verify` that verified with it does. The
+`CHECKPOINT_VERIFICATION_RECORDED` row records `Blocking Checks`
+(`<stage>:<sensor>@<binding digest>=passed|overridden`), `Checked Outputs` (each
+file's line-ending-normalized SHA-256) and the override fields. At the stage gate
+after the last Unit, each blocking check skips a file its Unit's current
+checkpoint checked while the file's hash is unchanged and the check's binding is
+the same; it reads every other file once. A checkpoint no person answers
+(Construction autonomy) fires nothing, and the late gate halts on the findings as
+before. That late gate's refusal is the agent's step, as the checkpoint's is: the
+state tool marks it (`agent_guidance: "blocking-check"`), and `report`, or the
+`next` that settles the gate itself, hands it over as a `print` carrying
+`ends_turn: true`, never an `error` a hook relays or a skill prints; the agent
+asks Fix or Override and ends its turn there, which ends it under Construction
+autonomy too. In this walk the refusal puts the question to the person, so their
+reply may come before the agent records the question: a reply after the
+refusal's own fire (the stage's latest `SENSOR_FAILED` or `SENSOR_COULD_NOT_RUN`
+of a blocking check before the question, with no boundary between, and the
+pick's Unit at a checkpoint) backs the pick, when nothing else was asked or
+answered between that reply and the question (`blockingSensorPicks`). The
+Override opens the late gate, and `next` then records its approval without
+running its checks again, and goes on. An advisory gate check whose latest result on the Unit's files did not
+pass fires again at that `verify`, and what it still finds is said once beside
+the checkpoint question (`check_findings` on `ask`, `checkpoint-checks --notices`),
+with no new stop or question. Guard Policy, at any value, never softens a blocking check: only the
+person's Override or the work's checks switched off lets work past one.
 Revalidating an already-open gate emits a fresh row with `Revalidated: true`,
 consuming the authorization receipt instead of leaving it reusable.
 In this release, a write-fired sensor may declare `blocking`, but PostToolUse

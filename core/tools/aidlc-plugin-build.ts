@@ -111,9 +111,11 @@ function writeResult(
   (result.valid ? process.stdout : process.stderr).write(output);
 }
 
-export function main(argv: string[]): number {
+// The `aidlc plugin build` verb passes its own usage line, so a usage error
+// names the command the person ran.
+export function main(argv: string[], usage = USAGE): number {
   if (argv.includes("--help") || argv.includes("-h")) {
-    process.stdout.write(`${USAGE}\n`);
+    process.stdout.write(`${usage}\n`);
     return 0;
   }
   const jsonArgs = argv.filter((arg) => arg === "--json");
@@ -123,7 +125,7 @@ export function main(argv: string[]): number {
     jsonArgs.length > 1 ||
     argv.some((arg) => arg.startsWith("-") && arg !== "--json")
   ) {
-    process.stderr.write(`${USAGE}\n`);
+    process.stderr.write(`${usage}\n`);
     return 2;
   }
 
@@ -176,7 +178,7 @@ export function main(argv: string[]): number {
   const target = Object.hasOwn(targets, harness) ? targets[harness] : undefined;
   if (!target) {
     process.stderr.write(
-      `${USAGE}\nUnknown harness "${typedHarness}" (available: ${Object.keys(targets).map(typedHarnessName).sort().join(", ")})\n`,
+      `${usage}\nUnknown harness "${typedHarness}" (available: ${Object.keys(targets).map(typedHarnessName).sort().join(", ")})\n`,
     );
     return 2;
   }

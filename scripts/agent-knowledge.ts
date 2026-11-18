@@ -18,13 +18,13 @@
 // that agent's knowledge absorbed.
 //
 // Used by scripts/package.ts (the declarative projection: Claude, Kiro,
-// Kiro IDE, and the opencode .aidlc copies) AND by the codex/opencode emit.ts
-// plugins (which read core/agents/*.md directly, bypassing the packager's
-// transform).
+// Kiro IDE, and the opencode .aidlc copies) AND by the codex, opencode and
+// copilot emit.ts plugins (which read core/agents/*.md directly, bypassing the
+// packager's transform).
 
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, sep } from "node:path";
-import { sharedKnowledgeWithoutFormatDocs } from "../core/tools/aidlc-inline-context.ts";
+import { kiroKnowledgePreflightClause, sharedKnowledgeWithoutFormatDocs } from "../core/tools/aidlc-inline-context.ts";
 
 // Walk core and owned-plugin stages and collect every frontmatter `reviewer:`
 // value. Cached per coreRoot - the packager calls this once per projected
@@ -143,10 +143,7 @@ export function injectDelegatedKnowledgePreflight(
     `\`aidlc/spaces/<active-space>/knowledge/aidlc-shared/\`, then ` +
     `\`aidlc/spaces/<active-space>/knowledge/${agentName}/\`. ` +
     `A native resource preload satisfies this requirement; otherwise read the files now. ` +
-    (harnessDir === ".kiro"
-      ? `Kiro shows only part of a long file: read each one with your file tool in parts of at most 200 lines ` +
-        `(offset and limit), from the first line to the last; a read that comes back cut short is not all of it. `
-      : "") +
+    kiroKnowledgePreflightClause(harnessDir) +
     `The dispatch brief supplies rules and artifact paths separately.`;
   const frontmatter = content.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/);
   if (!frontmatter) return `${block}\n\n${content.trimStart()}`;

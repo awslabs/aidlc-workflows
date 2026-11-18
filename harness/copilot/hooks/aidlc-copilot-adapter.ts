@@ -139,6 +139,7 @@ import {
   validSessionId,
 } from "../tools/aidlc-lib.ts";
 import { appendCoordinationStoodAside, appendSubagentPromptUnmatched } from "../tools/aidlc-audit.ts";
+import { patchTargets } from "./review-freeze-command.ts";
 import { keptRestartRun } from "../tools/aidlc-question-store.ts";
 import { ROUTES, routePolicyFor, withoutProjectDirFlag } from "../tools/aidlc.ts";
 import { aidlcInvocation, quoteCommandArgument } from "../tools/aidlc-runtime-paths.ts";
@@ -383,7 +384,11 @@ export async function run(
   ]);
   const rawToolName = copilot.tool_name ?? copilot.toolName ?? "";
   const toolName = TOOL_ALIAS[rawToolName] ?? rawToolName;
-  const isApplyPatch = rawToolName === "apply_patch" || rawToolName === "applyPatch";
+  // Copilot CLI hands its apply_patch to the PascalCase hooks as Edit, with the
+  // patch text itself as tool_input (live-captured on 1.0.109), so the envelope
+  // says it is a patch as well as the name.
+  const isApplyPatch = rawToolName === "apply_patch" || rawToolName === "applyPatch" ||
+    (typeof nativeToolInput?.input === "string" && /^\*\*\* Begin Patch$/m.test(nativeToolInput.input));
 
   // Re-serialize the payload with the canonical tool_name so verbatim pipes
   // (Bash → guards, rebuild-stage-graph) carry the name the core hooks match on.
@@ -1504,17 +1509,9 @@ export async function run(
   ): Array<{ path: string; toolName: "Write" | "Edit" }> {
     const patch = [toolInput.input, toolInput.patchText, toolInput.patch, toolInput.command]
       .find((value): value is string => typeof value === "string" && value.length > 0) ?? "";
-    const targets: Array<{ path: string; toolName: "Write" | "Edit" }> = [];
-    for (const match of patch.matchAll(/^\*\*\* (Add|Update|Delete) File: (.+)$/gm)) {
-      targets.push({
-        path: match[2].trim(),
-        toolName: match[1] === "Add" ? "Write" : "Edit",
-      });
-    }
-    for (const match of patch.matchAll(/^\*\*\* Move to: (.+)$/gm)) {
-      targets.push({ path: match[1].trim(), toolName: "Write" });
-    }
-    return targets.filter((target) => target.path.length > 0);
+    return patchTargets(patch)
+      .filter((target) => target.path.length > 0)
+      .map(({ kind, path }) => ({ path, toolName: kind === "Add" || kind === "Move" ? "Write" : "Edit" }));
   }
 
   function filePathsOf(toolInput: Record<string, unknown> | undefined): string[] {
@@ -2622,7 +2619,8 @@ export async function run(
             tool_input: { file_path: target.filePath },
           });
           runCore("aidlc-write-audit-log.ts", fwd);
-          runCore("aidlc-run-sensors.ts", fwd);
+          // A target that is gone (a patch deleted or moved it) leaves a sensor nothing to read.
+          if (existsSync(target.filePath)) runCore("aidlc-run-sensors.ts", fwd);
         }
         return 0;
       }

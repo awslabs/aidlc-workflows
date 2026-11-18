@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-unit:share, subcommand:aidlc-unit:publish, subcommand:aidlc-unit:land, subcommand:aidlc-unit:pin, function:planMadeElsewhere, function:codeGenerationStepOnRecord
+// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:report, subcommand:aidlc-unit:share, subcommand:aidlc-unit:publish, subcommand:aidlc-unit:land, subcommand:aidlc-unit:pin, function:planMadeElsewhere, function:codeGenerationStepOnRecord
 //
 // In team-owned Construction on the workspace's own repository, each hand-over
 // between people is put to the person as one question at the moment it is due,
@@ -11,15 +11,16 @@
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readActiveDirectiveMarker, readUnitScopeStamp } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { codeGenerationStepOnRecord } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
-import { AIDLC_SRC, seededStateFile } from "../harness/fixtures.ts";
+import { AIDLC_SRC, seededRecordDir, seededStateFile } from "../harness/fixtures.ts";
 import { gitBashPath, gitBashSkipReason } from "../harness/git-bash.ts";
 import {
   ORCH,
+  STATE,
   UNIT,
   approveMerge,
   asLeadsOwnCheckout as ranTheWorkHere,
@@ -82,6 +83,97 @@ function boardText(directive: Record<string, unknown>): string {
   return String(directive.message);
 }
 
+// A clone whose dependency folder nobody ignored: `count` files git does not
+// track, all but three deep in node_modules, and one file each one, two and
+// three levels down (z-deploy.env and src/x/y.ts sort after node_modules,
+// config/app.json before it).
+function addManyNewFiles(dir: string, count: number): void {
+  writeFileSync(join(dir, "z-deploy.env"), "KEY=untracked\n");
+  mkdirSync(join(dir, "config"), { recursive: true });
+  writeFileSync(join(dir, "config", "app.json"), "{}\n");
+  mkdirSync(join(dir, "src", "x"), { recursive: true });
+  writeFileSync(join(dir, "src", "x", "y.ts"), "export const y = 1;\n");
+  for (let i = 3; i < count; i++) {
+    const folder = join(dir, "node_modules", `pkg-${i % 100}`, "lib");
+    mkdirSync(folder, { recursive: true });
+    writeFileSync(join(folder, `file-${i}.js`), "module.exports = 1;\n");
+  }
+}
+
+// The new files outside aidlc/ that a commit here takes, as git lists them.
+function newFilesOutsideRecord(dir: string): number {
+  return git(dir, ["ls-files", "--others", "--exclude-standard"]).split("\n")
+    .filter((path) => path !== "" && !path.startsWith("aidlc/")).length;
+}
+
+// However many new files there are, the question names ten, the ones nearest
+// the project's top first and git's order within a depth, in git's own
+// spelling (`/` on Windows too), and says how many more, so the step stays a
+// few KB, far under any harness's limit for one step.
+function expectTenNamedAndTheCount(directive: Record<string, unknown>, dir: string): void {
+  const question = String(directive.question);
+  const words = question.match(/\(new: (.*), and (\d+) more; `git status` shows the rest\)/);
+  expect(words, question).not.toBeNull();
+  const deepest = git(dir, ["ls-files", "--others", "--exclude-standard", "--", "node_modules"]).split("\n").slice(0, 7);
+  expect((words as RegExpMatchArray)[1].split(", ")).toEqual(["z-deploy.env", "config/app.json", "src/x/y.ts", ...deepest]);
+  expect(Number((words as RegExpMatchArray)[2])).toBe(newFilesOutsideRecord(dir) - 10);
+  expect(question.length).toBeLessThan(1_500);
+  expect(Buffer.byteLength(JSON.stringify(directive), "utf-8")).toBeLessThan(4 * 1024);
+}
+
+// Files of the person's already on main: one they later delete here, one
+// they later edit in two halves.
+function withPersonsPushedFiles(dir: string): void {
+  mkdirSync(join(dir, "docs"), { recursive: true });
+  writeFileSync(join(dir, "docs", "old-notes.md"), "notes the person keeps on main\n");
+  writeFileSync(join(dir, "src", "split.ts"), "export const split = \"base\";\n");
+  git(dir, ["add", "docs/old-notes.md", "src/split.ts"]);
+  git(dir, ["commit", "-m", "the person's earlier work"]);
+  git(dir, ["push", "origin", "HEAD"]);
+}
+
+// The person's own uncommitted work: a tracked edit, a new file git does not
+// track, a staged new file, a staged edit with a further unstaged edit, and a
+// delete. A commit here takes every one of them, so each is named by what the
+// commit does to it.
+function personsOwnEdits(dir: string): void {
+  writeFileSync(join(dir, "src", "shared.ts"), `${readFileSync(join(dir, "src", "shared.ts"), "utf-8")}// half-done local edit\n`);
+  writeFileSync(join(dir, "z-deploy.env"), "API_KEY=not-for-the-team\n");
+  writeFileSync(join(dir, "staged-only.txt"), "staged, not committed\n");
+  writeFileSync(join(dir, "src", "split.ts"), "export const split = \"staged half\";\n");
+  git(dir, ["add", "staged-only.txt", "src/split.ts"]);
+  writeFileSync(join(dir, "src", "split.ts"), "export const split = \"staged half\";\n// unstaged half\n");
+  unlinkSync(join(dir, "docs", "old-notes.md"));
+}
+
+const OWN_EDITS_NAMED = "(changed: src/shared.ts, src/split.ts; new: staged-only.txt, z-deploy.env; deleted: docs/old-notes.md)";
+
+// The files the last commit here took, a rename's two names apart.
+function committedHere(dir: string): string[] {
+  return git(dir, ["show", "--no-renames", "--name-only", "--format=", "HEAD"]).split("\n").filter(Boolean);
+}
+
+// The step `next` gives in one chat (a line said once is said once a chat).
+function nextInChat(dir: string, chat: string): Record<string, unknown> {
+  const env = { AIDLC_SESSION_OVERRIDE: chat, AIDLC_SESSION_OVERRIDE_SOURCE: "payload" };
+  let result = runMergeTool(ORCH, ["next"], dir, false, env);
+  for (;;) {
+    expect(result.status, result.out).toBe(0);
+    const step = JSON.parse(result.stdout) as Record<string, unknown>;
+    if (step.kind !== "load-steering" || typeof step.receipt !== "string") return step;
+    result = runMergeTool(ORCH, ["continue", step.receipt], dir, false, env);
+  }
+}
+
+// The share's result: it names what it committed in the words the question
+// used, and counts what the commit took.
+function expectResultNames(stdout: string, dir: string, words: string): void {
+  const result = JSON.parse(stdout);
+  expect(result, stdout).toMatchObject({ shared: true, committed_files: words });
+  expect(words.startsWith(`the ${result.committed_paths} changed files here `), words).toBe(true);
+  expect(committedHere(dir)).toHaveLength(result.committed_paths);
+}
+
 describe("step 1: the lead shares the plan with the teams", () => {
   test("Several teams, claims open, a remote: the first Unit step is the share offer, once", () => {
     const { seed: lead } = makeSeed();
@@ -94,6 +186,7 @@ describe("step 1: the lead shares the plan with the teams", () => {
     expect(commandFor(offer, "Share them with the teams")).toMatch(/ unit share$/);
     expect(commandFor(offer, "Build them here for now")).toMatch(/ next$/);
     expect(detailFor(offer, "Share them with the teams")).toBe(`Pushes ${PLAIN_PUSH}`);
+    expect(JSON.stringify(offer)).not.toContain("Team work needs this project at the top");
     // No self-loop: the reply that does not take it runs next, and the walk goes on.
     const walk = nextDirective(lead);
     expect(isHandover(walk), JSON.stringify(walk)).toBe(false);
@@ -111,20 +204,218 @@ describe("step 1: the lead shares the plan with the teams", () => {
     expect(git(remote, ["rev-parse", "main"])).toBe(git(lead, ["rev-parse", "HEAD"]));
     expect(git(lead, ["status", "--porcelain", "--untracked-files=all"])).toBe("");
     const board = boardText(nextDirective(lead));
-    expect(board).toContain("# Team Construction Dispatcher");
+    expect(board).toContain("# Team Construction Board");
   });
 
-  // Share commits every path git shows, so the question names every new one:
-  // a key in the sixth file is seen before it is pushed.
-  test("the share question names every new file outside aidlc/, however many", () => {
+  // Once shared, the teams build the Units: the lead's "redo" with no Unit
+  // named is never sent to a Unit step this checkout does not build.
+  test("after the share, a redo that names no Unit names no Unit step here", () => {
+    const { seed: lead } = makeSeed();
+    asLeadsOwnCheckout(lead);
+    expect(isHandover(nextDirective(lead), "share")).toBe(true);
+    const shared = runMergeTool(UNIT, ["share"], lead);
+    expect(shared.status, shared.out).toBe(0);
+    const redo = runMergeTool(ORCH, ["report", "--result", "resumed", "--choice", "redo"], lead);
+    expect(redo.status, redo.out).toBe(0);
+    const message = String((JSON.parse(redo.stdout) as { message?: string }).message);
+    expect(message).not.toContain('for unit "alpha"');
+    expect(boardText(nextDirective(lead))).toContain("# Team Construction Board");
+  });
+
+  // Share commits every path git shows: with a handful of new files the
+  // question names every one, so a key in the sixth file is seen before it is
+  // pushed.
+  test("a handful of new files: the share question names every one outside aidlc/", () => {
     const { seed: lead } = makeSeed();
     asLeadsOwnCheckout(lead);
     for (const name of ["a.txt", "b.txt", "c.txt", "d.txt", "e.txt", "z-deploy.env"]) {
       writeFileSync(join(lead, name), "untracked\n");
     }
     const question = String(nextDirective(lead).question);
-    expect(question).toContain("z-deploy.env");
-    expect(question).not.toContain("more)");
+    expect(question).toContain("(new: a.txt, b.txt, c.txt, d.txt, e.txt, z-deploy.env)");
+    expect(question).not.toContain(" more; ");
+  });
+
+  test("hundreds of new files: the share question is put, says how many and names ten", () => {
+    const { seed: lead } = makeSeed();
+    asLeadsOwnCheckout(lead);
+    addManyNewFiles(lead, 400);
+    const offer = nextDirective(lead);
+    expect(isHandover(offer, "share"), JSON.stringify(offer).slice(0, 2000)).toBe(true);
+    expectTenNamedAndTheCount(offer, lead);
+  });
+
+  // The share commits the person's tracked edits, staged files and deletes
+  // as well as new files, so the question names each by what the commit does
+  // to it, and the result after the push names what it took in the same words.
+  test("the person's own edits, staged files and a delete: the share question names each, and so does its result", () => {
+    const { seed: lead, remote } = makeSeed();
+    asLeadsOwnCheckout(lead);
+    withPersonsPushedFiles(lead);
+    personsOwnEdits(lead);
+    const base = git(remote, ["rev-parse", "main"]);
+    const offer = nextDirective(lead);
+    expect(isHandover(offer, "share"), JSON.stringify(offer)).toBe(true);
+    const question = String(offer.question);
+    const words = question.match(/I'd commit (the \d+ changed files here \(.*\)) and push main to origin, /)?.[1];
+    expect(words, question).toEndWith(` here ${OWN_EDITS_NAMED}`);
+    const shared = runMergeTool(UNIT, ["share"], lead);
+    expect(shared.status, shared.out).toBe(0);
+    expectResultNames(shared.stdout, lead, words as string);
+    // What the share takes is as before: every one of them reaches the remote.
+    const onRemote = git(remote, ["diff", "--name-status", base, "main"]).split("\n");
+    for (const line of ["M\tsrc/shared.ts", "M\tsrc/split.ts", "A\tstaged-only.txt", "A\tz-deploy.env", "D\tdocs/old-notes.md"]) {
+      expect(onRemote).toContain(line);
+    }
+    expect(git(remote, ["show", "main:src/split.ts"])).toContain("unstaged half");
+  });
+
+  test("a typed share puts no question, and its result names what it committed", () => {
+    const { seed: lead } = makeSeed();
+    asLeadsOwnCheckout(lead);
+    withPersonsPushedFiles(lead);
+    personsOwnEdits(lead);
+    const shared = runMergeTool(UNIT, ["share"], lead);
+    expect(shared.status, shared.out).toBe(0);
+    const words = String(JSON.parse(shared.stdout).committed_files);
+    expect(words).toEndWith(` here ${OWN_EDITS_NAMED}`);
+    expectResultNames(shared.stdout, lead, words);
+  });
+
+  test("the share run again after its own reading step names what it committed", () => {
+    const { seed: lead } = makeSeed();
+    asLeadsOwnCheckout(lead);
+    const teamMd = join(lead, "aidlc", "spaces", "default", "memory", "team.md");
+    writeFileSync(teamMd, readFileSync(teamMd, "utf-8").replace("## Way of Working\n", "## Way of Working\n\nWork merges into `main`.\n"));
+    withPersonsPushedFiles(lead);
+    personsOwnEdits(lead);
+    const first = runMergeTool(UNIT, ["share"], lead);
+    expect(first.status, first.out).toBe(0);
+    expect(JSON.parse(first.stdout)).toMatchObject({ shared: false });
+    const recorded = runMergeTool(STATE, ["practices-branch", "--file", "team.md", "--branch", "main"], lead);
+    expect(recorded.status, recorded.out).toBe(0);
+    const again = runMergeTool(UNIT, ["share"], lead);
+    expect(again.status, again.out).toBe(0);
+    const words = String(JSON.parse(again.stdout).committed_files);
+    expect(words).toEndWith(` here ${OWN_EDITS_NAMED}`);
+    expectResultNames(again.stdout, lead, words);
+  });
+
+  // A rename and a removal the person staged with git (git mv, git rm) are in
+  // neither the index nor the disk under the old names, which git add refuses
+  // to be given, so the share stopped on "git add failed" on every try.
+  test("a rename and a removal the person staged with git: the share commits and names them", () => {
+    const { seed: lead, remote } = makeSeed();
+    asLeadsOwnCheckout(lead);
+    mkdirSync(join(lead, "docs"), { recursive: true });
+    writeFileSync(join(lead, "docs", "old-name.md"), "renamed later\n");
+    writeFileSync(join(lead, "docs", "gone.md"), "removed later\n");
+    git(lead, ["add", "docs"]);
+    git(lead, ["commit", "-m", "the person's docs"]);
+    git(lead, ["push", "origin", "HEAD"]);
+    const base = git(remote, ["rev-parse", "main"]);
+    git(lead, ["mv", "docs/old-name.md", "docs/new-name.md"]);
+    git(lead, ["rm", "-q", "docs/gone.md"]);
+    const offer = nextDirective(lead);
+    expect(isHandover(offer, "share"), JSON.stringify(offer)).toBe(true);
+    const question = String(offer.question);
+    const words = question.match(/I'd commit (the \d+ changed files here \(.*\)) and push main to origin, /)?.[1];
+    expect(words, question).toEndWith(" here (new: docs/new-name.md; deleted: docs/gone.md, docs/old-name.md)");
+    const shared = runMergeTool(UNIT, ["share"], lead);
+    expect(shared.status, shared.out).toBe(0);
+    expectResultNames(shared.stdout, lead, words as string);
+    const onRemote = git(remote, ["diff", "--no-renames", "--name-status", base, "main"]).split("\n");
+    for (const line of ["A\tdocs/new-name.md", "D\tdocs/gone.md", "D\tdocs/old-name.md"]) expect(onRemote).toContain(line);
+  });
+
+  // git's own words for a file it cannot add end without a full stop; the
+  // refusal still reads as two sentences.
+  test.skipIf(process.platform === "win32" || process.getuid?.() === 0)("a file git cannot read: the share's refusal ends git's words with a full stop", () => {
+    const { seed: lead } = makeSeed();
+    asLeadsOwnCheckout(lead);
+    writeFileSync(join(lead, "unreadable.txt"), "the person's\n");
+    chmodSync(join(lead, "unreadable.txt"), 0o000);
+    try {
+      const shared = runMergeTool(UNIT, ["share"], lead);
+      expect(shared.status, shared.out).not.toBe(0);
+      expect(shared.out).toContain("fatal: adding files failed. Then share again.");
+    } finally {
+      chmodSync(join(lead, "unreadable.txt"), 0o644);
+    }
+  });
+
+  // Taking, publishing and landing Units read and write the repository's trees
+  // at its top, so a project in a folder below it cannot hand Units to teams
+  // yet: no share is offered that would then fail, the walk says why once, and
+  // a typed share says it before it stages, commits or pushes anything.
+  test("a project in a folder of a bigger repository: no share is offered, and a typed share says why first", () => {
+    const { seed: lead } = makeSeed();
+    asLeadsOwnCheckout(lead);
+    const outer = mkdtempSync(join(tmpdir(), "aidlc-inc3-outer-"));
+    tempDirs.push(outer);
+    git(outer, ["init", "-b", "main"]);
+    git(outer, ["config", "user.name", "outer"]);
+    git(outer, ["config", "user.email", "outer@example.test"]);
+    cpSync(lead, join(outer, "app"), { recursive: true, filter: (path) => !path.split(/[\\/]/).includes(".git") });
+    mkdirSync(join(outer, "other"), { recursive: true });
+    writeFileSync(join(outer, "other", "notes.md"), "the person's other package\n");
+    git(outer, ["add", "-A"]);
+    git(outer, ["commit", "-m", "monorepo"]);
+    const bare = mkdtempSync(join(tmpdir(), "aidlc-inc3-outer-remote-"));
+    tempDirs.push(bare);
+    git(bare, ["init", "--bare", "-b", "main"]);
+    git(outer, ["remote", "add", "origin", bare]);
+    git(outer, ["push", "-u", "origin", "main"]);
+    const app = join(outer, "app");
+    writeFileSync(join(outer, "other", "staged.md"), "staged outside the project\n");
+    git(outer, ["add", "other/staged.md"]);
+    writeFileSync(join(app, "z-deploy.env"), "API_KEY=not-for-the-team\n");
+    const line = "Team work needs this project at the top of its git repository; it sits in app of " +
+      `${git(outer, ["rev-parse", "--show-toplevel"])}.`;
+    const chat = "01995000-7a11-7000-8000-000000003822";
+    const step = nextInChat(app, chat);
+    expect(isHandover(step), JSON.stringify(step)).toBe(false);
+    expect(JSON.stringify(step)).toContain(line);
+    // Said once, beside the step that starts the build, not at every step.
+    const after = nextInChat(app, chat);
+    expect(isHandover(after), JSON.stringify(after)).toBe(false);
+    expect(JSON.stringify(after)).not.toContain(line);
+    const before = [git(outer, ["rev-parse", "HEAD"]), git(bare, ["rev-parse", "main"]), git(outer, ["status", "--porcelain"])];
+    const shared = runMergeTool(UNIT, ["share"], app);
+    expect(shared.status, shared.out).not.toBe(0);
+    expect(shared.out).toContain(JSON.stringify({ error: line }));
+    expect([git(outer, ["rev-parse", "HEAD"]), git(bare, ["rev-parse", "main"]), git(outer, ["status", "--porcelain"])]).toEqual(before);
+  });
+
+  // Ten names in all, whatever their kind: the ten nearest the project's top,
+  // each under what the commit does to it, then how many more.
+  test("hundreds of files of every kind: the share question names ten in all, nearest the top, and its result the same ten", () => {
+    const { seed: lead, remote } = makeSeed();
+    asLeadsOwnCheckout(lead);
+    const deep = ["four", "one", "three", "two"].map((name) => `lib/a/${name}.ts`);
+    mkdirSync(join(lead, "lib", "a"), { recursive: true });
+    for (const path of deep) writeFileSync(join(lead, ...path.split("/")), "export {};\n");
+    writeFileSync(join(lead, "old.md"), "the person's old notes\n");
+    git(lead, ["add", "lib", "old.md"]);
+    git(lead, ["commit", "-m", "the person's earlier work"]);
+    git(lead, ["push", "origin", "HEAD"]);
+    for (const path of deep) writeFileSync(join(lead, ...path.split("/")), "export const edited = 1;\n");
+    unlinkSync(join(lead, "old.md"));
+    addManyNewFiles(lead, 400);
+    const modules = git(lead, ["ls-files", "--others", "--exclude-standard", "--", "node_modules"]).split("\n").slice(0, 2);
+    const ten = `(changed: ${deep.join(", ")}; new: z-deploy.env, config/app.json, src/x/y.ts, ${modules.join(", ")}; ` +
+      "deleted: old.md; and 395 more";
+    const offer = nextDirective(lead);
+    expect(isHandover(offer, "share"), JSON.stringify(offer).slice(0, 2000)).toBe(true);
+    const question = String(offer.question);
+    const words = question.match(/I'd commit (the \d+ changed files here \(.*\)) and push main to origin, /)?.[1];
+    expect(words, question).toEndWith(` here ${ten}; \`git status\` shows the rest)`);
+    expect(question.length).toBeLessThan(1_500);
+    expect(git(remote, ["rev-parse", "main"])).toBe(git(lead, ["rev-parse", "HEAD"]));
+    const shared = runMergeTool(UNIT, ["share"], lead);
+    expect(shared.status, shared.out).toBe(0);
+    // After the commit `git status` shows nothing more, so the result does not send the person there.
+    expectResultNames(shared.stdout, lead, (words as string).replace(/; `git status` shows the rest\)$/, ")"));
   });
 
   test("share refused: the commit is kept, next offers share again and starts no Unit here", () => {
@@ -191,8 +482,8 @@ describe("step 2: another clone takes a Unit", () => {
     expect(commandFor(offer, "Not now")).toMatch(/ next$/);
     const board = nextDirective(mate);
     expect(isHandover(board)).toBe(false);
-    expect(boardText(board)).toContain("# Team Construction Dispatcher");
-    expect(boardText(nextDirective(mate))).toContain("# Team Construction Dispatcher");
+    expect(boardText(board)).toContain("# Team Construction Board");
+    expect(boardText(nextDirective(mate))).toContain("# Team Construction Board");
   });
 
   // The live run: a team built its first Unit in its own clone (that Unit's
@@ -333,6 +624,15 @@ function doneIn(checkout: string): Record<string, unknown> {
   return nextDirective(checkout);
 }
 
+// What the Unit's Code Generation says it wrote (its source manifest): the
+// new files a publish commits as the Unit's own work.
+function claimAsUnitWork(checkout: string, paths: string[]): void {
+  writeFileSync(
+    join(seededRecordDir(checkout), "construction", "alpha", "code-generation", "source-manifest.json"),
+    `${JSON.stringify({ stage: "code-generation", unit: "alpha", version: 1, writes: paths.map((path) => ({ path })) })}\n`,
+  );
+}
+
 describe("step 3: a team publishes its finished Unit", () => {
   test("a claimed Unit done: the publish offer, once; Not now gives the done notice; publish --commit publishes", () => {
     const { remote } = makeSeed();
@@ -353,6 +653,7 @@ describe("step 3: a team publishes its finished Unit", () => {
     expect(String(notice.message)).not.toContain("aidlc unit publish");
     expect(isHandover(nextDirective(checkout))).toBe(false);
     writeFileSync(join(checkout, "src", "alpha-extra.ts"), "export const extra = 1;\n");
+    claimAsUnitWork(checkout, ["src/alpha.ts", "src/alpha-extra.ts"]);
     const claimRef = readUnitScopeStamp(checkout)?.claim_ref as string;
     const claimBefore = git(remote, ["rev-parse", claimRef]);
     const published = runMergeTool(UNIT, ["publish", "alpha", "--commit"], checkout);
@@ -362,17 +663,77 @@ describe("step 3: a team publishes its finished Unit", () => {
     expect(git(remote, ["rev-parse", claimRef])).not.toBe(claimBefore);
   });
 
-  test("the publish question names every new file outside aidlc/, however many", () => {
+  test("a handful of the Unit's new files: the publish question names every one", () => {
     const { remote } = makeSeed();
     const { checkout } = prepareCandidate(remote, "alpha", "team-a", { publish: false });
     for (const name of ["a.txt", "b.txt", "c.txt", "d.txt", "e.txt", "z-deploy.env"]) {
       writeFileSync(join(checkout, name), "untracked\n");
     }
+    claimAsUnitWork(checkout, ["a.txt", "b.txt", "c.txt", "d.txt", "e.txt", "z-deploy.env"]);
     const offer = doneIn(checkout);
     expect(isHandover(offer, "publish"), JSON.stringify(offer)).toBe(true);
-    expect(String(offer.question)).toContain("z-deploy.env");
-    expect(String(offer.question)).not.toContain("more)");
+    expect(String(offer.question)).toContain("(new: a.txt, b.txt, c.txt, d.txt, e.txt, z-deploy.env).");
+    expect(String(offer.question)).not.toContain(" more; ");
   });
+
+  // Publish commits every tracked change here, whatever the Unit's manifest
+  // lists, so its question names those too and counts what its commit takes.
+  test("the person's own edits, staged file and delete in a team's clone: the publish question names each", () => {
+    const { seed: lead, remote } = makeSeed();
+    withPersonsPushedFiles(lead);
+    const { checkout } = prepareCandidate(remote, "alpha", "team-a", { publish: false });
+    personsOwnEdits(checkout);
+    claimAsUnitWork(checkout, ["src/alpha.ts"]);
+    const offer = doneIn(checkout);
+    expect(isHandover(offer, "publish"), JSON.stringify(offer)).toBe(true);
+    const question = String(offer.question);
+    const words = question.match(/I'd commit (the (\d+) changed files of its work here \((.*)\))\.$/);
+    expect(words?.[3], question).toBe("changed: src/shared.ts, src/split.ts; new: staged-only.txt; deleted: docs/old-notes.md");
+    const published = runMergeTool(UNIT, ["publish", "alpha", "--commit"], checkout);
+    expect(published.status, published.out).toBe(0);
+    expect(committedHere(checkout)).toHaveLength(Number(words?.[2]));
+    // A typed publish names what it put on the claim ref the same way, beside what it left out.
+    expect(JSON.parse(published.stdout)).toMatchObject({ published: true, committed_files: words?.[1], left_out: 1 });
+  });
+
+  test("a removal the person staged with git in a team's clone: Commit and publish commits it", () => {
+    const { seed: lead, remote } = makeSeed();
+    withPersonsPushedFiles(lead);
+    const { checkout } = prepareCandidate(remote, "alpha", "team-a", { publish: false });
+    git(checkout, ["rm", "-q", "docs/old-notes.md"]);
+    claimAsUnitWork(checkout, ["src/alpha.ts"]);
+    expect(isHandover(doneIn(checkout), "publish")).toBe(true);
+    const published = runMergeTool(UNIT, ["publish", "alpha", "--commit"], checkout);
+    expect(published.status, published.out).toBe(0);
+    expect(committedHere(checkout)).toContain("docs/old-notes.md");
+    expect(JSON.parse(published.stdout).committed_files).toEndWith(" here (deleted: docs/old-notes.md)");
+  });
+
+  // A Unit whose own work (its manifest claims it) is thousands of new files:
+  // the question is put, not a step too long to send, and its choices walk on
+  // as with a handful. The commit takes every one of them.
+  for (const count of [400, 10_000]) {
+    test(`${count} new files: the publish question is put, says how many and names ten; Not now walks on, never back`, () => {
+      const { remote } = makeSeed();
+      const { checkout } = prepareCandidate(remote, "alpha", "team-a", { publish: false });
+      addManyNewFiles(checkout, count);
+      claimAsUnitWork(checkout, ["z-deploy.env", "config/", "src/x/", "node_modules/"]);
+      const offer = doneIn(checkout);
+      expect(isHandover(offer, "publish"), JSON.stringify(offer).slice(0, 2000)).toBe(true);
+      expect(String(offer.question)).toContain(`changed files of its work here (new: z-deploy.env, config/app.json, src/x/y.ts, `);
+      expectTenNamedAndTheCount(offer, checkout);
+      expect(labels(offer)).toEqual(["Commit and publish", "Not now"]);
+      expect(commandFor(offer, "Not now")).toMatch(/ next$/);
+      const notice = nextDirective(checkout);
+      expect(notice).toMatchObject({ kind: "notice", unit: "alpha" });
+      expect(isHandover(nextDirective(checkout))).toBe(false);
+      if (count > 1_000) return;
+      const published = runMergeTool(UNIT, ["publish", "alpha", "--commit"], checkout);
+      expect(published.status, published.out).toBe(0);
+      expect(git(checkout, ["status", "--porcelain", "--untracked-files=all"])).toBe("");
+      expect(git(checkout, ["ls-files", "node_modules"]).split("\n")).toHaveLength(count - 3);
+    });
+  }
 
   test("publish without --commit still refuses a dirty tree, as today", () => {
     const { remote } = makeSeed();
@@ -456,17 +817,70 @@ describe("step 5: main is pushed after a land", () => {
     expect(String(land.next_step)).toMatch(/ next`/);
     const offer = nextDirective(lead);
     expect(isHandover(offer, "push"), JSON.stringify(offer)).toBe(true);
-    expect(String(offer.question)).toContain("so the other teams see alpha");
+    expect(String(offer.question)).toBe("Push main to origin now so the other teams see alpha landed?");
     expect(labels(offer)).toEqual(["Push main", "Not now"]);
     expect(commandFor(offer, "Push main")).toMatch(/ unit share$/);
-    expect(["Pushes", "Commits, then pushes"].map((lead) => `${lead} ${PLAIN_PUSH}`)).toContain(String(detailFor(offer, "Push main")));
+    expect(detailFor(offer, "Push main")).toBe(`Pushes ${PLAIN_PUSH}`);
     expect(isHandover(nextDirective(lead), "push")).toBe(false);
     const shared = runMergeTool(UNIT, ["share"], lead);
     expect(shared.status, shared.out).toBe(0);
+    // Only AI-DLC's own record went in with the push, so no file is named.
+    expect(JSON.parse(shared.stdout).committed_files).toBeUndefined();
     expect(git(remote, ["merge-base", "--is-ancestor", land.git_commit_oid, "main"])).toBe("");
     // What the push committed first, if anything, is named for the landing, never as the plan.
     expect(git(lead, ["log", "-1", "--format=%s"])).not.toBe("Share the plan with the teams");
     expect(git(lead, ["status", "--porcelain"])).toBe("");
+  });
+
+  // The push commits what is left here first; its count takes in the row the
+  // question itself writes to this checkout's record, so it is the number the
+  // push then commits.
+  test("the person's own edit and new file after a land: the push question names them and counts what the push commits", () => {
+    const { seed: lead, remote } = makeSeed();
+    prepareCandidate(remote, "alpha", "team-a");
+    approveMerge(lead, "alpha");
+    expect(runMergeTool(UNIT, ["land", "alpha"], lead).status).toBe(0);
+    writeFileSync(join(lead, "src", "shared.ts"), `${readFileSync(join(lead, "src", "shared.ts"), "utf-8")}// half-done local edit\n`);
+    writeFileSync(join(lead, "z-deploy.env"), "API_KEY=not-for-the-team\n");
+    const offer = nextDirective(lead);
+    expect(isHandover(offer, "push"), JSON.stringify(offer)).toBe(true);
+    expect(String(offer.question)).toBe(
+      "Push main to origin now so the other teams see alpha landed? I'd commit the 3 changed files here " +
+        "(changed: src/shared.ts; new: z-deploy.env) first.",
+    );
+    const shared = runMergeTool(UNIT, ["share"], lead);
+    expect(shared.status, shared.out).toBe(0);
+    expectResultNames(shared.stdout, lead, "the 3 changed files here (changed: src/shared.ts; new: z-deploy.env)");
+  });
+
+  test("hundreds of new files: the push question is put, says how many and names ten", () => {
+    const { seed: lead, remote } = makeSeed();
+    prepareCandidate(remote, "alpha", "team-a");
+    approveMerge(lead, "alpha");
+    expect(runMergeTool(UNIT, ["land", "alpha"], lead).status).toBe(0);
+    addManyNewFiles(lead, 400);
+    const offer = nextDirective(lead);
+    expect(isHandover(offer, "push"), JSON.stringify(offer).slice(0, 2000)).toBe(true);
+    expect(String(offer.question)).toMatch(/shows the rest\) first\.$/);
+    expectTenNamedAndTheCount(offer, lead);
+  });
+
+  // Team work begun before the Integration branch line existed: team.md says
+  // the branch only in words, which the share's own step reads first. The push
+  // question and the board both stay, naming the team's branch until then.
+  test("while team.md's words are still to be read, the push offer and the board name the team's branch", () => {
+    const { seed: lead, remote } = makeSeed();
+    prepareCandidate(remote, "alpha", "team-a");
+    approveMerge(lead, "alpha");
+    expect(runMergeTool(UNIT, ["land", "alpha"], lead).status).toBe(0);
+    const teamMd = join(lead, "aidlc", "spaces", "default", "memory", "team.md");
+    writeFileSync(teamMd, readFileSync(teamMd, "utf-8").replace("## Way of Working\n", "## Way of Working\n\nWork merges into `main`.\n"));
+    const offer = nextDirective(lead);
+    expect(isHandover(offer, "push"), JSON.stringify(offer)).toBe(true);
+    expect(labels(offer)).toEqual(["Push the team's branch", "Not now"]);
+    const board = runMergeTool(ORCH, ["team-board", "--snapshot"], lead);
+    expect(board.status, board.out).toBe(0);
+    expect(board.stdout).toContain("the team's branch has alpha landed here and not on origin yet");
   });
 
   test("a land already on origin is not offered", () => {

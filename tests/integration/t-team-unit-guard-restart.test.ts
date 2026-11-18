@@ -65,10 +65,10 @@ function personSays(checkout: string, prompt: string): void {
 
 // The person picks the restart, and the agent records the pick it read, as at
 // any engine question (a typed reply alone picks no remedy).
-function personPicksRestart(checkout: string): void {
+function personPicksRestart(checkout: string, stage = "functional-design"): void {
   personSays(checkout, "Start the stage over");
   const run = spawnSync(BUN, [
-    join(AIDLC_SRC, "tools", "aidlc-log.ts"), "answer", "--stage", "functional-design", "--unit", "alpha",
+    join(AIDLC_SRC, "tools", "aidlc-log.ts"), "answer", "--stage", stage, "--unit", "alpha",
     "--checkpoint", "guard-recovery", "--details", "Start the stage over",
   ], {
     cwd: checkout,
@@ -81,21 +81,22 @@ function personPicksRestart(checkout: string): void {
   expect(run.status, `${run.stdout}${run.stderr}`).toBe(0);
 }
 
-// The recovery question the guard puts after a refused gate for the Unit's
-// Functional Design, its one runnable answer the stage restart.
-function askRestart(checkout: string, unit: string): void {
+// The recovery question the guard puts after a refused gate for one of the
+// Unit's stages (Functional Design unless named), its one runnable answer the
+// stage restart.
+function askRestart(checkout: string, unit: string, stage = "functional-design"): void {
   writeActiveDirectiveMarker(checkout, {
     kind: "ask",
     ask_type: GUARD_RECOVERY_ASK_TYPE,
-    stage: "functional-design",
+    stage,
     unit,
     state_sha256: stateDigest(readStateFile(checkout)),
     remedies: [{
       op: "redo-jump",
       label: "Start the stage over",
-      action: "Restart the stage from the top with /aidlc --stage functional-design.",
+      action: `Restart the stage from the top with /aidlc --stage ${stage}.`,
       interaction: "command",
-      operation: { kind: "restart-stage", stage: "functional-design" },
+      operation: { kind: "restart-stage", stage },
     }],
   });
 }
@@ -114,12 +115,12 @@ function claimedCheckout(): string {
   return checkout;
 }
 
-// What `next --stage functional-design --unit alpha` tells the conductor to run.
-function printedReopen(checkout: string): string {
-  const next = runMergeTool(ORCH, ["next", "--stage", "functional-design", "--unit", "alpha"], checkout);
+// What `next --stage <stage> --unit alpha` tells the conductor to run.
+function printedReopen(checkout: string, stage = "functional-design"): string {
+  const next = runMergeTool(ORCH, ["next", "--stage", stage, "--unit", "alpha"], checkout);
   expect(next.status, next.out).toBe(0);
   const message = String(JSON.parse(next.stdout).message ?? "");
-  const command = /`([^`]* reopen --target functional-design [^`]*)`/.exec(message)?.[1];
+  const command = new RegExp(`\`([^\`]* reopen --target ${stage} [^\`]*)\``).exec(message)?.[1];
   expect(command, message).toBeDefined();
   // As an installed engine runs it (the fixture prints the source tool's spelling).
   return command!.replace(/^bun \S*aidlc-jump\.ts /, "aidlc engine jump ");
@@ -151,6 +152,26 @@ describe("t-team-unit-guard-restart: a Unit's picked restart runs from its check
       command.replace("--target functional-design", "--target nfr-design"),
       `${command} --via change`,
       `${command}; true`,
+    ]) {
+      expect(guard(checkout, changed).code, changed).toBe(2);
+    }
+  });
+
+  // Code Generation is this Unit's own step (every other one is done): the
+  // picked restart redoes it as the solo walk redoes a Unit's step, and the
+  // guard admits that redo, never a change in its place.
+  test("the restart picked for the Unit's own step passes as its redo", () => {
+    const checkout = claimedCheckout();
+    askRestart(checkout, "alpha", "code-generation");
+    personPicksRestart(checkout, "code-generation");
+    const command = printedReopen(checkout, "code-generation");
+    expect(command).toContain("--stages code-generation --units alpha --via redo --scope");
+    const admitted = guard(checkout, command);
+    expect(admitted.code, admitted.stderr).toBe(0);
+    for (const changed of [
+      command.replace("--via redo", "--via change"),
+      command.replace("--units alpha", "--units beta"),
+      `${command} --via change`,
     ]) {
       expect(guard(checkout, changed).code, changed).toBe(2);
     }

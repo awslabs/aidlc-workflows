@@ -46,14 +46,12 @@ AttemptView
 AuditShardNote
 Authority
 AuthorityActor
-AuthorityCover
 AuthorityGrantSource
 BLOCKING_SENSOR_BOUNDARY_EVENTS
 BLOCKING_SENSOR_OVERRIDE_CHOICE
 BLOCKING_SENSOR_OVERRIDE_DECISION
 BLOCKING_SENSOR_OVERRIDE_OPTIONS
 BOLT_NAME_REGEX
-BoltDagParse
 BoltDagResolution
 BoltIdentity
 BoltIdentityError
@@ -72,7 +70,6 @@ CHANGE_CONTROL_VALUES
 CHECKBOX_REVERSE
 CLAIM_BOUNDARY_WARNINGS
 CLAIM_GENERATIONS_FILE
-CLAIM_REGISTRY_CACHE_FILE
 CLAUDE_HOST_TEMPLATES
 CLAUDE_HOST_TURN_ORIGINS
 CLAUDE_QUEUED_HOST_ORIGINS
@@ -84,18 +81,15 @@ CODEX_SESSION_RECORD_MAX_BYTES
 COMMAND_TURN_REPLY
 COMMAND_TURN_SENTENCE
 COMPLETE_INTENT_STATUS
-COMPOSE_MARKER_TTL_MS
 CONDUCTOR_SUMMARY_FIELD
 CONFIGURATION_STEP
 CONFIG_KEYS
 CONSTRUCTION_POLICY_CHECKPOINT
-CONSTRUCTION_POLICY_RECOVERY
 CONSTRUCTION_STAFFING_ASK
 CREATION_RECEIPT_FILE
 CURRENT_FINGERPRINTS
 CURRENT_SESSION_FILE
 CURRENT_STATE_VERSION
-CachedUnitClaim
 CeremonyKey
 CeremonyPolicy
 CeremonyResolution
@@ -454,7 +448,6 @@ STEERING_TOKEN_KEY_BYTES
 STEERING_TOKEN_KEY_FILE
 STRUCTURED_FIELD_HEAD
 STRUCTURED_FIELD_NAMES
-SUBAGENT_INFLIGHT_TTL_MS
 SUMMARY_AUTHORIZATION_DIR
 SUMMARY_AUTHORIZATION_FIELD
 SUMMARY_AUTHORIZATION_ID_RE
@@ -486,11 +479,6 @@ StageAnswerMode
 StageEntry
 StaleReviewProgress
 StateVersionClassification
-SubagentInflightEntry
-SubagentInflightLedger
-SubagentInflightMatch
-SubagentInflightRead
-SubagentInflightSummary
 SummaryAuthorization
 SummaryConfirmationEvidence
 SummaryConfirmationStage
@@ -509,7 +497,6 @@ TurnOrigin
 UNBINDABLE_FINGERPRINT
 UNITS_REPOS_ASK
 UNIT_GATE_RHYTHM_FIELD
-UNIT_KINDS
 UNIT_LIFECYCLE_EVENTS
 UNIT_MERGE_DIR
 UNIT_NAME_PLACEHOLDER
@@ -522,12 +509,9 @@ UNSAVED_REASONS
 UNTRUSTED_AUDIT_NOTICE
 UTILITY_COMMANDS
 UnitCheckpoint
-UnitClaimRegistryCache
-UnitDependencyEdge
 UnitGateRhythm
 UnitGateScope
 UnitGateStatus
-UnitKind
 UnitLifecycleMode
 UnitLifecycleRow
 UnitLifecycleSnapshot
@@ -639,7 +623,6 @@ authorityFor
 authorityStateText
 authorizedConstructionPolicyChange
 authorizedVerificationCommand
-backgroundAgentOutSince
 backwardJumpBoundary
 baselineSourceSnapshotMissing
 beforeDelimiter
@@ -652,7 +635,6 @@ boltEventUnits
 boltWorktreeBaseCommit
 boundDirectiveMessage
 boxPicksAddANote
-cachedClaimFanoutActive
 candidateAttemptEventMatches
 candidateReviewCoverageProjection
 canonicalEngineCommand
@@ -677,8 +659,6 @@ claimGenerationKey
 claimGenerationsPath
 claimOverOwnJump
 claimPayloadAtTip
-claimRegistryCachePath
-claimRegistryGit
 claimRegistryRemote
 claimRegistryTips
 classifyRuntimeCompileCommand
@@ -738,15 +718,12 @@ committedTextBytes
 committedTextParts
 committedTextSha256
 comparablePath
-completeSubagentInflight
 completedPipelineLinks
 completionCarriesVerifiedReview
 composeGateOpen
-composeMarkerPath
 composedPlanLabel
 composedPluginBase
 composerProposalPath
-computeBatches
 constructionCheckpointGaps
 constructionCheckpointsApply
 constructionHasStarted
@@ -843,7 +820,6 @@ exactCopilotMarker
 existingReviewAppendixOffset
 explicitWorkspaceList
 extractScopeBlock
-extractYamlUnitsBlock
 fenceCheckName
 fenceCommandOutput
 fenceKeyBypassed
@@ -881,7 +857,6 @@ formatGuardsOffLine
 formatGuardsOnLine
 freshActiveDirectiveMarker
 freshReviewReceipts
-freshSubagentEntries
 frontmatterBlock
 gateEstimateSeconds
 gateEventCovers
@@ -892,7 +867,6 @@ gateRejectionMatchesAttempt
 gateWordsDir
 gateWordsPath
 gateWordsSinceUnitReview
-gcSessionPidEntries
 generatedRunnerSkill
 gitAlternateEntry
 gitCommitSourceListing
@@ -952,7 +926,6 @@ hasCurrentSharedResumeWait
 hasDurableSourceBindingEvidence
 hasModernSourceBindingEvidence
 hasPendingDecision
-hasRealGitEntry
 hasRunnerGenMarker
 hasSubagentInflight
 hasUnsafeSingleLineCharacter
@@ -991,11 +964,9 @@ humanTurnState
 identityScopedUnitPath
 ignoredPathClaimable
 ignoredSourceClaimReason
-inHostShell
 inertPath
 inspectArtifactPath
 inspectContinuationCursor
-inspectSubagentInflight
 installPlanApprovalLegacyOffer
 installedHarnessName
 installedHarnessNameForTarget
@@ -1159,9 +1130,7 @@ markPersonLinesHeard
 markProtectedQuestionReplied
 markSelectedWork
 markStageWorkLogged
-markSubagentInflight
 markTurnEnd
-matchSubagentInflight
 materializeCommitTree
 materializeRawGitTree
 memoryChangeControlDeclarations
@@ -1248,7 +1217,6 @@ parseActiveDirectiveOutOfDate
 parseAgentFrontmatter
 parseArgs
 parseAuditShardNotes
-parseBoltDag
 parseBoltName
 parseCeremonySetting
 parseCeremonyStateLine
@@ -1260,7 +1228,6 @@ parseGuardPolicy
 parseGuardPolicyStateLine
 parseGuardsOffLine
 parseGuardsOnLine
-parseInlineDepsList
 parseKnowledgeCommand
 parseLiteralShellInvocation
 parseMemoryEntries
@@ -1277,7 +1244,6 @@ parseStageFrontmatter
 parseStateStageSuffixes
 parseTeamBoardArgs
 parseUnitSourceListing
-parseUnitsBlock
 parseWorkspaceCommand
 parsedNextArgv
 pathContainedBy
@@ -1417,11 +1383,9 @@ readShippedHarnessData
 readSourceSnapshot
 readStableReviewArtifacts
 readStageBaseline
-readSubagentInflightLedger
 readSummaryAuthorization
 readSyncBufferedBytes
 readSyncBufferedLine
-readUnitClaimRegistryCache
 readUnitGateRhythm
 readUnitMergeTransaction
 readUnitSourceManifest
@@ -1750,8 +1714,6 @@ stripYamlComment
 structuredField
 structuredFieldSpan
 subagentDispatchesShowNoReviewer
-subagentInflightMarkerPath
-subagentSessionIdentity
 summaryAnswerCleared
 summaryAnswerFromFile
 summaryAnswerLines
@@ -1863,7 +1825,6 @@ unknownRuntimeSessionWarning
 unlistedRecordForQuestion
 unmergedRootSettingsNotices
 unmetProducerInPlan
-unquoteScalar
 unrecordedKiroCliSteers
 unresolvedTeamGateRemedy
 unsavedOutputsMessage
@@ -1973,7 +1934,6 @@ writeSessionPidRecord
 writeSessionRebindOffer
 writeSessionSelectionNotice
 writeSourceSnapshot
-writeSubagentInflightLedger
 writeSummaryAuthorization
 writeUnitClaimRegistryCache
 writeUnitMergeTransaction

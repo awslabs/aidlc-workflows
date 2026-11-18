@@ -53,9 +53,7 @@ The conductor's Routing section defines the loading rules:
   event is detected mid-stage. This keeps error recovery and change handling
   out of context for normal forward-progress stages.
 - **`stage-protocol-governance.md`**: load at phase boundaries
-  (1.7->2.1, 2.9->3.1, 3.7->4.1) to run the Phase Boundary Verification
-  traceability check. This limits governance overhead to the points where it
-  is needed.
+  (1.7->2.1, 2.9->3.1, 3.7->4.1).
 - **`stage-protocol-learnings.md`**: load only when `protocol_modules` includes `learnings`. With `ceremony.learnings: off`, keep no diary and skip the entire ritual.
 - **`stage-protocol-reviewer.md`**: load when `protocol_modules` includes
   `reviewer`, or when the directive carries a reviewer. **`stage-protocol-reviewer-unit.md`**
@@ -410,13 +408,13 @@ follow-up instead of reopening the whole question.
 ### Tri-Mode System
 
 **Step 1: Create the questions file** in the appropriate `<record>/`
-directory using `[Answer]:` tag format with options A-E (A-D on Claude Code:
+directory using `[Answer]:` tag format with options A-E (A-D on Claude Code, A-C on Codex:
 the letters come from the harness manifest's `questionOptions`). Every ordinary
 question must end with `X. Other (please specify)`. The dedicated Consolidated
 Summary Confirmation is the sole exception: its **Looks correct / Request
 changes** options are unlettered. All `[Answer]:` tags start blank.
 Multi-select questions add "(select all that apply)" to the question text;
-answer format: `[Answer]: A, B, E`.
+answer format: `[Answer]: A, C`.
 
 The agent groups a fresh file's questions by who would answer them: each
 heading names the trade whose decision it is after its number
@@ -562,12 +560,12 @@ proceed with partial answers. The file is the authoritative record.
 ### Answer Analysis
 
 After collecting answers, analyze ALL responses (mandatory):
-- **Vague answers**: "mix of", "not sure", "depends", "probably"
+- **Vague answers**: "mix of", "not sure", "depends"
 - **Contradictions** between answers
 - **Missing details** needed for next step
 
 If ANY ambiguity found, create follow-up questions and resolve before
-proceeding. **When in doubt, ask.**
+proceeding.
 
 ### Ambiguity Detection
 
@@ -576,7 +574,7 @@ proceeding. **When in doubt, ask.**
 | Condition | Action |
 |-----------|--------|
 | Blank or underscore-only `[Answer]:` | List unanswered, ask user to complete |
-| Answer not matching options (A-E or A-D, X) and not clear free-text | Ask user to clarify |
+| Answer not matching options (A-E, A-D or A-C, X) and not clear free-text | Ask user to clarify |
 | Ambiguous ("maybe B", "either A or C") | Ask user to commit to single choice |
 
 **Contradiction detection** -- cross-check full answer set for:
@@ -592,8 +590,8 @@ When detected: present contradictory answers side by side, explain conflict,
 ask targeted follow-up. Do NOT proceed until resolved.
 
 **Overconfidence prevention:**
-- Default to asking, not assuming. Never proceed with ambiguity.
-- Red flags requiring follow-up: single-word answers to open-ended questions;
+- Never proceed with ambiguity.
+- Red flags requiring follow-up:
   contradictory signals; question-dodging; relaxing, lowering, or disabling a
   previously defined quality target (for example, a test coverage threshold)
   instead of meeting it
@@ -1271,7 +1269,14 @@ change. See
    workspace, when another open piece of work in this checkout claims files in
    its Units' source manifests, its `agent_note` gives the line the brief
    carries word for word: those files are that work's, not this work's to
-   review (the same set `other_work_note` names to the build). The directive's `review_artifact` field
+   review (the same set `other_work_note` names to the build). On Code
+   Generation, when the plan the person approved changed after that approval
+   and the plan re-approval check let it build without asking them again
+   (Guard Policy relaxed or off, unless that check is switched back on), the
+   `agent_note` gives one more line the brief carries word for word: what
+   changed, in the change line's words, and that their earlier approval stays
+   the record, naming the plan-approval record file while it is still that
+   approval's (`approvedPlanChangeReviewLine` in `aidlc-testing-posture.ts`). The directive's `review_artifact` field
    names the required Markdown output the review is about: the record is
    keyed to it, the gate names it, and finding selectors address it; output
    ordering and plugin additions cannot change it, and nothing writes to it
@@ -1542,23 +1547,7 @@ outputs are sufficient and consistent for the next phase.
 *(`stage-protocol-governance.md` Section 13 — distinct from the Learnings
 Ritual, which is `stage-protocol-learnings.md` Section 13)*
 
-### Triggers
-
-- After last stage of each phase is approved
-- Before first stage of next phase begins
-- On demand, when the person asks for it (`/aidlc --status` only reports and
-  runs no check)
-
-### Process
-
-1. Read methodology from `.claude/knowledge/aidlc-shared/verification.md`
-2. Run phase-specific traceability checks
-3. Write results to `<record>/verification/phase-check-<phase>.md`, the name the
-   phase-ending stages and `verification.md` use (the governance protocol module
-   still calls it `[phase-boundary]-verification.md`)
-4. If failed: present issues (missing links, orphaned artifacts,
-   inconsistencies) before proceeding
-5. `PHASE_VERIFIED` is emitted by the engine at the phase boundary; do not append it
+`PHASE_VERIFIED` is emitted by the engine at the phase boundary; do not append it
 
 ### Per-Phase Checks
 

@@ -74,11 +74,15 @@ your message. Multiline input is stored as one JSON string in committed
 the document, so Markdown lines resembling workflow fields cannot alter the
 selected scope or lifecycle state. A message that is only a document, with no
 words outside it, is taken as "Build what the pasted document describes.", and
-the plan question that follows says so.
+the plan question that follows says so. On Kiro CLI with its v2 engine, what
+you type or paste after `/aidlc` reaches AI-DLC without its line breaks and
+without the double quotes around a quoted word or phrase, so name a file there
+instead ([Kiro CLI (V2) usage](harnesses/kiro.md#kiro-cli-v2-usage)).
 
 You can also add a document yourself at any time with
-`/aidlc knowledge onboard <path>`, naming a file or folder anywhere in your
-project; one outside the knowledge folder is copied in and the line says where.
+`/aidlc knowledge onboard <path> ...`, naming one or more files or folders
+anywhere in your project; one outside the knowledge folder is copied in and the
+line says where.
 
 A PDF or Word file works the same way: name it, for example
 `/aidlc Build what ./brief.pdf describes`. The workflow copies it into
@@ -86,7 +90,9 @@ A PDF or Word file works the same way: name it, for example
 [knowledge base](08-knowledge.md), tells you in one line where it copied it and
 its document id (at the latest when it asks you to approve the stage), and
 reads its text. You never run a command or type the id, and it never replaces a
-file already in that folder. When the file is git-ignored (or git cannot
+file already in that folder, except its own copy of that same file: name the file
+again after you change it and that copy takes your new version, keeping its id,
+as long as nobody has changed the copy. When the file is git-ignored (or git cannot
 say), it asks first whether you want it copied anyway, because the copy would be committed. When no
 text can be read (no extractor for that kind of file, or a scanned document),
 it says why and asks you for a text or Markdown version. Text over 200,000
@@ -288,7 +294,8 @@ Your approval is recorded before the intent's `Construction Verification Command
 is set. That same command is reused at every Unit/batch checkpoint; changing it
 requires another recorded human approval. If a greenfield project has no runnable
 check yet, you may defer selection; the first checkpoint asks before running any
-verification. The conductor never invents or auto-approves a command.
+verification (on Kiro IDE and Kiro CLI v3, a side-by-side build asks once its plans
+are approved, before its workers start). The conductor never invents or auto-approves a command.
 
 With skeleton-on, the first DAG Unit is the smallest working integrated slice.
 It completes its design and code, including your Plan Approval and required
@@ -314,8 +321,9 @@ approval says so once, with the
 command that puts each one back when git holds your copy, for example "The
 build changed README.md, a file you had before this work started. To put it
 back, run `git checkout HEAD -- README.md`.", or that there is no committed
-copy to put back. AI-DLC's own files, as its setup or a later `aidlc config`
-wrote them, are not among them, and neither is AI-DLC's marked part of a file
+copy to put back. Built Unit by Unit, each Unit's approval names what that
+Unit changed and puts it back as that Unit found it. AI-DLC's own files, as its
+setup or a later `aidlc config` wrote them, are not among them, and neither is AI-DLC's marked part of a file
 it shares with you, such as AGENTS.md or `.gitignore`, when git holds your copy
 of it: your part of that file still is.
 

@@ -37,11 +37,7 @@ work. Recovery reconstructs decisions, in-stage context, the timeline, and the
 current position; it cannot recover the previous session's conversation buffer,
 so re-orient from these sources rather than trying to recreate the prior chat.
 
-The procedures below operate on these sources. For the full rationale — why
-recovery is an emergent property of the data plane rather than a bolted-on
-feature, and how the `withAuditLock` consistency constraint keeps the five
-sources in agreement — see `docs/reference/02-plane-architecture.md` § 5
-("Recovery as an emergent property").
+The procedures below operate on these sources.
 
 ### Session resume
 If `aidlc-state.md` exists, read it to determine:
@@ -274,7 +270,7 @@ Generation.
 1. Record the request with `{{INVOKE}} engine audit append-raw 'Change Request: <brief>' '<body>'`, carrying the user's exact words in the body
 2. Return to requirements-analysis or delivery-planning as appropriate
 3. Re-plan execution from that point forward
-4. If the stage set changes, run `aidlc-utility.ts recompose` (or a scope change through `aidlc-orchestrate.ts next`); never edit scope configuration in `aidlc-state.md`
+4. If the stage set changes, run `{{INVOKE}} engine recompose` (or a scope change through `{{INVOKE}} engine orchestrate next`); never edit scope configuration in `aidlc-state.md`
 
 ### Archive before change
 Before any major change that would overwrite existing artifacts:

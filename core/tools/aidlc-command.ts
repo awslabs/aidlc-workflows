@@ -91,7 +91,10 @@ export function cursorTrustedShell(): string {
 // expression over the tool name, so a tool reaches exactly the checks it
 // reached before: reads and searches go to the three that read, while only a
 // write, a shell command or a dispatch reaches the plan-approval guard. The
-// group is a registration, not a check: it decides nothing itself.
+// group is a registration, not a check: it decides nothing itself. On Claude
+// Code the row also carries the question box (AskUserQuestion), which no member
+// matches, so the code plan question's box can show the plan's lines
+// (runGroupMembers in aidlc.ts).
 //
 // The doctor reads this table too (aidlc-utility.ts), to check that every
 // member's hook file ships and to treat drift on the row as flow-altering, so
@@ -199,24 +202,63 @@ export function nextFlagTakesFollowing(flag: string, following: string | undefin
   return following !== undefined && !following.startsWith("-") && !NEXT_VALUELESS_FLAGS.has(flag);
 }
 
+export type UnitGrammar = {
+  /** The verb takes the Unit's name, its one word that is not an option. */
+  name: boolean;
+  /** The options the verb reads that take a value, as aidlc-lib.ts parseArgs keys them. */
+  options: readonly string[];
+  /** The options it reads that take none, so the word after one is never its value. */
+  switches?: readonly string[];
+  /** Its usage after the invocation, the line `--help` prints. */
+  usage: string;
+};
+
 /**
- * The `unit` noun's verbs, each with whether it takes the Unit's name, as the
- * Unit tool runs them (aidlc-unit.ts main). The dispatcher's `unit` route and
- * the `next` line both read this list.
+ * The `unit` noun's verbs as the Unit tool runs them (aidlc-unit.ts main): whether
+ * each takes the Unit's name, the options it reads and its usage. The Unit tool
+ * checks a command's words against it before the verb runs, the dispatcher's
+ * `unit` route takes its usage forms from it, and UNIT_VERBS is read from it.
  */
-export const UNIT_VERBS: ReadonlyMap<string, boolean> = new Map([
-  ["adopt", true],
-  ["claim", true],
-  ["gate", true],
-  ["land", true],
-  ["merge-status", true],
-  ["participate", false],
-  ["pin", true],
-  ["publish", true],
-  ["release", true],
-  ["share", false],
-  ["status", false],
-]);
+export const UNIT_GRAMMAR: Readonly<Record<string, UnitGrammar>> = {
+  adopt: { name: true, options: [], usage: "unit adopt <unit>" },
+  claim: {
+    name: true,
+    options: ["team", "request-file", "rhythm"],
+    usage: "unit claim <unit> [--team <label> | --request-file <file>] [--rhythm per-stage|unit-end]",
+  },
+  gate: {
+    name: true,
+    options: ["decision", "user-input", "request-file"],
+    usage: "unit gate <unit> --decision <approve|reject> (--user-input <text> | --request-file <file>)",
+  },
+  land: {
+    name: true,
+    options: ["step", "target", "strategy", "user-input"],
+    switches: ["accept-released-attempt"],
+    usage: "unit land <unit> [--step git|state|audit|all] [--target <branch>] [--strategy merge] " +
+      "[--accept-released-attempt --user-input <acknowledgment>]",
+  },
+  "merge-status": { name: true, options: [], usage: "unit merge-status <unit>" },
+  participate: { name: false, options: [], usage: "unit participate" },
+  pin: { name: true, options: [], usage: "unit pin <unit>" },
+  publish: {
+    name: true,
+    options: ["include"],
+    switches: ["commit"],
+    usage: "unit publish <unit> [--commit [--include <path>]...]",
+  },
+  release: { name: true, options: ["expect-nonce"], usage: "unit release <unit> [--expect-nonce <claim-nonce>]" },
+  share: { name: false, options: [], usage: "unit share" },
+  status: { name: false, options: [], usage: "unit status" },
+};
+
+/**
+ * The `unit` noun's verbs, each with whether it takes the Unit's name. The
+ * dispatcher's `unit` route and the `next` line both read this list.
+ */
+export const UNIT_VERBS: ReadonlyMap<string, boolean> = new Map(
+  Object.entries(UNIT_GRAMMAR).map(([verb, grammar]) => [verb, grammar.name]),
+);
 
 /**
  * The Unit tool's argv when a `next` line is the person's Unit command, else
@@ -334,7 +376,7 @@ function missingDispatcherWorkspaceName(
   return {
     kind: "error",
     noun,
-    message: `Usage: aidlc ${usage}`,
+    message: `Usage: ${aidlcInvocation()} engine ${usage}`,
   };
 }
 
@@ -488,7 +530,7 @@ export function parseDispatcherPluginCommand(
 ): DispatcherPluginCommand {
   if (args[0] !== "plugin") return { kind: "not-plugin" };
   const verb = args[1];
-  if (verb === "help" || verb === "-h" || verb === "--help") {
+  if (verb === undefined || verb === "help" || verb === "-h" || verb === "--help") {
     return { kind: "help" };
   }
   const target = verb === "select"
@@ -505,10 +547,9 @@ export function parseDispatcherPluginCommand(
   if (target !== undefined) {
     return { kind: "run", argv: [target, ...args.slice(2)] };
   }
-  const detail = verb ? `unknown verb '${verb}'` : "missing verb";
   return {
     kind: "error",
-    message: `aidlc: ${detail} for noun 'plugin'; try 'aidlc help --all'`,
+    message: `\`${aidlcInvocation()} engine plugin ${verb}\` is not a plugin command; the plugin commands are select, list, sync, validate and build`,
   };
 }
 

@@ -32,7 +32,7 @@ import type { EmitContext } from "../../scripts/manifest-types.ts";
 import {
   writeMarkdownAgentSurface,
 } from "../../core/tools/aidlc-model-policy.ts";
-import { injectDelegatedKnowledgePreflight } from "../../scripts/agent-knowledge.ts";
+import { absorbReviewerKnowledge, injectDelegatedKnowledgePreflight } from "../../scripts/agent-knowledge.ts";
 import { EXTENDED_SUBPROCESS_TIMEOUT_MS } from "../../core/tools/aidlc-runtime-budget.ts";
 import { LAUNCHER_PATH, launcherBody } from "../../core/tools/aidlc-launcher-voucher.ts";
 
@@ -162,7 +162,9 @@ export default function emit(ctx: EmitContext): void {
     content: () => emitHooksJson(harnessDir),
   });
 
-  // Persona custom agents from core/agents/*.md (body token → .aidlc).
+  // Persona custom agents from core/agents/*.md (body token -> .aidlc). A
+  // reviewer is dispatched from here, so its knowledge is absorbed here too:
+  // this emission reads core/agents/*.md directly, never the packager's transform.
   const agentsDir = join(coreRoot, "agents");
   for (const f of readdirSync(agentsDir).filter((x) => x.endsWith(".md")).sort()) {
     emissions.push({
@@ -172,7 +174,7 @@ export default function emit(ctx: EmitContext): void {
         return substituteToken(
           emitAgentMd(
             injectDelegatedKnowledgePreflight(
-              readFileSync(join(agentsDir, f), "utf-8"),
+              absorbReviewerKnowledge(readFileSync(join(agentsDir, f), "utf-8"), agentName, coreRoot),
               agentName,
               harnessDir,
             ),
@@ -218,7 +220,7 @@ export default function emit(ctx: EmitContext): void {
   }
   // (d) session skills — copied from core/ with token substitution (the
   // engine dir ships NO skills/ — Copilot never scans it).
-  for (const skill of ["aidlc-session-cost", "aidlc-replay", "aidlc-outcomes-pack", "aidlc-knowledge"]) {
+  for (const skill of ["aidlc-session-cost", "aidlc-replay", "aidlc-outcomes-pack", "aidlc-knowledge", "aidlc-issue-report"]) {
     const srcDir = join(coreRoot, "skills", skill);
     if (!existsSync(srcDir)) continue;
     for (const file of walk(srcDir)) {

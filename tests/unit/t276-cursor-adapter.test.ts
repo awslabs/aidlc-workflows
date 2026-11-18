@@ -64,6 +64,7 @@ import {
   writeActiveDirectiveMarker,
   writeSessionPidEntry,
   stateDigest,
+  subagentInflightMarkerPath,
 } from "../../dist/cursor/.cursor/tools/aidlc-lib.ts";
 import {
   createTestProject,
@@ -206,7 +207,7 @@ function runAdapter(
     cwd?: string;
     env?: Record<string, string | undefined>;
   } = {},
-): { stdout: string; stderr: string; code: number } {
+): { stdout: string; stderr: string; code: number; pid: number } {
   if (target === "mint") {
     try {
       const record = JSON.parse(stdin) as {
@@ -224,10 +225,8 @@ function runAdapter(
   const adapterProjectDir = options.adapterProjectDir ?? projectDir;
   const env: Record<string, string | undefined> = {
     ...process.env,
-    // The adapter reads the global git config when it resolves a persisted
-    // alias, so the global scope points at an absent file and a developer's own
-    // aliases stay out of the classification. A developer's pager needs no
-    // hiding any more: the adapter no longer reads one.
+    // The global and system git config point at absent files, so a developer's
+    // own git settings stay out of the hooks the adapter runs.
     GIT_CONFIG_GLOBAL: join(projectDir, ".absent-global-gitconfig"),
     GIT_CONFIG_SYSTEM: join(projectDir, ".absent-system-gitconfig"),
     AIDLC_PROJECT_DIR: projectDir,
@@ -248,7 +247,7 @@ function runAdapter(
       env: env as NodeJS.ProcessEnv,
     },
   );
-  return { stdout: r.stdout ?? "", stderr: r.stderr ?? "", code: r.status ?? 0 };
+  return { stdout: r.stdout ?? "", stderr: r.stderr ?? "", code: r.status ?? 0, pid: r.pid ?? -1 };
 }
 
 /** Cursor failClosed preToolUse requires permission JSON on allow, not silence. */
@@ -260,6 +259,18 @@ function expectAllowJson(
   expect(JSON.parse(r.stdout) as { permission?: string }, label).toEqual({
     permission: "allow",
   });
+}
+
+/**
+ * None of the adapter's own denies (its helper records, a helper's identity, a
+ * nested Task) answered a helper's call: the checks every harness runs decide it.
+ */
+function expectChecksEveryHarnessRunsDecide(
+  out: { permission?: string; agent_message?: string },
+  label?: string,
+): void {
+  if (out.permission === "allow") return;
+  expect(out.agent_message ?? "", label).not.toMatch(/attribution state|identity is unavailable|nested delegation/);
 }
 
 function registerTaskParent(projectDir: string): void {
@@ -604,7 +615,8 @@ describe("t276 cursor adapter payload conversion", () => {
     expect(write.code).toBe(0);
     const denied = JSON.parse(write.stdout) as { permission?: string; agent_message?: string };
     expect(denied.permission).toBe("deny");
-    expect(denied.agent_message ?? "").toContain("Plan Approval authority evaluation failed closed");
+    expect(denied.agent_message ?? "").toContain("cannot start: its plan's approval could not be checked: ");
+    expect(denied.agent_message ?? "").not.toMatch(/authority|failed closed|ambiguous or stale/);
     const next = spawnSync("bun", [join(proj, ".cursor", "tools", "aidlc-orchestrate.ts"), "next", "--project-dir", proj], {
       timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       encoding: "utf-8",
@@ -1227,7 +1239,8 @@ describe("t276 cursor adapter payload conversion", () => {
       .toEqual({ owner: 1, other: 0 });
     // A drop is recorded beside the completion, not under the cursor's intent.
     expect(drive((proj) => {
-      writeFileSync(join(proj, "aidlc", ".aidlc-subagent-inflight"), "{malformed");
+      mkdirSync(dirname(subagentInflightMarkerPath(proj)), { recursive: true });
+      writeFileSync(subagentInflightMarkerPath(proj), "{malformed");
       runAdapter(proj, "session-end", payload("sessionEnd", proj, same));
     })).toEqual({ owner: 1, other: 0, ownerDrop: true, otherDrop: false });
     // sessionEnd retires the delegation witness when the Task ledger is gone.
@@ -1397,7 +1410,7 @@ describe("t276 cursor adapter payload conversion", () => {
     const note = JSON.parse(background.stdout).additional_context as string;
     expect(note).toContain("Cursor background agent");
     expect(note).toContain("foreground chat");
-    expect(note).toContain("`bun .cursor/tools/aidlc.ts status`");
+    expect(note).toContain("`bun .cursor/tools/aidlc.ts engine status`");
     // Only AIDLC's own files are off limits; the user's Cursor config is not.
     expect(note).toContain(".cursor/mcp.json is fine to change");
     expect(note).not.toContain("AIDLC WORKFLOW ACTIVE");
@@ -1679,14 +1692,22 @@ describe("t276 cursor adapter payload conversion", () => {
     // As in the core hook group: a crashed member refuses nothing. Denying here
     // stopped every call, reads included, under every Guard Policy, with no
     // step that could fix a guard that throws on this project's state.
+    // A guard runs inside the adapter when its file exports run(), and as its
+    // own process otherwise; the shipped guards exit only as their own process.
     const crashes: Array<[string, string | null, string]> = [
       ["throws", 'throw new Error("simulated guard crash [degraded]");\n', "exited 1"],
-      ["exits 1", "process.exit(1);\n", "exited 1"],
+      ["exits 1", "if (import.meta.main) process.exit(1);\n", "exited 1"],
       ["is missing", null, "exited 1"],
+      [
+        "throws inside the adapter",
+        'export async function run(_input: string): Promise<number> { throw new Error("simulated guard crash [degraded]"); }\n' +
+          "if (import.meta.main) process.exit(await run(await Bun.stdin.text()));\n",
+        "exited 1",
+      ],
     ];
     // Windows has no POSIX signals: a killed process there reports an exit code.
     if (process.platform !== "win32") {
-      crashes.push(["is killed", 'process.kill(process.pid, "SIGKILL");\n', "was stopped by SIGKILL"]);
+      crashes.push(["is killed", 'if (import.meta.main) process.kill(process.pid, "SIGKILL");\n', "was stopped by SIGKILL"]);
     }
     for (const [how, body, said] of crashes) {
       const proj = installedProject();
@@ -1710,7 +1731,7 @@ describe("t276 cursor adapter payload conversion", () => {
     }
   });
 
-  test("22b: an unavailable shared freeze parser denies before the guard chain", () => {
+  test("22b: with the shared freeze parser unavailable, a plain command goes on, and the guard it breaks is on record", () => {
     const proj = installedProject();
     seedStateFile(proj, "state-construction.md");
     registerTaskParent(proj);
@@ -1736,15 +1757,9 @@ describe("t276 cursor adapter payload conversion", () => {
         tool_input: { command: "echo ok" },
       }),
     );
-    expect(r.code).toBe(0);
-    const out = JSON.parse(r.stdout) as {
-      permission?: string;
-      agent_message?: string;
-    };
-    expect(out.permission).toBe("deny");
-    expect(out.agent_message ?? "").toContain(
-      "general-purpose interpreters",
-    );
+    // As test 22: a guard that cannot load refuses nothing, and doctor reads why.
+    expectAllowJson(r);
+    expect(readdirSync(hooksHealthDir(proj)).some((file) => file.endsWith(".drops"))).toBe(true);
   });
 
   test("23: Shell working_directory and captured cwd feed reviewer-scope and review-freeze", () => {
@@ -1989,8 +2004,9 @@ if (import.meta.main) {
         permission?: string;
         agent_message?: string;
       };
-      expect(out.permission, runtime).toBe("deny");
-      expect(out.agent_message ?? "", runtime).toContain("general-purpose interpreters");
+      // A removal the command line does not spell out goes to Cursor's own
+      // command approval, as on every harness.
+      expect(out.permission, `${runtime}: ${out.agent_message ?? ""}`).toBe("allow");
     }
     expect(ledgerFilesFor(proj)).toHaveLength(1);
 
@@ -2024,10 +2040,7 @@ if (import.meta.main) {
         permission?: string;
         agent_message?: string;
       };
-      expect(out.permission, command).toBe("deny");
-      expect(out.agent_message ?? "", command).toContain(
-        "general-purpose interpreters",
-      );
+      expect(out.permission, `${command}: ${out.agent_message ?? ""}`).toBe("allow");
     }
 
     const dynamicRemovals = [
@@ -2062,8 +2075,7 @@ if (import.meta.main) {
         permission?: string;
         agent_message?: string;
       };
-      expect(out.permission, command).toBe("deny");
-      expect(out.agent_message ?? "", command).toContain("shell parameter expansion");
+      expect(out.permission, `${command}: ${out.agent_message ?? ""}`).toBe("allow");
     }
     expect(existsSync(dispatch)).toBe(true);
     expect(ledgerFilesFor(proj)).toHaveLength(1);
@@ -2232,10 +2244,9 @@ if (import.meta.main) {
       permission?: string;
       agent_message?: string;
     };
-    expect(dynamicOut.permission).toBe("deny");
-    expect(dynamicOut.agent_message ?? "").toContain(
-      "general-purpose interpreters",
-    );
+    // A removal the command line does not spell out goes to Cursor's own
+    // command approval; the witness keeps the helper's identity when it runs.
+    expect(dynamicOut.permission, dynamicOut.agent_message).toBe("allow");
 
     rmSync(ledgerDirFor(proj), { recursive: true, force: true });
     expect(witnessFilesFor(proj)).toHaveLength(1);
@@ -2435,7 +2446,7 @@ if (import.meta.main) {
   });
 
   // This evaluator matrix runs many adapter subprocesses sequentially.
-  test("29: Windows evaluator variants and unresolved expansion remain fail-closed", () => {
+  test("29: Windows evaluator variants and git's program settings go on to the checks every harness runs", () => {
     const proj = installedProject();
     const { dispatch } = activateReviewer(proj);
     const externalGitDir = join(proj, "scratch", "git-exec-path");
@@ -2517,8 +2528,7 @@ if (import.meta.main) {
         permission?: string;
         agent_message?: string;
       };
-      expect(out.permission, command).toBe("deny");
-      expect(out.agent_message ?? "", command).toContain("dynamic command evaluation");
+      expectChecksEveryHarnessRunsDecide(out, command);
     }
 
     const harmless = runAdapter(
@@ -2636,10 +2646,7 @@ if (import.meta.main) {
       permission?: string;
       agent_message?: string;
     };
-    expect(resetRepositoryOut.permission).toBe("deny");
-    expect(resetRepositoryOut.agent_message ?? "").toContain(
-      "dynamic command evaluation",
-    );
+    expectChecksEveryHarnessRunsDecide(resetRepositoryOut);
 
     const alternateChild = join(safeAlternateRepo, "child");
     mkdirSync(alternateChild, { recursive: true });
@@ -2720,8 +2727,7 @@ if (import.meta.main) {
       permission?: string;
       agent_message?: string;
     };
-    expect(persistedOut.permission).toBe("deny");
-    expect(persistedOut.agent_message ?? "").toContain("dynamic command evaluation");
+    expectChecksEveryHarnessRunsDecide(persistedOut);
 
     const safeAlias = spawnSync(
       "git",
@@ -2750,8 +2756,7 @@ if (import.meta.main) {
       permission?: string;
       agent_message?: string;
     };
-    expect(externalAliasOut.permission).toBe("deny");
-    expect(externalAliasOut.agent_message ?? "").toContain("dynamic command evaluation");
+    expectChecksEveryHarnessRunsDecide(externalAliasOut);
 
     const submoduleDir = join(proj, "scratch", "status-submodule");
     mkdirSync(submoduleDir, { recursive: true });
@@ -2868,10 +2873,7 @@ if (import.meta.main) {
       permission?: string;
       agent_message?: string;
     };
-    expect(resetIndexOut.permission).toBe("deny");
-    expect(resetIndexOut.agent_message ?? "").toContain(
-      "dynamic command evaluation",
-    );
+    expectChecksEveryHarnessRunsDecide(resetIndexOut);
 
 
     for (const command of [
@@ -2951,8 +2953,7 @@ if (import.meta.main) {
         permission?: string;
         agent_message?: string;
       };
-      expect(nestedOut.permission, command).toBe("deny");
-      expect(nestedOut.agent_message ?? "", command).toContain("dynamic command evaluation");
+      expectChecksEveryHarnessRunsDecide(nestedOut, command);
     }
     for (const command of [
       `git -C ${nestedRelative} st`,
@@ -3038,10 +3039,7 @@ if (import.meta.main) {
           permission?: string;
           agent_message?: string;
         };
-        expect(alternateOut.permission, command).toBe("deny");
-        expect(alternateOut.agent_message ?? "", command).toContain(
-          "dynamic command evaluation",
-        );
+        expectChecksEveryHarnessRunsDecide(alternateOut, command);
       }
 
       const ambiguousWrapperCommand =
@@ -3151,10 +3149,7 @@ if (import.meta.main) {
           permission?: string;
           agent_message?: string;
         };
-        expect(restoredOut.permission, command).toBe("deny");
-        expect(restoredOut.agent_message ?? "", command).toContain(
-          "dynamic command evaluation",
-        );
+        expectChecksEveryHarnessRunsDecide(restoredOut, command);
       }
 
       for (const command of [
@@ -3256,10 +3251,7 @@ if (import.meta.main) {
           permission?: string;
           agent_message?: string;
         };
-        expect(dangerousOut.permission, command).toBe("deny");
-        expect(dangerousOut.agent_message ?? "", command).toContain(
-          "dynamic command evaluation",
-        );
+        expectChecksEveryHarnessRunsDecide(dangerousOut, command);
       }
 
       const mainConversation = PAYLOADS.preToolUseTask.conversation_id;
@@ -4156,10 +4148,7 @@ if (import.meta.main) {
         permission?: string;
         agent_message?: string;
       };
-      expect(out.permission, command).toBe("deny");
-      expect(out.agent_message ?? "", command).toContain(
-        "dynamic command evaluation",
-      );
+      expect(out.permission, command).toBe("allow");
     }
 
     const allowed =
@@ -4282,7 +4271,7 @@ if (import.meta.main) {
     );
   });
 
-  test("37: delegated executable lookup and data-driven mutators cannot erase attribution stores", () => {
+  test("37: a program run from a path or fed a list goes on to the checks every harness runs, and a spelled-out removal is held", () => {
     const proj = installedProject();
     seedStateFile(proj, "state-construction.md");
     clearLedger(proj);
@@ -4316,107 +4305,44 @@ if (import.meta.main) {
     writeFileSync(script, destructiveBody);
     if (process.platform !== "win32") chmodSync(script, 0o755);
 
-    const command =
-      process.platform === "win32"
-        ? "scratch\\wipe-attribution.cmd"
-        : "./scratch/wipe-attribution";
-    const execution = runAdapter(
-      proj,
-      "guards",
-      payload("preToolUseShell", proj, {
-        conversation_id: "developer-project-executable-child",
-        session_id: "developer-project-executable-child",
-        tool_input: { command },
-      }),
-    );
-    const executionOut = JSON.parse(execution.stdout) as {
-      permission?: string;
-      agent_message?: string;
-    };
-    if (executionOut.permission === "allow") {
-      const result =
-        process.platform === "win32"
-          ? spawnSync(
-              process.env.ComSpec ?? "cmd.exe",
-              [
-                "/d",
-                "/s",
-                "/c",
-                `"${script}"`,
-              ],
-              { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
-            )
-          : spawnSync(script, [], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
-      expect(result.status, result.stderr).toBe(0);
-    }
-    expect(executionOut.permission).toBe("deny");
-    expect(executionOut.agent_message ?? "").toContain(
-      "general-purpose interpreters",
-    );
-    expect(ledgerFilesFor(proj)).toHaveLength(1);
-    expect(witnessFilesFor(proj)).toHaveLength(1);
-
+    // A program the line runs from a path, one a PATH it sets picks, and a
+    // mutator fed a list from a subfolder: the line does not spell out what
+    // they change, so Cursor's own command approval is the door, as on every
+    // harness, and the checks every harness runs decide them.
     const shadowedRg = join(
       scriptDir,
       process.platform === "win32" ? "rg.cmd" : "rg",
     );
     writeFileSync(shadowedRg, destructiveBody);
     if (process.platform !== "win32") chmodSync(shadowedRg, 0o755);
-    const resolutionCommands = [
-      `env PATH=${JSON.stringify(scriptDir)} rg`,
-      `PATH=${JSON.stringify(scriptDir)} rg`,
-      `PATH=${JSON.stringify(scriptDir)}; rg`,
-      `env PaTh=${JSON.stringify(scriptDir)} rg`,
-      "env PATHEXT=.CMD rg",
-      "env -uPATH rg",
-      "env --unset=PATH rg",
-      "env -i rg",
-      "env -i0 rg",
-      "env --ignore-environment rg",
-      "nice env -i rg",
-    ];
-    for (const [index, unsafeCommand] of resolutionCommands.entries()) {
-      const denied = runAdapter(
+    writeFileSync(join(scriptDir, "targets.txt"), "../aidlc\n");
+    for (const [command, cwd] of [
+      [process.platform === "win32" ? "scratch\\wipe-attribution.cmd" : "./scratch/wipe-attribution", proj],
+      [process.platform === "win32" ? "scratch\\echo.cmd harmless" : "./scratch/printf.sh harmless", proj],
+      [`env PATH=${JSON.stringify(scriptDir)} rg`, proj],
+      [`PATH=${JSON.stringify(scriptDir)} rg`, proj],
+      [`PATH=${JSON.stringify(scriptDir)}; rg`, proj],
+      [`env PaTh=${JSON.stringify(scriptDir)} rg`, proj],
+      ["env PATHEXT=.CMD rg", proj],
+      ["env -uPATH rg", proj],
+      ["env --unset=PATH rg", proj],
+      ["env -i rg", proj],
+      ["env -i0 rg", proj],
+      ["env --ignore-environment rg", proj],
+      ["nice env -i rg", proj],
+      ["xargs rm -rf < targets.txt", scriptDir],
+    ] as const) {
+      const out = JSON.parse(runAdapter(
         proj,
         "guards",
         payload("preToolUseShell", proj, {
           conversation_id: "developer-project-executable-child",
           session_id: "developer-project-executable-child",
-          tool_input: { command: unsafeCommand },
+          cwd,
+          tool_input: { command, cwd },
         }),
-      );
-      const deniedOut = JSON.parse(denied.stdout) as {
-        permission?: string;
-        agent_message?: string;
-      };
-      if (deniedOut.permission === "allow" && index === 0) {
-        const result =
-          process.platform === "win32"
-            ? spawnSync(
-                process.env.ComSpec ?? "cmd.exe",
-                ["/d", "/s", "/c", "rg"],
-                {
-                  timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
-                  cwd: proj,
-                  encoding: "utf-8",
-                  env: {
-                    ...process.env,
-                    PATH: scriptDir,
-                    PATHEXT: ".CMD",
-                  },
-                },
-              )
-            : spawnSync("rg", [], {
-                timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
-                cwd: proj,
-                encoding: "utf-8",
-                env: { ...process.env, PATH: scriptDir },
-              });
-        expect(result.status, result.stderr).toBe(0);
-      }
-      expect(deniedOut.permission, unsafeCommand).toBe("deny");
-      expect(ledgerFilesFor(proj), unsafeCommand).toHaveLength(1);
-      expect(witnessFilesFor(proj), unsafeCommand).toHaveLength(1);
+      ).stdout) as { permission?: string; agent_message?: string };
+      expectChecksEveryHarnessRunsDecide(out, command);
     }
 
     const safeEnvironment = runAdapter(
@@ -4429,35 +4355,6 @@ if (import.meta.main) {
       }),
     );
     expectAllowJson(safeEnvironment);
-
-    const targets = join(scriptDir, "targets.txt");
-    writeFileSync(targets, "../aidlc\n");
-    const dataDrivenCommand = "xargs rm -rf < targets.txt";
-    const dataDriven = runAdapter(
-      proj,
-      "guards",
-      payload("preToolUseShell", proj, {
-        conversation_id: "developer-project-executable-child",
-        session_id: "developer-project-executable-child",
-        cwd: scriptDir,
-        tool_input: { command: dataDrivenCommand, cwd: scriptDir },
-      }),
-    );
-    const dataDrivenOut = JSON.parse(dataDriven.stdout) as {
-      permission?: string;
-      agent_message?: string;
-    };
-    if (dataDrivenOut.permission === "allow" && process.platform !== "win32") {
-      const result = spawnSync("sh", ["-c", dataDrivenCommand], {
-        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
-        cwd: scriptDir,
-        encoding: "utf-8",
-      });
-      expect(result.status, result.stderr).toBe(0);
-    }
-    expect(dataDrivenOut.permission).toBe("deny");
-    expect(ledgerFilesFor(proj)).toHaveLength(1);
-    expect(witnessFilesFor(proj)).toHaveLength(1);
 
     const safeDataDriven = runAdapter(
       proj,
@@ -4474,29 +4371,19 @@ if (import.meta.main) {
     );
     expectAllowJson(safeDataDriven);
 
-    for (const unsafeCommand of [
-      process.platform === "win32"
-        ? "scratch\\echo.cmd harmless"
-        : "./scratch/printf.sh harmless",
-      "busybox rm -rf aidlc",
-      "toybox rm -rf aidlc",
-    ]) {
-      const denied = runAdapter(
+    // A removal the line spells out is held, whichever multi-call binary runs it.
+    for (const command of ["busybox rm -rf aidlc", "toybox rm -rf aidlc"]) {
+      const out = JSON.parse(runAdapter(
         proj,
         "guards",
         payload("preToolUseShell", proj, {
           conversation_id: "developer-project-executable-child",
           session_id: "developer-project-executable-child",
-          tool_input: { command: unsafeCommand },
+          tool_input: { command },
         }),
-      );
-      const deniedOut = JSON.parse(denied.stdout) as {
-        permission?: string;
-        agent_message?: string;
-      };
-      expect(deniedOut.permission, unsafeCommand).toBe("deny");
-      expect(ledgerFilesFor(proj), unsafeCommand).toHaveLength(1);
-      expect(witnessFilesFor(proj), unsafeCommand).toHaveLength(1);
+      ).stdout) as { permission?: string; agent_message?: string };
+      expect(out.permission, command).toBe("deny");
+      expect(out.agent_message ?? "", command).toContain("attribution state");
     }
 
     for (const safeCommand of [
@@ -4595,11 +4482,10 @@ if (import.meta.main) {
       }),
     ).stdout) as { permission?: string; agent_message?: string };
     expect(unrecordedTask().permission).toBe("allow");
-    // Under strict the identity checks hold, and each refusal names the step that works.
+    // Under strict the identity checks hold: a build or a test still runs (test
+    // 40), and a Task whose record cannot be written names the step that works.
     withPolicy("strict (set by you)");
-    const held = delegateShell("bun test");
-    expect(held.permission).toBe("deny");
-    expect(held.agent_message ?? "").toContain("have the parent conversation run executable probes");
+    expect(delegateShell("bun test").permission).toBe("allow");
     const heldTask = unrecordedTask();
     expect(heldTask.permission).toBe("deny");
     expect(heldTask.agent_message ?? "").toContain("Start it again");
@@ -4610,12 +4496,10 @@ if (import.meta.main) {
     })).stdout).permission).toBe("allow");
   });
 
-  test("39: under strict and relaxed a delegate runs the AI-DLC commands the core admits it, and nothing more", () => {
+  test("39: under strict and relaxed a delegate runs the AI-DLC commands it is given, and a write over its records is held", () => {
     // Reverse Engineering's helper mints and checks its scope fingerprint with
-    // AI-DLC's own command, as its template (re-artifacts.md) spells it. The
-    // core admits it to every delegate (delegateAdmittedVerbs); the
-    // interpreter and attribution-path denies refused it under strict and
-    // relaxed, so the stage stopped there on Cursor.
+    // AI-DLC's own command, as its template (re-artifacts.md) spells it; the
+    // checks every harness runs still judge it.
     const proj = installedProject();
     seedStateFile(proj, "state-construction.md");
     const statePath = join(seededRecordDir(proj), "aidlc-state.md");
@@ -4654,20 +4538,16 @@ if (import.meta.main) {
         `bun .cursor/tools/aidlc-utility.ts codekb-publish --repo proj --staged "${dirname(staged)}/" --paths ./ ` +
           "--expect-store none --expect-source 0123abcd --json",
       ]) {
-        rmSync(join(health, "review-freeze.last"), { force: true });
+        rmSync(join(health, "plan-approval-guard.last"), { force: true });
         const out = delegateShell(command);
         expect(out.permission, `${policy}: ${command}: ${out.agent_message ?? ""}`).toBe("allow");
         // The core guards still ran on it.
-        expect(existsSync(join(health, "review-freeze.last")), command).toBe(true);
+        expect(existsSync(join(health, "plan-approval-guard.last")), command).toBe(true);
       }
-      // The Windows spelling of the dispatcher path: the script itself in
-      // PowerShell, a different file name where a POSIX shell reads the
-      // backslashes as escapes.
+      // The Windows spelling of the dispatcher path.
       const windows = delegateShell("bun .cursor\\tools\\aidlc.ts engine workspace codekb-scope-diff --mint --paths ./");
-      if (process.platform === "win32") expect(windows.permission, windows.agent_message).toBe("allow");
-      else expect(windows.agent_message ?? "").toContain("general-purpose interpreters");
-      // The publish as the stage writes it, over continued lines: one command
-      // to a POSIX shell; PowerShell ends the command at the first line.
+      expect(windows.permission, windows.agent_message).toBe("allow");
+      // The publish as the stage writes it, over continued lines.
       const continued = delegateShell([
         "bun .cursor/tools/aidlc-utility.ts codekb-publish \\",
         "  --repo proj \\",
@@ -4677,29 +4557,35 @@ if (import.meta.main) {
         "  --expect-source 0123abcd \\",
         "  --json",
       ].join("\n"));
-      if (process.platform === "win32") expect(continued.agent_message ?? "").toContain("general-purpose interpreters");
-      else expect(continued.permission, continued.agent_message).toBe("allow");
+      expect(continued.permission, continued.agent_message).toBe("allow");
+      // A write over the helper's records beside AI-DLC's command is held.
+      for (const command of [
+        `${mint} \\\n> aidlc/.aidlc-cursor-subagents/x.json`,
+        `${mint} > aidlc/.aidlc-cursor-subagents/x.json`,
+        `rm -rf aidlc/.aidlc-cursor-subagents && ${mint}`,
+      ]) {
+        const out = delegateShell(command);
+        expect(out.permission, `${policy}: ${command}`).toBe("deny");
+        expect(out.agent_message ?? "", command).toContain("attribution state");
+      }
+      // A lifecycle step is still the main chat's, said by the check every harness runs.
+      const report = delegateShell("aidlc engine orchestrate report --stage reverse-engineering --result awaiting-approval");
+      expect(report.permission, policy).toBe("deny");
+      expect(report.agent_message ?? "", policy).toContain("Delegated agent");
+      // Anything else beside or instead of AI-DLC's command goes on to those checks.
       for (const command of [
         "bun -e 'x'",
         `${mint}\nbun -e 'x'`,
-        `${mint} \\\n> aidlc/.aidlc-cursor-subagents/x.json`,
         "bun --preload ./x.ts .cursor/tools/aidlc.ts engine workspace codekb-scope-diff --mint --paths ./",
-        `${mint} > aidlc/.aidlc-cursor-subagents/x.json`,
-        `rm -rf aidlc/.aidlc-cursor-subagents && ${mint}`,
         `FORCE=1 ${mint}`,
         "bun scratch/aidlc.ts engine workspace codekb-scope-diff --mint --paths ./",
         "bun .cursor/tools/aidlc.ts engine knowledge sync",
-        "aidlc engine orchestrate report --stage reverse-engineering --result awaiting-approval",
         "bun .cursor/tools/aidlc-utility.ts upgrade",
         "bun .cursor/tools/aidlc-log.ts review --stage reverse-engineering --verdict pass",
         "bun scratch/aidlc-utility.ts codekb-publish --repo proj",
       ]) {
-        const out = delegateShell(command);
-        expect(out.permission, `${policy}: ${command}`).toBe("deny");
-        expect(out.agent_message ?? "", command).toContain("general-purpose interpreters");
+        expectChecksEveryHarnessRunsDecide(delegateShell(command), `${policy}: ${command}`);
       }
-      // Under these policies a build or a test is still the parent's.
-      expect(delegateShell("bun test").agent_message ?? "").toContain("have the parent conversation run executable probes");
     }
     // What the shell reads inside quotes is an argument: a repo folder's name
     // as AI-DLC quotes it for each shell.
@@ -4712,7 +4598,7 @@ if (import.meta.main) {
       expect(out.permission, `${repo}: ${out.agent_message ?? ""}`).toBe("allow");
     }
     // Outside quotes they are the shell's, and so are "$" and "`" inside
-    // double quotes.
+    // double quotes: what they run goes on to the checks every harness runs.
     for (const command of [
       `${scope} --repo 'lib (copy)'; bun -e 'x'`,
       `${scope} --repo lib(copy) --mint --paths ./`,
@@ -4725,10 +4611,384 @@ if (import.meta.main) {
         ? `${scope} --repo 'a\u2019; bun -e 'x'; \u2019'`
         : `${scope} --repo "a\\"b"; bun -e 'x'; \\"`,
     ]) {
-      const out = delegateShell(command);
-      expect(out.permission, command).toBe("deny");
-      expect(out.agent_message ?? "", command).toContain("general-purpose interpreters");
+      expectChecksEveryHarnessRunsDecide(delegateShell(command), command);
     }
     expect(ledger()).toEqual(ledgerBefore);
+  });
+
+  test("40: under strict, relaxed and a team's locked strict a helper runs its builds, tests and searches", () => {
+    // Code Generation tells its developer helper to run each layer's tests.
+    // The helper's identity record guards two checks; a build, a test or a
+    // read cannot change that record, so only a write over it is held.
+    const proj = installedProject();
+    seedStateFile(proj, "state-construction.md");
+    const statePath = join(seededRecordDir(proj), "aidlc-state.md");
+    const original = readFileSync(statePath, "utf-8");
+    const withPolicy = (line: string | null) => writeFileSync(
+      statePath,
+      line === null
+        ? original
+        : original
+          .replace(/^- \*\*(?:Guard Policy|Change Control)\*\*:.*\n/gm, "")
+          .replace(/^(- \*\*Scope\*\*:.*)$/m, `$1\n- **Guard Policy**: ${line}`),
+    );
+    const teamMemory = join(proj, "aidlc", "spaces", "default", "memory", "team.md");
+    const lockStrict = (on: boolean) => {
+      mkdirSync(dirname(teamMemory), { recursive: true });
+      const existing = existsSync(teamMemory) ? readFileSync(teamMemory, "utf-8") : "# Team\n";
+      const unlocked = existing.replace("## Guard Policy\n\nMode: strict\n", "## Guard Policy\n");
+      writeFileSync(
+        teamMemory,
+        !on
+          ? unlocked
+          : unlocked.includes("## Guard Policy\n")
+            ? unlocked.replace("## Guard Policy\n", "## Guard Policy\n\nMode: strict\n")
+            : `${unlocked.trimEnd()}\n\n## Guard Policy\n\nMode: strict\n`,
+      );
+    };
+    setCurrentStage(proj, "functional-design");
+    clearLedger(proj);
+    registerTaskParent(proj);
+    expectAllowJson(runAdapter(proj, "guards", payload("preToolUseTask", proj, {
+      tool_input: { description: "Build the unit", prompt: "Implement the unit.", subagent_type: "aidlc-developer-agent" },
+    })));
+    mkdirSync(join(proj, "scratch"), { recursive: true });
+    const health = hooksHealthDir(proj);
+    const delegateShell = (command: string) => JSON.parse(runAdapter(proj, "guards", payload("preToolUseShell", proj, {
+      conversation_id: "developer-builds-and-tests",
+      session_id: "developer-builds-and-tests",
+      tool_input: { command },
+    })).stdout) as { permission?: string; agent_message?: string };
+    // Ordinary builds, tests, lints and searches, as a helper spells them on
+    // any shell; a deny that comes back for one of them fails here.
+    const ordinary = [
+      "bun test",
+      "npm test",
+      "pytest",
+      "python -m pytest",
+      "npx vitest run",
+      "cargo test",
+      "go test ./...",
+      "make test",
+      "bash scripts/test.sh",
+      "./node_modules/.bin/jest",
+      "bun test ./",
+      "eslint .",
+      "pytest .",
+      "grep -rn formatPrice .",
+      "git diff",
+      "git log --oneline -5",
+      "npm test 2>&1 | tee out.log",
+      'bun test -t "a \\"b\\""',
+      'cd "$ROOT" && npm test',
+      "npm.cmd test",
+      ".\\node_modules\\.bin\\jest.cmd",
+      "Get-ChildItem -Recurse . | Select-String foo",
+      "npm test *> test.log",
+      "Get-ChildItem scratch | Remove-Item",
+    ];
+    for (const [policy, locked] of [
+      ["strict (set by you)", false],
+      ["relaxed (set by you)", false],
+      [null, true],
+    ] as const) {
+      withPolicy(policy);
+      lockStrict(locked);
+      const label = policy ?? "team strict";
+      for (const command of ordinary) {
+        rmSync(join(health, "plan-approval-guard.last"), { force: true });
+        const out = delegateShell(command);
+        expect(out.permission, `${label}: ${command}: ${out.agent_message ?? ""}`).toBe("allow");
+        // The AI-DLC checks every harness runs still ran on it.
+        expect(existsSync(join(health, "plan-approval-guard.last")), `${label}: ${command}`).toBe(true);
+      }
+      // A write over the helper's own records is still held.
+      for (const command of [
+        "rm -rf aidlc",
+        "> aidlc/.aidlc-cursor-subagents/spawn-x.json",
+        "find . -delete",
+        "find aidlc -exec rm -rf {} +",
+      ]) {
+        const out = delegateShell(command);
+        expect(out.permission, `${label}: ${command}`).toBe("deny");
+        expect(out.agent_message ?? "", `${label}: ${command}`).toContain("attribution state");
+      }
+      // A lifecycle step is still the main chat's, said by the check every
+      // harness runs.
+      const report = delegateShell("aidlc engine orchestrate report --stage functional-design --result awaiting-approval");
+      expect(report.permission, label).toBe("deny");
+      expect(report.agent_message ?? "", label).toContain("Delegated agent");
+    }
+    expect(ledgerFilesFor(proj)).toHaveLength(1);
+  });
+});
+
+// --- guards: the four guards in the adapter's own process ------------------
+//
+// A child process loads the whole engine again, so a tool call whose guards ran
+// as children cost one engine load per guard. They run their core hook inside
+// the adapter's process, as on Codex and Copilot. Stand-in guards that record
+// their pid show where each one ran; the same calls through a twin project whose
+// guard files export no run() show that each decision is the one the guard's own
+// process gave (without run() the adapter starts the guard as a child, as it
+// always did).
+const GUARD_FILES = [
+  "aidlc-state-transition-guard.ts",
+  "aidlc-reviewer-scope.ts",
+  "aidlc-review-freeze.ts",
+  "aidlc-plan-approval-guard.ts",
+] as const;
+
+type StandIn = { code: number; stderr?: string; throws?: boolean; sees?: string };
+
+// A guard that records the pid it ran in (and, with `sees`, whether that path
+// existed when it ran) and answers as told.
+function standInGuard(capture: string, file: string, answer: StandIn): string {
+  return [
+    'import { appendFileSync, existsSync } from "node:fs";',
+    "export async function run(_input: string): Promise<number> {",
+    `  appendFileSync(${JSON.stringify(capture)}, JSON.stringify({ pid: process.pid, file: ${JSON.stringify(file)}${
+      answer.sees ? `, sees: existsSync(${JSON.stringify(answer.sees)})` : ""
+    } }) + "\\n");`,
+    answer.throws ? '  throw new Error("STANDIN-THREW");' : "",
+    answer.stderr ? `  process.stderr.write(${JSON.stringify(answer.stderr)});` : "",
+    `  return ${answer.code};`,
+    "}",
+    "if (import.meta.main) process.exit(await run(await Bun.stdin.text()));",
+  ].join("\n");
+}
+
+function standInGuards(dir: string, capture: string, answers: (file: string) => StandIn = () => ({ code: 0 })): void {
+  for (const file of GUARD_FILES) {
+    writeFileSync(join(dir, ".cursor", "hooks", file), standInGuard(capture, file, answers(file)), "utf-8");
+  }
+}
+
+function guardRuns(capture: string): Array<{ pid: number; file: string; sees?: boolean }> {
+  if (!existsSync(capture)) return [];
+  return readFileSync(capture, "utf-8").trim().split("\n").filter(Boolean)
+    .map((line) => JSON.parse(line) as { pid: number; file: string; sees?: boolean });
+}
+
+// The shipped guards, each behind a file whose run is no function: the adapter
+// starts the real hook as its own process, the path every call took before. The
+// file keeps the hook's other exports, since another hook imports from the plan guard.
+function childOnlyGuards(dir: string): void {
+  for (const file of GUARD_FILES) {
+    const path = join(dir, ".cursor", "hooks", file);
+    const real = file.replace(/\.ts$/, ".real.ts");
+    cpSync(path, join(dir, ".cursor", "hooks", real));
+    writeFileSync(path, [
+      `export * from "./${real}";`,
+      "export const run = undefined;",
+      "if (import.meta.main) {",
+      `  const { run } = await import("./${real}");`,
+      "  process.exit(await run(await Bun.stdin.text()));",
+      "}",
+    ].join("\n"), "utf-8");
+  }
+}
+
+function dropLines(dir: string): string[] {
+  const health = hooksHealthDir(dir);
+  if (!existsSync(health)) return [];
+  return readdirSync(health)
+    .filter((name) => name.endsWith(".drops"))
+    .sort()
+    .flatMap((name) => readFileSync(join(health, name), "utf-8").split("\n").filter(Boolean))
+    .map((line) => line.replace(/^[^\t]*\t/, ""));
+}
+
+// The project folder in either separator (a Windows test project is written
+// with forward slashes, a guard names it with backslashes), JSON-escaped or not.
+function inProject(text: string, dir: string): string {
+  let out = text;
+  for (const form of [dir, dir.replaceAll("\\", "/"), dir.replaceAll("/", "\\")]) {
+    out = out.replaceAll(JSON.stringify(form).slice(1, -1), "<project>").replaceAll(form, "<project>");
+  }
+  return out;
+}
+
+// A construction project at Code Generation with no approved plan.
+function codeGenerationProject(): string {
+  const proj = installedProject();
+  seedStateFile(proj, "state-construction.md");
+  const statePath = join(seededRecordDir(proj), "aidlc-state.md");
+  const state = readFileSync(statePath, "utf-8").replace(
+    /^- \*\*Current Stage\*\*:.*$/m,
+    "- **Current Stage**: code-generation",
+  );
+  writeFileSync(statePath, state);
+  writeActiveDirectiveMarker(proj, { kind: "run-stage", stage: "code-generation", state_sha256: stateDigest(state) });
+  return proj;
+}
+
+describe("t276 guards run the four guards in the adapter's own process", () => {
+  test("G1: a Shell call runs the four guards inside the adapter's process, in order", () => {
+    const proj = installedProject();
+    seedStateFile(proj, "state-construction.md");
+    const capture = join(proj, "guard-runs.ndjson");
+    standInGuards(proj, capture);
+    const r = runAdapter(proj, "guards", payload("preToolUseShell", proj));
+    expectAllowJson(r);
+    expect(r.pid).toBeGreaterThan(0);
+    expect(guardRuns(capture)).toEqual(GUARD_FILES.map((file) => ({ pid: r.pid, file })));
+  });
+
+  test("G2: a Read runs three guards, a Write four and a Task the plan check, inside the adapter's process", () => {
+    const proj = installedProject();
+    seedStateFile(proj, "state-construction.md");
+    const capture = join(proj, "guard-runs.ndjson");
+    standInGuards(proj, capture);
+    const read = runAdapter(proj, "guards", payload("preToolUseShell", proj, {
+      tool_name: "Read",
+      tool_input: { file_path: join(proj, "README.md") },
+    }));
+    expectAllowJson(read);
+    expect(guardRuns(capture)).toEqual(GUARD_FILES.slice(0, 3).map((file) => ({ pid: read.pid, file })));
+    rmSync(capture);
+    const write = runAdapter(proj, "guards", payload("preToolUseShell", proj, {
+      tool_name: "Write",
+      tool_input: { file_path: join(proj, "src", "notes.ts") },
+    }));
+    expectAllowJson(write);
+    expect(guardRuns(capture)).toEqual(GUARD_FILES.map((file) => ({ pid: write.pid, file })));
+    rmSync(capture);
+    registerTaskParent(proj);
+    const task = runAdapter(proj, "guards", payload("preToolUseTask", proj));
+    expectAllowJson(task);
+    expect(guardRuns(capture)).toEqual([{ pid: task.pid, file: "aidlc-plan-approval-guard.ts" }]);
+  });
+
+  test("G3: every guard decision is byte for byte the one the guard's own process gave", () => {
+    const cases: Array<{ name: string; project: () => string; input: (dir: string) => string; permission: string }> = [
+      {
+        name: "an ordinary shell command",
+        project: () => {
+          const proj = installedProject();
+          seedStateFile(proj, "state-construction.md");
+          return proj;
+        },
+        input: (dir) => payload("preToolUseShell", dir),
+        permission: "allow",
+      },
+      {
+        name: "a code write before the plan is approved",
+        project: codeGenerationProject,
+        input: (dir) => payload("preToolUseShell", dir, {
+          tool_name: "Write",
+          tool_input: { file_path: join(dir, "src", "blocked.ts") },
+        }),
+        permission: "deny",
+      },
+      {
+        name: "a shell code write before the plan is approved",
+        project: codeGenerationProject,
+        input: (dir) => payload("preToolUseShell", dir, { tool_input: { command: "uniq input.txt src/blocked.txt" } }),
+        permission: "deny",
+      },
+      {
+        name: "a developer launch before the plan is approved",
+        project: codeGenerationProject,
+        input: (dir) => payload("preToolUseTask", dir, {
+          tool_input: {
+            subagent_type: "aidlc-developer-agent",
+            prompt: `AIDLC-STAGE: code-generation\nAIDLC-TESTING-CONTRACT: sha256:${"a".repeat(64)}`,
+          },
+        }),
+        permission: "deny",
+      },
+      {
+        name: "a write to a requirements file whose review is READY",
+        project: () => projectWithReadyReview().project,
+        input: (dir) => {
+          const artifact = join(seededRecordDir(dir), "inception", "requirements-analysis", "requirements.md");
+          return payload("preToolUseShell", dir, {
+            cwd: "",
+            tool_input: { command: "printf change >> requirements.md", cwd: dirname(artifact) },
+          });
+        },
+        permission: "deny",
+      },
+      {
+        name: "a reviewer deleting another unit's file",
+        project: () => {
+          const proj = installedProject();
+          activateReviewer(proj);
+          mkdirSync(join(seededRecordDir(proj), "construction", "unit-b"), { recursive: true });
+          return proj;
+        },
+        input: (dir) => payload("preToolUseSubagentRead", dir, {
+          tool_name: "Delete",
+          tool_input: { file_path: join(seededRecordDir(dir), "construction", "unit-b", "design.md") },
+        }),
+        permission: "deny",
+      },
+    ];
+    for (const item of cases) {
+      const decisions = [false, true].map((childOnly) => {
+        const dir = item.project();
+        if (childOnly) childOnlyGuards(dir);
+        const r = runAdapter(dir, "guards", item.input(dir));
+        expect(r.code, `${item.name} (${childOnly ? "child" : "here"})`).toBe(0);
+        return { stdout: inProject(r.stdout, dir), drops: dropLines(dir).map((line) => inProject(line, dir)) };
+      });
+      expect((JSON.parse(decisions[0].stdout) as { permission?: string }).permission, item.name).toBe(item.permission);
+      expect(decisions[0], item.name).toEqual(decisions[1]);
+    }
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("G4: a guard that throws fails alone with the line its own process left, and a later refusal still reaches the agent", () => {
+    const proj = installedProject();
+    seedStateFile(proj, "state-construction.md");
+    const capture = join(proj, "guard-runs.ndjson");
+    standInGuards(proj, capture, (file) =>
+      file === "aidlc-state-transition-guard.ts"
+        ? { code: 0, throws: true }
+        : file === "aidlc-plan-approval-guard.ts"
+        ? { code: 2, stderr: "STANDIN-REFUSED" }
+        : { code: 0 }
+    );
+    const r = runAdapter(proj, "guards", payload("preToolUseShell", proj));
+    expect(r.code).toBe(0);
+    expect(JSON.parse(r.stdout)).toEqual({ permission: "deny", agent_message: "STANDIN-REFUSED" });
+    expect(guardRuns(capture).map((run) => run.file)).toEqual([...GUARD_FILES]);
+    expect(dropLines(proj)).toEqual([
+      "state-transition-guard exited 1 under the Cursor adapter: error: STANDIN-THREW",
+    ]);
+  });
+
+  // With no engine to start, a guard that fell back to its own process could not
+  // run: the shipped guards answering at all shows each one ran here.
+  test("G6: the shipped guards run inside the adapter, so their answers arrive with no engine child to start", () => {
+    const noEngine = (dir: string) => ({ env: { AIDLC_COMPILED_EXECUTABLE: join(dir, "no-engine-here") } });
+    const ordinary = installedProject();
+    seedStateFile(ordinary, "state-construction.md");
+    expectAllowJson(runAdapter(ordinary, "guards", payload("preToolUseShell", ordinary), noEngine(ordinary)));
+    const proj = codeGenerationProject();
+    const write = runAdapter(proj, "guards", payload("preToolUseShell", proj, {
+      tool_name: "Write",
+      tool_input: { file_path: join(proj, "src", "blocked.ts") },
+    }), noEngine(proj));
+    expect(write.code, write.stderr).toBe(0);
+    expect((JSON.parse(write.stdout) as { permission?: string }).permission).toBe("deny");
+    expect(dropLines(proj)).toEqual([]);
+  });
+
+  test("G5: under the compiled engine a Claude Code turn waiting in the project is settled before the guards run", () => {
+    const proj = installedProject();
+    seedStateFile(proj, "state-construction.md");
+    const pending = join(proj, "aidlc", ".aidlc-sessions", "claude-turns", "chat-waiting.json");
+    mkdirSync(dirname(pending), { recursive: true });
+    writeFileSync(pending, "[]\n");
+    const capture = join(proj, "guard-runs.ndjson");
+    standInGuards(proj, capture, () => ({ code: 0, sees: pending }));
+    // The guards run here, so the engine path is never started; it only says
+    // the adapter runs under the compiled engine, whose hook route settles first.
+    const r = runAdapter(proj, "guards", payload("preToolUseShell", proj), {
+      env: { AIDLC_COMPILED_EXECUTABLE: join(proj, "no-engine-here") },
+    });
+    expectAllowJson(r);
+    expect(guardRuns(capture)).toEqual(GUARD_FILES.map((file) => ({ pid: r.pid, file, sees: false })));
   });
 });

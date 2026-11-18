@@ -336,6 +336,10 @@ describe("OMP F1: terminal review refusal respects the team Unit gate", () => {
         expect(p.events("GATE_REJECTED")).toHaveLength(1);
         expect(p.events("STAGE_REVISING")).toHaveLength(1);
         p.assertGate("revising");
+        // A team Unit's revision is a new pass: it starts before its first record.
+        expect(json(p.tool("state", [
+          "unit", "start", "--stage", STAGE, "--unit", UNIT,
+        ]), "Start the Unit's revision").emitted).toBe("UNIT_STARTED");
         const confirmed = p.confirm();
         p.outputs();
         const requested = json(p.tool("log", p.reviewArgs()),

@@ -4535,7 +4535,7 @@ Common forms:
   aidlc-graph export                   Emit designer-facing bundle (stdout)
   aidlc-graph export --check           CI drift guard against fixture
 
-See docs/reference/16-artifact-vocabulary.md for artifact rules.`);
+See https://awslabs.github.io/aidlc-workflows/reference/16-artifact-vocabulary/ for artifact rules.`);
 }
 
 export async function main(argv: string[]): Promise<void> {

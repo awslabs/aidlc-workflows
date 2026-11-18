@@ -24,7 +24,7 @@ import {
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const AUTHORED_HOOKS = join(REPO_ROOT, "harness", "kiro-ide", "hooks");
 const DIST_HOOKS = join(REPO_ROOT, "dist", "kiro-ide", ".kiro", "hooks");
-const KIRO_IDE_GUIDE = join(REPO_ROOT, "docs", "guide", "harnesses", "kiro-ide.md");
+const KIRO_IDE_GUIDE = join(REPO_ROOT, "docs", "guide", "harnesses", "kiro.md");
 const WINDOWS_EVIDENCE = join(
   REPO_ROOT,
   "docs",
@@ -213,7 +213,9 @@ describe("t245 Kiro IDE hook registrations (v2 schema contract)", () => {
   });
 
   test("upgrade instructions remove retired hook registrations before overlaying the new tree", () => {
-    const guide = readFileSync(KIRO_IDE_GUIDE, "utf-8");
+    // Only the Kiro part: the Kiro CLI (V2) section carries the other distribution's copy steps.
+    const [guide, v2Part] = readFileSync(KIRO_IDE_GUIDE, "utf-8").split("\n## Kiro CLI (V2)\n");
+    expect(v2Part).toBeDefined();
     const cleanupStart = guide.indexOf("for retired_hook in");
     const overlayCopy = guide.indexOf(
       'cp -R "$RUNTIME_ROOT/kiro-ide/.kiro/."',

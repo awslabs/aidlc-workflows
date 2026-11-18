@@ -1,8 +1,8 @@
 # Project-Level Rules
 
 > Project-specific specialisation and corrections. Loaded after `org.md` and
-> `team.md` as strict-additive guidance; contradictions with broader policy
-> are rejected. Populated by practices-discovery and the self-learning loop.
+> `team.md` as strict-additive guidance.
+> Populated by practices-discovery and the self-learning loop.
 >
 > Use sparingly: most teams don't need a project layer. Reach for it
 > only when this specific project needs stable, durable guidance beyond the
@@ -14,6 +14,8 @@
 <!-- Project-specific specialisation. Example: -->
 <!-- This monorepo requires package-scoped branch names and a package owner -->
 <!-- review in addition to the team's normal merge policy. -->
+<!-- A project that merges into another branch than team.md names says so on its own line, read before team.md's: -->
+<!-- - **Integration branch**: develop -->
 
 ## Walking Skeleton
 

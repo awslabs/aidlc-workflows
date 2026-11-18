@@ -33,7 +33,7 @@ For each endpoint, generate:
 - [ ] Error response formatting (consistent error envelope)
 
 ### Database Model Checklist
-For each entity, generate:
+For each entity something upstream asks for or the approved plan names (any other goes into the plan first, never a checklist item added here), generate:
 - [ ] Model/schema definition with field types and constraints
 - [ ] Indexes for queried fields and foreign keys
 - [ ] Timestamps (created_at, updated_at) where appropriate

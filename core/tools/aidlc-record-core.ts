@@ -10,14 +10,15 @@
 import { scopeStampLanded } from "./aidlc-unit-landing.ts";
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { accessSync, constants as fsConstants, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { accessSync, constants as fsConstants, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, unlinkSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
-import { basename, dirname, isAbsolute, join, relative, resolve as resolvePath } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve as resolvePath, sep } from "node:path";
 import { dlopen, FFIType, type Pointer } from "bun:ffi";
 import { runtimeHarnessDir, runtimeHarnessName, SPACE_NAME_REGEX } from "./aidlc-runtime-paths.ts";
 import { validateUnitName } from "./aidlc-review-records.ts";
 import { activeSpace, assertNoSymlinkInChainOrThrow, ENGINE_DIR, engineDirFor, intentsDir, isPlainObject, listIntentDirs, mainCheckoutOfWorktree, readAppendOnlyFileNoFollowOrThrow, readRegularFileNoFollowOrThrow, refuseEngineObserverWrite, spaceRecordRoot, workspaceRoot, writeFileAtomic } from "./aidlc-locks.ts";
 import { escapeRegex } from "./aidlc-markdown.ts";
+import { gitCommonDirOf } from "./aidlc-git.ts";
 import { jsoncDocumentValue, withoutBom } from "./aidlc-distribution.ts";
 
 export type CheckboxState = "pending" | "in-progress" | "awaiting-approval" | "revising" | "completed" | "skipped";
@@ -137,44 +138,6 @@ export function relativeRecordDir(
   const slug = selection.intent;
   if (slug === null) return null;
   return `aidlc/spaces/${sp}/intents/${slug}`;
-}
-
-// The repository NAME for a checkout whose project root is a LINKED GIT
-// WORKTREE, else null so the caller keeps `basename(projectDir)`.
-//
-// `git worktree add` names its directory after a branch, so in a linked worktree
-// basename(projectDir) is a branch name rather than a repository name. The shared
-// git dir lives inside the MAIN checkout, so its parent's basename is the
-// repository name.
-//
-// TWO things make this safe, and both are load-bearing:
-//
-//  1. `--git-dir` and `--git-common-dir` are measured with `cwd: projectDir`, so a
-//     relative answer is relative to PROJECTDIR — never to `--show-toplevel`. The
-//     two coincide only when the project root IS the toplevel; resolving against
-//     the toplevel otherwise climbs too high, and if a git dir happens to sit
-//     there (a repository vendored in another, or a home directory that is itself
-//     a repository) it would silently return a DIFFERENT repository's name.
-//  2. A linked worktree is the only topology where those two paths differ
-//     (`--git-dir` is `<common>/worktrees/<name>`). Equal for a main checkout, for
-//     a subdirectory of one, and for a repository nested inside another — all of
-//     which return null here and keep today's answer byte-for-byte. That is what
-//     makes this change worktree-only rather than a re-definition of identity for
-//     every project root below its repository root.
-//
-// Deliberately NOT the `origin` remote: that would also cover a clone whose
-// directory name differs from the repository, but remote names are mutable (a
-// rename or a re-point would move a workspace's store) and it would change
-// resolution for every checkout whose remote and directory names differ. A
-// location is stable; widening identity to the remote is a separate decision.
-export function gitRevParseSingle(projectDir: string, flag: string): string | null {
-  const r = spawnSync("git", ["rev-parse", flag], {
-    cwd: projectDir,
-    encoding: "utf-8",
-  });
-  if (r.status !== 0) return null;
-  const out = r.stdout?.trim();
-  return out ? out : null;
 }
 
 // The id8 disambiguator: trailing 8 hex chars of the uuid (digits only, dashes
@@ -852,12 +815,147 @@ export function readSessionPidEntry(projectDir: string, pid: number): SessionPid
   }
 }
 
+export function gcSessionPidEntries(
+  projectDir: string,
+  deadlineMs: number,
+  skip: ReadonlySet<number> = new Set(),
+  readIdentity: (pid: number) => ProcessIdentity | null = processIdentityReader(deadlineMs),
+): void {
+  let names: string[];
+  try {
+    names = readdirSync(sessionPidMapDir(projectDir));
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    if (!/^\d+$/.test(name)) continue;
+    if (Date.now() >= deadlineMs) break;
+    const pid = Number.parseInt(name, 10);
+    if (skip.has(pid)) continue;
+    if (pidEntryStale(projectDir, pid, readIdentity) !== true) continue;
+    try {
+      unlinkSync(join(sessionPidMapDir(projectDir), name));
+    } catch {
+      /* raced with another hook or cleanup */
+    }
+  }
+  sweepReleaseChecks(projectDir, deadlineMs, readIdentity);
+}
+
+// Whether a pid entry no longer names its process: gone, dead, or alive with
+// another start time. Null when the live process's start time cannot be read.
+function pidEntryStale(
+  projectDir: string,
+  pid: number,
+  readIdentity: (pid: number) => ProcessIdentity | null,
+): boolean | null {
+  const entry = readSessionPidEntry(projectDir, pid);
+  if (!entry || !processIsAlive(pid)) return true;
+  if (entry.startTime === null) return false;
+  const identity = readIdentity(pid);
+  if (identity === null) return null;
+  return identity.startTime !== entry.startTime;
+}
+
+// --- The pinned release a session already checked -------------------------
+//
+// The dispatcher hashes a pinned release's binary and every runtime file on a
+// session's first call and records the pass in pids/<pid>.release-check, beside
+// the entry of the session process the walk found; later calls of that chat in
+// that process leave out only the hashing (aidlc-lifecycle.ts
+// resolvePinnedDispatch). The record counts only while the live entry names the
+// same chat and the same, known start time. Session-start keeps the entry's one
+// writer; this file has its own.
+
+export interface SessionProcess {
+  pid: number;
+  startTime: string | null;
+  sessionId: string | null;
+}
+
+export interface ReleaseCheckMark {
+  version: string;
+  distribution: string | null;
+  executable: string;
+}
+
+function releaseCheckPath(projectDir: string, pid: number): string {
+  const entry = sessionPidEntryPath(projectDir, pid);
+  return entry === "" ? "" : `${entry}.release-check`;
+}
+
+// The session process and its chat as the live entry names them, or null: a
+// release check never counts for an entry with no start time or no chat.
+function liveSession(projectDir: string, session: SessionProcess): { sessionId: string; startTime: string } | null {
+  if (session.sessionId === null || session.startTime === null) return null;
+  const entry = readSessionPidEntry(projectDir, session.pid);
+  if (!entry || entry.sessionId !== session.sessionId || entry.startTime !== session.startTime) return null;
+  return { sessionId: session.sessionId, startTime: session.startTime };
+}
+
+export function releaseCheckHolds(projectDir: string, session: SessionProcess, mark: ReleaseCheckMark): boolean {
+  const live = liveSession(projectDir, session);
+  const path = releaseCheckPath(projectDir, session.pid);
+  if (live === null || path === "") return false;
+  try {
+    const recorded = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
+    return recorded.sessionId === live.sessionId && recorded.startTime === live.startTime &&
+      recorded.version === mark.version && recorded.distribution === mark.distribution &&
+      recorded.executable === mark.executable;
+  } catch {
+    return false;
+  }
+}
+
+// Written only beside an entry that already exists (never a folder), then the
+// release checks of processes that are gone are swept, since a project pinned
+// to an earlier release runs that release's own session-start cleanup. A write
+// that is refused (a read-only engine probe changes no project bytes) sweeps
+// nothing either.
+export function recordReleaseCheck(projectDir: string, session: SessionProcess, mark: ReleaseCheckMark): void {
+  const live = liveSession(projectDir, session);
+  const path = releaseCheckPath(projectDir, session.pid);
+  if (live === null || path === "") return;
+  try {
+    writeFileAtomic(path, `${JSON.stringify({ ...live, ...mark })}\n`);
+  } catch {
+    return; // The next call checks again.
+  }
+  const deadline = Date.now() + sessionAncestryBudgetMs();
+  sweepReleaseChecks(projectDir, deadline, processIdentityReader(deadline));
+}
+
+// A release check goes when its pid entry is gone or stale.
+function sweepReleaseChecks(
+  projectDir: string,
+  deadlineMs: number,
+  readIdentity: (pid: number) => ProcessIdentity | null,
+): void {
+  let names: string[];
+  try {
+    names = readdirSync(sessionPidMapDir(projectDir));
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    const match = /^(\d+)\.release-check$/.exec(name);
+    if (!match) continue;
+    if (Date.now() >= deadlineMs) break;
+    if (pidEntryStale(projectDir, Number.parseInt(match[1], 10), readIdentity) !== true) continue;
+    try {
+      unlinkSync(join(sessionPidMapDir(projectDir), name));
+    } catch {
+      /* raced with another hook or cleanup */
+    }
+  }
+}
+
 // Resolve the nearest mapped ancestor of the calling process. Every failure is
 // a silent miss so tools retain cursor behavior when process metadata is absent.
 export function resolveSessionIdFromAncestry(projectDir: string): string | null {
   const cached = sessionAncestryCache.get(projectDir);
   if (cached && cached.expiresAt > Date.now()) return cached.sessionId;
-  const resolved = resolveSessionIdFromAncestryUncached(projectDir);
+  const resolved = resolveSessionIdFromAncestryUncached(projectDir)?.sessionId ?? null;
   if (resolved === null) {
     sessionAncestryCache.set(projectDir, {
       sessionId: null,
@@ -869,7 +967,13 @@ export function resolveSessionIdFromAncestry(projectDir: string): string | null 
   return resolved;
 }
 
-function resolveSessionIdFromAncestryUncached(projectDir: string): string | null {
+// The session process the walk finds, for the pinned release check, which
+// counts it only with a known start time (releaseCheckHolds).
+export function nearestSessionProcess(projectDir: string): SessionProcess | null {
+  return resolveSessionIdFromAncestryUncached(projectDir);
+}
+
+function resolveSessionIdFromAncestryUncached(projectDir: string): SessionProcess | null {
   if (!existsSync(sessionPidMapDir(projectDir))) return null;
   const deadline = Date.now() + sessionAncestryBudgetMs();
   const windows = sessionProcessPlatform() === "win32";
@@ -891,7 +995,7 @@ function resolveSessionIdFromAncestryUncached(projectDir: string): string | null
       entry &&
       (entry.startTime === null || entry.startTime === identity.startTime)
     ) {
-      return windows && entry.startTime === null ? null : entry.sessionId;
+      return windows && entry.startTime === null ? null : { pid, startTime: entry.startTime, sessionId: entry.sessionId };
     }
     childIdentity = identity;
     pid = identity.ppid;
@@ -1064,6 +1168,22 @@ function hostNamedChat(projectDir: string): string | null {
 // tree, which the chats of one window share.
 export const CHAT_NAMING_HOSTS: ReadonlySet<string> = new Set(["claude", "codex", "kiro", "opencode"]);
 
+// Whether the host itself names the chat this command runs in (its own
+// variable in the agent's shell, or the id its plugin hands each command), not
+// the process tree, which the chats of one window share and a restart renames.
+// Read per command, not per host: Kiro CLI V3 runs Kiro IDE's tree and names
+// its chat in KIRO_SESSION_ID, while Kiro IDE's own chats name none.
+export function hostNamesThisChat(projectDir: string): boolean {
+  if (validSessionId(process.env.AIDLC_SESSION_OVERRIDE) !== null) {
+    return process.env.AIDLC_SESSION_OVERRIDE_SOURCE === "payload";
+  }
+  try {
+    return hostNamedChat(projectDir) !== null;
+  } catch {
+    return false;
+  }
+}
+
 export function claudeNamedChat(): { pid: number; session: string } | null {
   const pid = Number.parseInt(process.env.CLAUDE_PID ?? "", 10);
   const session = Number.isSafeInteger(pid) && processIsAlive(pid)
@@ -1173,9 +1293,9 @@ function localWorktreeRecord(projectDir: string): string | null {
     ) as { version?: unknown; intentRecord?: unknown; gitCommonDirHash?: unknown };
     if (meta.version !== 1 || typeof meta.intentRecord !== "string" ||
       typeof meta.gitCommonDirHash !== "string") return null;
-    const commonRaw = gitRevParseSingle(projectDir, "--git-common-dir");
-    if (commonRaw === null) return null;
-    const common = realpathSync(resolvePath(projectDir, commonRaw)).replace(/\\/g, "/");
+    const dirs = gitCommonDirOf(projectDir);
+    if (!dirs.ok) return null;
+    const common = realpathSync(dirs.common).replace(/\\/g, "/");
     const key = process.platform === "win32" ? common.toLowerCase() : common;
     return createHash("sha256").update(key).digest("hex") === meta.gitCommonDirHash
       ? meta.intentRecord
@@ -1381,6 +1501,13 @@ export function stateFilePath(projectDir: string, intent?: string, space?: strin
   }
   return join(resolved.dir, "aidlc-state.md");
 }
+
+// The in-flight compose question's ask type on the active-directive marker
+// below. The agent shows the question from the composer's proposal, so the
+// engine hands out a print, and the print is published as the question's step,
+// as every question the engine asks is (prepareEmission; read by
+// composeGateOpen).
+export const COMPOSE_ASK_TYPE = "compose";
 
 // The engine's final validated run-stage is the active execution cursor. Most
 // stages match aidlc-state.md's Current Stage, but unit-major Construction can
@@ -1681,10 +1808,13 @@ export function cloneIdentity(projectDir: string): CloneIdentity {
 }
 
 // Where the audit trail stood when a question was shown: the shard and its
-// size then, so the turns after it are the replies it can have.
+// size then, so the turns after it are the replies it can have, and when
+// (replyTurnsAfter reads it for another shard of the work).
 export interface AuditMark {
   shard: string;
   offset: number;
+  /** When it was taken; a mark kept before marks had a time has none. */
+  at?: string;
 }
 
 // Read the FIRST `**Field**: value` line from one audit block (tolerates an
@@ -1907,6 +2037,100 @@ export function auditShardTurnBlocks(content: string): string[] {
   const blocks = auditShardBlocks(content);
   const withdrawn = withdrawnTurnPositions(blocks);
   return withdrawn.size === 0 ? blocks : blocks.filter((_, pos) => !withdrawn.has(pos));
+}
+
+// The work a project-relative shard path is written for: its record folder,
+// for a tracked shard (`<record>/audit/<name>`) and a claimed Unit's own record
+// (`<record>/.aidlc-engine/audit/<name>`) alike. Null for any other path.
+function auditShardWork(shard: string): string | null {
+  const parts = shard.split("/");
+  const name = parts.pop() ?? "";
+  if (!/^[A-Za-z0-9._-]+\.md$/.test(name) || parts.pop() !== "audit") return null;
+  if (parts.at(-1) === ENGINE_DIR) parts.pop();
+  return parts.length > 0 ? parts.join("/") : null;
+}
+
+const AUDIT_MARK_AT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
+
+// The HOST_TURNs in a shard's text, by the Message Id they take back, with
+// the latest time each is stamped.
+function hostTurnTimes(text: string): Map<string, string> {
+  const times = new Map<string, string>();
+  if (!text.includes("HOST_TURN")) return times;
+  for (const block of auditShardBlocks(text)) {
+    const id = auditBlockField(block, "Event") === "HOST_TURN" ? auditBlockField(block, "Message Id") : null;
+    const at = auditBlockField(block, "Timestamp") ?? "";
+    if (id !== null && (times.get(id) ?? "") <= at) times.set(id, at);
+  }
+  return times;
+}
+
+// The person's reply turns after a question's mark, oldest first; `isReply`
+// says which turns are replies (isReplyTurn, aidlc-lib.ts). In the mark's own
+// shard they are the turns after its offset. A team checkout that claims a
+// Unit writes the work's rows to the Unit's own record from then on, and to
+// its tracked shard again once the claim is gone, so when the shard written
+// now is another shard of the same work, its turns stamped after the mark
+// count too, and a HOST_TURN in either shard takes back a turn in the other.
+// A mark from before marks kept a time takes the first row at or after its
+// offset as one: never earlier than the showing, since a claim only trims that
+// shard or resets it to a prefix, though a row stamped before its wait for the
+// audit lock can make it a second early. When the claim left no row there, it
+// takes `shownAt`, a time its question was shown again, if the caller has one.
+// Times are whole seconds and only a later one counts. Rows a handover adopted
+// into the Unit's record read as the checkout's own: no row names the checkout
+// it came from. Another clone's shard and another work's prove nothing.
+export function replyTurnsAfter(
+  projectDir: string,
+  mark: AuditMark,
+  isReply: (block: string) => boolean,
+  shownAt?: string,
+): string[] {
+  const shardPath = auditFilePath(projectDir);
+  const current = relative(projectDir, shardPath).split(sep).join("/");
+  if (mark.shard === current) {
+    const after = readAppendOnlyFileNoFollowOrThrow(shardPath, "audit shard").subarray(mark.offset).toString("utf-8");
+    return auditShardTurnBlocks(after).filter(isReply);
+  }
+  const work = auditShardWork(current);
+  if (work === null || auditShardWork(mark.shard) !== work) return [];
+  const read = (path: string, offset = 0): string => {
+    try {
+      assertNoSymlinkInChainOrThrow(realpathSync(projectDir), relative(projectDir, path));
+      return readAppendOnlyFileNoFollowOrThrow(path, "audit shard").subarray(offset).toString("utf-8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return "";
+      throw error;
+    }
+  };
+  const marked = read(join(projectDir, ...mark.shard.split("/")), mark.offset);
+  const now = read(shardPath);
+  const at = typeof mark.at === "string" && AUDIT_MARK_AT.test(mark.at)
+    ? mark.at
+    : auditShardBlocks(marked).map((block) => auditBlockField(block, "Timestamp"))
+      .find((stamp) => stamp !== null) ?? (shownAt !== undefined && AUDIT_MARK_AT.test(shownAt) ? shownAt : null);
+  const takenBack = (block: string, times: Map<string, string>): boolean => {
+    const id = auditBlockField(block, "Message Id");
+    const taken = id === null ? undefined : times.get(id);
+    return taken !== undefined && taken >= (auditBlockField(block, "Timestamp") ?? "");
+  };
+  const takenNow = hostTurnTimes(now);
+  const turns = auditShardTurnBlocks(marked).filter((block) => isReply(block) && !takenBack(block, takenNow));
+  const seen = new Set(turns.map((block) => block.trim()));
+  if (at !== null) {
+    const takenThere = hostTurnTimes(marked);
+    for (const block of auditShardTurnBlocks(now)) {
+      const stamp = auditBlockField(block, "Timestamp");
+      if (stamp === null || stamp <= at || !isReply(block) || takenBack(block, takenThere)) continue;
+      if (seen.has(block.trim())) continue;
+      seen.add(block.trim());
+      turns.push(block);
+    }
+  }
+  return turns
+    .map((block, pos) => ({ block, pos, stamp: auditBlockField(block, "Timestamp") ?? "" }))
+    .sort((a, b) => (a.stamp < b.stamp ? -1 : a.stamp > b.stamp ? 1 : a.pos - b.pos))
+    .map(({ block }) => block);
 }
 
 // A shard file that a sync tool or a person copied (a "<shard> 2.md" conflict

@@ -248,8 +248,9 @@ export const ACTIVE_DIRECTIVE_LOCK = "active-directive.lock";
 // enumeration a future author has to remember. It THROWS rather than no-ops
 // because a silent no-op hides exactly the bug the barrier exists to expose, and
 // both producers already fail safe on a non-zero engine exit: the Stop hook
-// allows the stop and records a drop, and the route check surfaces the error
-// from `unit start` instead of corrupting authority.
+// allows the stop and records a drop, and the route check (readEngineUnitDirective)
+// surfaces the error from `unit start`, or lets the start-receipt guard stand
+// aside, instead of corrupting authority.
 export class EngineModeViolationError extends Error {
   constructor(readonly primitive: string) {
     super(
@@ -277,9 +278,10 @@ export function engineDirFor(recordRoot: string): string {
 // above).
 export const STOP_HOOK_PROBE_ENV = "AIDLC_STOP_HOOK_PROBE";
 
-// The env marker that identifies the route check `aidlc-state.ts unit start`
-// runs to learn which Unit the engine would route. Like the Stop-hook probe it
-// consults the engine and reads only the directive off stdout.
+// The env marker that identifies the route check (readEngineUnitDirective in
+// aidlc-log.ts) that `unit start` and the start-receipt guard run to learn which
+// Unit the engine would route. Like the Stop-hook probe it consults the engine
+// and reads only the directive off stdout.
 export const ROUTE_CHECK_ENV = "AIDLC_ROUTE_CHECK";
 
 // The env marker on the `next` a prompt hook runs ahead of the agent (Kiro
@@ -1938,6 +1940,14 @@ export function installWithoutReplacing(from: string, to: string): void {
   }
 }
 
+// Puts a fully written file over the one at a name, with the same Windows
+// retry as the atomic writers (a reader holding the target open refuses the
+// rename there for a moment). For a caller that has already decided the file
+// at `to` may be replaced: the copy of a changed original nobody edited.
+export function replaceWithStaged(from: string, to: string): void {
+  replaceAtomically(from, to);
+}
+
 // ensureDirSync / renameIntoPlace / removeTreeSync — the three raw
 // mkdir/rename/rm primitives, re-exported so a caller that has NO reason to
 // import node:fs's mutating names directly still can. This module already
@@ -2057,6 +2067,11 @@ export function sameFileIdentity(
   return left.dev === right.dev && left.ino === right.ino;
 }
 
+/** The way past the read boundary's hardlink refusal, shared with the
+ *  knowledge tool's stat mirror. Said in words: a chained shell command does
+ *  not parse in Windows PowerShell 5.1, and cmd has no cp or mv. */
+export const HARDLINK_REMEDY = "Copy the file, delete the original, give the copy the original's name, then re-run.";
+
 // THE read boundary for any path that came from OUTSIDE the workspace — a CLI
 // flag, a value-transport file, a committed ledger row. Returns the contents of a
 // REGULAR file or throws; it never blocks indefinitely and never follows a link.
@@ -2165,8 +2180,7 @@ export function readRegularFileNoFollowOrThrow(
       throw new Error(
         `${what} is multiply linked (a hardlink) and is not trusted: ${path}. ` +
           `A hardlink can alias content from elsewhere on the filesystem into this ` +
-          `directory. Replace it with an independent copy - ` +
-          `cp <file> <file>.copy && mv <file>.copy <file> - and re-run.`,
+          `directory. ${HARDLINK_REMEDY}`,
       );
     }
     if (maxBytes !== undefined && st.size > maxBytes) {

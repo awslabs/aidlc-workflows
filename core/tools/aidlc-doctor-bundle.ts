@@ -353,10 +353,11 @@ export interface Timeline {
   workflowStartedRaw: string | typeof UNKNOWN;
   workflowStatus: string; // from state file, or "unknown"
   // True when the LATEST run (the scoped slice, not the whole buffer) recorded a
-  // WORKFLOW_COMPLETED that no later STAGE_STARTED reopened. Rule 3 (state/audit
-  // drift) reads this so it never fires on an old completion left in the buffer
-  // by a completed-then-restarted run, nor on finished work a scope change
-  // reopened at the stage it added (#2261).
+  // WORKFLOW_COMPLETED that nothing reopened since (a later STAGE_STARTED, or a
+  // Unit's reopen). Rule 3 (state/audit drift) reads this so it never fires on
+  // an old completion left in the buffer by a completed-then-restarted run, on
+  // finished work a scope change reopened at the stage it added (#2261), nor on
+  // a Unit's redo after the finish (#3608).
   workflowCompleted: boolean;
   notes: string[];
 }
@@ -492,8 +493,14 @@ export function reconstructTimeline(audit: string, stateContent: string): Timeli
     stages,
     workflowStartedRaw: workflowStarted?.timestampRaw ?? UNKNOWN,
     workflowStatus: status,
+    // Completed unless something reopened the run since: a stage started, or
+    // a Unit's step reopened (aidlc-jump reopen writes its GATE_REJECTED rows
+    // with Reopen and no STAGE_STARTED, so only those Units start it over).
     workflowCompleted: lastEventIndex(events, "WORKFLOW_COMPLETED") !== -1 &&
-      lastEventIndex(events, "WORKFLOW_COMPLETED") > lastEventIndex(events, "STAGE_STARTED"),
+      lastEventIndex(events, "WORKFLOW_COMPLETED") > Math.max(
+        lastEventIndex(events, "STAGE_STARTED"),
+        events.findLastIndex((e) => e.event === "GATE_REJECTED" && auditBlockField(e.block, "Reopen") !== null),
+      ),
     notes,
   };
 }
@@ -512,7 +519,8 @@ function extractStatus(stateContent: string): string {
 export const ARCHIVED_FROM_FIELD = "Archived From";
 
 // Whether the state agrees with a recorded WORKFLOW_COMPLETED: Completed, or a
-// completed workflow the person archived. Both doctor surfaces read it.
+// completed workflow the person archived. Both doctor surfaces read it, and so
+// does the finished-work window (keptSinceFinished), whose finish it picks.
 export function stateShowsCompletion(stateContent: string): boolean {
   const status = extractStatus(stateContent);
   if (status === "Completed") return true;
@@ -649,9 +657,10 @@ export interface MarkerSnapshot {
   stopHookDirExists: boolean;
 }
 
-// Freshness window past which a heartbeat is "frozen" relative to the newest
-// recorded work (newestWorkAuditMs). A hook that has not fired since well before the last
-// stage transition is the cold-hook signal (#571's rebuild-stage-graph case).
+// Freshness window past which the hooks read "frozen" relative to the newest
+// recorded work (newestWorkAuditMs): even the newest heartbeat across hooks is
+// older than this (#571's rebuild-stage-graph case). One hook's own old beat is
+// no signal, since hooks fire on different events (Rule 5).
 export const FROZEN_HEARTBEAT_MS = 24 * 60 * 60 * 1000;
 
 // Run every diagnosis rule. Order is severity-stable (errors first) only after
@@ -669,13 +678,15 @@ export function runDiagnosis(input: DiagnosisInput): DoctorFinding[] {
     audit,
   } = input;
 
-  // Rule 1 — open / unresolved gates. A stage whose gate never resolved is the
-  // single most common "it will not advance" cause.
+  // Rule 1 - open / unresolved gates. A stage waiting at its gate is waiting
+  // for the person, which the live report calls healthy waiting (the
+  // "Approval gate pending" row in collectDoctorReport), so it rides at info:
+  // the report keeps it beside the timeline, and no warning says otherwise.
   const unresolved = timeline.stages.filter((s) => s.gate === "unresolved");
   for (const s of unresolved) {
     findings.push({
       id: "gate-unresolved",
-      severity: "error",
+      severity: "info",
       summary: `Stage "${hashSlugForDisplay(s.slug)}" has an unresolved approval gate.`,
       evidence: {
         stage: hashSlugForDisplay(s.slug),
@@ -861,8 +872,10 @@ export function runDiagnosis(input: DiagnosisInput): DoctorFinding[] {
     });
   }
 
-  // Rule 5 - frozen / missing hook heartbeats. A registered hook that has not
-  // fired since well before the latest recorded work is cold.
+  // Rule 5 - frozen / missing hook heartbeats. Hooks fire on different events
+  // (on Claude Code validate-state only before a compaction), so one hook's
+  // old beat says nothing while another beat since: the hooks are cold only
+  // when the newest beat is, as hookLiveness reads them for the live row.
   if (!hooksHealth.dirExists) {
     findings.push({
       id: "hooks-never-fired",
@@ -873,7 +886,9 @@ export function runDiagnosis(input: DiagnosisInput): DoctorFinding[] {
       safeToAutomate: true,
     });
   } else {
-    for (const hb of hooksHealth.heartbeats) {
+    const ages = hooksHealth.heartbeats.flatMap((hb) => hb.ageMs === null ? [] : [hb.ageMs]);
+    const cold = ages.length > 0 && Math.min(...ages) > FROZEN_HEARTBEAT_MS;
+    for (const hb of cold ? hooksHealth.heartbeats : []) {
       if (hb.ageMs !== null && hb.ageMs > FROZEN_HEARTBEAT_MS) {
         findings.push({
           id: "hook-heartbeat-frozen",

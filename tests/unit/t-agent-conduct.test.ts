@@ -12,7 +12,8 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { FILE_TOOLS_RULE } from "../../core/tools/aidlc-testing-posture.ts";
+import { AS_ITS_OWN_COMMAND, FILE_TOOLS_RULE } from "../../core/tools/aidlc-testing-posture.ts";
+import { readConductorSurface } from "../harness/conductor-skill.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 
 const PROSE = [
@@ -76,7 +77,7 @@ describe("t-agent-conduct", () => {
   // in every skill's "run the engine" paragraph too.
   test("every skill tells the lead that its files stay inside the project", () => {
     for (const harness of ["claude", "codex", "copilot", "cursor", "kiro-ide", "kiro", "opencode"]) {
-      const skill = readFileSync(join(REPO_ROOT, "harness", harness, "skills", "aidlc", "SKILL.md"), "utf-8");
+      const skill = readConductorSurface(join(REPO_ROOT, "harness", harness, "skills", "aidlc", "SKILL.md"));
       expect(skill, harness).toMatch(
         /Run the engine binary directly via [^.]*\. Every file you make on your own, a scratch file, a helper script, a command's output, stays inside the project \(nothing in \/tmp or any folder outside it\), and a command's output is read from the tool result, never sent to a file; a file the person asks for, or one the plan names, goes where they say\./,
       );
@@ -86,9 +87,40 @@ describe("t-agent-conduct", () => {
   test("the Copilot and Kiro IDE skills carry their own conduct sentence", () => {
     const copilot = readFileSync(join(REPO_ROOT, "harness", "copilot", "skills", "aidlc", "SKILL.md"), "utf-8");
     expect(copilot).toContain("never into Copilot's memory tool");
-    const kiroIde = readFileSync(join(REPO_ROOT, "harness", "kiro-ide", "skills", "aidlc", "SKILL.md"), "utf-8");
+    const kiroIde = readConductorSurface(join(REPO_ROOT, "harness", "kiro-ide", "skills", "aidlc", "SKILL.md"));
     expect(kiroIde).toContain("**Every AI-DLC command on its own.**");
     expect(kiroIde).toContain("no pipe, no `;`, no `echo`, no `Select-String`");
+  });
+
+  // Reported on Kiro CLI 3.1.0: one small feature asked the person twenty times for the
+  // conductor's own `ls -la && cat package.json`, `grep` and an AI-DLC command piped into `head`.
+  // The conductor's prompt carries FILE_TOOLS_RULE's exception for the person's and the plan's
+  // commands and its reading and command sentences word for word,
+  // so it has them from the chat's start, not only when the engine hands over conductor.md; the
+  // skill Kiro IDE and Kiro CLI's 3.0 engine share also names shell reads to leave out.
+  test("every Kiro conductor is told from the chat's start to look at files with its file tool and run AI-DLC commands alone", () => {
+    const start = FILE_TOOLS_RULE.indexOf("Read, list, and search");
+    expect(start).toBeGreaterThan(0);
+    const READ_AND_RUN = FILE_TOOLS_RULE.slice(start);
+    // The person's own command, or one the plan names, still runs as they wrote it.
+    const PERSON_AND_PLAN_RUN = /A command the person asks for, [^.]*still runs as written\./.exec(FILE_TOOLS_RULE)?.[0] ?? "";
+    expect(PERSON_AND_PLAN_RUN).toContain("still runs as written");
+    expect(READ_AND_RUN).toContain(`Run every AI-DLC command ${AS_ITS_OWN_COMMAND}`);
+    for (const tree of ["dist", "dist-release"]) {
+      const ide = readFileSync(join(REPO_ROOT, tree, "kiro-ide", ".kiro", "agents", "aidlc-aidlc.md"), "utf-8");
+      const cli = (JSON.parse(readFileSync(join(REPO_ROOT, tree, "kiro", ".kiro", "agents", "aidlc.json"), "utf-8")) as {
+        prompt: string;
+      }).prompt;
+      for (const [row, prompt] of [["kiro-ide", ide], ["kiro", cli]]) {
+        expect(prompt, `${tree} ${row}`).toContain(READ_AND_RUN);
+        expect(prompt, `${tree} ${row}`).toContain(PERSON_AND_PLAN_RUN);
+      }
+      const skill = readConductorSurface(join(REPO_ROOT, tree, "kiro-ide", ".kiro", "skills", "aidlc", "SKILL.md"));
+      expect(skill, `${tree} kiro-ide skill`).toContain("Kiro IDE and Kiro CLI run most plain AI-DLC commands quietly");
+      expect(skill, `${tree} kiro-ide skill`).toContain(
+        "Read, list and search the project's files with your file tools (read a file, list a folder, search names or text), not with `ls`, `cat`,",
+      );
+    }
   });
 
   test("the diary bootstrap uses the write tool, not a shell mkdir", () => {

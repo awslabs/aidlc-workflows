@@ -37,6 +37,7 @@ import { pathToFileURL } from "node:url";
 import { QUESTION_UNAVAILABLE, readQuestion, retireRequest, startedRequestFor } from "./aidlc-question-store.ts";
 import { sayWritesBeforePick } from "./aidlc-before-pick.ts";
 import { planApprovalAskState } from "./aidlc-plan-approval-ask.ts";
+import { shownSubagentInflightPath } from "./aidlc-subagent-inflight.ts";
 import {
   appendAuditEntries,
   appendAuditEntry,
@@ -44,7 +45,7 @@ import {
   maskSecretShapes,
   saySecretMaskedOnce,
 } from "./aidlc-audit.ts";
-import { hasStateUpgrade, stateUpgradeRecord } from "./aidlc-state-upgrade.ts";
+import { hasStateUpgrade, newerStateStep, stateUpgradeRecord, waitsToBeBroughtUp } from "./aidlc-state-upgrade.ts";
 import {
   applyIntentSettings,
   applyReviewOverride,
@@ -75,7 +76,7 @@ import {
   VALID_DEPTHS,
   VALID_TEST_STRATEGIES,
 } from "./aidlc-guard-switch.ts";
-import { compareVersions, VERSION_ID } from "./aidlc-channel.ts";
+import { compareVersions, projectPinnedVersion, VERSION_ID } from "./aidlc-channel.ts";
 import { main as pluginBuildMain } from "./aidlc-plugin-build.ts";
 import { droppedPluginRegistrations } from "./aidlc-plugin-emit.ts";
 import { main as pluginTestMain } from "./aidlc-plugin-test.ts";
@@ -148,6 +149,8 @@ import {
   type WorkspaceRepoEntry,
   withoutCredentials,
 } from "./aidlc-workspace-manifest.ts";
+import { isProjectSubmodule, parseGitmodules, submoduleLeavesProjectRepo, submodulePath } from "./aidlc-git.ts";
+export { parseGitmodules };
 import {
   CloneFailure,
   discardStagedWorkspaceRepo,
@@ -159,6 +162,7 @@ import {
 import {
   composedPluginNames,
   copilotCliTrust,
+  harnessCliLeads,
   insideGitRepository,
   instructionFileDoctorCheck,
   openCodeGlobalShortFormNote,
@@ -237,8 +241,6 @@ import {
   parseGuardPolicyStateLine,
   resolveGuardPolicy,
   composeGateOpen,
-  composeMarkerPath,
-  COMPOSE_MARKER_TTL_MS,
   defaultScope,
   defaultScopeResolution,
   DEFAULT_SPACE,
@@ -416,7 +418,6 @@ import {
   setPhaseProgress,
   setStageSuffix,
   intentRepos,
-  discoverSiblingRepos,
   INTENT_SELECTOR_REGEX,
   SPACE_NAME_REGEX,
   scopeGridPath,
@@ -517,6 +518,8 @@ import {
   personsWordsText,
   declaredProjectType,
   installWithoutReplacing,
+  pathContainedBy,
+  replaceWithStaged,
 } from "./aidlc-lib.ts";
 import { chatTookStep, relativeRecordDirForSelection } from "./aidlc-record-core.ts";
 import { GUARD_POLICY_GLOSS, SCOPE_GLOSS } from "./aidlc-guard-fences.ts";
@@ -558,7 +561,7 @@ import {
   tomlFragmentText,
   withFileLineEndings,
 } from "./aidlc-plugin.ts";
-import { pluginTestCommand, renderPluginTestHelp, resolveHookPath } from "./aidlc.ts";
+import { pluginAuthorCommand, renderPluginTestHelp, resolveHookPath } from "./aidlc.ts";
 import { projectPluginCommands } from "./aidlc-plugin-commands.ts";
 import { pluginScriptLaunch } from "./aidlc-plugin-script.ts";
 import { executePlan, withTransactionFix } from "./aidlc-transaction.ts";
@@ -884,7 +887,7 @@ Utilities:
   intent archive <name> [--reason <text>]  Retire an in-flight or completed intent; its record stays on disk and leaves the default list
   intent unarchive <name>  Bring an archived intent back as it was (in-flight or complete)
   intent add-repo <name> [--url <address>] [--reason <text>] [--person-words <their words>]  Add a sibling repo to the active piece of work, cloning it first when it is not here yet (from repos.json, or --url)
-  intent remove-repo <name>  Take a sibling repo out of the active piece of work (never the last one); its folder and its repos.json line stay
+  intent remove-repo <name>  Take a sibling repo out of the active piece of work; its folder and its repos.json line stay
   intent set-repos <name,...> | --all  Set exactly which sibling repos the active piece of work covers, or keep them all
   intent add-checkout <path>  Record a checkout outside the review's reach (a harness-folder worktree, or one outside the project) so the review covers the code there
   intent remove-checkout <path>  Take a recorded checkout out of the active piece of work's review
@@ -899,7 +902,7 @@ Utilities:
   plugin sync       Compose installed plugins into the current install
   plugin validate [path]  Validate authored plugin content (--with <base-root> checks a base plugin's agents; --json for structured output)
   plugin build <harness> [outDir]  Build a host plugin projection (--plugin-root <path>)
-  knowledge onboard [path]  Index customer documents into the space DocumentKB
+  knowledge onboard [path ...]  Index customer documents into the space DocumentKB
   knowledge sync    Reconcile the catalog with disk; retries extractor_unavailable rows
   knowledge list    The DocumentKB catalog (--json for structured output)
   knowledge show <id>  One document's record, plus its extracted text
@@ -1010,7 +1013,7 @@ function requireInstalledHarness(projectDir: string): void {
   );
   if (!existsSync(installedLib)) {
     die(
-      `select-plugins requires an installed project harness at ${dirname(dirname(installedLib))}.`,
+      `plugin select requires an installed project harness at ${dirname(dirname(installedLib))}.`,
     );
   }
 }
@@ -1431,7 +1434,7 @@ function handleSelectPlugins(projectDir: string, positional: string[], rulesLeve
     ? { names: knownPluginNames().filter((name) => pluginsEnabled()?.has(name) ?? true), hasEmpty: false }
     : parsePluginSelectionArgs(positional);
   if (parsedSelection.hasEmpty || parsedSelection.names.length === 0) {
-    die("select-plugins requires at least one non-empty plugin name, or no arguments to print the current selection.");
+    die("plugin select requires at least one non-empty plugin name, or no arguments to print the current selection.");
   }
   const names = [...new Set(parsedSelection.names)].sort();
   requireInstalledHarness(projectDir);
@@ -1462,11 +1465,11 @@ function handleSelectPlugins(projectDir: string, positional: string[], rulesLeve
         .map(([plugin, base]) => `  ${plugin} would be paused: ${plugin} builds on ${base}, which this selection leaves off.\n`)
         .join("");
       die(
-        `select-plugins refused: the new selection would strand ${violations.length} active workflow dependency(ies):\n` +
+        `plugin select refused: the new selection would strand ${violations.length} active workflow dependency(ies):\n` +
           violations.map((v) => `  - ${v}`).join("\n") +
           (pausedWhy ? `\n${pausedWhy.trimEnd()}` : "") +
           `\nComplete or archive the workflow(s) first (\`${entrySkillInvocation()} intent archive <name>\`; a parked workflow ` +
-          "still needs its plugin when it resumes), or keep the plugin enabled, then re-run select-plugins.",
+          `still needs its plugin when it resumes), or keep the plugin enabled, then re-run \`${entrySkillInvocation()} plugin select <names>\`.`,
       );
     }
 
@@ -1562,7 +1565,7 @@ function handleSelectPlugins(projectDir: string, positional: string[], rulesLeve
       }
     } catch (err) {
       resetSelectionSensitiveCaches();
-      die(`select-plugins failed: ${withTransactionFix(err, errorMessage(err))}`);
+      die(`plugin select failed: ${withTransactionFix(err, errorMessage(err))}`);
     } finally {
       rmSync(stagingRoot, { recursive: true, force: true });
     }
@@ -1607,20 +1610,36 @@ function pluginAuthorCommandCode(code: number): void {
   if (code !== 0) process.exitCode = code;
 }
 
+// A plugin author verb's usage error names the command the person ran and
+// what was wrong with it.
+function pluginAuthorUsageError(usage: string, reason: string): void {
+  process.stderr.write(`Usage: ${usage}\n${reason}\n`);
+  process.exitCode = 2;
+}
+
+// Why a plugin author verb's flags or words do not fit it, or null.
+function pluginAuthorArgsProblem(
+  positional: readonly string[],
+  flags: Record<string, string>,
+  missingValueFlags: ReadonlySet<string>,
+  valued: string,
+  maxPositional: number,
+): string | null {
+  const unknown = Object.keys(flags).find((key) => key !== "json" && key !== "help" && key !== valued);
+  if (unknown !== undefined) return `unknown option "--${unknown}"`;
+  if (missingValueFlags.has(valued)) return `--${valued} requires a value`;
+  return positional.length > maxPositional ? `unexpected positional argument "${positional[maxPositional]}"` : null;
+}
+
 function handlePluginValidate(
   positional: string[],
   flags: Record<string, string>,
   missingValueFlags: ReadonlySet<string>,
 ): void {
-  const unknown = Object.keys(flags).filter(
-    (key) => key !== "json" && key !== "help" && key !== "with",
-  );
-  if (
-    unknown.length > 0 ||
-    positional.length > 2 ||
-    missingValueFlags.has("with")
-  ) {
-    pluginAuthorCommandCode(pluginValidateMain([]));
+  const { usage } = pluginAuthorCommand("validate");
+  const problem = pluginAuthorArgsProblem(positional, flags, missingValueFlags, "with", 2);
+  if (problem !== null) {
+    pluginAuthorUsageError(usage, problem);
     return;
   }
   if (
@@ -1628,13 +1647,13 @@ function handlePluginValidate(
     positional[1] === "-h" ||
     positional[1] === "--help"
   ) {
-    pluginAuthorCommandCode(pluginValidateMain(["--help"]));
+    pluginAuthorCommandCode(pluginValidateMain(["--help"], `Usage: ${usage}`));
     return;
   }
   const args = [positional[1] ?? process.cwd()];
   if (flags.with !== undefined) args.push("--with", flags.with);
   if (flags.json === "true") args.push("--json");
-  pluginAuthorCommandCode(pluginValidateMain(args));
+  pluginAuthorCommandCode(pluginValidateMain(args, `Usage: ${usage}`));
 }
 
 function handlePluginBuild(
@@ -1642,18 +1661,10 @@ function handlePluginBuild(
   flags: Record<string, string>,
   missingValueFlags: ReadonlySet<string>,
 ): void {
-  const unknown = Object.keys(flags).filter(
-    (key) =>
-      key !== "json" &&
-      key !== "help" &&
-      key !== "plugin-root",
-  );
-  if (
-    unknown.length > 0 ||
-    positional.length > 3 ||
-    missingValueFlags.has("plugin-root")
-  ) {
-    pluginAuthorCommandCode(pluginBuildMain([]));
+  const { usage } = pluginAuthorCommand("build");
+  const problem = pluginAuthorArgsProblem(positional, flags, missingValueFlags, "plugin-root", 3);
+  if (problem !== null) {
+    pluginAuthorUsageError(usage, problem);
     return;
   }
   if (
@@ -1661,7 +1672,7 @@ function handlePluginBuild(
     positional[1] === "-h" ||
     positional[1] === "--help"
   ) {
-    pluginAuthorCommandCode(pluginBuildMain(["--help"]));
+    pluginAuthorCommandCode(pluginBuildMain(["--help"], `Usage: ${usage}`));
     return;
   }
   const args = [
@@ -1670,7 +1681,7 @@ function handlePluginBuild(
     ...(positional[2] ? [positional[2]] : []),
   ];
   if (flags.json === "true") args.push("--json");
-  pluginAuthorCommandCode(pluginBuildMain(args));
+  pluginAuthorCommandCode(pluginBuildMain(args, `Usage: ${usage}`));
 }
 
 function handlePluginTest(
@@ -1678,7 +1689,7 @@ function handlePluginTest(
   flags: Record<string, string>,
   missingValueFlags: ReadonlySet<string>,
 ): void {
-  const { usage, options } = pluginTestCommand();
+  const { usage, options } = pluginAuthorCommand("test");
   // Help wherever it is asked, as the standalone tool reads it.
   if (flags.help !== undefined || positional.slice(1).includes("-h")) {
     process.stdout.write(renderPluginTestHelp());
@@ -1699,8 +1710,7 @@ function handlePluginTest(
   }
   if (paths.length > 1) reason ??= `unexpected positional argument "${paths[1]}"`;
   if (reason !== null) {
-    process.stderr.write(`Usage: ${usage}\n${reason}\n`);
-    process.exitCode = 2;
+    pluginAuthorUsageError(usage, reason);
     return;
   }
   const args = [paths[0] ?? process.cwd()];
@@ -1760,13 +1770,13 @@ async function handlePluginSync(projectDir: string, pluginRoot: string | undefin
 
   if (composePaths.length === 0) {
     die(
-      `plugin-sync: no compose hook found in ${roots.length} configured plugin root(s):\n${skippedDetails}`,
+      `plugin sync: no compose hook found in ${roots.length} configured plugin root(s):\n${skippedDetails}`,
     );
   }
 
   if (skippedRoots.length > 0) {
     process.stderr.write(
-      `plugin-sync warning: skipped ${skippedRoots.length} configured plugin root(s):\n${skippedDetails}\n`,
+      `plugin sync warning: skipped ${skippedRoots.length} configured plugin root(s):\n${skippedDetails}\n`,
     );
   }
 
@@ -1802,11 +1812,11 @@ async function handlePluginSync(projectDir: string, pluginRoot: string | undefin
           compose?: () => void | Promise<void>;
         };
         if (typeof mod.compose !== "function") {
-          die(`plugin-sync failed for ${item.root}: compose.ts does not export compose()`);
+          die(`plugin sync failed for ${item.root}: compose.ts does not export compose()`);
         }
         await mod.compose();
       } catch (error) {
-        die(`plugin-sync failed for ${item.root}: ${withTransactionFix(error, errorMessage(error))}`);
+        die(`plugin sync failed for ${item.root}: ${withTransactionFix(error, errorMessage(error))}`);
       } finally {
         for (const key of envKeys) {
           const value = previous[key];
@@ -1825,7 +1835,7 @@ async function handlePluginSync(projectDir: string, pluginRoot: string | undefin
     });
     if (result.status !== 0) {
       const detail = (result.stderr || result.stdout || `exit ${result.status ?? 1}`).trim();
-      die(`plugin-sync failed for ${item.root}: ${detail}`);
+      die(`plugin sync failed for ${item.root}: ${detail}`);
     }
     rulesLines.push(...pluginSyncRules(projectDir, item.root));
   }
@@ -1840,7 +1850,7 @@ function pluginSyncRules(projectDir: string, root: string): string[] {
     const line = mergePluginRulesFromRoot(projectDir, harnessDir(), root, isPluginEnabled);
     return line === null ? [] : [line];
   } catch (error) {
-    die(`plugin-sync failed for ${root}: ${errorMessage(error)}`);
+    die(`plugin sync failed for ${root}: ${errorMessage(error)}`);
   }
 }
 
@@ -2021,7 +2031,33 @@ function workHereStatus(projectDir: string, space: string): string | null {
     `To start new work: ${entry} "build the auth service"\n`;
 }
 
-function handleStatus(projectDir: string, flags: Record<string, string>): void {
+// Work built one Unit at a time, as the walk the engine routes by has it:
+// where each Unit stands and what comes next (unitWalkStanding). The
+// orchestrator is loaded only here, with an awaited import as aidlc-jump.ts
+// loads it (the compiled build takes no require() of it), and only for the
+// work's own record in Construction, which is the record the walk reads, and
+// not while an older AI-DLC's record waits for the next step to bring it up:
+// reading the walk would bring it up in place, and status writes nothing. Null
+// otherwise, or when it cannot be read: status then gives the light count
+// (unitProgress) and the Next Stage field.
+async function soloUnitWalk(
+  projectDir: string,
+  flags: Record<string, string>,
+  scope: string,
+  content: string,
+): Promise<{ clause: string; current: number | null; total: number; next: string | null } | null> {
+  if (flags.intent || flags.space || isTeamUnitOwnership(content) || waitsToBeBroughtUp(content)) return null;
+  if ((getField(content, "Construction Iteration") ?? "").trim() !== "unit-major") return null;
+  if (findStageBySlug((getField(content, "Current Stage") ?? "").trim())?.phase !== "construction") return null;
+  try {
+    const { unitWalkStanding } = await import("./aidlc-orchestrate.ts");
+    return unitWalkStanding(projectDir, scope, content);
+  } catch {
+    return null;
+  }
+}
+
+async function handleStatus(projectDir: string, flags: Record<string, string>): Promise<void> {
   // --intent <record> / --space <name> target a specific intent's status
   // (vision §5); omitted -> the active record.
   const selection = resolveWorkflowSelection(projectDir, {
@@ -2055,6 +2091,7 @@ To get started:
   const phase = getField(content, "Lifecycle Phase") || "Unknown";
   const currentStage = getField(content, "Current Stage") || "Unknown";
   const status = getField(content, "Status") || "Unknown";
+  const walk = await soloUnitWalk(projectDir, flags, scope, content);
   // Who is on it and what was done or comes next, in the names the person
   // sees elsewhere; a setup step or an empty value says nothing.
   const agentSlug = (getField(content, "Active Agent") ?? "").trim();
@@ -2081,7 +2118,10 @@ To get started:
     }
   }
   const lastLine = lastName === null ? "" : `Last Completed: ${lastName}${approvedBy}\n`;
-  const nextLine = nextName === null ? "" : `Next Stage:     ${nextName}\n`;
+  // On a Unit walk the Next Stage field stays on the stage after the block's
+  // first one, so the walk's own next step is said instead.
+  const shownNext = walk === null ? nextName : walk.next;
+  const nextLine = shownNext === null ? "" : `Next Stage:     ${shownNext}\n`;
   const plan = getField(content, PLAN_FIELD);
   // A plan composed for this work runs on a stock scope the person never
   // chose, so a setting that came from that scope reads as the approved
@@ -2292,12 +2332,16 @@ To get started:
     ).length;
     // Working one Unit at a time, the stage boxes tick only when the last Unit
     // finishes a stage, so while a Unit is open the count is of Units: the one
-    // the person is on, of those planned (the status line counts the same way).
-    const units = p === "construction"
+    // the person is on, of those planned, and where each Unit stands. Without
+    // the walk (another record named, or it cannot be read), the light count,
+    // while Current Stage is on the Units' stages.
+    const units = p === "construction" && walk === null && currentEntry !== undefined && isPerUnitStage(currentEntry)
       ? unitProgress(dirname(sp), getField(content, "Construction Iteration") ?? "")
       : null;
     const phaseSkipped = phaseCheckboxes.filter((c) => c.state === "skipped").length;
-    const count = units
+    const count = p === "construction" && walk !== null
+      ? walk.current === null ? walk.clause : `Unit ${walk.current} of ${walk.total}: ${walk.clause}`
+      : units
       ? `Unit ${units.current} of ${units.total}`
       : phaseSkipped === phaseCheckboxes.length
       ? "skipped"
@@ -3669,8 +3713,9 @@ export function kiroIdeIgnoreSourceChecks(
     : [{ pass: true, label: `${KIRO_IGNORE_PREFIX} none hide ${harness}/ (${sources.length} file(s) checked)` }];
 }
 
-// What stops working when the person switches an AI-DLC hook off in Kiro's
-// Agent Hooks. Legacy names stay while config has not yet removed their files.
+// What stops working when an AI-DLC hook's file is switched off (Kiro IDE's
+// Agent Hooks writes the flag; a committed file carries it). Legacy names stay
+// while config has not yet removed their files.
 const FLOW_ALTERING_KIRO_HOOKS: Record<string, string> = {
   "aidlc-guard-tool-call": "the approved plan, reviewed work and AI-DLC's records are not protected",
   "aidlc-record-human-turn": "your replies are not recorded, so approval gates cannot tell your answer from the assistant's, and /aidlc commands typed in chat are not run directly",
@@ -3701,7 +3746,7 @@ export type KiroDisabledHook = {
   protects: string | null;
 };
 
-// Every AI-DLC hook file under `<harness>/hooks/` that Kiro has switched off,
+// Every AI-DLC hook file under `<harness>/hooks/` that is switched off,
 // in file order. The install manifest says which hook files are AI-DLC's;
 // without one, the aidlc- prefix does. Kiro's `enabled` key is read by the
 // library's one parse (aidlc-lib.ts), which doctor's rows below and the
@@ -3744,16 +3789,16 @@ export function kiroDisabledHookChecks(projectDir: string, harness: string): Doc
     }
     rows.push({
       pass: false,
-      label: `AI-DLC hook ${hook.name} is switched off in Kiro's Agent Hooks: ${hook.protects}`,
-      fix: `turn ${hook.name} back on under Kiro's Agent Hooks, or set "enabled": true in ${hook.file}`,
+      label: `AI-DLC hook ${hook.name} is switched off: ${hook.protects}`,
+      fix: `in Kiro CLI, change "enabled": false to true in ${hook.file}, then quit Kiro and start \`kiro-cli --v3\` again in this folder; in Kiro IDE, turn ${hook.name} back on under Agent Hooks`,
     });
   }
   if (advisory.length > 0) {
     rows.push({
       pass: true,
       severity: "warn",
-      label: `AI-DLC hooks switched off in Kiro's Agent Hooks: ${advisory.map((name) => `${name} (${ADVISORY_KIRO_HOOKS[name] ?? "it no longer runs"})`).join("; ")}`,
-      fix: `turn them back on under Kiro's Agent Hooks, or set "enabled": true in their ${harness}/hooks/ files`,
+      label: `AI-DLC hooks switched off: ${advisory.map((name) => `${name} (${ADVISORY_KIRO_HOOKS[name] ?? "it no longer runs"})`).join("; ")}`,
+      fix: `in Kiro CLI, change "enabled": false to true in their ${harness}/hooks/ files, then quit Kiro and start \`kiro-cli --v3\` again in this folder; in Kiro IDE, turn them back on under Agent Hooks`,
     });
   }
   return rows;
@@ -3890,13 +3935,8 @@ export function harnessTreeVersionsCheck(projectDir: string): DoctorCheck | null
     };
   }
   const native = aidlcInvocation() === "aidlc";
-  let pinned: string | undefined;
-  try {
-    const pin = readFileSync(join(projectDir, ".aidlc-version"), "utf-8").trim();
-    if (VERSION_ID.test(pin)) pinned = pin;
-  } catch {
-    // No pin; a malformed one has its own row.
-  }
+  // A malformed pin has its own row.
+  const pinned = projectPinnedVersion(projectDir);
   const newest = trees.filter((tree) => tree.frameworkVersion)
     .sort((left, right) => compareVersions(right.frameworkVersion ?? "", left.frameworkVersion ?? ""))[0];
   const release = pinned ?? (native ? AIDLC_VERSION : newest.frameworkVersion ?? AIDLC_VERSION);
@@ -4339,14 +4379,7 @@ export async function collectDoctorReport(
   // every engine command (hooks, sensors, orchestration) to the pinned one, so
   // the project stamp is judged against that engine. A malformed pin is
   // reported below and leaves this check on the running release.
-  const pinnedEngine = (() => {
-    try {
-      const value = readFileSync(pinPath, "utf-8").trim();
-      return VERSION_ID.test(value) ? value : null;
-    } catch {
-      return null;
-    }
-  })();
+  const pinnedEngine = projectPinnedVersion(projectDir);
   if (existsSync(projectStamp)) {
     try {
       const stamp = JSON.parse(readFileSync(projectStamp, "utf-8")) as {
@@ -5408,11 +5441,21 @@ export async function collectDoctorReport(
   const workflowHasProgress = progressedStageCount > 0;
   const workflowStageStarted = auditAllShards.includes("**Event**: STAGE_STARTED");
   const hookExecutionRecovery = gitBashLauncherRecovery() ?? hookExecutionRecoveryText(projectDir);
-  const declaredNotRunYet = hookActivation()?.notRunYet;
-  const hooksNotRunYet = declaredNotRunYet === undefined
-    ? undefined
-    : startedInsideProjectStep(projectDir) ??
-      fillHookActivationText(registrationFault(projectDir) ?? declaredNotRunYet, projectDir);
+  const activation = hookActivation();
+  // A chat started inside the project or a broken registration has its own
+  // line; otherwise the CLI's words are for the CLI of the harness whose
+  // shipped data gave the advice.
+  const hooksNotRunYet = (notRunYet: string): string => {
+    const own = startedInsideProjectStep(projectDir);
+    if (own !== null) return own;
+    const fault = registrationFault(projectDir);
+    if (fault !== null) return fillHookActivationText(fault, projectDir);
+    const cliFirst = activation?.notRunYetCliFirst;
+    const text = cliFirst && harnessCliLeads(runtimeHarnessName(projectDir, harnessDir()), cliFirst.env)
+      ? cliFirst.text
+      : notRunYet;
+    return fillHookActivationText(text, projectDir);
+  };
 
   // 6. Hook heartbeats
   // Three states, discriminated by health-dir presence, readable heartbeats,
@@ -5497,7 +5540,7 @@ export async function collectDoctorReport(
     });
   } else if (
     (!heartbeatDirExists || (!hasHookFiredContent && !workflowStageStarted)) &&
-    hooksNotRunYet !== undefined
+    activation?.notRunYet !== undefined
   ) {
     // (a) on a host whose hooks leave a heartbeat on the first chat message and
     // run only after the person acts: none yet means nobody has chatted here or
@@ -5506,7 +5549,7 @@ export async function collectDoctorReport(
       pass: false,
       severity: "warn",
       label: "AIDLC hooks have not run in this project yet",
-      fix: hooksNotRunYet,
+      fix: hooksNotRunYet(activation.notRunYet),
     });
   } else if (
     !heartbeatDirExists ||
@@ -5726,9 +5769,9 @@ export async function collectDoctorReport(
     try {
       const auditContent = auditAllShards;
       const stateContent = readFileSync(stateMdPath, "utf-8");
-      // The latest run recorded a completion that no later stage start
-      // reopened (a scope change on finished work starts the stage it adds,
-      // #2261). One owner for the rule, the doctor bundle's timeline, which
+      // The latest run recorded a completion that nothing reopened since (a
+      // scope change on finished work starts the stage it adds, #2261; a
+      // Unit's reopen there writes its reopen rows, #3608). One owner for the rule, the doctor bundle's timeline, which
       // reads every shard in time order: shards joined by file name put a
       // teammate's earlier completion after this clone's reopen.
       if (reconstructTimeline(auditContent, stateContent).workflowCompleted) {
@@ -5818,7 +5861,7 @@ export async function collectDoctorReport(
         results.push({
           pass: false,
           label: "state version compatible",
-          fix: verdict.message,
+          fix: newerStateStep(projectDir, verdict.version),
         });
       } else {
         const upgrade = stateUpgradeRecord(projectDir, doctorIntent, doctorSelection.space);
@@ -5834,35 +5877,26 @@ export async function collectDoctorReport(
     }
   }
 
-  // Orphaned compose-marker probe: a read-only tripwire. The conductor writes
-  // the compose marker before an in-flight compose gate and deletes it on
-  // resolve; the Stop hook treats a FRESH marker as a carve-out (the turn may
-  // end at the gate). A crash between write and resolve can leave the marker on
-  // disk, so doctor reports a present marker with its age and the remediation
-  // (delete it if no compose gate is actually pending). Pass/fail follows the
-  // shared freshness window: a FRESH marker is the normal state while a compose
-  // gate is legitimately open (written before the gate, deleted on resolve), so
-  // it renders as an advisory pass (running doctor in a second terminal during
-  // a live gate must not exit 1 on a healthy workspace). Only a STALE marker
-  // (older than the TTL, i.e. an orphan the Stop hook has begun ignoring) is a
-  // fault. Silent when absent (no marker means nothing to report). Read-only:
-  // doctor never deletes it (the Stop hook is the janitor for a stale one).
+  // The in-flight compose question (composeGateOpen) is healthy waiting: an
+  // advisory pass. The file an earlier version had the agent write for it is
+  // read by nothing now; doctor names it while it is there and never deletes it.
   try {
-    const composeMarker = composeMarkerPath(projectDir);
-    if (existsSync(composeMarker)) {
-      const ageMs = Date.now() - statSync(composeMarker).mtimeMs;
-      const ageHours = Math.floor(ageMs / (60 * 60 * 1000));
-      const ageLabel = ageHours >= 1 ? `${ageHours}h old` : "under 1h old";
-      const stale = ageMs > COMPOSE_MARKER_TTL_MS;
-      const staleLabel = stale ? ", stale" : ", fresh";
+    if (composeGateOpen(projectDir)) {
       results.push({
-        pass: !stale,
-        label: `Compose marker present (aidlc/.aidlc-compose-pending, ${ageLabel}${staleLabel})`,
-        fix: "if no in-flight compose gate is actually pending, delete it ('rm aidlc/.aidlc-compose-pending') or resolve the pending gate. A stale marker no longer disables the Stop hook, but it should not linger.",
+        pass: true,
+        label: "A proposed plan change is waiting for the person's answer (approve, edit or reject)",
+        fix: "answer the proposed plan change in the chat that shows it",
       });
     }
   } catch {
-    // Compose-marker probe failure is non-fatal for the doctor report.
+    // Compose-question probe failure is non-fatal for the doctor report.
+  }
+  if (existsSync(join(projectDir, "aidlc", ".aidlc-compose-pending"))) {
+    results.push({
+      pass: true,
+      label: "Left over from an earlier AI-DLC version and no longer read: aidlc/.aidlc-compose-pending (safe to delete)",
+      fix: "delete aidlc/.aidlc-compose-pending",
+    });
   }
 
   // A long-open approval gate is healthy waiting, not a hung workflow. Surface
@@ -5912,10 +5946,11 @@ export async function collectDoctorReport(
       const countLabel = subagents.malformed
         ? "malformed"
         : `${subagents.freshCount} fresh, ${subagents.staleCount} stale, oldest ${ageLabel}`;
+      const ledger = shownSubagentInflightPath(projectDir);
       results.push({
         pass: !subagents.malformed && subagents.staleCount === 0,
-        label: `Background-subagent ledger present (aidlc/.aidlc-subagent-inflight, ${countLabel})`,
-        fix: "if no background subagent is actually running, delete it ('rm aidlc/.aidlc-subagent-inflight'). Stale or malformed entries never authorize the Stop hook, but the ledger should not linger.",
+        label: `Background-subagent ledger present (${ledger}, ${countLabel})`,
+        fix: `if no background subagent is actually running, delete ${ledger} yourself. Stale or malformed entries never authorize the Stop hook, but the ledger should not linger.`,
       });
     }
   } catch {
@@ -6301,7 +6336,7 @@ export async function collectDoctorReport(
         );
       }
       label = `Orphan worktrees: ${orphanActive.length + cleanupOrphans.length} drift - ${[...orphanActive, ...cleanupOrphans].join(", ")}`;
-      fix = `${parts.join("; ")}. Inspect the owning intent, then remove via 'aidlc-worktree discard --slug <slug> --intent <record> --space <space>'.`;
+      fix = `${parts.join("; ")}. Inspect the owning intent, then remove via '${aidlcDispatcherInvocation("worktree discard")} --slug <slug> --intent <record> --space <space>'.`;
     }
     results.push({ pass, label, fix });
   } catch (e) {
@@ -6436,7 +6471,7 @@ export async function collectDoctorReport(
       results.push({
         pass: false,
         label: `Orphan state files: ${orphan.length} drift - ${orphan.join(", ")}`,
-        fix: "Inspect unrecognised names and unknown intent ownership. Recognised state files have no owning Bolt Refs entry or WORKTREE_DISCARDED row. Recover via 'aidlc-worktree discard --slug <slug> --intent <record> --space <space>' (idempotent).",
+        fix: `Inspect unrecognised names and unknown intent ownership. Recognised state files have no owning Bolt Refs entry or WORKTREE_DISCARDED row. Recover via '${aidlcDispatcherInvocation("worktree discard")} --slug <slug> --intent <record> --space <space>' (idempotent).`,
       });
     }
   } catch (e) {
@@ -7438,6 +7473,10 @@ const LANG_BY_EXT: Record<string, string> = {
   ".hpp": "C++",
   ".swift": "Swift",
   ".php": "PHP",
+  // Infrastructure code is code (Terraform, Terragrunt and Packer, Bicep).
+  ".tf": "Terraform",
+  ".hcl": "HCL",
+  ".bicep": "Bicep",
 };
 
 const SCAN_SOURCE_DIRS = ["src", "app", "lib", "pages", "components", "tests"];
@@ -7459,6 +7498,8 @@ const SCAN_EXCLUDE = new Set([
   ".next",
   "target",
   "vendor",
+  // Terraform's provider lock file, written beside a root's .tf files.
+  ".terraform.lock.hcl",
 ]);
 
 // Package/build manifests that mark a directory as an application (not just
@@ -7697,14 +7738,16 @@ interface DirSignals {
   buildSystem: string;
 }
 
-function scanSignals(dir: string, fileScanDepth: number): DirSignals {
+// `leftOut`: entries of dir read as if they were not there (a submodule at
+// lib/ is not the project's own source folder).
+function scanSignals(dir: string, fileScanDepth: number, leftOut: ReadonlySet<string> = new Set()): DirSignals {
   let entries: string[] = [];
   try {
     entries = readdirSync(dir);
   } catch {
     // dir doesn't exist yet (caller should scaffold first)
   }
-  const entrySet = new Set(entries.filter((e) => !SCAN_EXCLUDE.has(e)));
+  const entrySet = new Set(entries.filter((e) => !SCAN_EXCLUDE.has(e) && !leftOut.has(e)));
 
   // Source-file count. countFilesByLang(dir, counts, 0) counts files directly
   // under dir (its recursion guard returns immediately at depth -1), matching
@@ -7744,48 +7787,6 @@ function scanSignals(dir: string, fileScanDepth: number): DirSignals {
   };
 }
 
-// Parse .gitmodules (ini-like) into submodule entries. Pure and exported for
-// direct unit testing. Line-oriented, tolerant: malformed content degrades to
-// whatever parses (total garbage yields []); it never throws. An entry with no
-// path is dropped, as is any path that is absolute or escapes the project via a
-// `..` segment (a caller joins path under projectDir and must not follow it out).
-export function parseGitmodules(
-  content: string
-): Array<{ name: string; path: string; url: string }> {
-  const entries: Array<{ name: string; path: string; url: string }> = [];
-  let current: { name: string; path: string; url: string } | null = null;
-  const finish = () => {
-    if (!current) return;
-    const p = current.path;
-    const isUnsafe =
-      p === "" ||
-      p.startsWith("/") ||
-      /^[A-Za-z]:[\\/]/.test(p) || // Windows drive-absolute
-      p.split(/[/\\]/).includes("..");
-    if (!isUnsafe) entries.push(current);
-    current = null;
-  };
-  for (const rawLine of content.split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (line === "" || line.startsWith("#") || line.startsWith(";")) continue;
-    if (line.startsWith("[")) {
-      finish();
-      const m = line.match(/^\[submodule\s+"(.+)"\]$/);
-      current = m ? { name: m[1], path: "", url: "" } : null;
-      continue;
-    }
-    if (!current) continue;
-    const eq = line.indexOf("=");
-    if (eq < 0) continue;
-    const key = line.slice(0, eq).trim();
-    const value = line.slice(eq + 1).trim();
-    if (key === "path") current.path = value;
-    else if (key === "url") current.url = value;
-  }
-  finish();
-  return entries;
-}
-
 // Read + parse the workspace-root .gitmodules and probe each declared path for
 // initialization. A missing/unreadable file yields [] (the swallow idiom of the
 // scanner neighbors). `initialized` mirrors isGitRepoDir (aidlc-lib.ts): the dir
@@ -7804,10 +7805,18 @@ function scanSubmodules(projectDir: string): SubmoduleEntry[] {
   }));
 }
 
-export function detectWorkspace(projectDir: string): ScanResult {
+// `ownCodeBeside` leaves these folders and the ones the project's .gitmodules
+// lists out of the root's signals and the nested walk, and drops the signal
+// those declarations give: Brownfield then means code of the project's own,
+// outside its submodules and the other repos in it.
+export function detectWorkspace(projectDir: string, { ownCodeBeside }: { ownCodeBeside?: readonly string[] } = {}): ScanResult {
+  const submodules = scanSubmodules(projectDir);
+  const leftOut: ReadonlySet<string> = new Set(
+    ownCodeBeside === undefined ? [] : [...ownCodeBeside, ...submodules.map((entry) => submodulePath(entry.path))],
+  );
   // Root scan (depth 0 for the top-level file sweep, byte-identical to the
   // base inline loop plus the SCAN_SOURCE_DIRS recurse, both inside scanSignals).
-  const root = scanSignals(projectDir, 0);
+  const root = scanSignals(projectDir, 0, leftOut);
   const langCounts = { ...root.langCounts };
   const frameworks = [...root.frameworks];
   let buildSystem = root.buildSystem;
@@ -7843,7 +7852,7 @@ export function detectWorkspace(projectDir: string): ScanResult {
 
       let found = false;
       for (const entry of entries) {
-        if (skipNestedScanDir(entry)) continue;
+        if (skipNestedScanDir(entry) || leftOut.has([...parentParts, entry].join("/"))) continue;
         const full = join(parentDir, entry);
         let st: import("node:fs").Stats;
         try {
@@ -7904,8 +7913,7 @@ export function detectWorkspace(projectDir: string): ScanResult {
   // SCANNED (Unknown is truthful until the submodules are fetched). A root
   // signal: folded in after the nested fallback so nested aggregation (and
   // nestedRoot attribution) still runs when submodules are the only signal.
-  const submodules = scanSubmodules(projectDir);
-  if (submodules.length > 0) brownfield = true;
+  if (submodules.length > 0 && ownCodeBeside === undefined) brownfield = true;
 
   const result: ScanResult = {
     projectType: brownfield ? "Brownfield" : "Greenfield",
@@ -7916,6 +7924,20 @@ export function detectWorkspace(projectDir: string): ScanResult {
   };
   if (nestedHits.length > 0) result.nestedRoot = nestedRoots.join(", ");
   return result;
+}
+
+// The repos a piece of work records when it starts, one rule for its creation
+// and for existing code declared before Construction: the set the person named
+// (`--repos`) as named; otherwise the repos found in the folder, less the
+// submodules of a project with code of its own beside them (outside them and
+// the other repos found), which is then the work's repo as in any one-repo
+// project. A project made only of submodules records them.
+function startingRepoSet(projectDir: string, explicitReposCsv?: string): string[] {
+  const repos = resolveIntentRepoSet(projectDir, explicitReposCsv);
+  if (explicitReposCsv && explicitReposCsv.trim().length > 0) return repos;
+  if (!repos.some((name) => isProjectSubmodule(projectDir, name))) return repos;
+  if (detectWorkspace(projectDir, { ownCodeBeside: repos }).projectType !== "Brownfield") return repos;
+  return repos.filter((name) => !isProjectSubmodule(projectDir, name));
 }
 
 // ---------------------------------------------------------------------------
@@ -8391,14 +8413,15 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
     );
   }
 
-  // Resolve the repo set the intent touches (P7 multi-repo): an explicit
-  // `--repos a,b` wins; absent it, sibling auto-discovery scans the workspace
-  // root's immediate children for a `.git`. An empty result (legacy single-repo /
-  // fresh greenfield) records no repos row — the lone repo is inferred on the
-  // construction path. Validated up front so a bad name fails before any mutation.
+  // Resolve the repo set the intent touches (P7 multi-repo, startingRepoSet):
+  // an explicit `--repos a,b` wins; absent it, the workspace root's immediate
+  // children with a `.git`, a project's own submodules aside. An empty result
+  // (legacy single-repo / fresh greenfield) records no repos row; the lone repo
+  // is inferred on the construction path. Validated up front so a bad name fails
+  // before any mutation.
   let repos: string[];
   try {
-    repos = resolveIntentRepoSet(projectDir, flags.repos);
+    repos = startingRepoSet(projectDir, flags.repos);
   } catch (e) {
     die(errorMessage(e));
   }
@@ -9244,17 +9267,50 @@ function resolveIntentByName(
   return { ...match, dirName: match.dirName };
 }
 
+// A claim typed while no work is selected here (a teammate's first message in a
+// new clone) goes to the one piece of work here with a Unit by that name,
+// selected as `intent <name>` selects it; the claim then says what it says with
+// work selected. Work whose Unit plan cannot be read counts, so the claim says
+// why. Named as status names them, by record dir where `intent` needs it.
+function claimWhereTheUnitIs(projectDir: string, unit: string): void {
+  let selection: ReturnType<typeof resolveWorkflowSelection>;
+  try {
+    selection = resolveWorkflowSelection(projectDir);
+  } catch {
+    return;
+  }
+  if (selection.intent !== null) return;
+  const space = selection.space;
+  const work = (workToPickUp(projectDir, space, null) ?? []).map(({ intent }) => intent).filter((intent) => {
+    if (!isBindableIntentRecordName(intent.dirName)) return false;
+    const dag = resolveBoltDag(projectDir, intent.dirName, space);
+    return dag.state === "malformed" || (dag.state === "ok" && dag.units.includes(unit));
+  });
+  if (work.length === 0) die(`${unit} is not a Unit of any piece of work here.`);
+  if (work.length > 1) {
+    const all = listIntents(projectDir, space, null);
+    const named = work.map((intent) =>
+      all.filter((i) => i.slug === intent.slug && i.dirName !== null).length > 1 ? intent.dirName : intentDisplayLabel(intent)
+    );
+    die(`${unit} is a Unit of more than one piece of work here (${named.join(", ")}); say which one.`);
+  }
+  handleIntent(projectDir, ["intent", "switch", work[0].dirName as string], {}, new Set(), true);
+}
+
 // `/aidlc intent` (list) · `/aidlc intent <name>` (switch the active-intent
 // cursor) · `/aidlc intent archive|unarchive <name>` (lifecycle). Switching an
 // intent is a PURE cursor write (an intent has no native include — only a
 // space does). The <name> matches a record dir name exactly, or a slug (when
 // unambiguous within the space). --json on the bare list emits the structured
-// query shape; --all includes archived records in the human listing.
+// query shape; --all includes archived records in the human listing. `quiet`
+// selects for a command that says its own result (claimWhereTheUnitIs): what
+// the chat kept for the work it picks still goes to it, said on the next step.
 function handleIntent(
   projectDir: string,
   positional: string[],
   flags: Record<string, string>,
   missingValueFlags: ReadonlySet<string> = new Set(),
+  quiet = false,
 ): void {
   const asJson = flags.json === "true";
   const showAll = flags.all === "true";
@@ -9339,7 +9395,7 @@ function handleIntent(
   // Only the chat this command runs in moves. One typed somewhere else moves
   // the shared selection and asks the open chat once (askTheOpenChatToFollow).
   const sid = selection.sessionId;
-  if (!sid) askTheOpenChatToFollow(projectDir, space, match.dirName, `\`${intentDisplayLabel(match)}\``);
+  if (!sid && !quiet) askTheOpenChatToFollow(projectDir, space, match.dirName, `\`${intentDisplayLabel(match)}\``);
   if (sid) {
     writeSessionBinding(projectDir, sid, space, match.dirName, "switch");
     clearSessionRebindOffer(projectDir, sid);
@@ -9358,6 +9414,11 @@ function handleIntent(
       recordSessionIntentSwitch(projectDir, sid, priorUuid, recordIntentKey(space, match.dirName));
     }
   }
+  const kept = sid ? applyKeptToPickedWork(projectDir, sid, space, match.dirName) : [];
+  if (quiet) {
+    if (sid && kept.length > 0 && !addPendingPersonLines(projectDir, sid, kept)) process.stdout.write(`${kept.join("\n")}\n`);
+    return;
+  }
   // What the person sees after picking or switching: the work they are on now,
   // by the name they know it by.
   const where = space === DEFAULT_SPACE ? "" : ` in space \`${space}\``;
@@ -9370,7 +9431,6 @@ function handleIntent(
     ? null
     : intents.filter((i) => i.slug === prior.slug && i.dirName !== null).length > 1 ? prior.dirName : intentDisplayLabel(prior);
   const back = priorName === null ? "" : ` You were on \`${priorName}\`: \`${entrySkillInvocation()} intent ${priorName}\` goes back.`;
-  const kept = sid ? applyKeptToPickedWork(projectDir, sid, space, match.dirName) : [];
   process.stdout.write(`Now working on \`${intentDisplayLabel(match)}\`${where}.${back}\n`);
   if (kept.length > 0) process.stdout.write(`${kept.join("\n")}\n`);
 }
@@ -9698,6 +9758,8 @@ function handleIntentRepos(
       }
       const current = row.repos ?? [];
       if (current.length === 0) {
+        // Nothing to take out: the workspace folder is already the work's repo.
+        if (verb === "remove-repo") return { kind: "none" as const };
         die(`intent ${verb} refused: this piece of work treats the workspace folder itself as its code repo, so it records no repos to change.`);
       }
       const state = readStateFile(projectDir, dirName, space);
@@ -9709,7 +9771,9 @@ function handleIntentRepos(
         }
       } else {
         if (!current.includes(name)) return { kind: "absent" as const, current };
-        if (current.length === 1) {
+        // A submodule of a project that is a checkout itself leaves the
+        // project folder as the work's repo, as in any one-repo project.
+        if (current.length === 1 && !submoduleLeavesProjectRepo(projectDir, name)) {
           die(`intent remove-repo refused: "${name}" is the only repo this piece of work records; removing it would leave none.`);
         }
       }
@@ -9724,7 +9788,8 @@ function handleIntentRepos(
           ...(staged !== null && clone !== null ? { "Cloned From": maskUserinfo(clone.repo.url ?? `git@github.com:${clone.org}/${name}.git`) } : {}),
           ...(reason ? { Reason: reason } : {}),
           ...(personWords ? { "Person Words": personWords } : {}),
-          ...(verb === "add-repo" ? repoBaselineAdditionField(projectDir, [name], dirName, space) : {}),
+          ...(verb === "add-repo" ? repoBaselineAdditionField(projectDir, [name], dirName, space)
+            : next.length === 0 ? repoBaselineAdditionField(projectDir, [], dirName, space) : {}),
         },
         projectDir,
         dirName,
@@ -9739,6 +9804,7 @@ function handleIntentRepos(
         reState: boxes.get("reverse-engineering"),
         reAction,
         units: unitsRepoChangeAtChange(projectDir, state, stage, dirName, space),
+        none: next.length === 0,
       };
     }, dirName, space);
   });
@@ -9750,6 +9816,9 @@ function handleIntentRepos(
       break;
     case "absent":
       lines.push(`${name} is not one of this piece of work's repos (${outcome.current.join(", ")}); nothing changed.`);
+      break;
+    case "none":
+      lines.push("This piece of work records no repos: it works on the workspace folder itself. Nothing changed.");
       break;
     case "changed":
       if (verb === "add-repo") {
@@ -9769,11 +9838,12 @@ function handleIntentRepos(
       } else {
         const listed = workspaceManifestNames(projectDir).includes(name);
         lines.push(
-          `Removed ${name} from this piece of work's repos. Its folder stays` +
+          `Removed ${name} from this piece of work's repos${outcome.none ? "; it now works on the workspace folder itself" : ""}. Its folder stays` +
             (listed ? ", and so does its line in repos.json (delete that line to take it off the workspace's list)." : "."),
         );
         if (outcome.units !== null) lines.push(outcome.units);
-        lines.push("You can add it back any time.");
+        // add-repo serves work that records repos, so with none left it is no way back.
+        if (!outcome.none) lines.push("You can add it back any time.");
       }
       break;
   }
@@ -9816,11 +9886,14 @@ function workspaceManifestNames(projectDir: string): string[] {
   }
 }
 
-// Where a repo not on disk is cloned from and what repos.json becomes: its own
-// entry, else the person's `--url`, else the repos.json `org`. The address goes
-// to git as given; repos.json, which the team commits, gets it without
-// credentials. With no repos.json, a hosted `--url` creates one naming its owner
-// as the org; a local path or another shape creates none, and the line says so.
+// Where a repo not on disk is cloned from and what repos.json becomes: the
+// person's `--url`, else its own entry (a name-only entry from the repos.json
+// `org`). A name no repos.json lists gets no address made up from the org: the
+// org may be another host's owner, read off the address of the repo that
+// started the list. The address goes to git as given; repos.json, which the
+// team commits, gets it without credentials. With no repos.json, a hosted
+// `--url` creates one naming its owner as the org; a local path or another
+// shape creates none, and the line says so.
 function plannedRepoClone(
   projectDir: string,
   name: string,
@@ -9845,22 +9918,22 @@ function plannedRepoClone(
       note: null,
     };
   }
-  if (url === undefined && manifest === null) {
+  if (url === undefined) {
     die(
-      `${name} is not in this workspace yet, and there is no repos.json with an org to clone it from. ` +
+      `${name} is not in this workspace yet, and no repos.json lists it, so there is no address to clone it from. ` +
         "Give its clone address with --url, or clone it beside the other repos, then add it again.",
     );
   }
-  const kept = url === undefined ? undefined : withoutCredentials(url);
-  const written: WorkspaceRepoEntry = { name, ...(kept === undefined ? {} : { url: kept }) };
+  const kept = withoutCredentials(url);
+  const written: WorkspaceRepoEntry = { name, url: kept };
   const stripped = kept !== url ? " Its address there leaves out the credential." : "";
-  const repo: WorkspaceRepoEntry = { name, ...(url === undefined ? {} : { url }) };
+  const repo: WorkspaceRepoEntry = { name, url };
   if (manifest !== null) {
     const next = workspaceManifestWith(raw, manifest.org, written);
     if (next === null) die(`${name} could not be added to repos.json, which has no repos list. Nothing was changed.`);
     return { repo, org: manifest.org, manifest: { raw, next }, note: `repos.json now lists it.${stripped}` };
   }
-  const owner = hostedAddressOwner(url!);
+  const owner = hostedAddressOwner(url);
   if (owner === null) {
     return {
       repo,
@@ -10677,15 +10750,18 @@ function onboardDocumentInput(
 
   let target = absPath;
   let created = false;
+  let updated = false;
+  let besideChanged: string | undefined;
+  const original = inPlace ? undefined : copiedFromPath(projectRoot, absPath);
   if (!inPlace) {
     try {
       mkdirSync(documentsAbs, { recursive: true });
       kb.assertKnowledgeRootTrusted(projectRoot, space);
-      ({ target, created } = copyIntoDocuments(
-        kb,
-        realpathSync(documentsAbs),
-        basename(portablePath),
-        bytes,
+      // The same file named again, changed: its new bytes go over the copy made
+      // from it, so the document keeps its id (copied_from on the row).
+      ({ target, created, updated, besideChanged } = copyIntoDocuments(
+        kb, realpathSync(documentsAbs), basename(portablePath), bytes,
+        original === undefined ? undefined : () => updateCopiedDocument(projectRoot, kb, space, original, bytes),
       ));
     } catch (error) {
       refuse(`cannot copy ${quoted} into the knowledge folder: ${errorMessage(error)}`);
@@ -10699,7 +10775,10 @@ function onboardDocumentInput(
   // only a refusal or an empty result proves nothing names the copy.
   let mayHaveCommitted = false;
   try {
-    const result = kb.onboard(projectRoot, space, target, new Date().toISOString());
+    const result = kb.onboard(
+      projectRoot, space, target, new Date().toISOString(), undefined,
+      original === undefined ? undefined : new Map([[realpathSync(target), original]]),
+    );
     if (result.refused) failure = result.refused.reason;
     else {
       outcome = result.indexed[0];
@@ -10727,8 +10806,14 @@ function onboardDocumentInput(
   })();
 
   const targetPath = JSON.stringify(relative(projectRoot, target).split(sep).join("/"));
-  const added = created
-    ? `I copied ${quoted} to ${targetPath} and added it to the knowledge base as document ${indexed.id}.`
+  const earlier = besideChanged === undefined
+    ? ""
+    : ` The earlier copy, ${JSON.stringify(`${relative(projectRoot, documentsAbs).split(sep).join("/")}/${besideChanged}`)}, ` +
+      "has changed since it was copied, so I left it as it is; the knowledge base now holds both.";
+  const added = updated && indexed.status === "edited"
+    ? `I updated ${targetPath} to your new ${quoted}; it stays the same document in the knowledge base.`
+    : created
+    ? `I copied ${quoted} to ${targetPath} and added it to the knowledge base as document ${indexed.id}.${earlier}`
     : indexed.status === "already"
       ? `${quoted} is already in the knowledge base as document ${indexed.id}` +
         `${inPlace ? "" : ` (copied to ${targetPath})`}.`
@@ -10843,6 +10928,24 @@ function gitIgnoredAmong(projectRoot: string, absPaths: string[]): Set<string> {
   );
 }
 
+/** Which cap a set of documents would pass, or null when none. */
+type KnowledgeCopyCapBreach =
+  | { cap: "document"; file: string; size: number }
+  | { cap: "count"; count: number }
+  | { cap: "bytes"; count: number; bytes: number };
+
+function knowledgeCopyCapBreach(
+  entries: ReadonlyArray<{ file: string; size: number }>,
+  kb: typeof import("./aidlc-knowledge.ts"),
+): KnowledgeCopyCapBreach | null {
+  const big = entries.find((entry) => entry.size > kb.EXTRACT_INPUT_BYTE_CAP);
+  if (big !== undefined) return { cap: "document", file: big.file, size: big.size };
+  if (entries.length > kb.EXTRACT_BATCH_DOC_CAP) return { cap: "count", count: entries.length };
+  const bytes = entries.reduce((total, entry) => total + entry.size, 0);
+  if (bytes > kb.EXTRACT_BATCH_BYTE_CAP) return { cap: "bytes", count: entries.length, bytes };
+  return null;
+}
+
 /**
  * Why the engine will not copy what the person named: a single document over
  * the per-document cap, or a folder over a batch cap. Checked BEFORE the copy,
@@ -10856,22 +10959,19 @@ function knowledgeCopyCapRefusal(
   kb: typeof import("./aidlc-knowledge.ts"),
 ): string | null {
   const smaller = "Name a subfolder, or one document at a time.";
-  const big = entries.find((entry) => entry.size > kb.EXTRACT_INPUT_BYTE_CAP);
-  if (big !== undefined) {
-    return `${toPosix(relative(projectDir, big.file))} is ${big.size} bytes, over the ` +
+  const breach = knowledgeCopyCapBreach(entries, kb);
+  if (breach === null) return null;
+  if (breach.cap === "document") {
+    return `${toPosix(relative(projectDir, breach.file))} is ${breach.size} bytes, over the ` +
       `${kb.EXTRACT_INPUT_BYTE_CAP}-byte per-document cap; nothing was copied. Split it or reduce it ` +
       "below the cap, then name it again.";
   }
-  if (entries.length > kb.EXTRACT_BATCH_DOC_CAP) {
-    return `${shown} holds ${entries.length} documents, over the ${kb.EXTRACT_BATCH_DOC_CAP}-document ` +
+  if (breach.cap === "count") {
+    return `${shown} holds ${breach.count} documents, over the ${kb.EXTRACT_BATCH_DOC_CAP}-document ` +
       `batch cap; nothing was copied or indexed. ${smaller}`;
   }
-  const bytes = entries.reduce((total, entry) => total + entry.size, 0);
-  if (bytes > kb.EXTRACT_BATCH_BYTE_CAP) {
-    return `${shown} holds ${entries.length} documents of ${bytes} bytes, over the ` +
-      `${kb.EXTRACT_BATCH_BYTE_CAP}-byte batch cap; nothing was copied or indexed. ${smaller}`;
-  }
-  return null;
+  return `${shown} holds ${breach.count} documents of ${breach.bytes} bytes, over the ` +
+    `${kb.EXTRACT_BATCH_BYTE_CAP}-byte batch cap; nothing was copied or indexed. ${smaller}`;
 }
 
 /** What the command layer copied in for the person, for the line it says. */
@@ -10883,24 +10983,80 @@ export interface KnowledgeDocumentCopy {
   gitIgnored: "yes" | "no" | "unknown";
   /** Files inside a named folder that git ignores, left where they are. */
   leftOut: number;
+  /** A copied file's project-relative path, for the row's copied_from (never a folder's). */
+  original?: string;
+  /** The file's new bytes were written over the copy made from it before. */
+  updated?: boolean;
+  /** The earlier copy made from it (documents-relative) had changed, so this one went in beside it. */
+  besideChanged?: string;
 }
 
-export function copyNamedDocumentIntoKnowledge(
+/**
+ * The project-relative POSIX path a copy's `copied_from` records for the file
+ * the person named, or undefined when there is none to record.
+ */
+function copiedFromPath(projectDir: string, absPath: string): string | undefined {
+  const rel = toPosix(relative(realpathSync(projectDir), realpathSync(absPath)));
+  return rel === "" || rel === ".." || rel.startsWith("../") || isAbsolute(rel) ? undefined : rel;
+}
+
+/**
+ * Writes a changed original's bytes over the copy made from it, when the
+ * knowledge tool finds that one copy (copiedDocumentFor: its row records this
+ * original and the copy still holds the bytes copied). Returns `{ target }`, the
+ * copy's path; `{ changedCopy }` when the one copy made from it has changed, so
+ * the caller copies beside it and says so; or null to copy beside it as before. The bytes are staged beside the copy
+ * under a dot name the walk skips, the copy is checked again just before the
+ * rename (an edit made meanwhile is never written over), and the rename keeps
+ * the Windows retry the atomic writers use.
+ */
+function updateCopiedDocument(
   projectDir: string,
   kb: typeof import("./aidlc-knowledge.ts"),
   space: string,
+  original: string,
+  bytes: Buffer,
+): { target: string } | { changedCopy: string } | null {
+  const digest = kb.sha256Hex(bytes);
+  const found = kb.copiedDocumentFor(projectDir, space, original, digest);
+  if (found === null || "changedCopy" in found) return found;
+  if (found.holdsNew) return { target: found.copyPath };
+  const staged = documentStagingPath(dirname(found.copyPath));
+  try {
+    writeFileSync(staged, bytes, { flag: "wx" });
+    const still = kb.copiedDocumentFor(projectDir, space, original, digest);
+    if (still === null || "changedCopy" in still) return still;
+    if (still.copyPath !== found.copyPath) return null;
+    if (!still.holdsNew) replaceWithStaged(staged, found.copyPath);
+    return { target: found.copyPath };
+  } catch {
+    return null;
+  } finally {
+    try { unlinkSync(staged); } catch { /* renamed over the copy, or never written */ }
+  }
+}
+
+/** A named document or folder, read for copying but not yet copied. */
+interface NamedDocumentCopyPlan {
+  real: string;
+  shown: string;
+  folder: boolean;
+  gitIgnored: "yes" | "no" | "unknown";
+  copyable: Array<{ file: string; size: number }>;
+  leftOut: number;
+}
+
+function planNamedDocumentCopy(
+  projectDir: string,
+  kb: typeof import("./aidlc-knowledge.ts"),
   absPath: string,
-): KnowledgeDocumentCopy | { refusal: string } {
-  const documentsReal = ensureKnowledgeDocumentsFolder(projectDir, kb, space);
+): NamedDocumentCopyPlan {
   const shown = toPosix(relative(projectDir, absPath));
   const gitIgnored = documentInputGitIgnored(projectDir, shown);
   const real = realpathSync(absPath);
   const named = statSync(real);
   if (!named.isDirectory()) {
-    const refusal = knowledgeCopyCapRefusal(projectDir, shown, [{ file: real, size: named.size }], kb);
-    if (refusal !== null) return { refusal };
-    const { target } = copyIntoDocuments(kb, documentsReal, basename(real), readFileSync(real));
-    return { target, files: 1, gitIgnored, leftOut: 0 };
+    return { real, shown, folder: false, gitIgnored, copyable: [{ file: real, size: named.size }], leftOut: 0 };
   }
   const found: Array<{ file: string; size: number }> = [];
   for (const file of kb.walkDocuments(real)) {
@@ -10916,10 +11072,30 @@ export function copyNamedDocumentIntoKnowledge(
     ? gitIgnoredAmong(projectDir, found.map((entry) => entry.file))
     : new Set<string>();
   const copyable = found.filter((entry) => !ignoredInside.has(entry.file));
-  const refusal = knowledgeCopyCapRefusal(projectDir, shown, copyable, kb);
-  if (refusal !== null) return { refusal };
-  if (copyable.length === 0) {
-    throw new Error(`${shown} holds no documents to add`);
+  return { real, shown, folder: true, gitIgnored, copyable, leftOut: found.length - copyable.length };
+}
+
+function carryOutNamedDocumentCopy(
+  projectDir: string,
+  kb: typeof import("./aidlc-knowledge.ts"),
+  space: string,
+  documentsReal: string,
+  plan: NamedDocumentCopyPlan,
+): KnowledgeDocumentCopy {
+  const { real, gitIgnored, copyable, leftOut } = plan;
+  if (!plan.folder) {
+    const bytes = readFileSync(real);
+    const original = copiedFromPath(projectDir, real);
+    const { target, updated, besideChanged } = copyIntoDocuments(
+      kb, documentsReal, basename(real), bytes,
+      original === undefined ? undefined : () => updateCopiedDocument(projectDir, kb, space, original, bytes),
+    );
+    return {
+      target, files: 1, gitIgnored, leftOut,
+      ...(original === undefined ? {} : { original }),
+      ...(updated ? { updated: true } : {}),
+      ...(besideChanged === undefined ? {} : { besideChanged }),
+    };
   }
   // A folder of its own name, never merged into one already there: the copy is
   // this folder as it is now, not a blend of two.
@@ -10936,7 +11112,105 @@ export function copyNamedDocumentIntoKnowledge(
     mkdirSync(dirname(target), { recursive: true });
     writeFileSync(target, readFileSync(entry.file), { flag: "wx" });
   }
-  return { target: root, files: copyable.length, gitIgnored, leftOut: found.length - copyable.length };
+  return { target: root, files: copyable.length, gitIgnored, leftOut };
+}
+
+export function copyNamedDocumentIntoKnowledge(
+  projectDir: string,
+  kb: typeof import("./aidlc-knowledge.ts"),
+  space: string,
+  absPath: string,
+): KnowledgeDocumentCopy | { refusal: string } {
+  const documentsReal = ensureKnowledgeDocumentsFolder(projectDir, kb, space);
+  const plan = planNamedDocumentCopy(projectDir, kb, absPath);
+  const refusal = knowledgeCopyCapRefusal(projectDir, plan.shown, plan.copyable, kb);
+  if (refusal !== null) return { refusal };
+  if (plan.folder && plan.copyable.length === 0) {
+    throw new Error(`${plan.shown} holds no documents to add`);
+  }
+  return carryOutNamedDocumentCopy(projectDir, kb, space, documentsReal, plan);
+}
+
+/**
+ * Several documents or folders named in one onboard, copied in together. Each
+ * is checked on its own first, and one that cannot be copied (an empty folder,
+ * or one over a cap by itself) is left out with why, so it never costs the
+ * person the others. The rest, with the named paths already under
+ * `documents/` (`inPlace`), are one batch: over a batch cap together, nothing
+ * is copied, because the verb would refuse them after the copies were made.
+ */
+export function copyNamedDocumentsIntoKnowledge(
+  projectDir: string,
+  kb: typeof import("./aidlc-knowledge.ts"),
+  space: string,
+  toCopy: readonly string[],
+  inPlace: readonly string[],
+  namedCount: number,
+): { outcomes: Array<KnowledgeDocumentCopy | { reason: string }> } | { refusal: string } {
+  const documentsReal = ensureKnowledgeDocumentsFolder(projectDir, kb, space);
+  const plans = toCopy.map((absPath): NamedDocumentCopyPlan | { reason: string } => {
+    const plan = planNamedDocumentCopy(projectDir, kb, absPath);
+    const breach = knowledgeCopyCapBreach(plan.copyable, kb);
+    if (breach?.cap === "document") {
+      const which = breach.file === plan.real ? "it" : `${toPosix(relative(projectDir, breach.file))} in it`;
+      return { reason: `${which} is ${breach.size} bytes, over the ${kb.EXTRACT_INPUT_BYTE_CAP}-byte per-document cap` };
+    }
+    if (breach?.cap === "count") {
+      return { reason: `it holds ${breach.count} documents, over the ${kb.EXTRACT_BATCH_DOC_CAP}-document batch cap` };
+    }
+    if (breach?.cap === "bytes") {
+      return {
+        reason: `it holds ${breach.count} documents of ${breach.bytes} bytes, over the ` +
+          `${kb.EXTRACT_BATCH_BYTE_CAP}-byte batch cap`,
+      };
+    }
+    if (plan.folder && plan.copyable.length === 0) {
+      return { reason: plan.leftOut > 0 ? "every file in it is kept out of git" : "it holds no documents" };
+    }
+    return plan;
+  });
+  const batch = new Map<string, { file: string; size: number }>();
+  for (const plan of plans) {
+    if ("reason" in plan) continue;
+    for (const entry of plan.copyable) batch.set(entry.file, entry);
+  }
+  const inPlaceFiles = inPlace.flatMap((absPath) => {
+    const real = realpathSync(absPath);
+    return statSync(real).isDirectory() ? kb.walkDocuments(real) : [real];
+  });
+  for (const work of kb.onboardBatchWork(projectDir, space, inPlaceFiles)) {
+    batch.set(work.abs, { file: work.abs, size: work.bytes });
+  }
+  const together = knowledgeCopyCapBreach(
+    [...batch.values()].filter((entry) => entry.size <= kb.EXTRACT_INPUT_BYTE_CAP),
+    kb,
+  );
+  if (together?.cap === "count") {
+    return {
+      refusal: `The ${namedCount} paths you named hold ${together.count} documents, over the ` +
+        `${kb.EXTRACT_BATCH_DOC_CAP}-document batch cap; nothing was copied or indexed. Name ` +
+        `${kb.EXTRACT_BATCH_DOC_CAP} or fewer documents at a time.`,
+    };
+  }
+  if (together?.cap === "bytes") {
+    return {
+      refusal: `The ${namedCount} paths you named hold ${together.count} documents of ${together.bytes} bytes, ` +
+        `over the ${kb.EXTRACT_BATCH_BYTE_CAP}-byte batch cap; nothing was copied or indexed. Name fewer ` +
+        "documents at a time.",
+    };
+  }
+  // The same original named twice is one copy.
+  const copied = new Map<string, KnowledgeDocumentCopy>();
+  return {
+    outcomes: plans.map((plan) => {
+      if ("reason" in plan) return plan;
+      const earlier = copied.get(plan.real);
+      if (earlier !== undefined) return earlier;
+      const copy = carryOutNamedDocumentCopy(projectDir, kb, space, documentsReal, plan);
+      copied.set(plan.real, copy);
+      return copy;
+    }),
+  };
 }
 
 // Why an onboarded document came back with no text, in the person's terms.
@@ -10959,12 +11233,19 @@ function documentInputNoTextReason(shown: { state: string }): string {
 
 // The copy keeps the file's own name in knowledge/documents/ and never
 // replaces a file there: one with the same name and bytes is this copy already,
-// and any other moves the copy to <stem>-2<ext>, -3, and so on. Leading dots
+// and any other moves the copy to <stem>-2<ext>, -3, and so on. The one
+// exception is `update` (updateCopiedDocument): the copy made earlier from the
+// same original, while nobody has edited it, takes the new bytes in place. Leading dots
 // are dropped and the names the knowledge walk skips are passed over, so a
 // later sync still sees the copy. The bytes land in a dot-named staging file
 // first and are published with installWithoutReplacing, which never replaces a
 // name, whichever temp folder or computer the other copy runs from.
 const DOCUMENT_INPUT_COPY_NAME_LIMIT = 100;
+// A dot name the knowledge walk skips, so a sync running beside a copy never
+// indexes the bytes on their way in.
+function documentStagingPath(dir: string): string {
+  return join(dir, `.aidlc-document-input-${process.pid}-${randomUUID()}.tmp`);
+}
 // ponytail: a 0-byte file made this second may be another copy's claim that
 // fills a moment later; a claim that takes over a second to fill leaves a -2
 // copy with the same bytes.
@@ -10975,7 +11256,11 @@ function copyIntoDocuments(
   documentsReal: string,
   name: string,
   bytes: Buffer,
-): { target: string; created: boolean } {
+  update?: () => { target: string } | { changedCopy: string } | null,
+): { target: string; created: boolean; updated: boolean; besideChanged?: string } {
+  let besideChanged: string | undefined;
+  const made = (target: string) =>
+    ({ target, created: true, updated: false, ...(besideChanged === undefined ? {} : { besideChanged }) });
   const base = name.replace(/^\.+/, "") || "document";
   const ext = extname(base);
   const stem = base.slice(0, base.length - ext.length);
@@ -11003,19 +11288,26 @@ function copyIntoDocuments(
       }
     };
     if (lstatSync(target, { throwIfNoEntry: false }) !== undefined) {
-      if (holdsSameBytes()) return { target, created: false };
+      if (holdsSameBytes()) return { target, created: false, updated: false };
       continue;
     }
-    const staged = join(documentsReal, `.aidlc-document-input-${process.pid}-${randomUUID()}.tmp`);
+    // Every copy already holding these bytes was looked for first (one an older
+    // release made beside the first, say); only then is the copy made from this
+    // original updated in place, before a new name is taken.
+    const over = update?.() ?? null;
+    update = undefined;
+    if (over !== null && "target" in over) return { target: over.target, created: false, updated: true };
+    if (over !== null) besideChanged = over.changedCopy;
+    const staged = documentStagingPath(documentsReal);
     try {
       writeFileSync(staged, bytes, { flag: "wx" });
       installWithoutReplacing(staged, target);
-      return { target, created: true };
+      return made(target);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
       // Another run published this name first: if it holds the same bytes it
       // is the same copy, not a reason to make a second one.
-      if (holdsSameBytes()) return { target, created: false };
+      if (holdsSameBytes()) return { target, created: false, updated: false };
     } finally {
       try { unlinkSync(staged); } catch { /* never created, or already gone */ }
     }
@@ -11165,6 +11457,31 @@ function withCodekbLock<T>(
   );
 }
 
+// Where a --paths entry the snapshot could not read points, when that is
+// outside the folder being scanned: in another of the work's recorded repos
+// (the --repo that reads it, as resolveCodekbRepo resolves it, and the path
+// from that repo's folder), or outside. Null for a path inside the folder. Lexical, on the platform's own path
+// rules, so nothing outside the project is read.
+function codekbPathPlace(
+  projectDir: string,
+  space: string,
+  repoDir: string,
+  recorded: readonly string[],
+  path: string,
+): { repo: string; path: string } | "outside" | null {
+  const at = resolve(repoDir, path);
+  if (pathContainedBy(resolve(repoDir), at)) return null;
+  for (const repo of recorded) {
+    const root = resolve(codekbSourceRoot(projectDir, repo, space));
+    // A recorded repo not cloned here resolves to the project folder, which
+    // holds every path inside the project.
+    if (root === resolve(projectDir) || !pathContainedBy(root, at)) continue;
+    const from = relative(root, at);
+    return { repo, path: from === "" ? "./" : from.split(sep).join("/") };
+  }
+  return "outside";
+}
+
 // Snapshot the two generations a scan is built from. The stage takes this
 // immediately before scanning and passes both tokens to codekb-publish.
 function handleCodekbSnapshot(
@@ -11178,20 +11495,60 @@ function handleCodekbSnapshot(
     recoverCodekbTransactions(projectDir, space, repo);
     const sourceFingerprint = codekbSourceFingerprint(repoDir, paths, excludes);
     if (sourceFingerprint === null) {
-      // Name what to change: a path that is not there, else an entry under
-      // the paths that cannot be read as a file or folder.
-      const absent = paths.filter((path) => {
+      // Name what to change: a path outside the folder being scanned (in
+      // another repo of this work, or outside it), a path that is not there,
+      // else an entry under the paths that cannot be read as a file or folder.
+      let recorded: string[];
+      try {
+        recorded = intentRepos(projectDir, undefined, space);
+      } catch {
+        recorded = [];
+      }
+      const inRepo = new Map<string, { named: string[]; from: string[] }>();
+      const outside: string[] = [];
+      const inside: string[] = [];
+      for (const path of paths) {
+        const place = codekbPathPlace(projectDir, space, repoDir, recorded, path);
+        if (place === null) {
+          inside.push(path);
+        } else if (place === "outside") {
+          outside.push(path);
+        } else {
+          const entry = inRepo.get(place.repo) ?? { named: [], from: [] };
+          entry.named.push(path);
+          entry.from.push(place.path);
+          inRepo.set(place.repo, entry);
+        }
+      }
+      const absent = inside.filter((path) => {
         try {
           return lstatSync(join(repoDir, path), { throwIfNoEntry: false }) === undefined;
         } catch {
           return false;
         }
       });
+      const be = (named: readonly string[]): string => (named.length === 1 ? "is" : "are");
+      const causes: string[] = [];
+      for (const [other, entry] of inRepo) {
+        causes.push(
+          `${entry.named.join(", ")} ${be(entry.named)} in the ${other} repository: run it again with ` +
+            `--repo ${quoteCommandArgument(other)} --paths ${quoteCommandArgument(entry.from.join(","))}.`,
+        );
+      }
+      if (outside.length > 0) {
+        const folder = resolve(repoDir) === resolve(projectDir) ? "the project folder" : `the ${repo} repository's folder`;
+        // No way to bring outside code in is named: add-repo clones nothing
+        // for a name the work already records, and a checkout nested in a
+        // Git project is fingerprinted at its commit only.
+        causes.push(`${outside.join(", ")} ${be(outside)} outside ${folder}: run it again with --paths naming folders inside it.`);
+      }
+      if (absent.length > 0) {
+        causes.push(`${absent.join(", ")} ${be(absent)} not in the repository: run it again with --paths naming paths that exist.`);
+      }
       die(
         `codekb-snapshot: cannot fingerprint source paths: ${paths.join(", ")}. ` +
-          (absent.length > 0
-            ? `${absent.join(", ")} ${absent.length === 1 ? "is" : "are"} not in the repository: ` +
-              `run it again with --paths naming paths that exist.`
+          (causes.length > 0
+            ? causes.join(" ")
             : `Something under ${paths.length === 1 ? "it" : "them"} is not a regular file or folder (a socket or named pipe) or ` +
               `cannot be read: run it again with --paths naming only the folders that hold ` +
               `source, leaving that one out.`),
@@ -11912,18 +12269,24 @@ function handleReclassify(projectDir: string, flags: Record<string, string>, raw
   // command, else the chat most recently active here. At the person's own
   // terminal no chat answer can arrive: the step that works there is named
   // instead.
-  if (!humanPresenceGuardDisabled() && !personSaidProjectType(projectDir, {
+  const said = {
     chat: selection.sessionId ?? readCurrentSessionId(projectDir),
-    type: declared === "Brownfield" ? "brownfield" : "greenfield",
-    ...(named.message !== undefined ? { message: named.message } : {}),
+    type: declared === "Brownfield" ? ("brownfield" as const) : ("greenfield" as const),
     intent,
     space,
+  };
+  if (!humanPresenceGuardDisabled() && !personSaidProjectType(projectDir, {
+    ...said,
+    ...(named.message !== undefined ? { message: named.message } : {}),
   })) {
     die(personAtOwnTerminal(projectDir)
       ? OWN_TERMINAL_PRESENCE_STEP
       : requestMessageStep(projectDir, "The person has not said yet whether this folder is existing code. Ask them " +
         "the question you were given, end the turn, and run this command after they answer."));
   }
+  // "as you said" only where the record shows them saying it; a message the
+  // agent named and nothing else is the agent's reading of their words.
+  const asTheySaid = named.message === undefined || personSaidProjectType(projectDir, said) ? ", as you said" : "";
 
   // The registry row is workspace state and the plan is the work's own: hold
   // the workspace lock, then the work's lock, across the whole read, audit and
@@ -11983,10 +12346,11 @@ function handleReclassify(projectDir: string, flags: Record<string, string>, raw
       ).content;
     }
     // Repos added after creation, recorded as creation would have recorded
-    // them; only names a repo may have, since each becomes a path segment.
+    // them (startingRepoSet); only names a repo may have, since each becomes a
+    // path segment.
     const repos = declared === "Brownfield" && !started && intent !== undefined &&
         intentRepos(projectDir, intent, space).length === 0
-      ? discoverSiblingRepos(projectDir).filter(isValidRepoName)
+      ? startingRepoSet(projectDir).filter(isValidRepoName)
       : [];
     content = setField(content, "Last Updated", isoTimestamp());
 
@@ -12025,10 +12389,10 @@ function handleReclassify(projectDir: string, flags: Record<string, string>, raw
     // it, in their words. It rides on the directive as its narration.
     const lines: string[] = [
       previous.toLowerCase() !== declared.toLowerCase()
-        ? `Project type is now ${words}, as you said${found}.`
+        ? `Project type is now ${words}${asTheySaid}${found}.`
         : yours
           ? `Project type is already ${words}, as you said${found}.`
-          : `Project type is ${words}, as you said${found}; I won't ask about it again for this piece of work.`,
+          : `Project type is ${words}${asTheySaid}${found}; I won't ask about it again for this piece of work.`,
     ];
     if (declared === "Brownfield" && scan.projectType !== "Brownfield") lines.push(NO_CODE_FOUND_YET);
     // Finished stages these lines name as behind the code.
@@ -12459,9 +12823,12 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
           newStageProgress += `- ${marker} ${stage.slug} \u2014 ${suffix}\n`;
         }
       }
-      const stageProgressRegex = /## Stage Progress\n<!-- [^\n]* -->\n([\s\S]*?)(?=\n## (?!Stage Progress))/;
+      // A Windows clone checks the state file out with CRLF line endings, so
+      // the list is found with either ending and written back in its own.
+      const stageProgressRegex = /## Stage Progress\r?\n<!-- [^\r\n]* -->\r?\n([\s\S]*?)(?=\r?\n## (?!Stage Progress))/;
       const stageProgressHeader = "## Stage Progress\n<!-- Checkbox states: [ ] not started, [-] in progress, [?] awaiting approval (gate open), [R] revising (user rejected gate), [x] completed, [S] skipped via --stage/--phase jump -->\n";
-      content = content.replace(stageProgressRegex, stageProgressHeader + newStageProgress);
+      const stageProgressEol = stageProgressRegex.exec(content)?.[0].includes("\r\n") ? "\r\n" : "\n";
+      content = content.replace(stageProgressRegex, (stageProgressHeader + newStageProgress).replaceAll("\n", stageProgressEol));
       content = setField(content, "Scope", newScope);
       // The new scope's grid replaces any plan composed for this piece of work.
       content = removeField(content, PLAN_FIELD);
@@ -13069,15 +13436,15 @@ function handleRecompose(projectDir: string, flags: Record<string, string>, rawA
       : { content, audit: [], lines: [] };
     content = setField(settingsUpdate.content, "Last Updated", isoTimestamp());
 
-    // The person's approval at the in-flight compose question: its step runs
-    // this before deleting the question's marker and names nothing after it,
-    // so the work goes on from here, as after their approval at a stage's gate.
-    // The engine's other plan-change steps say what comes after themselves.
+    // The person's approval at the in-flight compose question, read before
+    // this write closes it: its step names nothing after this, so the work
+    // goes on from here, as after their approval at a stage's gate. The
+    // engine's other plan-change steps say what comes after themselves.
     let approvedAtCompose = false;
     try {
-      approvedAtCompose = composeGateOpen(projectDir);
+      approvedAtCompose = composeGateOpen(projectDir, flags.intent, flags.space);
     } catch {
-      // An unreadable marker names no step and nobody; the plan change still lands.
+      // An unreadable step names no step and nobody; the plan change still lands.
     }
 
     // Audit first, as config-change does, in one batch: a failed append leaves
@@ -13114,7 +13481,7 @@ function handleRecompose(projectDir: string, flags: Record<string, string>, rawA
         (droppedUnitWork === null ? "" : `${droppedUnitWork}\n`) +
         settingsUpdate.lines.map((line) => `${line}\n`).join("") +
         (approvedAtCompose
-          ? "Then delete `aidlc/.aidlc-compose-pending`, apply any setting the same approval also named, and run " +
+          ? "Then apply any setting the same approval also named, and run " +
             `\`${aidlcToolInvocation("orchestrate")} next\`; follow what it returns, so the work carries on.\n`
           : ""),
     );
@@ -13486,35 +13853,29 @@ function applyKeptToPickedWork(projectDir: string, sessionId: string, space: str
 // set-status — atomically update statusline fields at stage start
 // ---------------------------------------------------------------------------
 
-// Whether a status sync to `stage` leaves the main cursor (Current Stage, In
-// Progress, the cursor checkbox) where it is. Under unit-major, while the step
-// the engine issued is a Unit's Construction step on `stage` or on Current
-// Stage, a sync to any Construction stage other than Current Stage leaves it:
-// the cursor is the engine's. In an unscoped checkout it rests on the block's
-// first stage while the Units walk, and the task slug names the Unit's stage.
-// In a checkout that claimed the Unit (Unit Ownership: team),
-// `aidlc-state.ts sync-unit-scope-stage` rests it on the Unit's own stage, and
-// the sync names another stage: on Kiro IDE the audit tail's last
-// STAGE_STARTED, the block's first stage while the Units walk, because a Unit
-// step writes UNIT_STARTED rows and no STAGE_STARTED. There, moving the cursor
-// retires the step the engine just issued, and the marker is not refreshed
-// (its stage is not the sync's): on Kiro IDE, where the sync runs after every
-// shell command, `continue` then restarts at part one and Plan Approval finds
-// no current directive, forever. The hook's audit-tail path asks this before
-// it writes; set-status applies it to the slug it is given.
-export function statusSyncLeavesUnitCursor(
+// Whether a status sync to `stage` leaves the state as it is: the one rule for
+// where the sync may move Current Stage. While the step the engine issued is
+// still current (`issuedStep` is readActiveDirectiveMarker's, so only while it
+// matches the state), Current Stage is where the engine put it for that step,
+// and a sync naming another stage changes nothing. The sync takes its stage
+// from outside the engine (the task the agent marked in progress, or on Kiro
+// IDE the audit tail's last STAGE_STARTED, which a Unit's step never writes),
+// and the engine writes Current Stage itself on every move of its own, so no
+// step needs the sync to move it. Moving it retires the issued step (on Kiro
+// IDE `continue` then restarts at part one after every shell command) or the
+// place of a Unit walk, whose cursor rests on the block's first stage under
+// unit-major and under the walking skeleton. The step stays current across a
+// `unit start` because the digest leaves out the Unit lifecycle fields, and a
+// step left at the state's digest when it went out of date holds the sync too.
+// The hook's audit-tail path asks this before it writes; set-status applies it
+// to the slug it is given.
+export function statusSyncLeavesCursor(
   stateContent: string,
-  activeDirective: ActiveDirectiveMarker | null,
+  issuedStep: ActiveDirectiveMarker | null,
   stage: string,
-  phase: string,
 ): boolean {
   const currentStage = (getField(stateContent, "Current Stage") ?? "").trim();
-  return getField(stateContent, "Construction Iteration")?.trim() === "unit-major" &&
-    phase === "CONSTRUCTION" &&
-    activeDirective?.unit !== undefined &&
-    currentStage.length > 0 &&
-    currentStage !== stage &&
-    (activeDirective.stage === stage || activeDirective.stage === currentStage);
+  return issuedStep !== null && currentStage.length > 0 && currentStage !== stage;
 }
 
 export function setStatus(
@@ -13534,18 +13895,19 @@ export function setStatus(
   const agent = flags.agent || entry.lead_agent;
 
   const previousContent = readStateFile(projectDir, flags.intent, flags.space);
-  const activeDirective = readActiveDirectiveMarker(projectDir, previousContent);
-  const preserveUnitMajorCursor = statusSyncLeavesUnitCursor(previousContent, activeDirective, stage, phase);
+  // Held, nothing is written: Active Agent follows Current Stage, and another
+  // stage's Lifecycle Phase would change the digest and retire the step.
+  if (statusSyncLeavesCursor(previousContent, readActiveDirectiveMarker(projectDir, previousContent), stage)) {
+    return { phase, stage, agent };
+  }
   let content = previousContent;
   content = setField(content, "Lifecycle Phase", phase);
   content = setField(content, "Active Agent", agent);
   content = setField(content, "Status", "Running");
   content = setField(content, "Last Updated", isoTimestamp());
-  if (!preserveUnitMajorCursor) {
-    content = setField(content, "Current Stage", stage);
-    content = setField(content, "In Progress", stage);
-    content = setCheckbox(withStageProgressRow(content, stage), stage, "in-progress");
-  }
+  content = setField(content, "Current Stage", stage);
+  content = setField(content, "In Progress", stage);
+  content = setCheckbox(withStageProgressRow(content, stage), stage, "in-progress");
   writeStateFile(projectDir, content, flags.intent, flags.space);
   try {
     refreshActiveDirectiveMarker(projectDir, stage, previousContent, content);
@@ -13981,9 +14343,10 @@ export async function main(argv: string[]): Promise<void> {
       process.stdout.write(`${isoTimestamp()}\n`);
       break;
     case "status":
-      handleStatus(projectDir, flags);
+      await handleStatus(projectDir, flags);
       break;
     case "claim":
+      if (positional.length === 2 && !("help" in flags) && !rawArgs.includes("-h")) claimWhereTheUnitIs(projectDir, positional[1]);
       unitMain([
         "claim",
         ...rawArgs.slice(1),

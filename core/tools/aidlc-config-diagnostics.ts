@@ -38,7 +38,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir, platform as hostPlatform } from "node:os";
-import { delimiter, dirname, join, relative, resolve } from "node:path";
+import { delimiter, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import {
   assertProjectionPathHasNoSymlinks,
   holdsRecordedWrite,
@@ -67,6 +67,7 @@ import {
 import {
   aidlcInvocation,
   discoverProjectHarnesses,
+  inHostShell,
   kiroTreeLayout,
   typedHarnessName,
 } from "./aidlc-runtime-paths.ts";
@@ -86,6 +87,7 @@ import { readBoundedRegularFile } from "./aidlc-inline-context.ts";
 import { KIRO_IDE_STEERING } from "./aidlc-includes.ts";
 import {
   HARNESS_PRODUCT_NAMES,
+  isModelHarness,
   sessionSetsAgentModels,
   type ModelHarness,
 } from "./aidlc-model-policy.ts";
@@ -963,6 +965,14 @@ function isVsCodeCopilotStandInFolder(directory: string): boolean {
     parts.at(-2)?.toLowerCase() === "github.copilot-chat";
 }
 
+// A CLI's --version reply often says more than its version ("codex-cli
+// 0.167.1", "2.1.322 (Claude Code)", Copilot's update hint on a second line).
+// A line for the person shows the version alone; the probe keeps the reply.
+// Copilot ends its version with a period, which a prerelease tag never does.
+export function cliVersionShown(reply: string): string {
+  return /\d+\.\d+\.\d+(?:[-+][^\s)]*[^\s).])?/.exec(reply)?.[0] ?? reply;
+}
+
 function versionTuple(value: string): [number, number, number] | null {
   const match = value.match(/(\d+)\.(\d+)\.(\d+)/);
   return match
@@ -1058,6 +1068,53 @@ export function probeHarnessCli(
   };
 }
 
+// A harness whose editor has no CLI to probe names that editor
+// (descriptor.editorTerminalApp), and the editor's integrated terminal is the
+// signal that setup is for it: TERM_PROGRAM is exactly the editor's name, or
+// the git askpass helper VS Code-based editors set (VSCODE_GIT_ASKPASS_NODE)
+// is the editor's executable. A miss only loses the default choice.
+export function launchedFromEditorTerminal(
+  app: string,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  const name = app.toLowerCase();
+  if ((env.TERM_PROGRAM ?? "").toLowerCase() === name) return true;
+  const helper = (env.VSCODE_GIT_ASKPASS_NODE ?? "").split(/[\\/]/).pop()?.toLowerCase() ?? "";
+  return helper === name || helper === `${name}.exe`;
+}
+
+// probeHarnessCli's answer read from absolute PATH entries only: a relative
+// entry resolves in whatever folder the command runs in, so it is never run.
+function supportedHarnessCliOnPath(harness: string, env: NodeJS.ProcessEnv): boolean {
+  if (!isModelHarness(harness)) return false;
+  const platform = hostPlatform();
+  const absolute = pathEntries(env.PATH ?? "", platform).filter((directory) => isAbsolute(directory));
+  return probeHarnessCli(harness, {
+    env,
+    platform,
+    interactivePath: absolute.join(platform === "win32" ? ";" : delimiter),
+  }).status === "found";
+}
+
+// A tree an editor and a CLI both run (Kiro IDE and Kiro CLI) words its
+// what-next lines for the editor and keeps a copy for the CLI. The copy leads
+// where a supported CLI (its version floor included) is on an absolute PATH
+// entry and the command runs outside the editor: in no shell `hostEnv` names,
+// and not in the terminal of the editor `hostEnv`'s TERM_PROGRAM entry names
+// (launchedFromEditorTerminal, which reads the git askpass helper too).
+// Someone with both, in a plain terminal, is told the CLI first and the editor
+// after. The environment is read first, so inside the editor the CLI is never
+// run.
+export function harnessCliLeads(
+  harness: string,
+  hostEnv: readonly string[],
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  const editors = hostEnv.flatMap((entry) => entry.startsWith("TERM_PROGRAM=") ? [entry.slice("TERM_PROGRAM=".length)] : []);
+  if (inHostShell(hostEnv, env) || editors.some((app) => launchedFromEditorTerminal(app, env))) return false;
+  return supportedHarnessCliOnPath(harness, env);
+}
+
 export function probeRuntime(
   projectDir: string,
   harnessDir: string,
@@ -1118,7 +1175,9 @@ export function runtimeIssues(diagnostics: RuntimeDiagnostics): DiagnosticIssue[
     issues.push({
       id: "runtime-harness-cli-old",
       message:
-        `${diagnostics.cli.command} ${diagnostics.cli.version || "unknown"} is below ${diagnostics.cli.minimumVersion}`,
+        `${diagnostics.cli.command} ${
+          diagnostics.cli.version ? cliVersionShown(diagnostics.cli.version) : "unknown"
+        } is below ${diagnostics.cli.minimumVersion}`,
       remediation: diagnostics.cli.remediation ?? "Upgrade the selected harness CLI.",
     });
   }
@@ -2188,14 +2247,14 @@ export function flagIssues(
         issues.push({
           id: "flag-claude-default-scope-drift",
           message: `${path} does not carry the recorded default scope ${record.defaultScope}`,
-          remediation: "Run aidlc config flags again to reapply the recorded default scope.",
+          remediation: `Run ${invocationForHarness(harnessDir)} config flags again to reapply the recorded default scope.`,
         });
       }
     } catch (error) {
       issues.push({
         id: "flag-claude-settings-unreadable",
         message: error instanceof Error ? error.message : String(error),
-        remediation: "Restore .claude/settings.json, then rerun aidlc config flags.",
+        remediation: `Restore .claude/settings.json, then rerun ${invocationForHarness(harnessDir)} config flags.`,
       });
     }
   }
@@ -2376,7 +2435,7 @@ export function projectChoiceIssues(
       issues.push({
         id: "project-plugin-unknown",
         message: `Recorded plugin ${plugin} is not installed`,
-        remediation: "Install the plugin or rerun aidlc config project with the installed plugin set.",
+        remediation: `Install the plugin or rerun ${invocationForHarness(harnessDir)} config project with the installed plugin set.`,
       });
     }
   }
@@ -2396,7 +2455,7 @@ export function projectChoiceIssues(
       issues.push({
         id: "project-mcp-unreadable",
         message: `${path} is malformed`,
-        remediation: "Repair .mcp.json, then rerun aidlc config project.",
+        remediation: `Repair .mcp.json, then rerun ${invocationForHarness(harnessDir)} config project.`,
       });
       return issues;
     }
@@ -2408,7 +2467,7 @@ export function projectChoiceIssues(
     issues.push({
       id: "project-mcp-defaults-drift",
       message: "Recorded MCP consent is defaults, but one or more shipped MCP entries are absent",
-      remediation: "Run aidlc config project --mcp defaults to reapply consented entries.",
+      remediation: `Run ${invocationForHarness(harnessDir)} config project --mcp defaults to reapply consented entries.`,
     });
   }
   if (
@@ -2419,7 +2478,7 @@ export function projectChoiceIssues(
     issues.push({
       id: "project-mcp-none-drift",
       message: "Recorded MCP consent is none, but shipped MCP entries remain",
-      remediation: "Run aidlc config project --mcp none to remove framework-owned MCP entries.",
+      remediation: `Run ${invocationForHarness(harnessDir)} config project --mcp none to remove framework-owned MCP entries.`,
     });
   }
   return issues;
@@ -2436,7 +2495,7 @@ export function providerSurfaceIssues(
     issues.push({
       id,
       message,
-      remediation: `Run aidlc config providers again to reapply the recorded answer to ${file}.`,
+      remediation: `Run ${invocationForHarness(harnessDir)} config providers again to reapply the recorded answer to ${file}.`,
     });
   };
   const warning = (id: string, message: string, remediation: string): void => {
@@ -2569,7 +2628,7 @@ export function providerSurfaceIssues(
     issues.push({
       id: "provider-surface-unreadable",
       message: error instanceof Error ? error.message : String(error),
-      remediation: "Restore the selected harness configuration files, then rerun aidlc config providers.",
+      remediation: `Restore the selected harness configuration files, then rerun ${invocationForHarness(harnessDir)} config providers.`,
     });
   }
   return issues;
@@ -3720,11 +3779,13 @@ export function runtimeDoctorChecks(
       ? { severity: "warn" as const }
       : {}),
     label: cli.status === "found"
-      ? `Harness CLI: ${cli.command} ${cli.version || ""} at ${cli.path}`.trim()
+      ? `Harness CLI: ${cli.command} ${cli.version ? cliVersionShown(cli.version) : ""} at ${cli.path}`.trim()
       : cli.status === "not-applicable"
       ? `Harness CLI: none required for ${typedHarnessName(cli.harness)}`
       : cli.status === "too-old"
-      ? `Harness CLI: ${cli.required ? "" : "optional "}${cli.command} ${cli.version || "unknown"} is below ${cli.minimumVersion}`
+      ? `Harness CLI: ${cli.required ? "" : "optional "}${cli.command} ${
+        cli.version ? cliVersionShown(cli.version) : "unknown"
+      } is below ${cli.minimumVersion}`
       : cli.required
       ? `Harness CLI: ${cli.command} is missing`
       : `Harness CLI: optional ${cli.command} is not installed`,
@@ -3893,7 +3954,7 @@ export function vscodeWorkspaceRequestCapDoctorCheck(
       pass: false,
       severity: "warn",
       label: `${label} ${where} has no settings, so a window opened from it uses your user setting or VS Code's default of 50`,
-      fix: `run aidlc system workspace-sync, which adds "settings": { "${VSCODE_REQUEST_CAP_KEY}": 200 } to ${where}, or add it yourself; ${REQUEST_CAP_PAUSES}`,
+      fix: `run ${invocationForHarness(selected.harnessDir)} system workspace-sync, which adds "settings": { "${VSCODE_REQUEST_CAP_KEY}": 200 } to ${where}, or add it yourself; ${REQUEST_CAP_PAUSES}`,
     };
   }
   if (settings === null || typeof settings !== "object" || Array.isArray(settings)) {

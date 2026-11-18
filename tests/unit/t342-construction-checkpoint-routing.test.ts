@@ -118,13 +118,16 @@ ${stages.map((stage) => `- [${stage === current ? "-" : " "}] ${stage} — EXECU
   return p;
 }
 
+// A code plan still being written (its test instructions empty) routes as its
+// plan step; with both files written the engine would write the plan's Testing
+// Contract and ask the person to approve it.
 function cover(p: string, unit: string, selected = stages, receipts = true) {
   for (const slug of selected) {
     const stage = findStageBySlug(slug)!;
     const output = join(seededRecordDir(p), "construction", unit, slug);
     mkdirSync(output, { recursive: true });
     for (const name of stage.produces ?? []) {
-      writeFileSync(join(output, artifactFilename(name)), `# ${unit} ${name}\n`);
+      writeFileSync(join(output, artifactFilename(name)), name === "unit-test-instructions" ? "" : `# ${unit} ${name}\n`);
     }
     if (stage.workspace_requires) {
       writeFileSync(join(output, "source-manifest.json"), JSON.stringify({
@@ -1633,6 +1636,31 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     expect(next(p)).toMatchObject({ stage: "code-generation", unit: "beta" });
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // The first unit jumps on before any unit has finished a step. It
+  // still moves only that unit on: no step is marked skipped for every unit,
+  // so the next unit starts at its own first step.
+  test("a forward jump before any unit has finished a step moves only the first unit on", () => {
+    const p = fixture();
+    expect(next(p)).toMatchObject({ stage: "functional-design", unit: "alpha" });
+    const jump = JSON.parse(tool(p, "orchestrate", ["next", "--stage", "code-generation"]).stdout);
+    expect(jump.kind, JSON.stringify(jump)).toBe("print");
+    expect(jump.message).toContain(
+      "execute --target code-generation --direction forward --units alpha " +
+        "--stages functional-design,nfr-requirements,nfr-design,infrastructure-design --scope feature",
+    );
+    expect(jump.message).not.toContain('unit "beta" (');
+    const command = /`[^`]*aidlc-jump\.ts (execute [^`]+)`/.exec(jump.message)?.[1];
+    const executed = tool(p, "jump", command!.split(" "));
+    expect(executed.status, executed.out).toBe(0);
+    expect(jumped(p)).toBe(0);
+    const state = readFileSync(seededStateFile(p), "utf-8");
+    for (const slug of stages) expect(state, slug).not.toContain(`- [S] ${slug}`);
+    expect(next(p)).toMatchObject({ stage: "code-generation", unit: "alpha" });
+    cover(p, "alpha", ["code-generation"]);
+    approve(p, "alpha");
+    expect(next(p)).toMatchObject({ stage: "functional-design", unit: "beta" });
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   // The jump's own print, and its commands run in order as the conductor does.
   function jumpAhead(p: string, args: string[]) {
     const jump = JSON.parse(tool(p, "orchestrate", ["next", ...args]).stdout);
@@ -2260,14 +2288,16 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
   test("a forward jump that drops no Unit's work, and a stage-major forward jump, still jump", () => {
     // Unit by unit, the jump's own line says what it skips for each Unit
     // (#3530), so there is nothing to say or run around it: the `next` makes
-    // the jump itself and returns the step it lands on, with that line.
+    // the jump itself and returns the step it lands on, with that line. A jump
+    // inside the per-unit steps moves only the unit in flight on, so
+    // this one leaves Construction.
     const fresh = fixture();
-    const clear = JSON.parse(tool(fresh, "orchestrate", ["next", "--stage", "code-generation"]).stdout);
+    const clear = JSON.parse(tool(fresh, "orchestrate", ["next", "--stage", "build-and-test"]).stdout);
     expect(clear.kind, JSON.stringify(clear)).not.toBe("print");
-    expect(clear.stage).toBe("code-generation");
+    expect(clear.stage).toBe("build-and-test");
     expect(clear.change_notices).toContain(
-      "Moved to Code Generation. Skipped for units alpha and beta: Functional Design, NFR Requirements, NFR Design " +
-        "and Infrastructure Design. Their files stay. You can go back to Functional Design any time.",
+      "Moved to Build and Test. Skipped for units alpha and beta: Functional Design, NFR Requirements, NFR Design, " +
+        "Infrastructure Design and Code Generation. Their files stay. You can go back to Functional Design any time.",
     );
     expect(jumped(fresh)).toBe(1);
     // Stage by stage there is nothing to say or run around it, so the `next`
@@ -3102,7 +3132,14 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
   // completion the way a solo run does, with no output fingerprint.
   function buildReviewed(p: string, unit: string, edit?: () => void, asRun = false) {
     let codeReviewed: ReturnType<typeof reviewThroughLog> | null = null;
+    // A team Unit's records hang off its start: each teammate's own.
+    const team = readFileSync(seededStateFile(p), "utf-8").includes("- **Unit Ownership**: team");
     for (const slug of stages) {
+      if (team) {
+        appendAuditEntry("UNIT_STARTED", {
+          Stage: slug, Unit: unit, "Run floor": latestMainWorkflowStageRunFloorForProject(p, slug, true, unit),
+        }, p);
+      }
       cover(p, unit, [slug], false);
       if (slug === "code-generation") edit?.();
       const reviewed = reviewThroughLog(p, [

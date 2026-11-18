@@ -99,6 +99,13 @@ const manifest: HarnessManifest = {
       "Claude Code runs this project's hooks only when it is started in the project folder. Exit Claude Code, " +
       "start it again in <folder>, then type <entry>.",
   },
+  // Claude Code marks every command its agent runs (measured in its Bash tool,
+  // 2.1.318); a native engine with several tools set up reads this to know it
+  // runs for Claude Code.
+  hostShell: { env: ["CLAUDECODE", "CLAUDE_CODE_SESSION_ID"] },
+  // A clean chat for new work started beside other work: /clear starts a new
+  // conversation and keeps the old one for /resume.
+  newChatStep: { text: "type /clear, then <entry>" },
   harnessDir: ".claude",
   orchestratorSkillPath: ".claude/skills/aidlc/SKILL.md",
   tierFlavor: "claude",
@@ -129,6 +136,9 @@ const manifest: HarnessManifest = {
           // The variant shipped before the block ignored aidlc/.aidlc-request-text/
           // (a request the engine has not read yet).
           "sha256:3cc1cbd212d2ca0dbf1e525eb9a40d4694a585eb7864d8b877f8fe8bd99122dc",
+          // The variant shipped before the block ignored a Bolt worktree's metadata
+          // (.aidlc/worktree-meta.json, .aidlc/base-source-listing.tsv).
+          "sha256:839f98012dd457ed13dcf19547b992130a2c44ef7afa73fb3faf000137a087d7",
         ],
       },
     },
@@ -175,6 +185,7 @@ const manifest: HarnessManifest = {
     { src: "skills/aidlc-session-cost", dst: "skills/aidlc-session-cost" },
     { src: "skills/aidlc-replay", dst: "skills/aidlc-replay" },
     { src: "skills/aidlc-outcomes-pack", dst: "skills/aidlc-outcomes-pack" },
+    { src: "skills/aidlc-issue-report", dst: "skills/aidlc-issue-report" },
     { src: "skills/aidlc-knowledge", dst: "skills/aidlc-knowledge" },
   ],
 

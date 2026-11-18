@@ -383,7 +383,7 @@ Machine
 Project (.claude, Claude Code)
   warn  AIDLC hooks have not run in this project yet
         fix: This is expected before your first Claude Code chat in this folder. ...
-  warn  Workspace records: 8 uncommitted change(s) under aidlc/ (advisory - the shared records travel by git; commit & push so teammates get them: `git add aidlc/ && git commit && git push`)
+  warn  Workspace records: 8 uncommitted change(s) under aidlc/ (advisory - the shared records travel by git; commit & push so teammates get them: `git add aidlc/`, `git commit`, `git push`)
         fix: add --verbose to see the details, correct the named condition, then run doctor again
   ok    49 checks passed
 
@@ -643,7 +643,7 @@ The steps are the same everywhere; these differ:
 | --- | --- | --- | --- |
 | Claude Code | `claude` | `claude` | `/aidlc` |
 | Kiro (Kiro IDE, Kiro CLI on v3) | `kiro` | Open the project, then choose **aidlc** in the chat panel's agent picker, or run `kiro-cli --v3` in the project (when Kiro asks whether you trust the folder and you know what is in it, choose **Trust, continue**) | `/aidlc` |
-| Kiro CLI (V2) | `kiro-v2` | `kiro-cli --v2` (Kiro CLI 2.21.4 or later; for an older one, see [Kiro CLI](harnesses/kiro-cli.md#prerequisites)) | `/aidlc` |
+| Kiro CLI (V2) | `kiro-v2` | `kiro-cli --v2` (Kiro CLI 2.21.4 or later; for an older one, see [Kiro CLI (V2) prerequisites](harnesses/kiro.md#kiro-cli-v2-prerequisites)) | `/aidlc` |
 | Codex CLI | `codex` | `codex` | `$aidlc` |
 | Cursor | `cursor` | Open Cursor or run `agent` | `/aidlc` |
 | opencode | `opencode` | `opencode` | `/aidlc` |
@@ -655,7 +655,7 @@ After config, complete the one step config names for your tool:
 | --- | --- |
 | Claude Code | If Claude Code is already open in this folder, exit it and start it again |
 | Kiro (Kiro IDE, Kiro CLI on v3) | Open the configured project, then choose **aidlc** in the chat panel's agent picker, or start `kiro-cli --v3` in the project (when Kiro asks whether you trust the folder and you know what is in it, choose **Trust, continue**) |
-| Kiro CLI (V2) | Start `kiro-cli --v2` (Kiro CLI 2.21.4 or later; for an older one, see [Kiro CLI](harnesses/kiro-cli.md#prerequisites)); the project selects the AI-DLC agent |
+| Kiro CLI (V2) | Start `kiro-cli --v2` (Kiro CLI 2.21.4 or later; for an older one, see [Kiro CLI (V2) prerequisites](harnesses/kiro.md#kiro-cli-v2-prerequisites)); the project selects the AI-DLC agent |
 | Codex CLI | Approve the hook trust prompt or apply the generated trust seed |
 | Cursor | Open the configured project or run `agent` |
 | opencode | Start `opencode` in the project |
@@ -666,13 +666,13 @@ on Claude Code; on Codex, setup offers Codex's built-in status line, with the
 task progress AI-DLC keeps current. For Kiro's v3 engine on Kiro CLI 2.24.1 or
 later, use `kiro` and start `kiro-cli --v3` (when it asks to trust the folder and
 you know what is in it, choose **Trust, continue**); `kiro-v2` is Kiro CLI (V2)
-([Kiro CLI](harnesses/kiro-cli.md) says how an existing Kiro CLI (V2) project
+([Kiro CLI (V2)](harnesses/kiro.md#kiro-cli-v2) says how an existing Kiro CLI (V2) project
 switches).
 
 In Kiro IDE, the **aidlc** agent appears in the agent picker only after you
 trust the folder and reload the window: if the Restricted Mode banner shows,
 select **Manage** on it, then **Trust**, and run **Developer: Reload Window**
-(see [First run](harnesses/kiro-ide.md#first-run)). If you use Kiro IDE's own
+(see [First run](harnesses/kiro.md#first-run)). If you use Kiro IDE's own
 terminal in a folder you have not trusted yet, Kiro first asks whether you
 trust it; choose **Trust Folder & Continue** only for your own project or one
 you have checked, since trusting lets the folder's `.kiro` hooks run commands

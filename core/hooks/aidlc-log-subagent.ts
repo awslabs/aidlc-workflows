@@ -1,11 +1,11 @@
 // SubagentStop hook: Emit SUBAGENT_COMPLETED when a subagent finishes.
 //
 // Receives JSON on stdin with subagent info. Audits only while a workflow is
-// running, or with no work while a stage run on its own is open in the space's
-// own record. Its pair, SUBAGENT_DISPATCHED (a helper was sent), is written by
-// recordSubagentDispatch: from the dispatch hook every adapter but Cursor's and
-// Kiro IDE's runs, and here for a `hook_event_name: "SubagentStart"` those two
-// forward.
+// running or a stage run on its own is open on it, or with no work while such a
+// run is open in the space's own record. Its pair, SUBAGENT_DISPATCHED (a
+// helper was sent), is written by recordSubagentDispatch: from the dispatch
+// hook every adapter but Cursor's and Kiro IDE's runs, and here for a
+// `hook_event_name: "SubagentStart"` those two forward.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry } from "../tools/aidlc-audit.ts";
@@ -18,6 +18,7 @@ import {
   hooksHealthDir,
   writeHookStatusFile,
   isClaudeCodeHookInput,
+  isolatedRunIsOpen,
   isolatedRunWithoutWork,
   isoTimestamp,
   isScopedReviewCopy,
@@ -37,8 +38,10 @@ import {
   validSessionId,
 } from "../tools/aidlc-lib.ts";
 
-// The selection's record takes a helper's rows while its workflow runs, or with
-// no work while a stage run on its own is open in the space's own record.
+// The selection's record takes a helper's rows while its workflow runs or a
+// stage run on its own is open on it (finished work is live then, as every hook
+// that writes into it reads it: selectedRecordIsFinished), or with no work while
+// such a run is open in the space's own record.
 function recordsHelpers(projectDir: string, selection: ReturnType<typeof resolveWorkflowSelection>): boolean {
   let stateContent: string;
   try {
@@ -46,7 +49,7 @@ function recordsHelpers(projectDir: string, selection: ReturnType<typeof resolve
   } catch {
     return isolatedRunWithoutWork(projectDir, selection);
   }
-  return getField(stateContent, "Status") === "Running";
+  return getField(stateContent, "Status") === "Running" || isolatedRunIsOpen(projectDir, selection);
 }
 
 /**

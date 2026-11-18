@@ -295,6 +295,19 @@ export function aidlcEngineCommand(
     : [process.execPath, sourceToolPath ?? resolveHarnessPath(["tools", `aidlc-${route}.ts`]), ...args];
 }
 
+// Whether the agent's shell is in the host a harness's `{ env }` names: `NAME`
+// matches when set, `NAME=value` when it holds that value (TERM_PROGRAM=kiro).
+// A `NAME=value` variable holding another value rules the host out: Kiro CLI in
+// VS Code's terminal has TERM_PROGRAM=vscode beside VS Code's own VSCODE_PID.
+export function inHostShell(env: readonly string[] | undefined, actualEnv: NodeJS.ProcessEnv = process.env): boolean {
+  const entries = (env ?? []).map((entry) => {
+    const [name, value] = entry.split("=", 2);
+    return { value: value?.toLowerCase(), actual: actualEnv[name]?.trim().toLowerCase() };
+  });
+  if (entries.some(({ value, actual }) => value !== undefined && actual && actual !== value)) return false;
+  return entries.some(({ value, actual }) => value === undefined ? Boolean(actual) : actual === value);
+}
+
 // Control characters (line breaks, terminal escapes) in something we print.
 export function hasControlCharacters(value: string): boolean {
   // biome-ignore lint/suspicious/noControlCharactersInRegex: detecting them is the point
@@ -366,8 +379,13 @@ export function quoteCommandArgument(
   // PowerShell reads a bare word that starts with "@" as splatting a variable.
   if (/^[A-Za-z0-9_./:@%+=,-]+$/.test(value) && !(shell !== "posix" && value.startsWith("@"))) return value;
   // The two shells quote an apostrophe differently, so it is double-quoted
-  // when both read that alike.
-  if (shell === "windows" && POWERSHELL_SINGLE_QUOTE.test(value) && readsAlikeInDoubleQuotes(value)) return `"${value}"`;
+  // when both read that alike. Inside double quotes Git Bash reads a backslash
+  // as itself, as PowerShell does, unless another backslash or the closing
+  // quote follows it, so a Windows path's own backslashes pass.
+  if (
+    shell === "windows" && POWERSHELL_SINGLE_QUOTE.test(value) && !/\\(?:\\|$)/.test(value) &&
+    readsAlikeInDoubleQuotes(value.replaceAll("\\", ""))
+  ) return `"${value}"`;
   return shell !== "posix"
     ? `'${value.replaceAll(new RegExp(POWERSHELL_SINGLE_QUOTE.source, "g"), "$&$&")}'`
     : `'${value.replaceAll("'", "'\"'\"'")}'`;
@@ -386,8 +404,16 @@ export function projectedDispatcher(): string | null {
   return PROJECTED_INVOKE.startsWith("{{") ? null : join(MODULE_TOOLS_DIR, "aidlc.ts");
 }
 
-export function entrySkillInvocation(): string {
+// The entry as the tree this engine runs on spells it, for what is written into
+// that tree (its runners).
+export function treeEntrySkillInvocation(): string {
   return runtimeHarnessDir() === ".codex" ? "$aidlc" : "/aidlc";
+}
+
+// The entry the person types: their tool's, or, where the engine could only
+// guess which tool runs it (harnessIsAGuess), the one every tool but Codex takes.
+export function entrySkillInvocation(): string {
+  return harnessIsAGuess() ? "/aidlc" : treeEntrySkillInvocation();
 }
 
 export function aidlcDispatcherInvocation(route: string): string {
@@ -408,6 +434,14 @@ export function swarmUnitTestCommand(unit: string): string {
 // inputs and records the result, which the script run bare does not.
 export function sensorFireUsage(id = "<id>"): string {
   return aidlcDispatcherInvocation(`sensor fire ${id} --stage <slug> --output-path <path>`);
+}
+
+// A check script's result, written whole before the process exits 0: under Bun
+// an exit straight after a large write to a pipe drops what is not yet written.
+// writeSync is no way round: once stdout is non-blocking it writes part and
+// returns; ending without an exit makes an early-closing reader an EPIPE exit 1.
+export function writeSensorResult(result: unknown): void {
+  process.stdout.write(`${JSON.stringify(result)}\n`, () => process.exit(0));
 }
 
 export function aidlcToolInvocation(
@@ -542,6 +576,43 @@ export function hookSessionProjectDir(hostDir: string, payload: string): string 
   return (dir === null ? null : hostWorktreeProjectDir(hostDir, dir)) ?? hostDir;
 }
 
+// A folder that is an AI-DLC project of its own: it holds AI-DLC's records
+// (`aidlc/spaces/`), an AI-DLC install, or is a Unit's worktree AI-DLC made,
+// which reads its worker's identity from its own folder. A session folder a
+// run left behind (`aidlc/.aidlc-sessions/`) is none of these.
+export function isAidlcProjectFolder(dir: string): boolean {
+  return existsSync(join(dir, "aidlc", "spaces")) ||
+    existsSync(join(dir, ".aidlc", "worktree-meta.json")) ||
+    discoverProjectHarnesses(dir).length > 0;
+}
+
+// The project these modules' own path names (`<project>/<harness>/tools/`: the
+// copy channel, a Bun-run tree), or null for the compiled engine, whose modules
+// live in the runtime payload, and for a source checkout.
+export function moduleProjectDir(): string | null {
+  if (isCompiledExecutable()) return null;
+  return basename(MODULE_TOOLS_DIR) === "tools" && /^\.[a-z0-9][a-z0-9._-]*$/i.test(basename(MODULE_HARNESS_ROOT))
+    ? dirname(MODULE_HARNESS_ROOT)
+    : null;
+}
+
+// The AI-DLC project a folder sits in when it is not one itself (a code repo
+// cloned into the workspace, a plain subfolder): the nearest folder above it
+// that is one. Null for a project, for a folder in no project, and when a
+// folder on the way up cannot be read.
+export function enclosingProjectDir(dir: string): string | null {
+  let current = resolve(dir);
+  try {
+    if (isAidlcProjectFolder(current)) return null;
+    for (let parent = dirname(current); parent !== current; current = parent, parent = dirname(parent)) {
+      if (isAidlcProjectFolder(parent)) return parent;
+    }
+  } catch {
+    // An unreadable folder: the command keeps the folder it was run in.
+  }
+  return null;
+}
+
 function within(parent: string, path: string): boolean {
   const rel = relative(resolve(parent), resolve(path));
   return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
@@ -632,28 +703,100 @@ export function kiroTreeLayout(harnessRoot: string): KiroLayout | null {
   return null;
 }
 
-/**
- * The harness dir for this process, or null when the working directory cannot
- * be read (a command started from a directory the user cannot list or enter).
- * Null means "not discoverable here", never a default harness: a command that
- * needs one still resolves it later and reports the error then. Other
- * discovery errors are rethrown.
- *
- * Codex sets CODEX_SESSION_ID in every shell command its model runs, so in a
- * project that also holds another tool's install, a command Codex runs reads
- * the Codex install instead of the first one found.
- */
-export function discoverableRuntimeHarnessDir(projectDir = runtimeProjectDir()): string | null {
-  try {
-    if (!process.env.AIDLC_HARNESS_DIR?.trim() && process.env.CODEX_SESSION_ID?.trim()) {
-      const codex = discoverProjectHarnesses(projectDir).find((item) => item.distribution === "codex");
-      if (codex) return codex.harnessDir;
+// The marks a harness's host puts on every command its agent runs (harness.json
+// `hostShell`): the running release's own copy of the tree first, as for the
+// directive limit, so a project configured before the field existed has them,
+// then the project's file.
+function hostShellMarks(harness: ProjectHarness): string[] | undefined {
+  const file = join(harness.root, "tools", "data", "harness.json");
+  const project = (): Record<string, unknown> | null => {
+    try {
+      return JSON.parse(readFileSync(file, "utf-8")) as Record<string, unknown>;
+    } catch {
+      return null;
     }
-    return runtimeHarnessDir(projectDir);
+  };
+  for (const data of [releasedHarnessData(file), project()]) {
+    const env = (data?.hostShell as { env?: unknown } | null | undefined)?.env;
+    if (Array.isArray(env) && env.length > 0 && env.every((name) => typeof name === "string" && name !== "")) {
+      return env as string[];
+    }
+  }
+  return undefined;
+}
+
+/**
+ * The installed harness whose host runs this command: the one installed, or of
+ * several the one whose host's mark (hostShellMarks) the command carries. Null
+ * when none of several is marked, or more than one is (a tool started from
+ * another's shell carries both): nothing then tells which tool the person is in.
+ */
+export function callingHarness(
+  installed: readonly ProjectHarness[],
+  env: NodeJS.ProcessEnv = process.env,
+): ProjectHarness | null {
+  if (installed.length <= 1) return installed[0] ?? null;
+  const marked = installed.filter((harness) => inHostShell(hostShellMarks(harness), env));
+  return marked.length === 1 ? marked[0] : null;
+}
+
+/**
+ * The harness this process runs on, and whether that is a guess, or null when
+ * the working directory cannot be read (a command started from a directory the
+ * user cannot list or enter). Null means "not discoverable here", never a
+ * default harness: a command that needs one still resolves it later and
+ * reports the error then. Other discovery errors are rethrown.
+ *
+ * A named harness is that one. Otherwise it is the tool whose chat runs the
+ * command (callingHarness), so in a project with several tools set up each runs
+ * on its own setup; when that cannot be told, the first one installed, as a
+ * guess (harnessIsAGuess).
+ */
+export function discoverableRuntimeHarness(
+  projectDir = runtimeProjectDir(),
+  env: NodeJS.ProcessEnv = process.env,
+): { harnessDir: string; guessed: boolean } | null {
+  try {
+    const named = env.AIDLC_HARNESS_DIR?.trim();
+    if (named) return { harnessDir: named, guessed: false };
+    const installed = discoverProjectHarnesses(projectDir);
+    const caller = callingHarness(installed, env);
+    if (caller) return { harnessDir: caller.harnessDir, guessed: false };
+    return { harnessDir: runtimeHarnessDir(projectDir), guessed: installed.length > 1 };
   } catch (error) {
     if (["EACCES", "EPERM"].includes((error as NodeJS.ErrnoException).code ?? "")) return null;
     throw error;
   }
+}
+
+// The harness the dispatcher pinned with no tool's mark to go by, among several
+// installed. Read only while it is still the pin, so a later pin of another
+// harness is never a guess; pinRuntimeHarness and keepRuntimeHarnessPin write it.
+const GUESSED_HARNESS_DIR = "AIDLC_HARNESS_DIR_GUESSED";
+
+/** Pin the harness this process and the tools it loads run on; `guessed` marks the first of several installed that no tool's mark named. */
+export function pinRuntimeHarness(harnessDir: string, guessed = false): void {
+  process.env.AIDLC_HARNESS_DIR = harnessDir;
+  if (guessed) process.env[GUESSED_HARNESS_DIR] = harnessDir;
+  else delete process.env[GUESSED_HARNESS_DIR];
+}
+
+/** The pin as it is now, guess and all, put back by the function returned (after a run pinned to another harness). */
+export function keepRuntimeHarnessPin(): () => void {
+  const dir = process.env.AIDLC_HARNESS_DIR;
+  const guessed = process.env[GUESSED_HARNESS_DIR];
+  return () => {
+    if (dir === undefined) delete process.env.AIDLC_HARNESS_DIR;
+    else process.env.AIDLC_HARNESS_DIR = dir;
+    if (guessed === undefined) delete process.env[GUESSED_HARNESS_DIR];
+    else process.env[GUESSED_HARNESS_DIR] = guessed;
+  };
+}
+
+/** Whether the harness this process runs on is a guess at the person's tool: its lines for one tool may be another's. */
+export function harnessIsAGuess(env: NodeJS.ProcessEnv = process.env): boolean {
+  const guessed = env[GUESSED_HARNESS_DIR]?.trim();
+  return Boolean(guessed) && guessed === env.AIDLC_HARNESS_DIR?.trim();
 }
 
 export function runtimeHarnessName(
@@ -750,11 +893,11 @@ export function harnessArgsAsTyped(args: readonly string[]): string[] {
 
 /**
  * Pin the harness a command names (`--harness-dir`) for this process and the
- * tools it loads: a compiled aidlc has already pinned the first one installed
- * here, which in a project with Claude Code beside it is .claude.
+ * tools it loads: a compiled aidlc has already pinned the one whose tool runs
+ * the command, or the first one installed.
  */
 export function pinNamedHarness(projectDir: string, harnessDir: string): void {
-  process.env.AIDLC_HARNESS_DIR = harnessDir;
+  pinRuntimeHarness(harnessDir);
   delete process.env.AIDLC_HARNESS_NAME;
   process.env.AIDLC_HARNESS_NAME = runtimeHarnessName(projectDir, harnessDir);
 }

@@ -6,6 +6,8 @@ import { fileURLToPath } from "node:url";
 import { appendAuditEntry } from "./aidlc-audit.ts";
 import { personGitNameField } from "./aidlc-git-name.ts";
 import { beforePerUnitBlock, withStageProgressRow } from "./aidlc-graph.ts";
+import { keptSinceFinished } from "./aidlc-message-store.ts";
+import { isNonAnswer } from "./aidlc-reply-reader.ts";
 import { readReviewArtifactContexts } from "./aidlc-review-brief.ts";
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { isCompiledExecutable } from "./aidlc-runtime-paths.ts";
@@ -38,6 +40,8 @@ import {
   resolveStage,
   resolveWorkflowSelection,
   type StageEntry,
+  updateIntentStatus,
+  withAuditLock,
   setCheckbox,
   removeField,
   setField,
@@ -50,12 +54,16 @@ import {
   writeStateFile,
   REDO_REUSE_SOURCE,
   answerModeStageStartedFields,
+  type GateReply,
   personsGateReply,
+  personsWordsText,
   resolveInvokingSessionId,
   windowMessageIds,
   claimAttemptFields,
   effectiveUnitGateRhythm,
   isTeamUnitOwnership,
+  cachedClaimFanoutActive,
+  unitMajorConstructionStageSlugs,
 } from "./aidlc-lib.js";
 
 // The EFFECTIVE per-stage action: the live state file's EXECUTE/SKIP suffix
@@ -192,6 +200,7 @@ export function forwardJumpNotice(
   skipped: readonly { slug: string; name: string; plugin?: string }[],
   cameFrom: string,
   units: ForwardJumpUnitSteps | null = null,
+  wayBack = true,
 ): string {
   const and = (names: readonly string[]): string =>
     names.length <= 1 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
@@ -226,7 +235,7 @@ export function forwardJumpNotice(
   return [
     `Moved to ${stageLabel(target, target.slug) ?? "that stage"}${list ? `; skipped ${list}` : ""}.`,
     ...sentences,
-    `You can go back to ${stageLabel(stageOrNone(back), back) ?? "where you were"} any time.`,
+    ...(wayBack ? [`You can go back to ${stageLabel(stageOrNone(back), back) ?? "where you were"} any time.`] : []),
   ].join(" ");
 }
 
@@ -297,10 +306,47 @@ function parseFlags(
 // The active Unit's lifecycle mirror is dropped; the next `unit start` writes
 // it again.
 
+// Work moved back to Running from Completed is in flight again on the work
+// list (intents.json, which `intent list` and the running-work readers show),
+// as a scope change's reopen puts it; finishing again marks it complete. One
+// place for every move of the jump tool, under the workspace lock the registry
+// write asks for.
+function backInFlight(pd: string, before: string, after: string): void {
+  if (getField(before, "Status")?.trim() !== "Completed" || getField(after, "Status")?.trim() !== "Running") return;
+  const { intent, space } = resolveWorkflowSelection(pd);
+  if (intent !== null) withAuditLock(pd, () => updateIntentStatus(pd, intent, "in-flight", space));
+}
+
+// The change the person asked for, in their words. On finished work the
+// human-turn hook keeps their messages beside the record and writes no turn on
+// them, so the change is every message of theirs kept there since the finish
+// (keptSinceFinished, the window the guard let this reopen through on), read
+// as personsGateReply reads a gate's window: their words joined in order, only
+// when the engine names this chat and none was cut, beside every message's id.
+function changeAsked(pd: string, content: string, stage: string): GateReply {
+  const session = resolveInvokingSessionId(pd);
+  const reply = personsGateReply(pd, session, stage);
+  if (reply.words !== null || getField(content, "Status")?.trim() !== "Completed") return reply;
+  const kept = keptSinceFinished(pd);
+  // With no chat named, several chats' messages are nobody's to name, as at a gate.
+  if (kept.length === 0 || (session === null && new Set(kept.map((message) => message.session)).size > 1)) return reply;
+  const said = kept
+    .map((message) => (message.words ? personsWordsText(message.words) : ""))
+    .filter((text) => !isNonAnswer(text));
+  const whole = session !== null && kept.every((message) => message.cut !== true);
+  return {
+    words: whole && said.length > 0 ? said.join("\n") : null,
+    messageId: kept.at(-1)?.id ?? null,
+    replies: kept.map((message) => ({ id: message.id, at: message.at })),
+    elsewhere: [],
+  };
+}
+
 function handleReopen(args: string[]): void {
   const flags = parseFlags(args);
   const pd = resolveProjectDir(projectDir);
   let content = readStateFile(pd);
+  const stateBefore = content;
   const targetSlug = flags.target;
   const units = (flags.units ?? "").split(",").map((unit) => unit.trim()).filter(Boolean);
   if (!targetSlug || units.length === 0) {
@@ -328,9 +374,7 @@ function handleReopen(args: string[]): void {
   // A change is kept in the person's own words, from the gate they answered,
   // with the messages they came in, as a gate's Request Changes row names them.
   const gateStage = getField(content, "Current Stage")?.trim() ?? targetSlug;
-  const change = flags.via === "change"
-    ? personsGateReply(pd, resolveInvokingSessionId(pd), gateStage)
-    : null;
+  const change = flags.via === "change" ? changeAsked(pd, content, gateStage) : null;
   // From a later stage of the same phase (Build and Test, say) the work moves
   // back to the target as a backward jump moves it, but with no STAGE_JUMPED or
   // STAGE_STARTED: only these Units start the step again. Each Unit's row names
@@ -344,17 +388,26 @@ function handleReopen(args: string[]): void {
   const theirs = flags.via === "change" || !isAutonomousConstructionDecision(content, targetStage.phase);
   let stagesReset: string[] = [];
   let movedFrom: string | undefined;
-  if (from && !isPerUnitStage(from) && from.phase === targetStage.phase && stageIndex(current) > stageIndex(targetSlug)) {
+  // Work whose walk ended on the target or a later stage of its phase (Units
+  // built one at a time, the stages after Code Generation skipped) is put back
+  // to Running on the target, as a redo or backward jump puts it, so `next`
+  // takes these Units' step again; still only they start it over.
+  const finishedHere = getField(content, "Status")?.trim() === "Completed" && !!from &&
+    from.phase === targetStage.phase && stageIndex(current) >= stageIndex(targetSlug);
+  const fromLater = from && !isPerUnitStage(from) && from.phase === targetStage.phase &&
+    stageIndex(current) > stageIndex(targetSlug);
+  if (fromLater || finishedHere) {
     const scope = flags.scope || getField(content, "Scope") || "feature";
     const scopeMapping = loadScopeMapping()[scope];
     if (!scopeMapping) error(`Unknown scope: ${scope}`);
     const suffixes = scope === (getField(content, "Scope") || "")
       ? parseStateStageSuffixes(content)
       : new Map<string, "EXECUTE" | "SKIP">();
-    const moved = movedState(content, targetSlug, targetStage, "backward", scope, suffixes, scopeMapping);
+    const direction = stageIndex(current) === stageIndex(targetSlug) ? "redo" : "backward";
+    const moved = movedState(content, targetSlug, targetStage, direction, scope, suffixes, scopeMapping);
     content = moved.content;
     stagesReset = moved.stagesReset;
-    movedFrom = current;
+    if (current !== targetSlug) movedFrom = current;
   }
   for (const unit of units) {
     emitAudit(pd, "GATE_REJECTED", {
@@ -394,6 +447,7 @@ function handleReopen(args: string[]): void {
   }
   content = setField(content, "Last Updated", isoTimestamp());
   writeStateFile(pd, content);
+  backInFlight(pd, stateBefore, content);
   console.log(JSON.stringify({
     reopened: targetSlug, stages, units, ...(stagesReset.length > 0 ? { stages_reset: stagesReset } : {}),
     state_updated: true, audit_appended: true,
@@ -530,6 +584,7 @@ function movedState(
   scope: string,
   suffixes: Map<string, "EXECUTE" | "SKIP">,
   scopeMapping: { stages: Record<string, string> },
+  keepsUnitStages = false,
 ): {
   content: string;
   stagesSkipped: string[];
@@ -569,6 +624,7 @@ function movedState(
     for (let i = currentIdx + 1; i < targetIdx; i++) {
       const slug = graph[i].slug;
       if (effectiveAction(suffixes, scopeMapping, slug) !== "EXECUTE") continue;
+      if (keepsUnitStages && isPerUnitStage(graph[i])) continue;
       const state = checkboxMap.get(slug);
       if (state && IN_FLIGHT_STATES.includes(state)) {
         content = setCheckbox(content, slug, "skipped");
@@ -578,7 +634,8 @@ function movedState(
     // Also mark the current stage if it's in-flight AND the target is further
     // forward (target !== current). When target === current, direction is "redo"
     // not "forward" — but guard explicitly in case caller mis-specifies.
-    if (currentSlug !== targetSlug) {
+    const currentNode = graph.find((node) => node.slug === currentSlug);
+    if (currentSlug !== targetSlug && !(keepsUnitStages && currentNode && isPerUnitStage(currentNode))) {
       const currentState = checkboxMap.get(currentSlug);
       if (
         currentState &&
@@ -719,6 +776,7 @@ async function handleExecute(args: string[]): Promise<void> {
   const flags = parseFlags(args);
   const pd = resolveProjectDir(projectDir);
   let content = readStateFile(pd);
+  const stateBefore = content;
 
   const targetSlug = flags.target;
   if (!targetSlug) error("Usage: execute --target <slug> --direction <forward|backward|redo> [--units <unit[,unit...]> [--stages <slug[,slug...]>]] [--scope <scope>]");
@@ -780,20 +838,37 @@ async function handleExecute(args: string[]): Promise<void> {
   // add's own line said what changed or an update added it (the person sees it
   // start), so the move says nothing.
   const addedBack = direction === "backward" && addedStagesPassedOver(content, pd).includes(targetSlug);
+  // Under team ownership, once a team has taken a Unit, a move past the Unit
+  // stages leaves them to the Units' claims, as going back before them does:
+  // each Unit still lands into them as it finishes. The teams' claims are read
+  // as the remote has them now (the board's own one fetch of the claim refs).
+  const unitStages = unitMajorConstructionStageSlugs(scope, content, true);
+  const pastUnitStages = direction === "forward" && isTeamUnitOwnership(content) && unitStages.length > 0 &&
+    stageIndex(targetSlug) > stageIndex(unitStages[unitStages.length - 1]);
+  if (pastUnitStages) {
+    try {
+      (await import("./aidlc-unit.ts")).refreshClaimRefs(pd);
+    } catch {
+      // The claims as this checkout last saw them.
+    }
+  }
+  const keepsUnitStages = pastUnitStages && cachedClaimFanoutActive(pd);
   // A Construction that runs one unit at a time: what this jump does to each
   // unit, read before the jump writes the state, for the jump's own line.
   // The orchestrator owns the walk; it is loaded only here, so the jump's
   // other commands start without it (a compiled build takes no require() of it).
   let unitSteps: ForwardJumpUnitSteps | null = null;
+  let stillOpen: string | null = null;
   if (direction === "forward") {
     try {
-      const { forwardJumpUnitSteps } = await import("./aidlc-orchestrate.ts");
+      const { forwardJumpUnitSteps, unitsStillOpenLine } = await import("./aidlc-orchestrate.ts");
       unitSteps = forwardJumpUnitSteps(pd, scope, content, targetSlug);
+      if (keepsUnitStages) stillOpen = unitsStillOpenLine(pd);
     } catch {
       // The line names the stages instead; the jump never fails for it.
     }
   }
-  const moved = movedState(content, targetSlug, targetStage, direction, scope, suffixes, scopeMapping);
+  const moved = movedState(content, targetSlug, targetStage, direction, scope, suffixes, scopeMapping, keepsUnitStages);
   content = moved.content;
   const { stagesSkipped, stagesReset, currentStageForPhase, crossesPhaseBoundary, phasesJumpedOver, completedCount, timestamp } = moved;
 
@@ -809,7 +884,9 @@ async function handleExecute(args: string[]): Promise<void> {
   // Under team ownership each Unit's per-Unit work belongs to its claim: going
   // back to a stage before the per-Unit block (the Unit plan changing) keeps
   // it, and a Unit goes back to work only by its own reopen (`jump reopen
-  // --units`). The row says so; stageJumpReaches reads it.
+  // --units`). The row says so, as does the move past the block that keeps
+  // its stages open (`keepsUnitStages`); stageJumpReaches and
+  // hasCurrentTeamUnitActivity (aidlc-state.ts) read it.
   const keepsTeamUnitWork = direction === "backward" && isTeamUnitOwnership(content) &&
     beforePerUnitBlock(graph, targetSlug);
   const downstreamStages = direction === "backward"
@@ -854,7 +931,6 @@ async function handleExecute(args: string[]): Promise<void> {
         });
         emitAudit(pd, "PHASE_VERIFIED", {
           "Phase boundary": `${currentStageForPhase.phase} → ${targetStage.phase}`,
-          Details: "Traceability verification on jump",
         });
         for (const phase of phasesJumpedOver) {
           emitAudit(pd, "PHASE_SKIPPED", {
@@ -888,7 +964,7 @@ async function handleExecute(args: string[]): Promise<void> {
               JSON.stringify(invalidatedDownstreamReviews),
           }
         : {}),
-      ...(keepsTeamUnitWork ? { "Unit Work": "kept" } : {}),
+      ...(keepsTeamUnitWork || keepsUnitStages ? { "Unit Work": "kept" } : {}),
       ...jumpSourceBaseline,
       ...(theirs ? personGitNameField(pd) : {}),
     });
@@ -906,6 +982,7 @@ async function handleExecute(args: string[]): Promise<void> {
   }
 
   writeStateFile(pd, content);
+  backInFlight(pd, stateBefore, content);
 
   // The jump is done, so its line (what it skipped and the way back, or what
   // comes after an owed Reverse Engineering) can never fail it. The line is
@@ -914,7 +991,11 @@ async function handleExecute(args: string[]): Promise<void> {
   const from = graph.find((node) => node.slug === cameFrom);
   let notice: string | undefined;
   if (direction === "forward") {
-    notice = forwardJumpNotice(targetStage, graph.filter((node) => stagesSkipped.includes(node.slug)), cameFrom, unitSteps);
+    const skipped = graph.filter((node) => stagesSkipped.includes(node.slug));
+    // Going back after a move that kept the Unit stages reopens only the Units
+    // this checkout builds (teamRedoNarrowed), so the line names no way back.
+    notice = forwardJumpNotice(targetStage, skipped, cameFrom, unitSteps, !keepsUnitStages) +
+      (stillOpen ? ` ${stillOpen}` : "");
   } else if (direction === "redo" && targetSlug === "reverse-engineering" && from && from.slug !== targetSlug) {
     notice = reverseEngineeringRedoNotice(from);
   } else if (direction === "backward" && from && !addedBack) {

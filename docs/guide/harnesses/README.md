@@ -44,7 +44,8 @@ aidlc config
 The installer always includes every harness runtime. `aidlc config --harness <name>` selects the project surface. Host prerequisites still apply: Codex requires
 the target project to be a Git repository for project hook discovery.
 
-On Windows, download `install.ps1` and invoke it as
+On Windows, download `install.ps1`, allow scripts in that PowerShell window
+with `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force`, and run
 `& $installer`. See [Windows installation](../18-install-and-lifecycle.md#windows-powershell)
 for account scope, automatic User PATH registration, and `-NoModifyPath`.
 
@@ -53,8 +54,8 @@ Pick your harness:
 | Harness | Invoke | Chapter |
 |---------|--------|---------|
 | **Claude Code** | `/aidlc` | Covered throughout the [User Guide](../00-introduction.md) (its examples run on Claude Code); install in [Getting Started](../01-getting-started.md). |
-| **Kiro IDE** (≥ 1.1.70) and **Kiro CLI** (≥ 2.24.1, v3 engine), listed in setup as Kiro (`--harness kiro`) | `/aidlc` | [Running AI-DLC on Kiro IDE and Kiro CLI](kiro-ide.md) — one tree for both surfaces: prerequisites (Opus 4.8), install, hooks, what's different on Kiro. |
-| **Kiro CLI** (≥ 2.6), listed in setup as Kiro CLI (V2) (`--harness kiro-v2`) | `/aidlc` | [Running AI-DLC on Kiro CLI](kiro-cli.md) — the harness that pins no engine: prerequisites, install, what's different on Kiro. For Kiro's v3 engine on Kiro CLI ≥ 2.24.1, use Kiro above. |
+| **Kiro IDE** (≥ 1.1.70) and **Kiro CLI** (≥ 2.24.1, v3 engine), listed in setup as Kiro (`--harness kiro`) | `/aidlc` | [Running AI-DLC on Kiro](kiro.md) — one tree for both surfaces: prerequisites (Opus 4.8), install, hooks, what's different on Kiro. |
+| **Kiro CLI** (≥ 2.6), listed in setup as Kiro CLI (V2) (`--harness kiro-v2`) | `/aidlc` | [Kiro CLI (V2)](kiro.md#kiro-cli-v2), a section of the same page — the harness that pins no engine: prerequisites, install, what's different on Kiro. For Kiro's v3 engine on Kiro CLI ≥ 2.24.1, use Kiro above. |
 | **Codex CLI** (≥ 0.145.0) | `$aidlc` | [AI-DLC on Codex CLI](codex-cli.md) — prerequisites, trust pre-seed, Bedrock config, the git-repo requirement. |
 | **Cursor** | `/aidlc` | [AI-DLC on Cursor](cursor.md) — one tree for the Cursor IDE and CLI, native subagents and skills, the hooks.json adapter, what's different on Cursor. |
 | **opencode** (1.18.29 or newer, or OpenCode 2) | `/aidlc` | [AI-DLC on opencode](opencode.md) — the split `.aidlc/` + `.opencode/` layout, the adapter plugin, what's different on opencode. |

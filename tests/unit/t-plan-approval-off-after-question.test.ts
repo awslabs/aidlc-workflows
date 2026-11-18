@@ -127,15 +127,18 @@ function planQuestionShown(proj: string): void {
   expect(next(proj)).toEqual({ kind: "ask", ask_type: "plan-approval" });
 }
 
-/** The code plan written, its question not yet asked. */
-function planWritten(proj: string): void {
+const planFile = (proj: string): string =>
+  join(seededRecordDir(proj), "construction", "code-generation", "code-generation-plan.md");
+
+/** The code plan written, its question not yet asked; `contract` false leaves its Testing Contract to the engine. */
+function planWritten(proj: string, contract = true): void {
   const dir = join(seededRecordDir(proj), "construction", "code-generation");
   mkdirSync(dir, { recursive: true });
   writeFileSync(
-    join(dir, "code-generation-plan.md"),
+    planFile(proj),
     "# Code Generation Plan\n\n## Summary\n\n- Builds: greet the person by name\n- Touches: src/app.js\n" +
       "- Tests: 1 unit test\n\n## Steps\n\n- [ ] Step 1: greet by name\n\n" +
-      renderTestingContract(resolveTestingPosture(proj)),
+      (contract ? renderTestingContract(resolveTestingPosture(proj)) : ""),
     "utf-8",
   );
   writeFileSync(join(dir, "unit-test-instructions.md"), "# Unit Test Instructions\n\nRun `npm test`.\n", "utf-8");
@@ -233,6 +236,42 @@ describe("while the code plan question waits, plan approval goes off only on a m
     expect(next(proj)).toEqual({ kind: "ask", ask_type: "plan-approval" });
     const reply = said(proj, "skip plan approval for this work");
     const off = planApprovalOff(proj, reply);
+    expect(off.rc, off.out).toBe(0);
+    expect(stateField(proj, "Plan Approval")).toBe("off (set by you)");
+  });
+
+  // The plan written without its Testing Contract, which the engine writes:
+  // its question is due all the same, and only `next` writes the block.
+  test.each([true, false])("a plan written without its Testing Contract, not yet shown (a code write refused first: %p): the earlier Approve does not turn it off", (refusedWrite) => {
+    const proj = bugfixAtRequirements();
+    const approve = said(proj, "Approve");
+    approveRequirements(proj, approve);
+    expect(["run-stage", "load-steering"]).toContain(next(proj).kind ?? "");
+    planWritten(proj, false);
+    const plan = readFileSync(planFile(proj), "utf-8");
+    if (refusedWrite) expect(guardAdmits(proj, "echo built > src/app.js")).not.toBe(0);
+    const refused = planApprovalOff(proj, approve);
+    expect(refused.rc, refused.out).not.toBe(0);
+    expect(refused.out).toContain("plan question");
+    expect(stateField(proj, "Plan Approval")).toBe("on (from scope bugfix)");
+    expect(ceremonySets(proj)).toHaveLength(0);
+    expect(readFileSync(planFile(proj), "utf-8")).toBe(plan);
+    expect(next(proj)).toEqual({ kind: "ask", ask_type: "plan-approval" });
+  });
+
+  // An approved plan whose Testing Contract a later save broke is no plan
+  // question coming (`next` writes the block back and builds): turning plan
+  // approval off then, on their word, stands.
+  test("an approved plan whose contract later broke: plan approval off on their word stands", () => {
+    const proj = bugfixAtRequirements();
+    approveRequirements(proj, said(proj, "Approve"));
+    planQuestionShown(proj);
+    said(proj, "approve the plan");
+    const approved = run(proj, LOG, ["answer", "--stage", "code-generation", "--checkpoint", "plan-approval", "--details", "Approve Plan"]);
+    expect(approved.rc, approved.out).toBe(0);
+    expect(next(proj).kind).toBe("run-stage");
+    writeFileSync(planFile(proj), readFileSync(planFile(proj), "utf-8").replace('"version": 1', '"version": 1,,'), "utf-8");
+    const off = planApprovalOff(proj, said(proj, "turn plan approval off"));
     expect(off.rc, off.out).toBe(0);
     expect(stateField(proj, "Plan Approval")).toBe("off (set by you)");
   });
