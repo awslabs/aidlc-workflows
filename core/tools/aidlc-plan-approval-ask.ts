@@ -108,6 +108,7 @@ import {
   planWithTestingContract,
   readPlanApprovalSettingWith,
   readTestingContract,
+  recordedApprovalFingerprint,
   replaceTestingContractSection,
   resolveCodeGenerationAuthority,
   resolveTestingPosture,
@@ -1664,9 +1665,10 @@ export function publishPlanApprovalAsk(
       const onDisk = readText(path);
       if (onDisk === content) return;
       // The file invites the person to answer on its `[Answer]:` line. While
-      // the same question stands, their answer is the only difference from the
-      // template, so it stays: the engine never erases what they wrote. A new
-      // question, or a file changed in any other way, is written as usual.
+      // the same question stands, the engine never erases what they wrote: a
+      // file where only their answer differs stays as it is, and a file
+      // written again for another line carries their answer (below). A new
+      // question is written fresh.
       if (same && onlyTheirAnswerDiffers(onDisk, content)) return;
       // Nor is it rewritten for the repos line alone: a file an earlier AI-DLC
       // wrote without it (a teammate's clone included) is kept wherever the file
@@ -1674,7 +1676,18 @@ export function publishPlanApprovalAsk(
       const named = underSummary(projectDir, [view.unit], null);
       const without = named.length === 0 ? null : fileWith(view.summary.filter((line) => !named.includes(line)));
       if (without !== null && (onDisk === without || (same && onlyTheirAnswerDiffers(onDisk, without)))) return;
-      writeFileAtomic(path, content);
+      // Their answer is the `[Answer]:` line and whatever they wrote under it:
+      // the template ends with that line. It is carried whole, and only out of
+      // the file about this plan; the engine's record of a plan built without
+      // asking holds no answer of theirs.
+      const at = onDisk.search(/^\[Answer\]:/m);
+      const theirs = at < 0 ? "" : onDisk.slice(at).replace(/\r\n/g, "\n");
+      const written = theirs.slice("[Answer]:".length).trim();
+      const carry = same && written !== "" && !onDisk.slice(0, at).includes(BUILT_WITHOUT_ASKING_INTRO[0]) &&
+        recordedApprovalFingerprint(onDisk) === targets[index].fingerprint;
+      const file = carry ? `${content.slice(0, content.lastIndexOf("[Answer]:"))}${theirs}` : content;
+      // The same bytes are not written again: an editor holding the file open would ask about a change on disk.
+      if (file !== onDisk) writeFileAtomic(path, file);
     });
   });
 }
