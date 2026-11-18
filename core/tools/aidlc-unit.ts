@@ -8409,7 +8409,7 @@ function writeHereClaim(
   }
   const payload = takenClaimPayload(current, {
     team: identity.space, home: { space: identity.space, uuid: identity.intentUuid, id8: identity.intentId8 }, unit, ref,
-    generation: takenBack ? (current?.generation ?? 0) + 1 : takeGeneration(current), me: gitUserName(pd) ?? "a teammate",
+    generation: takenBack ? (current?.generation ?? 0) + 1 : takeGeneration(current), me: gitUserName(pd) ?? NO_GIT_NAME,
     baseOid: kept.commit, integrationRef: kept.ref, gateRhythm: readUnitGateRhythm(state),
   });
   const pushed = writeUnitRecord(pd, place, ref, createRecordCommit(pd, current?.oid ?? null, payload, "taken", {}, { take: true }), current?.oid ?? null);
@@ -11592,7 +11592,7 @@ function takeUnit(args: string[], projectDir?: string, rhythm?: UnitClaimPayload
   const opening = src.opening;
   if (!opening.units.includes(unit)) fail(`${unit} is not one of ${home.label}'s Units (${opening.units.join(", ")}).`);
   if (solo?.started.has(unit)) fail(`${unit} is being built on the other machine; take another Unit, or follow along.`);
-  const me = git(pd, ["config", "user.name"]).stdout.trim() || "a teammate";
+  const me = git(pd, ["config", "user.name"]).stdout.trim() || NO_GIT_NAME;
   if (current?.status === "claimed" && current.payload.open_again === undefined) {
     if (!claimIsMine(pd, current)) fail(takenLine(unit, current));
     const said = bringOwnBuildHere(pd, home.uuid, current);
@@ -11801,6 +11801,10 @@ function takeGeneration(current: UnitClaimView | null): number {
   if (current?.payload.open_again !== undefined) return current.generation + 1;
   return current?.status === "claimed" || current?.status === "released" ? current.generation : (current?.generation ?? 0) + 1;
 }
+
+// Who a take or a push names when git has no user.name: a builder whose name
+// is not known (builderOf gives it back).
+const NO_GIT_NAME = "a teammate";
 
 // The claim a take writes: the space the build goes in as its owner, taken by
 // this person, at this generation.
@@ -12045,7 +12049,7 @@ function recordTakeHere(projectDir: string, build: UnitBuild, home: HomeWork, st
         : `refs/heads/${affirmedIntegrationBranch(projectDir, home.space)?.branch ?? integrationBranch(projectDir, null)}`;
       const payload = takenClaimPayload(current, {
         team: standing.team, home, unit: build.unit, ref, generation,
-        me: git(projectDir, ["config", "user.name"]).stdout.trim() || "a teammate",
+        me: git(projectDir, ["config", "user.name"]).stdout.trim() || NO_GIT_NAME,
         baseOid: standing.baseOid, integrationRef, gateRhythm: takeRhythmAt(projectDir, home, standing.baseOid, record),
         earlyOn: standing.earlyOn,
       });
@@ -13429,7 +13433,7 @@ function pushUnit(args: string[], projectDir?: string,
     .filter((rel) => existsSync(join(activeRecordDir(pd), ...rel.split("/"))));
   const kept = inputsKeptOverNewer(recordDir(pd) ?? "");
   const result: UnitResult = {
-    by: git(pd, ["config", "user.name"]).stdout.trim() || "a teammate", repos: results, outputs,
+    by: git(pd, ["config", "user.name"]).stdout.trim() || NO_GIT_NAME, repos: results, outputs,
     ...(kept.length > 0 ? { kept_edits: kept } : {}),
   };
   // The result on the Unit's record, with the Unit outputs the lead's later
@@ -15685,17 +15689,52 @@ export function sendLeadsApprovedChanges(projectDir: string): string[] {
       return [sent.kind === "unreadable" ? unreadablePlanLine(pd, sent.format)
         : sent.kind === "unfollowed" ? planUnfollowedSay(pd, sent.follow, what, false).line : planWriteRefusedLine(pd, sent, what, false)];
     }
+    // In the plan's order, as the board lists them.
+    const order = kept?.plan.units.map((entry) => entry.name) ?? [];
+    const inOrder = (units: string[]): string[] => [...new Set(units)].sort((a, b) => order.indexOf(a) - order.indexOf(b));
     for (const input of changed) {
       const units = reached.get(input);
       if (units === undefined) continue;
       const name = inputName(input);
-      // In the plan's order, as the board lists them.
-      const order = kept?.plan.units.map((entry) => entry.name) ?? [];
-      const listed = [...new Set(units)].sort((a, b) => order.indexOf(a) - order.indexOf(b));
-      lines.unshift(`The ${name} you changed ${name.endsWith("s") ? "are" : "is"} on the plan now, for ${joinNames(listed)}.`);
+      lines.unshift(`The ${name} you changed ${name.endsWith("s") ? "are" : "is"} on the plan now, for ${joinNames(inOrder(units))}.`);
     }
+    // A Unit already done is not rebuilt: said once, on the last line, and the lead decides what comes of it.
+    const done = inOrder([...reached.values()].flat()).map((unit) => reaches.get(unit)!.view).filter((view) => view.payload.done === true);
+    if (done.length > 0) lines[lines.length - 1] += notRebuilt(pd, done);
     return lines;
   });
+}
+
+// The lead's line for done Units a change reached: not rebuilt, theirs to send
+// back or build here. That nothing tells the builder is said once a chat (noNoticeOnce).
+function notRebuilt(pd: string, done: UnitClaimView[]): string {
+  const noNotice = noNoticeOnce(pd) !== "";
+  if (done.length > 1) {
+    return ` ${joinNames(done.map((view) => view.unit))} are already done, so they are not rebuilt` +
+      `${noNotice ? ", and AI-DLC sends no notice of the change: their builders hear it from you" : ""}. Say which you want sent back, or built here.`;
+  }
+  const unit = done[0].unit;
+  const by = builderOf(done[0]) === NO_GIT_NAME ? "its builder" : builderOf(done[0]);
+  return ` ${unit} is already done, so it is not rebuilt${noNotice ? `, and AI-DLC sends no notice of the change: ${by} hears it from you` : ""}. ` +
+    `Say if you want ${unit} sent back to ${by}, or built here.`;
+}
+
+// The team Units done on the plan with a change of the lead's newer than the
+// merge the lead's record holds (UNIT_MERGED, recordUnitDone): none once one is
+// sent back or built here (it is no longer done, or it is the lead's own).
+export function doneUnitsChangedSinceMerge(projectDir: string): string[] {
+  const pd = resolveProjectDir(projectDir);
+  try {
+    const cached = cachedClaims(pd);
+    const own = leadsOwnClaims(pd, readStateFile(pd), cached);
+    const rows = readAuditShardEvents(pd);
+    const merged = (view: UnitClaimView): number => Date.parse(unitMergesStanding(rows, view.unit)
+      .filter((row) => auditBlockField(row.block, "Attempt Generation") === String(view.generation)).at(-1)?.timestamp ?? "");
+    return [...cached.values()].filter((view) => view.status === "claimed" && view.payload.done === true && view.payload.taken_by !== undefined &&
+      !own.has(view.unit) && (view.payload.amendments ?? []).some((entry) => Date.parse(entry.at) > merged(view))).map((view) => view.unit);
+  } catch {
+    return [];
+  }
 }
 
 // The text of a change the lead approved to an input, as the plan keeps it.

@@ -621,6 +621,7 @@ import { gitUserName } from "./aidlc-git-name.ts";
 import { resolveSwarmCheckpoint, swarmBuildingChat } from "./aidlc-swarm-checkpoints.ts";
 import {
   BUILD_WAITING_CLAUSE,
+  doneUnitsChangedSinceMerge,
   otherBuildsTurnedDown,
   amendAskName,
   buildClaimNotes,
@@ -5751,6 +5752,14 @@ let restoreSpentRequestFile: (() => void) | null = null;
 
 type StepOffer = NonNullable<PrintDirective["offers"]>[number];
 
+// The agent's way for the lead's answer about a Unit already done
+// (sendLeadsApprovedChanges): the route answers with both ways. `unit` where one is meant.
+function doneUnitRoute(unit: string | null): string {
+  return "When the person asks to send a Unit already done back to its builder, or to build it again here, run " +
+    `\`${aidlcToolInvocation("orchestrate")} next --stage code-generation --unit ${unit === null ? "<unit>" : shellArg(unit)}\`` +
+    `${unit === null ? ", with the name of the Unit they mean," : ""} and follow what it returns.`;
+}
+
 // For the agent at a team home: the commands for the lead's words about the
 // teams' Units, whatever the step is. At the lead's own work whose plan is a
 // ref of its own, the person saying the plan is in another repository now is
@@ -5758,6 +5767,8 @@ type StepOffer = NonNullable<PrintDirective["offers"]>[number];
 // when a write there ends at the old place.
 function teamCommandsNote(projectDir?: string): string {
   const unitTool = aidlcToolInvocation("unit");
+  // While a done Unit has a change it was not rebuilt for, the lead may answer its line on that step or any later one.
+  const done = projectDir === undefined ? [] : doneUnitsChangedSinceMerge(projectDir);
   const moved = projectDir !== undefined && leadsOwnTeamWork(projectDir)
     ? " When the person says the plan is in another repository now, that is the move to it on this computer: run " +
       `\`${aidlcInvocation()} unit share --plan --repo <that repository>\`.` +
@@ -5774,6 +5785,7 @@ function teamCommandsNote(projectDir?: string): string {
     `when they ask to free a Unit, run \`${unitTool} release <unit>\`; when they ask to build a Unit ` +
     `left open here, run \`${unitTool} assign --here <unit> ${unitWordsArg("assign")}\`. ` +
     `${UNIT_WORDS_NOTE} Say the notice line each prints.${moved}` +
+    (done.length === 0 ? "" : ` ${doneUnitRoute(done.length === 1 ? done[0] : null)}`) +
     // A checkout the person's own word made the lead's: its way back is in front of the agent at every step.
     (projectDir !== undefined && leadHereByWord(projectDir) === true ? ` ${leadHereOffSentence()}` : "");
 }

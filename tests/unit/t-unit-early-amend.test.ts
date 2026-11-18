@@ -8,7 +8,8 @@
 // their own words; an approved change reaches every team building with it as
 // a fact on its claim, on every Guard Policy, and the stages that used it read
 // as current, so nobody approves anything again. A Unit already done hears it
-// with an offer of follow-up work and is never reopened.
+// with an offer of follow-up work and is never reopened; the lead hears it is
+// not rebuilt, and says whether it goes back to its builder or is built here.
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
@@ -29,10 +30,12 @@ import {
   git,
   GIT_ENV,
   HOME_RECORD,
+  hook,
   inSpace,
   makeHome,
   mergeOnHost,
   next,
+  ORCH,
   personsChat,
   personsNext,
   type PlanHome,
@@ -51,6 +54,22 @@ setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 afterEach(cleanupTeamBuild);
 
 const REQUIREMENTS = "inception/requirements-analysis/requirements.md";
+
+// Two Units in the repos the fixtures host, so two teams can each build one.
+const TWO_BUILDS_PLAN = `# Unit dependencies
+
+\`\`\`yaml
+units:
+  - name: refunds
+    kind: service
+    repos: [checkout-api, billing]
+    depends_on: []
+  - name: checkout-ui
+    kind: ui
+    repos: [checkout-api]
+    depends_on: []
+\`\`\`
+`;
 
 // refunds pushed from the payments space; dana's clone with billing and
 // checkout-api, ready to take reporting, which waits on refunds and is open.
@@ -533,7 +552,8 @@ describe("a change to a shared input", () => {
     appendAuditEntry("GATE_APPROVED", { Stage: "requirements-analysis", "User Input": "Approve" }, home.dir);
     const lead = personsChat("lead-chat");
     const step = personsNext(home.dir, lead, "lead-chat");
-    expect(notices(step).join(" "), JSON.stringify(step).slice(0, 400)).toContain(
+    // A Unit not done: the line as it was, nothing added.
+    expect(notices(step), JSON.stringify(step).slice(0, 400)).toContain(
       "The requirements you changed are on the plan now, for refunds.",
     );
     expect((planWordAt(home, "refunds") as { amendments?: unknown[] }).amendments?.length).toBe(1);
@@ -563,7 +583,13 @@ describe("a change to a shared input", () => {
     appendAuditEntry("GATE_APPROVED", { Stage: "requirements-analysis", "User Input": "Approve" }, home.dir);
     appendAuditEntry("GATE_APPROVED", { Stage: "units-generation", "User Input": "Approve" }, home.dir);
     const lead = personsChat("lead-chat");
-    expect(notices(personsNext(home.dir, lead, "lead-chat")).join(" ")).toContain("The requirements you changed are on the plan now, for refunds.");
+    // The lead hears it is not rebuilt, and with whom it goes back, once for both changes.
+    const step = personsNext(home.dir, lead, "lead-chat");
+    const told = notices(step);
+    expect(told).toContain("The unit of work you changed is on the plan now, for refunds.");
+    expectDoneLine(step, "The requirements you changed are on the plan now, for refunds. refunds is already done, so it is not rebuilt, " +
+      "and AI-DLC sends no notice of the change: alice hears it from you. Say if you want refunds sent back to alice, or built here.", "refunds");
+    expect(told.filter((line) => line.includes("already done"))).toHaveLength(1);
     fetchRecords(alice);
     // One offer for both, never one per file.
     const heard = notices(next(alice));
@@ -594,12 +620,187 @@ describe("a change to a shared input", () => {
     appendAuditEntry("GATE_APPROVED", { Stage: "requirements-analysis", "User Input": "Approve" }, home.dir);
     const lead = personsChat("lead-chat");
     const step = personsNext(home.dir, lead, "lead-chat");
-    expect(notices(step).join(" "), JSON.stringify(step).slice(0, 400)).toContain("The requirements you changed are on the plan now, for refunds.");
+    expectDoneLine(step, "The requirements you changed are on the plan now, for refunds. " +
+      "refunds is already done, so it is not rebuilt, and AI-DLC sends no notice of the change: alice hears it from you. " +
+      "Say if you want refunds sent back to alice, or built here.", "refunds");
     expect((planWordAt(home, "refunds") as { amendments?: unknown[] }).amendments?.length).toBe(1);
     fetchRecords(alice);
     expect(notices(next(alice))).toContain(
       "The lead changed the requirements, and refunds is already done. Do you want me to start follow-up work for it?",
     );
+  });
+
+  // The agent's way for the lead's answer to that line: the one Unit it names outright, else the one they mean.
+  const routeFor = (unit: string | null): string => "When the person asks to send a Unit already done back to its builder, or to build it " +
+    `again here, run \`bun .claude/tools/aidlc-orchestrate.ts next --stage code-generation --unit ${unit ?? "<unit>"}\`` +
+    `${unit === null ? ", with the name of the Unit they mean," : ""} and follow what it returns.`;
+
+  const ROUTE_START = "send a Unit already done back to its builder";
+
+  // Every form the lead can meet ends "or built here.", and the step that says it hands the agent the way once,
+  // in its standing note, never beside the line.
+  function expectDoneLine(step: Record<string, unknown>, line: string, unit: string | null): void {
+    expect(notices(step), JSON.stringify(step).slice(0, 400)).toContain(line);
+    expect(line.endsWith("or built here.")).toBe(true);
+    expect(String(step.board_note), JSON.stringify(step).slice(0, 400)).toContain(routeFor(unit));
+    expect(String(step.change_notices_note ?? "")).not.toContain(ROUTE_START);
+    expect(JSON.stringify(step).split(ROUTE_START)).toHaveLength(2);
+  }
+
+  test("the lead's steps hand the agent the way for a done Unit a change reached, from the step that says it, in an ask and in parts, until it is sent back", () => {
+    const { home, hosts, alice, record } = refundsTakenInClone();
+    codeGenerated(alice, record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    mergeOnHost(hosts["checkout-api"], "refunds", "squash");
+    mergeOnHost(hosts.billing, "refunds", "squash");
+    fetchRecords(home.dir);
+    next(home.dir);
+    expect(planWordAt(home, "refunds")).toMatchObject({ done: true });
+    const homeRecord = join(home.dir, "aidlc", "spaces", "default", "intents", HOME_RECORD);
+    const statePath = join(homeRecord, "aidlc-state.md");
+    writeFileSync(statePath, readFileSync(statePath, "utf-8")
+      .replace(/^- \[[ -]\] (functional-design|nfr-requirements|nfr-design|infrastructure-design|code-generation) /gm, "- [x] $1 ")
+      .replace(/^- \*\*Current Stage\*\*: .*$/m, "- **Current Stage**: build-and-test"));
+    const lead = personsChat("lead-chat");
+    // An ask: the bring-them-up-to-date question at Build and Test carries the line.
+    writeFileSync(join(homeRecord, ...REQUIREMENTS.split("/")), "# Requirements\n\nFR1 refunds, said the new way.\n");
+    appendAuditEntry("GATE_APPROVED", { Stage: "requirements-analysis", "User Input": "Approve" }, home.dir);
+    const asked = personsNext(home.dir, lead, "lead-chat");
+    expect(asked.ask_type, JSON.stringify(asked).slice(0, 400)).toBe("team-handover");
+    expectDoneLine(asked, "The requirements you changed are on the plan now, for refunds. refunds is already done, so it is not rebuilt, " +
+      "and AI-DLC sends no notice of the change: alice hears it from you. Say if you want refunds sent back to alice, or built here.", "refunds");
+    // A step in parts: Build and Test's rules come first, and the run-stage that ends them carries a second change's line.
+    expect(run(UNIT, ["catch-up"], home.dir).status).toBe(0);
+    writeFileSync(join(homeRecord, "inception", "units-generation", "unit-of-work.md"), "# Units of work\n\nrefunds, checkout-ui, reporting, said the new way.\n");
+    appendAuditEntry("GATE_APPROVED", { Stage: "units-generation", "User Input": "Approve" }, home.dir);
+    expect(hook(home.dir, lead, { hook_event_name: "UserPromptSubmit", session_id: "lead-chat", prompt: "/aidlc" }).status).toBe(0);
+    let part = run(ORCH, ["next"], home.dir, lead).json ?? {};
+    expect(part.kind, JSON.stringify(part).slice(0, 400)).toBe("load-steering");
+    for (let parts = 0; part.kind === "load-steering" && parts < 50; parts++) {
+      part = run(ORCH, ["continue", String(part.receipt)], home.dir, lead).json ?? {};
+    }
+    expect(part.kind, JSON.stringify(part).slice(0, 400)).toBe("run-stage");
+    expectDoneLine(part, "The unit of work you changed is on the plan now, for refunds. refunds is already done, so it is not rebuilt. " +
+      "Say if you want refunds sent back to alice, or built here.", "refunds");
+    // A later step says no such line, and its standing note still hands the way while refunds stays done.
+    const after = personsNext(home.dir, lead, "lead-chat");
+    expect(notices(after).some((line) => line.endsWith("or built here."))).toBe(false);
+    expect(String(after.board_note), JSON.stringify(after).slice(0, 400)).toContain(routeFor("refunds"));
+    // Sent back: it is no longer done, and the standing note hands no such way.
+    const back = run(UNIT, ["send-back", "refunds", "--person-words", "refunds needs the new requirements"], home.dir);
+    expect(back.status, back.out).toBe(0);
+    const sentBack = String(next(home.dir).board_note);
+    expect(sentBack).toContain("release <unit>");
+    expect(sentBack).not.toContain(ROUTE_START);
+  });
+
+  test("built here, a done Unit the lead changed is no longer handed to the agent as one to send back", () => {
+    const { home, hosts, alice, record } = refundsTakenInClone();
+    codeGenerated(alice, record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    mergeOnHost(hosts["checkout-api"], "refunds", "squash");
+    mergeOnHost(hosts.billing, "refunds", "squash");
+    fetchRecords(home.dir);
+    next(home.dir);
+    expect(planWordAt(home, "refunds")).toMatchObject({ done: true });
+    leadChangesRequirements(home, "said the new way");
+    expect(String(next(home.dir).board_note)).toContain(routeFor("refunds"));
+    const here = run(UNIT, ["assign", "--here", "refunds", "--person-words", "we build refunds again here"], home.dir);
+    expect(here.status, here.out).toBe(0);
+    const builtHere = String(next(home.dir).board_note);
+    expect(builtHere).toContain("release <unit>");
+    expect(builtHere).not.toContain(ROUTE_START);
+  });
+
+  // The lead's requirements changed and approved, at the lead's next step in their chat.
+  function leadChangesRequirements(home: PlanHome, words: string): Record<string, unknown> {
+    const homeRecord = join(home.dir, "aidlc", "spaces", "default", "intents", HOME_RECORD);
+    writeFileSync(join(homeRecord, ...REQUIREMENTS.split("/")), `# Requirements\n\nFR1 refunds, ${words}.\n`);
+    appendAuditEntry("GATE_APPROVED", { Stage: "requirements-analysis", "User Input": "Approve" }, home.dir);
+    return personsNext(home.dir, personsChat("lead-chat"), "lead-chat");
+  }
+
+  test("a done Unit whose builder git had no name for: the lead hears it goes back to its builder", () => {
+    // Git with no user.name on alice's computer: her commits still carry a name, the take and the push have none to record.
+    const nameless: NodeJS.ProcessEnv = { ...ENV, GIT_AUTHOR_NAME: "nameless", GIT_COMMITTER_NAME: "nameless" };
+    const { home, hosts, alice, record } = refundsTakenInClone((clone) => git(clone, ["config", "user.name", ""]), undefined, nameless);
+    codeGenerated(alice, record);
+    const pushed = run(UNIT, ["push"], alice, nameless);
+    expect(pushed.status, pushed.out).toBe(0);
+    mergeOnHost(hosts["checkout-api"], "refunds", "squash");
+    mergeOnHost(hosts.billing, "refunds", "squash");
+    fetchRecords(home.dir);
+    next(home.dir);
+    expect(planWordAt(home, "refunds")).toMatchObject({ done: true });
+    expectDoneLine(leadChangesRequirements(home, "said the new way"), "The requirements you changed are on the plan now, for refunds. " +
+      "refunds is already done, so it is not rebuilt, and AI-DLC sends no notice of the change: its builder hears it from you. " +
+      "Say if you want refunds sent back to its builder, or built here.", "refunds");
+  });
+
+  test("two done Units built by two teams: the lead hears both are not rebuilt, and picks which goes back", () => {
+    const { home, hosts, alice, record } = refundsTakenInClone(undefined, TWO_BUILDS_PLAN);
+    codeGenerated(alice, record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    mergeOnHost(hosts["checkout-api"], "refunds", "squash");
+    mergeOnHost(hosts.billing, "refunds", "squash");
+    const bob = cloneOf(home.remote, "bob");
+    cloneCode(hosts["checkout-api"], bob, "checkout-api", "bob");
+    expect(takeIn("web", ["checkout-ui", ...planFrom(home)], bob).status).toBe(0);
+    const intents = join(bob, "aidlc", "spaces", "web", "intents");
+    const ui = join(intents, readdirSync(intents).find((name) => name.endsWith("-checkout-ui"))!);
+    mkdirSync(join(bob, "checkout-api", "src"), { recursive: true });
+    writeFileSync(join(bob, "checkout-api", "src", "ui.ts"), "export const ui = 1;\n");
+    mkdirSync(join(ui, "construction", "checkout-ui", "code-generation"), { recursive: true });
+    writeFileSync(join(ui, "construction", "checkout-ui", "code-generation", "source-manifest.json"), `${JSON.stringify({
+      stage: "code-generation", unit: "checkout-ui", version: 1, writes: [{ repo: "checkout-api", path: "src/ui.ts" }],
+    }, null, 2)}\n`);
+    const pushed = run(UNIT, ["push"], bob);
+    expect(pushed.status, pushed.out).toBe(0);
+    mergeOnHost(hosts["checkout-api"], "checkout-ui", "squash");
+    fetchRecords(home.dir);
+    next(home.dir);
+    expect(planWordAt(home, "refunds")).toMatchObject({ done: true });
+    expect(planWordAt(home, "checkout-ui")).toMatchObject({ done: true });
+    expectDoneLine(leadChangesRequirements(home, "for both teams"), "The requirements you changed are on the plan now, for refunds and checkout-ui. " +
+      "refunds and checkout-ui are already done, so they are not rebuilt, and AI-DLC sends no notice of the change: their builders hear it from you. " +
+      "Say which you want sent back, or built here.", null);
+  });
+
+  test("a done Unit, in a chat that already heard AI-DLC sends no notice: the rest of the line stands", () => {
+    const { home, hosts, alice, record } = proposed();
+    // The lead turns alice's change down in their chat, which says once that AI-DLC sends no notice.
+    const lead = personsChat("lead-chat");
+    expect(personsNext(home.dir, lead, "lead-chat").ask_type).toBe("unit-amend");
+    expect(hook(home.dir, lead, { hook_event_name: "UserPromptSubmit", session_id: "lead-chat", prompt: "turn it down" }).status).toBe(0);
+    const down = run(UNIT, ["amend", "refunds", "--input", REQUIREMENTS, "--answer", "reject", "--person-words", "turn it down"], home.dir, lead);
+    expect(down.status, down.out).toBe(0);
+    expect(String(down.json?.notice)).toContain("AI-DLC sends no notice of it.");
+    codeGenerated(alice, record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    mergeOnHost(hosts["checkout-api"], "refunds", "squash");
+    mergeOnHost(hosts.billing, "refunds", "squash");
+    fetchRecords(home.dir);
+    next(home.dir);
+    expect(planWordAt(home, "refunds")).toMatchObject({ done: true });
+    expectDoneLine(leadChangesRequirements(home, "said the new way"), "The requirements you changed are on the plan now, for refunds. " +
+      "refunds is already done, so it is not rebuilt. Say if you want refunds sent back to alice, or built here.", "refunds");
+  });
+
+  test("a done Unit and one under way on one line: only the done one is said not rebuilt", () => {
+    const { home, hosts, alice, record } = refundsTakenInClone();
+    codeGenerated(alice, record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    mergeOnHost(hosts["checkout-api"], "refunds", "squash");
+    mergeOnHost(hosts.billing, "refunds", "squash");
+    fetchRecords(home.dir);
+    next(home.dir);
+    expect(planWordAt(home, "refunds")).toMatchObject({ done: true });
+    const bob = cloneOf(home.remote, "bob");
+    expect(takeIn("web", ["checkout-ui", ...planFrom(home)], bob).status).toBe(0);
+    fetchRecords(home.dir);
+    expectDoneLine(leadChangesRequirements(home, "for both teams"), "The requirements you changed are on the plan now, for refunds and checkout-ui. " +
+      "refunds is already done, so it is not rebuilt, and AI-DLC sends no notice of the change: alice hears it from you. " +
+      "Say if you want refunds sent back to alice, or built here.", "refunds");
   });
 
   test("a team that left its copy as it was takes the lead's new version, as before", () => {

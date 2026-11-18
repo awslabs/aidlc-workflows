@@ -542,15 +542,15 @@ export function refundsTaken(beforeTake?: (alice: string) => void, dependencies?
 
 // refunds taken as refundsTaken takes it, by a teammate whose workspace is a
 // clone of the lead's, which several teams share: the lead's work is on disk in
-// it, and its origin is the lead's workspace's own host.
-export function refundsTakenInClone(beforeTake?: (alice: string) => void, dependencies?: string) {
+// it, and its origin is the lead's workspace's own host. `env` is the take's.
+export function refundsTakenInClone(beforeTake?: (alice: string) => void, dependencies?: string, env: NodeJS.ProcessEnv = ENV) {
   const hosts = { "checkout-api": codeHost("checkout-api"), billing: codeHost("billing") };
   const home = makePlanHomeWithRemote({ repos: hosts, ...(dependencies === undefined ? {} : { dependencies }) });
   const alice = cloneOf(home.remote, "alice");
   for (const [name, host] of Object.entries(hosts)) cloneCode(host, alice, name, "alice");
   beforeTake?.(alice);
   inSpace(alice, "payments");
-  const took = run(UNIT, ["take", "refunds", ...planFrom(home)], alice);
+  const took = run(UNIT, ["take", "refunds", ...planFrom(home)], alice, env);
   expect(took.status, took.out).toBe(0);
   const intents = join(alice, "aidlc", "spaces", "payments", "intents");
   const record = join(intents, readdirSync(intents).find((name) => name.endsWith("-refunds"))!);
