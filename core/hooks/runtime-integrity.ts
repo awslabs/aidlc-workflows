@@ -1084,7 +1084,8 @@ function unresolvedAuditTrailWrite(visible: string, command: string, cwd: string
   // The walk's `visible` text has rewritten what it evaluated (a substitution
   // as its literal output or a placeholder, a heredoc as its header, unquoted
   // parentheses and braces as separators), so words, assignments and directory
-  // changes are also read from the command as written.
+  // changes are also read from the command as written, minus its heredoc
+  // bodies (`command` is the caller's `withoutBodies`).
   const words: string[] = [];
   shellWriteTargets(visible, cwd, words);
   shellWriteTargets(command, cwd, words);
