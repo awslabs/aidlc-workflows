@@ -415,7 +415,7 @@ function render(){
   const s = SCOPES.find(x=>x.name===base);
   let meta;
   if (match) {
-    meta = esc(s.description) + ' <em>\\u00b7 depth ' + esc(s.depth) + ' \\u00b7 tests ' + esc(s.testStrategy) + '</em>';
+    meta = esc(s.description);
   } else {
     const d = diff(base);
     meta = 'Tailored from <b>' + esc(base) + '</b> <em>\\u00b7 +' + d.add.length + ' / \\u2212' + d.skip.length + '</em><button class="reset" id="reset" type="button">Back to ' + esc(base) + '</button>';
