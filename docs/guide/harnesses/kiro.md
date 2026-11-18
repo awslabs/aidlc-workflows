@@ -39,7 +39,7 @@ AI-DLC 2.11.3 and earlier, and the 2.11.4 previews of 2026-11-04 and 2026-11-05,
   `kiro-cli` on the PATH is older; it cannot read the Kiro IDE version.
 - **Claude Opus 4.8** selected as the chat model (see the note above)
 - **bun** only when generating or running the source/development `dist/`
-  projection. Native installs and versioned release runtimes are
+  projection or the versioned manual-copy runtime. Native installs are
   self-contained.
 
 > [!TIP]
@@ -115,7 +115,7 @@ then set `RUNTIME_ROOT` to the extracted `runtime/` directory.
 
 ```bash
 mkdir -p your-project/.kiro your-project/aidlc
-# Safe on fresh installs; required when upgrading from v2.5.56 or earlier.
+# Safe on fresh installs; required over an install from v2.5.56 or earlier.
 for retired_hook in \
   audit-logger block mint runtime-compile stop sync-statusline \
   enforce-approval-gate plan-approval-guard review-freeze state-transition-guard \
@@ -131,7 +131,7 @@ rm -f \
   your-project/.kiro/agents/aidlc-*-agent.json \
   your-project/.kiro/hooks/aidlc-*.kiro.hook
 # The copy replaces .kiro/settings/cli.json; keep the project's own first.
-if [ -f your-project/.kiro/settings/cli.json ]; then
+if [ -f your-project/.kiro/settings/cli.json ] && [ ! -f your-project/cli.json.before-aidlc ]; then
   cp your-project/.kiro/settings/cli.json your-project/cli.json.before-aidlc
 fi
 cp -R "$RUNTIME_ROOT/kiro-ide/.kiro/." your-project/.kiro/
@@ -139,7 +139,32 @@ cp -R "$RUNTIME_ROOT/kiro-ide/aidlc/." your-project/aidlc/     # the workspace s
 cd your-project && bun .kiro/tools/aidlc.ts config --from "$RUNTIME_ROOT" --harness kiro
 ```
 
-The first removal loop is the v2.5.57 hook-name migration. The second removes
+To move a project set up this way to a newer release, do not run the block
+again: its copy replaces `.kiro/tools/data/harness.json`, where the project
+keeps its plugin choices and setup answers, and your changes to the files it
+copies, without saying it reset them. Set `RUNTIME_ROOT` to the newer
+release's extracted `runtime/` directory and run only the setup command, from
+the project folder:
+
+```bash
+bun .kiro/tools/aidlc.ts config --from "$RUNTIME_ROOT"
+```
+
+It brings the project's AI-DLC files to that release and keeps the plugin
+choices and setup answers. It removes the AI-DLC files that release no longer
+ships and names them, so the removals in the copy block are not needed; if a
+change you made to an AI-DLC file conflicts with the refresh, it changes
+nothing and names the file. With no `--harness` it refreshes the one harness
+the project has; in a project that also has another harness, such as Claude
+Code's, it changes nothing and asks for one: add `--harness kiro-ide`, which
+releases before 2.11.4 also read as Kiro. This needs a project whose
+setup command ran on AI-DLC 2.11.0 or later; on 2.11.0, answer `y` if it asks
+to initialize the project, then run it once more, so that the newer release's
+own tool checks the setup. A project copied from an earlier release, or one
+whose setup command never ran, runs the whole block; that copy turns every
+plugin back on, so turn off again any you had turned off.
+
+In the copy block, the first removal loop is the v2.5.57 hook-name migration. The second removes
 Kiro CLI-format agent JSON shipped by older distributions and the IDE 0.x
 `.kiro.hook` registrations, which Kiro IDE 1.x never executes. An overlay copy
 cannot delete retired files. The copy also replaces `.kiro/settings/cli.json`,
@@ -150,8 +175,11 @@ than overwrite a copy that differs from the shipped one, and `--force` replaces
 it. Keep your own Kiro CLI settings in the user-level `~/.kiro/settings/cli.json`
 instead: Kiro CLI reads that file too, and the project file wins only for the
 keys it sets.
-If the project kept settings in `.kiro/settings/cli.json`, the block above saves
-them as `cli.json.before-aidlc` so you can move them there. Both removals are
+If the project kept settings in `.kiro/settings/cli.json`, the copy block saves
+them as `cli.json.before-aidlc` so you can move them there; a copy saved by an
+earlier run is kept, so running the block again never writes over it. Each run
+of the block puts AI-DLC's `.kiro/settings/cli.json` back, so make later changes in the
+user-level file. Both removals are
 no-ops on a fresh install. After that cleanup, the
 `cp -R <src>/. <dst>/` form copies the tree **contents** whether
 `your-project/.kiro` already exists or not. A plain
@@ -160,8 +188,7 @@ existing `.kiro/` and the IDE never sees the new files.
 
 The `aidlc/` directory is the workspace shell — it ships the pre-built
 `aidlc/spaces/default/memory/` method tree the engine reads. It is a **sibling**
-of `.kiro/`, so copy it separately (or copy the whole
-`$RUNTIME_ROOT/kiro-ide/` tree at once). `/aidlc --doctor` fails its
+of `.kiro/`, so copy it separately. `/aidlc --doctor` fails its
 "workspace shell ready" check if it is missing.
 
 In a copied project, the `aidlc` agent runs AI-DLC's engine commands
@@ -180,7 +207,7 @@ plan, holds one of them, the agent passes your words through a file it writes in
 `aidlc/.aidlc-request-text/` instead, so those words put no card in front of
 you.
 
-The versioned runtime uses the native `aidlc` command. Framework developers who
+Framework developers who
 need the Bun-shaped source projection can clone the repository, run
 `bun install --frozen-lockfile` and `bun scripts/package.ts`, then use the
 ignored local `dist/kiro-ide/` output instead.
@@ -310,7 +337,7 @@ Identical to the Claude Code harness: `/aidlc <description>` starts a
 workflow, `/aidlc --status` reports position, `/aidlc --doctor`, `--stage`,
 `--phase`, `--depth`, `--test-strategy`, and `--config [section]` all work, and the
 per-stage (`/aidlc-domain-design`) and per-scope (`/aidlc-feature`) runner
-skills are installed. There is no init command; the shipped shell scaffolds
+skills are installed. The shipped shell scaffolds
 the workspace, and AI-DLC automatically creates the first intent on your first `/aidlc`.
 
 ### Start AI-DLC in a Kiro IDE chat
@@ -631,8 +658,19 @@ AI-DLC records the model and effort in `aidlc.settings.json` and writes
 `.kiro/agents/aidlc-architecture-reviewer-agent.md`; a Unit's reviewer copy
 keeps them. Kiro reads them when it next dispatches the agent, in a chat that
 is already open too. The model must be one your Kiro offers
-(`kiro-cli chat --list-models`, or Kiro IDE's model picker): one it does not
-offer can fail that agent's dispatch. An effort the model does not take runs
+(`kiro-cli chat --list-models`, or Kiro IDE's model picker): Kiro runs an
+agent whose model it does not offer on your chat's model, with that agent's
+effort, and shows no warning (measured on Kiro CLI 3.3.0 and Kiro IDE
+1.4.178). `aidlc config models`, `aidlc config models --check` and
+`aidlc doctor` compare the agent models with the list of the account
+`kiro-cli` is signed in to and name one that is not in it. When that list
+cannot be read (`kiro-cli` not found, not signed in, or offline),
+`config models` says it could not check, and doctor says so with `--verbose`.
+`config models` prints each such line as a `Note:`, or as a `Warning:` line
+with `--quiet`; with `--json` the check is `agentModels` and its lines are in
+`notes`, under `models` when the run writes files or plans to (`--dry-run`),
+and at the top of `data` for `--check` and an unchanged policy.
+An effort the model does not take runs
 at the model's own default, and an agent given a model but no effort runs at
 that model's default effort, not your chat's. `--model default` and
 `--effort default` take them out again. A preset or a group effort
@@ -878,8 +916,8 @@ See [Porting to a New Harness](../../harness-engineering/09-porting-to-a-new-har
 > kiro-v2`), which pins no Kiro engine; start it with `kiro-cli --v2` (Kiro CLI 2.21.4 or later; for an older one, see
 > [Kiro CLI (V2) prerequisites](#kiro-cli-v2-prerequisites)). The
 > interactive `aidlc config` lists it as Kiro CLI (V2); when it detects Kiro
-> CLI 2.24.1 or later, it makes it the default over Kiro, except in Kiro IDE's
-> own terminal, where Kiro leads. For Kiro's v3 engine on Kiro CLI 2.24.1 or
+> CLI 2.24.1 or later, it makes Kiro the default over it, and you take Kiro CLI
+> (V2) by its number. For Kiro's v3 engine on Kiro CLI 2.24.1 or
 > later, use the Kiro harness (`--harness kiro`), listed as Kiro: it runs in
 > Kiro CLI (started with `kiro-cli --v3`) as well as Kiro IDE. In an existing
 > Kiro CLI (V2) project, `aidlc config --harness kiro` switches `.kiro/` to it
@@ -918,7 +956,7 @@ install).
   - without it, start with `kiro-cli chat` and no engine flag (for example
     `kiro-cli chat --agent aidlc`).
 - **bun** only when generating or running the source/development `dist/`
-  projection. Native installs and versioned release runtimes are
+  projection or the versioned manual-copy runtime. Native installs are
   self-contained.
 
 ### Kiro CLI (V2) install
@@ -970,18 +1008,64 @@ then set `RUNTIME_ROOT` to the extracted `runtime/` directory.
 
 ```bash
 mkdir -p your-project/.kiro your-project/aidlc
-cp -R "$RUNTIME_ROOT/kiro/.kiro/." your-project/.kiro/
+# The copy replaces .kiro/settings/cli.json; keep the project's own first.
+if [ -f your-project/.kiro/settings/cli.json ] && [ ! -f your-project/cli.json.before-aidlc ]; then
+  cp your-project/.kiro/settings/cli.json your-project/cli.json.before-aidlc
+fi
+# Leave .kiro/settings/mcp.json to config, which merges it.
+if kiro_copy="$(mktemp -d)"; then
+  cp -R "$RUNTIME_ROOT/kiro/.kiro/." "$kiro_copy/"
+  rm -f "$kiro_copy/settings/mcp.json"
+  cp -R "$kiro_copy/." your-project/.kiro/
+  rm -rf "$kiro_copy"
+fi
 cp -R "$RUNTIME_ROOT/kiro/aidlc/." your-project/aidlc/    # the workspace shell (spaces/default/memory) — a sibling of .kiro/, not inside it
 cd your-project && bun .kiro/tools/aidlc.ts config --from "$RUNTIME_ROOT" --harness kiro-v2
 ```
 
+To move a project set up this way to a newer release, do not run the block
+again: its copy replaces `.kiro/tools/data/harness.json`, where the project
+keeps its plugin choices and setup answers, and your changes to the files it
+copies, without saying it reset them; at a terminal the setup then asks the
+Models question again. Set `RUNTIME_ROOT` to the newer release's extracted
+`runtime/` directory and run only the setup command, from the project folder:
+
+```bash
+bun .kiro/tools/aidlc.ts config --from "$RUNTIME_ROOT"
+```
+
+It brings the project's AI-DLC files to that release and keeps the plugin
+choices and setup answers. It removes the AI-DLC files that release no longer
+ships and names them; if a change you made to an AI-DLC file conflicts with
+the refresh, it changes nothing and names the file. With no `--harness` it
+refreshes the one harness the project has; in a project that also has another
+harness, such as Claude Code's, it changes nothing and asks for one: add `--harness kiro-v2` when the
+project is on AI-DLC 2.11.4 or later, and `--harness kiro` when it is on
+2.11.3 or earlier or a 2.11.4 preview of 2026-11-04 or 2026-11-05. This needs a
+project whose setup command ran on AI-DLC 2.11.0 or later; on 2.11.0, answer
+`y` if it asks to initialize the project, then run it once more, so that the
+newer release's own tool checks the setup. A project copied from an earlier
+release, or one whose setup command never ran, runs the whole block; that
+copy turns every plugin back on, so turn off again any you had turned off.
+
+The copy block replaces `.kiro/settings/cli.json`, which sets `chat.defaultAgent` to
+`aidlc`, and each run of the block puts AI-DLC's file back. Keep your own Kiro CLI settings
+in the user-level `~/.kiro/settings/cli.json` instead: Kiro CLI reads that file
+too, and the project file wins only for the keys it sets. If the project kept
+settings in `.kiro/settings/cli.json`, the copy block saves them as
+`cli.json.before-aidlc` so you can move them there; a copy saved by an earlier
+run is kept, so running the block again never writes over it. The block copies
+`.kiro/` through a temporary folder without `settings/mcp.json`, so a project's
+own `.kiro/settings/mcp.json` is left for `config`, which keeps your servers and
+your changes to them and adds the AI-DLC servers it does not have yet, turned
+off. A project without one gets AI-DLC's.
+
 The `aidlc/` directory is the workspace shell — it ships the pre-built
 `aidlc/spaces/default/memory/` method tree the engine reads. It is a **sibling**
-of `.kiro/`, so copy it separately (or copy the whole
-`$RUNTIME_ROOT/kiro/` tree at once).
+of `.kiro/`, so copy it separately.
 `/aidlc --doctor` fails its "workspace shell ready" check if it is missing.
 
-The versioned runtime uses the native `aidlc` command. Framework developers who
+Framework developers who
 need the Bun-shaped source projection can clone the repository, run
 `bun install --frozen-lockfile` and `bun scripts/package.ts`, then use the
 ignored local `dist/kiro/` output instead.

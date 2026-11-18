@@ -188,7 +188,7 @@ instead — they never become rows, and no refusal is printed for them.
 A pathless sweep is bounded too: more than 20 not-yet-indexed or visibly
 changed documents, or more than 256 MiB across that work set, is refused
 and NOTHING is indexed — already-current rows do not consume the batch
-budget. Onboard a subdirectory or one file at a time, or run `sync`. A
+budget. Onboard a subdirectory or one file at a time, or run `sync` when they are already indexed. A
 single document over 32 MiB is refused without being read. Report which
 cap was hit and do not retry the same work set unchanged: it will be
 refused identically.

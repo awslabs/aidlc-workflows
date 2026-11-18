@@ -124,4 +124,4 @@ Organize each functional design specification as:
 6. **Interfaces**: Input/output specifications for each operation
 7. **Validation**: Field-level and cross-field validation rules
 8. **Error Catalog**: All error conditions with codes and messages
-9. **Traceability**: Mapping back to requirements (FR-NNN references)
+9. **Traceability**: Mapping back to requirements

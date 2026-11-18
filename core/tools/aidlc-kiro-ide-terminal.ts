@@ -9,7 +9,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { insertJsoncSetting, jsoncRootMembers, jsoncSettingValue, replaceJsoncSetting } from "./aidlc-distribution.ts";
-import { installRoot } from "./aidlc-install-paths.ts";
+import { installRoot, windowsUninstallFencePath } from "./aidlc-install-paths.ts";
 import { setByDotenvFile } from "./aidlc-kiro-session.ts";
 import { insideKiroIde, kiroIdeUserSettingsPath } from "./aidlc-kiro-ide-workflows.ts";
 import { atATerminal, writeFileAtomic } from "./aidlc-lib.ts";
@@ -258,7 +258,8 @@ export function readKiroTerminalShell(): "cmd" | "powershell" | null {
  * VSCODE_CODE_CACHE_PATH, so the shell comes from the last chat start's record
  * or, before any, from Kiro's default folder), for a person who kept Command
  * Prompt or was asked and did not act. Nothing is noted before the question
- * was asked, after the switch, or once warned.
+ * was asked, after the switch, once warned, or while a Windows uninstall is
+ * scheduled.
  */
 export function noteSlowReply(
   elapsedMs: number,
@@ -271,6 +272,9 @@ export function noteSlowReply(
   const root = installRoot();
   if (existsSync(join(root, KIRO_TERMINAL_WARNED_FILE))) return;
   try {
+    // A scheduled Windows uninstall planned this file with its contents, so a
+    // new note now (the uninstall run's own exit) would stop that cleanup.
+    if (existsSync(windowsUninstallFencePath())) return;
     mkdirSync(root, { recursive: true });
     writeFileAtomic(join(root, KIRO_TERMINAL_DROPPED_FILE), `${new Date().toISOString()}\n`);
   } catch {

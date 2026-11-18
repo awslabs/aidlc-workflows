@@ -16,6 +16,11 @@ content, not the walk source.
 All stages follow `stage-protocol.md` for approval gates, question format,
 completion messages, and state tracking.
 
+Support agents take part when collaborators are on (the `collaborators`
+setting, shipped on only for `enterprise`; `/aidlc --collaborators on` turns it
+on for one piece of work). With collaborators off, the engine hands each stage
+an empty `support_agents` list and the lead runs alone.
+
 > **Path convention.** Each workflow's artifacts live under its **intent record
 > dir** — `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/` (where `<space>` is
 > `default` unless a non-default space is in play, and `<YYMMDD>-<label>` is the
@@ -50,8 +55,9 @@ as one question.
 For eligible checkpoint work with skeleton-on, the first DAG Unit is the
 smallest working integrated slice. It completes its applicable stages, including
 Code Generation, before later Units even with stage-major selected. Its real
-end-to-end project check must pass, and a human must approve that verified
-skeleton. A legacy first Construction-stage approval is only a stage review;
+end-to-end project check must pass, unless the person says to approve the
+skeleton as it is over that check (`verify --over-failed-check`), and a human
+must approve it. A legacy first Construction-stage approval is only a stage review;
 it does not establish that an integrated skeleton has been built.
 
 All Unit/batch checkpoints reuse the intent's recorded, human-authorized
@@ -403,9 +409,9 @@ feasibility input.
      concurrency edge cases)
 
 3. **Collect and Analyze Answers** -- Collect answers following
-   stage-protocol.md question flow (offer interaction mode choice, collect
+   stage-protocol.md question flow (collect
    answers, write back to file). Perform MANDATORY ambiguity analysis:
-   - Identify vague answers ("mix of", "not sure", "depends", "probably")
+   - Identify vague answers ("mix of", "not sure", "depends")
    - Check for contradictions between answers
    - Flag missing details needed for artifact generation
    - If ANY ambiguity found: create follow-up questions and resolve before
@@ -625,7 +631,7 @@ infrastructure and platform input.
 
 3. **Collect and Analyze Answers** -- Collect answers following
    stage-protocol.md question flow. Perform MANDATORY ambiguity analysis:
-   - Identify vague answers ("mix of", "not sure", "depends", "probably")
+   - Identify vague answers ("mix of", "not sure", "depends")
    - Check for contradictions between answers
    - Flag missing details needed for artifact generation
    - If ANY ambiguity found: create follow-up questions and resolve before
@@ -843,25 +849,7 @@ present only when multiple units share resources.
 ### Purpose
 
 Generate all application code, tests, and configuration for a single unit of
-work. It runs for every Unit in every scope that includes it; infra runs no
-Code Generation and no Build and Test, as its compiled plan shows:
-
-```text
-$ aidlc engine graph scope infra
-workspace-scaffold
-workspace-detection
-state-init
-practices-discovery
-requirements-analysis
-nfr-requirements
-nfr-design
-infrastructure-design
-ci-pipeline
-deployment-pipeline
-environment-provisioning
-deployment-execution
-observability-setup
-```
+work. It runs for every Unit in every scope that includes it.
 
 Code is written to the workspace root, never to
 `<record>/`.
@@ -935,7 +923,8 @@ This stage has a **two-part structure**: planning followed by generation.
    Run `aidlc-testing-posture.ts render` to read the Testing Contract the plan
    follows; `next` writes its `## Testing Contract` JSON block into the plan
    itself (a block that is missing, broken or out of date is replaced; the rest
-   of the plan is kept). The resolver reads
+   of the plan is kept, and after the person's own edit so are the words they
+   wrote in that section, after the block). The resolver reads
    org/team/project Testing Posture sections additively: a project coverage or
    integration note remains applicable but does not erase a team methodology;
    a contradictory narrower methodology is rejected.
@@ -1546,9 +1535,12 @@ with the aidlc-devsecops-agent providing security testing expertise.
     that nothing builds is settled when the latest stage that traced it (User
     Stories, NFR Requirements, then Code Generation) marked it `N/A` with its
     reason in every table there that lists it; an `N/A` with no reason is not
-    settled. A Code Generation `N/A` whose reason hands the ID to another Unit
-    settles nothing: if no Unit built it, it is uncovered and its row lists the
-    hand-offs as `handed_off`. Write
+    settled. A story Units Generation kept out of every Unit, `Deferred` with
+    its reason, settles its criteria the same way (a requirement, in work
+    without stories), unless a later stage's table lists them. A Code Generation
+    `N/A` whose reason hands the ID to another Unit settles nothing: if no Unit
+    built it, it is uncovered and its row lists the hand-offs as `handed_off`.
+    Write
     `cross-unit-traceability.md` from that output with the verdict, per-ID
     coverage and every uncovered ID; an uncovered ID is a finding shown at the
     approval gate.
@@ -1691,7 +1683,7 @@ Strictly 2-option: Approve / Request Changes.
 
 - **Phase boundary verification**: This is the last stage of the Construction
   phase. It performs the Construction-to-Operation phase boundary verification
-  check (per stage-protocol-governance.md section 13), validating that architecture traces
+  check, validating that architecture traces
   to code and code traces to tests. Results are written to
   `<record>/verification/phase-check-construction.md`.
 - **Conditional execution**: This stage is skipped if the project already has
@@ -1725,7 +1717,7 @@ through a phased construction flow:
   (pipeline-deploy-led)
 
 **Key characteristics:**
-- Stages 3.1-3.4 are CONDITIONAL; 3.5-3.6 run in every scope that includes them (infra has neither); 3.7 is CONDITIONAL
+- Stages 3.1-3.4 are CONDITIONAL; 3.5-3.6 run in every scope that includes them; 3.7 is CONDITIONAL
 - Which conditional stages are reached comes from the plan (the scope, plus any skip or add the person makes), not from Delivery Planning; each still applies its own condition
 - New source-producing solo Unit workflows default to unit-major, serial
   execution and verified Unit checkpoints. Preserve explicit iteration choices

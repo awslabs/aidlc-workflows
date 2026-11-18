@@ -42,7 +42,7 @@ Replace with: "The dashboard page loads in < 3 seconds at p95 under 500 concurre
 
 ### Scalability Requirement Format
 ```
-NFR-SCALE-NNN: [Scalability Requirement]
+[Scalability Requirement]
 Current baseline: [measured current capacity]
 Target capacity: [required capacity at specific timeline]
 Growth model: [linear, exponential, seasonal, step-function]
@@ -140,7 +140,7 @@ Auto-remediation: [if any automated response is triggered]
 
 ### Authentication Requirements
 ```
-NFR-AUTH-NNN: [Authentication Requirement]
+[Authentication Requirement]
 Method: [OAuth 2.0, JWT, session-based, API key, mTLS]
 Token lifetime: [access token TTL, refresh token TTL]
 MFA requirement: [none, optional, required for admin, required for all]
@@ -150,7 +150,7 @@ Password policy: [min length, complexity, rotation, breach detection]
 
 ### Authorization Requirements
 ```
-NFR-AUTHZ-NNN: [Authorization Requirement]
+[Authorization Requirement]
 Model: [RBAC, ABAC, ACL, policy-based]
 Roles: [list of roles and their permission boundaries]
 Resource granularity: [organization, team, user, resource-level]
@@ -160,7 +160,7 @@ Audit: [which authorization decisions are logged]
 
 ### Data Protection Requirements
 ```
-NFR-DATA-NNN: [Data Protection Requirement]
+[Data Protection Requirement]
 Classification: [public, internal, confidential, restricted]
 Encryption at rest: [algorithm, key management, rotation schedule]
 Encryption in transit: [TLS version, cipher suites, certificate management]
@@ -171,7 +171,7 @@ Backup encryption: [separate key, recovery testing frequency]
 
 ### Compliance Requirements
 ```
-NFR-COMP-NNN: [Compliance Requirement]
+[Compliance Requirement]
 Framework: [GDPR, SOC 2, HIPAA, PCI-DSS, ISO 27001]
 Scope: [which components/data are in scope]
 Controls: [specific controls required — access logging, encryption, retention]

@@ -125,6 +125,11 @@ describe("t-active-space-includes: every shipped include reads the copy", () => 
       return config.resources.includes(`file://${COPY}/**/*.md`);
     });
     expect(withMemory.length).toBeGreaterThanOrEqual(15);
+    // The orchestrator skill names the same include, so an agent checking a
+    // worker's file against it finds no mismatch on a correct install.
+    const skill = readFileSync(distSurface("kiro", ".kiro", "skills", "aidlc", "SKILL.md"), "utf-8");
+    expect(skill).toContain(`must include \`file://${COPY}/**/*.md\` in \`resources\``);
+    expect(skill).not.toContain("file://aidlc/spaces/");
   });
 
   test("Cursor: the standing and phase rules and the persona bodies read the copy", () => {

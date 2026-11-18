@@ -694,6 +694,26 @@ describe("t329 project-description and document-input boundaries", () => {
     ).toThrow("changed after project-containment validation");
   });
 
+  test("an HTML page the person names is read as it is written, and one that is not UTF-8 is refused", () => {
+    const dir = project();
+    mkdirSync(join(dir, "docs"));
+    const page = "<!DOCTYPE html>\n<html><body><h1>Vision</h1><p>Build inventory.</p></body></html>\n";
+    writeFileSync(join(dir, "docs", "spec.html"), page);
+    writeRequest(dir, "docs/spec.html");
+    for (const result of [run(dir), runOnboard(dir)]) {
+      expect(result.status, result.stderr).toBe(0);
+      expect(JSON.parse(result.stdout).content).toBe(page);
+    }
+    expect(existsSync(join(dir, DOCUMENTS))).toBe(false);
+    // Windows-1252 left and right double quotes: not UTF-8.
+    writeFileSync(join(dir, "docs", "word.htm"),
+      Buffer.concat([Buffer.from("<html><body><p>"), Buffer.from([0x93, 0x61, 0x94]), Buffer.from("</p></body></html>")]));
+    writeRequest(dir, "docs/word.htm");
+    const refused = run(dir);
+    expect(refused.status).not.toBe(0);
+    expect(refused.stderr).toContain("Ask the person for a text, Markdown, PDF, or Word version.");
+  });
+
   test("the plain read names the onboarding form for a PDF and copies nothing", () => {
     const dir = project();
     writeFileSync(

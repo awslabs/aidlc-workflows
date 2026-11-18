@@ -661,13 +661,14 @@ describe("t150 dist/codex packaging determinism + trust", () => {
     expect(result.status, result.output).toBe(0);
     if (version === "0.144.9") {
       expect(result.output).toContain(
-        "Harness CLI: codex codex-cli 0.144.9 is below 0.145.0",
+        "Harness CLI: codex 0.144.9 is below 0.145.0",
       );
       expect(result.output).toContain(
         "Install or upgrade Codex CLI to 0.145.0 or later",
       );
     } else {
-      expect(result.output).toContain("Harness CLI: codex codex-cli 0.145.0");
+      // Codex answers "codex-cli <version>"; the row names the CLI once.
+      expect(result.output).toMatch(/Harness CLI: codex 0\.145\.0 at \S/);
     }
     // Each version owns one native fixture and doctor run, including cleanup.
     // Compiler/probe backstops use the shared native policy for each version.
