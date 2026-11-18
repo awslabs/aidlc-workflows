@@ -1770,6 +1770,19 @@ async function verifyOnce(
   }, before.intent, before.space);
 }
 
+// The stages a checkpoint's approval or rejection decides ("Gate Stages"): its
+// stages less any that is [S] for every Unit. That decision records the open
+// findings of these stages, and the Review brief shown at the checkpoint
+// (aidlc-review-brief.ts unitOwnApproval) lists the same stages.
+export function checkpointGateStages(checkpoint: ConstructionCheckpoint, state: string): string[] {
+  const skipped = new Set(
+    parseCheckboxes(state)
+      .filter((entry) => entry.state === "skipped")
+      .map((entry) => entry.slug),
+  );
+  return checkpoint.stages.filter((stage) => !skipped.has(stage));
+}
+
 // The checkpoint gate row. "Stages" is the checkpoint's identity and names
 // every stage in it, including one kept after it went [S] through per-unit
 // skips. "Gate Stages" is what the row gates: readers of a rejection treat it
@@ -1782,16 +1795,11 @@ function gateFields(
   checkpoint: ConstructionCheckpoint,
   state: string,
 ): Record<string, string> {
-  const skipped = new Set(
-    parseCheckboxes(state)
-      .filter((entry) => entry.state === "skipped")
-      .map((entry) => entry.slug),
-  );
   return {
     Unit: checkpoint.unit,
     Stage: checkpoint.stages.at(-1)!,
     Stages: checkpoint.stages.join(", "),
-    "Gate Stages": checkpoint.stages.filter((stage) => !skipped.has(stage)).join(", "),
+    "Gate Stages": checkpointGateStages(checkpoint, state).join(", "),
     "Gate Scope": "unit-end",
     Checkpoint: checkpointName(checkpoint.kind),
     Fingerprint: checkpoint.fingerprint,
