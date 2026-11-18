@@ -2456,7 +2456,13 @@ proved and a review that was asked for, the Unit is verified and their words are
 approval (`review_not_finished.approved_in_words`: `approve` asks nothing more),
 recorded with the review as not finished, as at a stage gate. A verdict for that review that comes in later is
 recorded and leaves the Unit approved. Under a team's locked `strict` the review finishes
-first, without asking the person. A Unit whose review ended in the NOT-READY
+first, without asking the person. When the Unit's check ran and did not pass (every test green and a
+coverage floor not met, say) and the person says to approve it as it is, add `--over-failed-check --message <id>`
+to `verify` the same way: the check runs again, and if it still does not pass the record keeps `Verified: false`
+with `Check Not Passed: approved in words`, the result carries `check_not_passed.approved_in_words` and a
+`next_step` naming the `approve` to run with no question, and the person hears "Approved. <unit>'s check,
+`<command>`, did not pass."; under a team's locked `strict` the check has to pass, and `verify` says so in one
+line. Each flag lifts only what it names; pass both when both apply. A Unit whose review ended in the NOT-READY
 fallback the conductor records when a retried review still wrote no whole review is asked
 about once (`review_not_finished.question`) and approved the same way, with no
 option to pass. A Unit review never asked
@@ -2468,6 +2474,7 @@ before does not count) is required under every Guard Policy: `rereview` carries
 aidlc engine bolt checkpoint --action status --unit "<Unit>" --kind <unit|skeleton>
 aidlc engine bolt checkpoint --action verify --unit "<unit>" --kind <unit|skeleton>
 aidlc engine bolt checkpoint --action verify --unit "<unit>" --kind <unit|skeleton> --over-unfinished-review --message <id>
+aidlc engine bolt checkpoint --action verify --unit "<unit>" --kind <unit|skeleton> --over-failed-check --message <id>
 aidlc engine bolt checkpoint --action verify --unit "<unit>" --kind <unit|skeleton> --override-blocking-sensors --user-input "Override blocking sensors"
 ```
 

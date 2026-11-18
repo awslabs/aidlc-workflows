@@ -73,7 +73,7 @@ describe("a Unit approved over its check that did not pass", () => {
     const s = shape();
     expect(shapeValue(v, s, "CHECKPOINT_VERIFICATION_RECORDED", "Check Not Passed", "approved in words")).toBe("approved in words");
     expect(shapeValue(v, s, "GATE_APPROVED", "Check", "not passed")).toBe("not passed");
-    expect(shapeValue(v, s, "GATE_APPROVED", "Check", "billing")).toBe("<custom-value-1>");
+    expect(shapeValue(v, s, "GATE_APPROVED", "Check", "something they said")).toBe("<custom-value-1>");
   });
 });
 

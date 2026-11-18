@@ -78,6 +78,7 @@ import {
   renderChangedPaths,
   renderReviewRequestCommand,
   resolveBoltDag,
+  resolveGuardPolicy,
   resolveReviewClass,
   resolveWorkflowSelection,
   restrictSourceListing,
@@ -207,6 +208,10 @@ export interface ConstructionCheckpoint {
    *  its approval: nothing more is asked. Otherwise (a review that ended in
    *  the NOT-READY fallback) `question` is the one approval question. */
   review_not_finished?: { stages: string[]; question?: string; approved_in_words?: true };
+  /** The person's "approve it as it is" went over the Unit's check that did not pass: their words are its approval. */
+  check_not_passed?: { approved_in_words: true };
+  /** With `check_not_passed`, until the approval is recorded: the approve step their words already took. */
+  next_step?: string;
   /** The stages whose fresh review records a review file edited after the
    *  reviewer finished (strict; relaxed and off said it with the verdict). The
    *  checkpoint says so in one line before the person is asked. */
@@ -243,6 +248,8 @@ export interface ConstructionCheckpoint {
 }
 
 const PROOF_DIR = ".aidlc-construction-checkpoints";
+// A verification row's "Check Not Passed": the person approved the Unit as it is over its check.
+const CHECK_NOT_PASSED = "approved in words";
 const CHECK_TIMEOUT_MS = EXTENDED_SUBPROCESS_TIMEOUT_MS;
 
 /** A finite execution budget; Node timers cannot represent larger values. */
@@ -595,11 +602,13 @@ function proofFromVerificationRow(
   const fingerprint = auditBlockField(block, "Fingerprint");
   const commandSha256 = auditBlockField(block, "Command SHA-256");
   const verified = auditBlockField(block, "Verified") === "true";
+  // A check the person approved the Unit over ran to its end on these files too.
+  const ran = verified || auditBlockField(block, "Check Not Passed") === CHECK_NOT_PASSED;
   if (!id || !fingerprint || !commandSha256 || !/^[a-f0-9]{64}$/.test(commandSha256)) return null;
   return {
-    id, kind, unit, fingerprint, command_sha256: commandSha256, verified, evidence_unchanged: verified,
+    id, kind, unit, fingerprint, command_sha256: commandSha256, verified, evidence_unchanged: ran,
     exit_code: auditBlockField(block, "Exit Code") === "0" ? 0 : null, signal: null, error: null,
-    finished_at: verified ? "recorded" : null,
+    finished_at: ran ? "recorded" : null,
   };
 }
 
@@ -620,6 +629,8 @@ interface Snapshot {
   waivedStages: string[];
   /** The message the person said to go on without the review in, as the latest verification recorded it. */
   waiverMessage: string | null;
+  /** The Unit's latest check ran on its files as they are, with the current command, and did not pass, and no word lifts it. */
+  failedCheck: boolean;
   /** Each source stage's files as an approval of the Unit holds them, however many, with the claim that reads
    *  them as the Unit's whole listing when one does: a path it covers that they lack is one the Unit deleted. */
   approvedFiles: Map<string, { files: WorkspaceSourceListing; claim?: SourceClaimModel }>;
@@ -843,6 +854,44 @@ function reviewsNamed(slugs: readonly string[]): string {
 // gate (aidlc-state.ts approve).
 export function unfinishedReviewsNotice(slugs: readonly string[], unit?: string): string {
   return `Approved. The ${reviewsNamed(slugs)}${unit ? ` for ${unit}` : ""} did not finish.`;
+}
+
+const checkNamed = (unit: string, command: string | null): string => `${unit}'s check, \`${command ?? ""}\``;
+
+// The one line the person hears when their approval went over the Unit's check
+// that did not pass, joined to the review's when that did not finish either.
+function failedCheckNotice(unit: string, command: string | null, reviews?: readonly string[]): string {
+  const check = `${checkNamed(unit, command)}, did not pass.`;
+  return reviews ? `Approved. The ${reviewsNamed(reviews)} for ${unit} did not finish, and ${check}` : `Approved. ${check}`;
+}
+
+// The step a verification that took the person's words over the check hands on.
+function approveStep(unit: string, kind: ConstructionCheckpointKind): string {
+  return `The check did not pass, and the person's words are the approval of ${unit} as it is, so run ` +
+    `\`${aidlcToolInvocation("bolt")} checkpoint --unit "${unit}" --kind ${kind} --action approve\` at once without ` +
+    "asking anything, and say the one line it returns, as written.";
+}
+
+// The one line for the person whose words would go over the check, under a
+// strict the team locks (the lock the review's waiver reads): it stays required.
+function lockedCheckLine(projectDir: string, current: Snapshot): string | null {
+  if (personMayApproveOverUnfinishedReview(projectDir, current.state)) return null;
+  const lock = resolveGuardPolicy(projectDir, current.state).memoryStrict;
+  const { unit, verification_command: command } = current.result;
+  return lock ? `Your team set Guard Policy to strict in ${lock.path}, so ${checkNamed(unit, command)}, has to pass ` +
+    `before ${unit} is approved. Say if you want me to fix what it found and run it again, or choose another check. ` +
+    "Changing that line there changes it." : null;
+}
+
+// What ask and approve tell the agent over a check that did not pass: the step
+// the person's words already took, or each way on. Null when verify is the step.
+function notPassedRefusal(current: Snapshot): string | null {
+  const { unit, verification_command: command, next_step: step } = current.result;
+  if (step !== undefined) return step;
+  if (!current.failedCheck) return null;
+  return `${checkNamed(unit, command)}, did not pass, so ${unit} is not approved yet: fix what it found and run the ` +
+    "check again; or, if the person chose another check, set it and run that; or, if the person said to approve " +
+    `${unit} as it is, verify with --over-failed-check --message <id>.`;
 }
 
 function locked<T>(
@@ -1289,22 +1338,35 @@ function snapshot(
   const proof = readProof(root, proofPath);
   const proofFile = proof;
   const ready = errors.length === 0;
-  const verifiedWith = (
+  // The latest check and its row are this Unit's, on its files as they are,
+  // with this command and run floor, run to its end (not stopped or failing to run).
+  const ranWith = (
     commandSha256: string | undefined,
     proof: ReturnType<typeof proofFromVerificationRow> = proofFile,
   ): boolean => ready && proof !== null &&
     commandSha256 !== undefined &&
     proof.kind === kind && proof.unit === unit &&
     proof.command_sha256 === commandSha256 &&
-    isFingerprint(proof.fingerprint) && proof.verified === true &&
-    proof.evidence_unchanged === true && proof.exit_code === 0 &&
-    proof.signal === null && proof.error === null &&
+    isFingerprint(proof.fingerprint) &&
+    proof.evidence_unchanged === true && proof.signal === null && proof.error === null &&
     typeof proof.finished_at === "string" && verification !== null &&
     auditBlockField(verification.block, "Run floor") === floors[stages.at(-1)!] &&
     auditBlockField(verification.block, "Verification Id") === proof.id &&
     isFingerprint(auditBlockField(verification.block, "Fingerprint")) &&
-    auditBlockField(verification.block, "Command SHA-256") === commandSha256 &&
-    auditBlockField(verification.block, "Verified") === "true";
+    auditBlockField(verification.block, "Command SHA-256") === commandSha256;
+  const verifiedWith = (
+    commandSha256: string | undefined,
+    proof: ReturnType<typeof proofFromVerificationRow> = proofFile,
+  ): boolean => ranWith(commandSha256, proof) && proof!.verified === true && proof!.exit_code === 0 &&
+    auditBlockField(verification!.block, "Verified") === "true";
+  // The person approved the Unit as it is over that check, which did not pass,
+  // in the message its row records; never over a strict the team locks.
+  const liftedWith = (
+    commandSha256: string | undefined,
+    proof: ReturnType<typeof proofFromVerificationRow> = proofFile,
+  ): boolean => ranWith(commandSha256, proof) && !verifiedWith(commandSha256, proof) &&
+    auditBlockField(verification!.block, "Check Not Passed") === CHECK_NOT_PASSED &&
+    auditBlockField(verification!.block, "Message Id") !== null && overAllowed();
   const verifiedNow = verifiedWith(shared.verificationCommand?.sha256);
   const gateApprovedWith = (commandSha256: string | undefined): boolean => gate?.event === "GATE_APPROVED" &&
     auditBlockField(gate.block, "Unit") === unit &&
@@ -1323,15 +1385,20 @@ function snapshot(
   // when the person approves a new command: the new one checks the Units
   // still to be approved.
   let verified = verifiedNow || (gateApproved && verifiedWith(proof?.command_sha256));
-  let approved = verified && gateApproved;
+  // So does one approved over its check under an earlier command.
+  let lifted = !verified &&
+    (liftedWith(shared.verificationCommand?.sha256) || (gateApproved && liftedWith(proof?.command_sha256)));
+  let approved = (verified || lifted) && gateApproved;
   let restored: ConstructionCheckpointProof | null = null;
   // A checkout with no proof file at all (a fresh clone, another machine):
   // the committed verification row stands in for it, for a Unit already
   // approved whose evidence is unchanged since. Nothing is run again.
   if (!approved && proof === null && verification !== null && proofFileAbsent(root, proofPath)) {
     const committed = proofFromVerificationRow(verification.block, kind, unit);
-    if (committed && gateApprovedWith(committed.command_sha256) && verifiedWith(committed.command_sha256, committed)) {
-      verified = true;
+    if (committed && gateApprovedWith(committed.command_sha256) &&
+      (verifiedWith(committed.command_sha256, committed) || liftedWith(committed.command_sha256, committed))) {
+      verified = committed.verified;
+      lifted = !verified;
       approved = true;
       // Asked about again, the approval binds to the verification it stands
       // on. The committed row records no output, so none is shown.
@@ -1369,6 +1436,7 @@ function snapshot(
     approvedFiles,
     overAllowed: rereview?.unfinished !== undefined && unfinishedMayGoOn && overAllowed(),
     waivedStages: notFinished,
+    failedCheck: !verifiedNow && !lifted && ranWith(shared.verificationCommand?.sha256),
     result: {
       kind, unit, stages, fingerprint, verified, approved,
       human_required: humanRequired, enabled, ready, errors,
@@ -1379,6 +1447,8 @@ function snapshot(
           ? { stages: unfinishedStages, approved_in_words: true as const }
           : { stages: unfinishedStages, question: `Approve ${unit}? Its ${reviewsNamed(unfinishedStages)} did not finish.` },
       } : {}),
+      ...(lifted ? { check_not_passed: { approved_in_words: true as const } } : {}),
+      ...(lifted && !approved ? { next_step: approveStep(unit, kind) } : {}),
       ...(editedReviews.length > 0 ? { review_edited: { stages: editedReviews } } : {}),
       ...(dictatedReviews.length > 0 ? { review_dictated: { stages: dictatedReviews } } : {}),
       ...(noReviewerReviews.length > 0 ? { review_no_reviewer: { stages: noReviewerReviews } } : {}),
@@ -1599,27 +1669,30 @@ export async function verifyConstructionCheckpoint(
   unit: string,
   kind: ConstructionCheckpointKind,
   options: {
-    overUnfinishedReview?: boolean; timeoutMs?: number; message?: string;
+    overUnfinishedReview?: boolean; overFailedCheck?: boolean; timeoutMs?: number; message?: string;
     overrideBlockingSensors?: boolean; userInput?: string;
   } = {},
 ): Promise<ConstructionCheckpoint> {
   // The person's "approve it as it is": the message the agent names
-  // (--message), proved, is what lets the Unit go on without its review.
+  // (--message), proved, is what lets the Unit go on without its review, or
+  // over its check, as each flag names.
   let over: string | null = null;
-  if (options.overUnfinishedReview === true && options.message !== undefined) {
+  if ((options.overUnfinishedReview === true || options.overFailedCheck === true) && options.message !== undefined) {
     const proof = proveMessage(projectDir, options.message, "request", { request: true });
     if ("refusal" in proof) throw new Error(proof.refusal);
     over = proof.message.id;
   }
+  const overReview = options.overUnfinishedReview === true ? over : null;
+  const overCheck = options.overFailedCheck === true ? over : null;
   // A check that formats or regenerates the Unit's files changes what it
   // checked, so it runs once more against the files as they are now.
   const timeoutMs = verificationTimeoutMs(options.timeoutMs);
   const override = { requested: options.overrideBlockingSensors === true, input: options.userInput };
-  const first = await verifyOnce(projectDir, unit, kind, false, over, timeoutMs, override);
+  const first = await verifyOnce(projectDir, unit, kind, false, overReview, overCheck, timeoutMs, override);
   if (!first.rerun) return first.result;
   // The line about an accepted change is said once, on whichever run made it.
   // The check changed the files, so the Unit's gate checks read them again.
-  const second = (await verifyOnce(projectDir, unit, kind, true, over, timeoutMs, { ...override, keys: first.overridden })).result;
+  const second = (await verifyOnce(projectDir, unit, kind, true, overReview, overCheck, timeoutMs, { ...override, keys: first.overridden })).result;
   const notices = [...(first.result.change_notices ?? []), ...(second.change_notices ?? [])];
   return notices.length > 0 ? { ...second, change_notices: notices } : second;
 }
@@ -1635,6 +1708,8 @@ async function verifyOnce(
   secondRun: boolean,
   // The message the person said to approve it as it is in, proved; null when they said nothing of it now.
   overUnfinishedReview: string | null,
+  // The same, when they said it over the Unit's check that did not pass.
+  overFailedCheck: string | null,
   timeoutMs: number,
   // The person's Override at a blocking check on the Unit, when they chose it.
   override: { requested: boolean; input?: string; keys?: string[] } = { requested: false },
@@ -1644,6 +1719,8 @@ async function verifyOnce(
     withdrawProtectedQuestions(projectDir, "*");
     const current = snapshot(projectDir, unit, kind, undefined, undefined, personAllows);
     requireReady(current);
+    const lockLine = overFailedCheck === null ? null : lockedCheckLine(projectDir, current);
+    if (lockLine !== null) throw new Error(lockLine);
     // A change to this Unit's reviewed work that its Guard Policy accepts is
     // recorded and said once, before the person is asked to approve; so is one
     // to another approved Unit's work that no step has said yet.
@@ -1741,7 +1818,14 @@ async function verifyOnce(
     writeRecordFileNoFollow(before.root, proofRelativePath(unit, kind), `${JSON.stringify(proof, null, 2)}\n`);
     if (after.root !== before.root) throw new Error("Active intent changed during Construction verification.");
     // The waiver it records stands on the message the person said it in: named now, or carried from the last one.
-    const waiverMessage = overUnfinishedReview ?? before.waiverMessage;
+    const waiverMessage = overUnfinishedReview ?? overFailedCheck ?? before.waiverMessage;
+    // Their "approve it as it is" over a check that did not pass on these
+    // files: named now, or kept from the last check, with this same command.
+    const overCheck = !proof.verified && proof.evidence_unchanged && proof.signal === null && proof.error === null &&
+      waiverMessage !== null &&
+      (overFailedCheck !== null || (before.result.check_not_passed !== undefined &&
+        before.result.verification?.command_sha256 === proof.command_sha256)) &&
+      personMayApproveOverUnfinishedReview(projectDir, before.state);
     appendAuditEntryUnlocked("CHECKPOINT_VERIFICATION_RECORDED", {
       Unit: unit,
       Kind: kind,
@@ -1756,8 +1840,9 @@ async function verifyOnce(
       ...(before.waivedStages.length > 0 ? {
         "Review Not Finished": JSON.stringify(Object.fromEntries(before.waivedStages
           .map((stage) => [stage, before.result.run_floors[stage]]))),
-        ...(waiverMessage ? { "Message Id": waiverMessage } : {}),
       } : {}),
+      ...(overCheck ? { "Check Not Passed": CHECK_NOT_PASSED } : {}),
+      ...((before.waivedStages.length > 0 || overCheck) && waiverMessage ? { "Message Id": waiverMessage } : {}),
       ...claimAttemptFields(projectDir, unit),
       ...(proof.evidence_unchanged ? checks.fields : {}),
     }, projectDir);
@@ -1819,7 +1904,7 @@ export function askConstructionCheckpoint(
       throw new Error("Construction checkpoints are not enabled or have no applicable stages.");
     }
     if (!current.result.ready || !current.result.verified) {
-      throw new Error(`Verify the current Construction checkpoint first, before asking for approval. Run ${aidlcToolInvocation("bolt")} checkpoint --unit "${unit}" --kind ${kind} --action verify and require verified: true.`);
+      throw new Error(notPassedRefusal(current) ?? `Verify the current Construction checkpoint first, before asking for approval. Run ${aidlcToolInvocation("bolt")} checkpoint --unit "${unit}" --kind ${kind} --action verify and require verified: true.`);
     }
     // The person may have answered while the Unit's review ran: their words
     // typed in this chat after it was asked for and before any other question
@@ -1903,13 +1988,15 @@ export function approveConstructionCheckpoint(
   return locked(projectDir, () => {
     const current = snapshot(projectDir, unit, kind);
     requireReady(current);
-    if (!current.result.verified) {
-      throw new Error(`Verify the current Construction checkpoint before approval: a matching CHECKPOINT_VERIFICATION_RECORDED receipt and passing proof are required. Run ${aidlcToolInvocation("bolt")} checkpoint --unit "${unit}" --kind ${kind} --action verify.`);
+    // Over a check that did not pass, only the person's words approve the Unit.
+    const overCheck = current.result.check_not_passed !== undefined;
+    if (!current.result.verified && !overCheck) {
+      throw new Error(notPassedRefusal(current) ?? `Verify the current Construction checkpoint before approval: a matching CHECKPOINT_VERIFICATION_RECORDED receipt and passing proof are required. Run ${aidlcToolInvocation("bolt")} checkpoint --unit "${unit}" --kind ${kind} --action verify.`);
     }
-    const humanRequired = current.result.human_required || reply !== undefined;
+    const humanRequired = current.result.human_required || reply !== undefined || overCheck;
     // The person's "approve it as it is", which the verification took, is the
     // approval; nothing more is asked of them.
-    const inWords = current.result.review_not_finished?.approved_in_words === true;
+    const inWords = current.result.review_not_finished?.approved_in_words === true || overCheck;
     let theirs: Record<string, string> = {};
     if (humanRequired && inWords) {
       // Already approved from their words: an approve run again records nothing more.
@@ -1929,7 +2016,7 @@ export function approveConstructionCheckpoint(
       return current.result;
     }
     const rechecked = snapshot(projectDir, unit, kind);
-    if (!rechecked.result.verified ||
+    if (!(rechecked.result.verified || rechecked.result.check_not_passed) ||
       rechecked.root !== current.root ||
       rechecked.result.fingerprint !== current.result.fingerprint ||
       rechecked.result.verification?.id !== current.result.verification?.id ||
@@ -1943,7 +2030,9 @@ export function approveConstructionCheckpoint(
     // The person let the Unit go on without a review that did not finish: the
     // approval says so, and so does the one line they hear.
     const notFinished = rechecked.result.review_not_finished;
-    if (notFinished) notices.push(unfinishedReviewsNotice(notFinished.stages, unit));
+    if (rechecked.result.check_not_passed) {
+      notices.push(failedCheckNotice(unit, rechecked.result.verification_command, notFinished?.stages));
+    } else if (notFinished) notices.push(unfinishedReviewsNotice(notFinished.stages, unit));
     const gate = gateFields(projectDir, rechecked.result, rechecked.state);
     appendAuditEntryUnlocked("GATE_APPROVED", {
       ...gate,
@@ -1953,6 +2042,7 @@ export function approveConstructionCheckpoint(
       ...(humanRequired ? { "User Input": "Approve" } : { Autonomous: "true" }),
       ...theirs,
       ...(notFinished ? { Review: "not finished" } : {}),
+      ...(rechecked.result.check_not_passed ? { Check: "not passed" } : {}),
       ...findingDispositions?.(
         gate["Gate Stages"].split(", ").filter(Boolean), [unit], humanRequired ? "person" : "nobody",
       ),

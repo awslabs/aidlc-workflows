@@ -572,7 +572,7 @@ describe("approving a Unit as it is over a check that did not pass", () => {
   }
 
   for (const policy of ["off", "relaxed", "strict", "default"] as const) {
-    test(`Guard Policy ${policy}: their words approve the Unit over the check in one step, and the walk carries on`, () => {
+    test(`Guard Policy ${policy}: their words approve the Unit over the check in one step, and the walk goes on to the next Unit`, () => {
       const { p, command } = failedCheck(policy);
       const message = says(p, AS_IT_IS_CHECK);
       // The agent reads their words as an approval: the refusal names the way that takes them.
@@ -584,8 +584,9 @@ describe("approving a Unit as it is over a check that did not pass", () => {
       expect(lifted.json).toMatchObject({ verified: false, approved: false, check_not_passed: { approved_in_words: true } });
       // The verify's own result hands the approve step: nothing is asked again.
       const step = String(lifted.json?.next_step);
-      expect(step).toBe(`The person's words are the approval, so run \`${aidlcToolInvocation("bolt")} checkpoint --unit "alpha" ` +
-        "--kind unit --action approve` at once without asking anything, and say the one line it returns.");
+      expect(step).toBe("The check did not pass, and the person's words are the approval of alpha as it is, so run " +
+        `\`${aidlcToolInvocation("bolt")} checkpoint --unit "alpha" --kind unit --action approve\` at once without asking ` +
+        "anything, and say the one line it returns, as written.");
       const approved = checkpoint(p, "alpha", "approve");
       expect(approved.status, approved.out).toBe(0);
       expect(approved.json).toMatchObject({ approved: true, verified: false, check_not_passed: { approved_in_words: true } });
@@ -607,7 +608,9 @@ describe("approving a Unit as it is over a check that did not pass", () => {
       expect(auditBlockField(approval[0].block, "Review")).toBeNull();
       expect(questionsAsked(p, "alpha")).toHaveLength(0);
       unlinkSync(floor(p));
-      walkCarriesOn(p);
+      // As for a review: under strict this fixture has no record of where the stage started, so its close is not walked.
+      if (policy === "off" || policy === "relaxed") walkCarriesOn(p);
+      else expect(routed(p)).toMatchObject({ stage: CG, unit: "beta" });
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
 
