@@ -568,7 +568,7 @@ them; images, charts, comments and headers are not read). HTML pages (`.html`,
 `.htm`) are read by AI-DLC itself too: their text, without markup, styles, scripts or
 embedded images, and their tables as tables, read as UTF-8 when the bytes are UTF-8,
 otherwise in the charset the page declares, otherwise as Windows-1252. To keep a
-page's markup instead (a UI mockup), save it with a `.txt` name. A project can configure
+page's markup instead (a UI mockup), add a copy of it saved with a `.txt` name. A project can configure
 its own extractor for any type, and a configured one wins. PDF gets a default
 extractor (`pdftotext`) if none is configured; any other type is catalogued and
 citable as `unsupported_type`; after configuring an extractor, run `sync` to retry

@@ -103,10 +103,10 @@ function auditBody(p: string): string {
   return existsSync(path) ? readFileSync(path, "utf-8") : "";
 }
 
-/** A row shaped like one the writer produces, for the pure decision table. */
 // Where the row's document would be; only an HTML page recorded before its reader is read from it.
 const ROW_FILE = "/nonexistent/documents/p.pdf";
 
+/** A row shaped like one the writer produces, for the pure decision table. */
 function row(extraction: Record<string, unknown>): Record<string, unknown> {
   return {
     id: "019fda80-8f8d-7bfa-b56c-983cf0353faa",

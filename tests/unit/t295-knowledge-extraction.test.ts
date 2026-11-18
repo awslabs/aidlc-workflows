@@ -1022,11 +1022,11 @@ describe("t295 Finding 5(c): a DOCX with no configured extractor becomes retryab
   });
 });
 
-// An HTML page (a spec exported from Word, Confluence or Google Docs) used to be
-// stored as its markup: style attributes and an inline image filled the
-// 200,000-character cap, and a page that was not UTF-8 got no text at all. The
-// knowledge base now reads a page itself, as it reads a Word file: its text in
-// lines, tables as Markdown tables, in the page's own encoding.
+// An HTML page (a spec exported from Word, Confluence or Google Docs) is read
+// by the knowledge base itself, as a Word file is: its text in lines, tables as
+// Markdown tables, in the page's own encoding. Stored as markup, its style
+// attributes and an inline image would fill the 200,000-character cap, and a
+// page that is not UTF-8 would have no text at all.
 describe("t295 an HTML page is read as its text, the way a Word file is", () => {
   const SENTENCE = "The service records each request in the audit log, checks the caller against the access list, " +
     "and returns a receipt within two seconds.";
@@ -1107,7 +1107,7 @@ describe("t295 an HTML page is read as its text, the way a Word file is", () => 
     expect(text!.startsWith(`Service specification\nT00001 ${SENTENCE}\nT00002 `)).toBe(true);
     expect(text).not.toMatch(/<\/?[a-z!]/i);
     expect(text).not.toContain("margin");
-    // Main's markup copy stopped at paragraph 880; the text reaches well past it.
+    // Stored as markup, the cap ends near paragraph 880; stored as text, well past it.
     expect(text).toContain(`T01300 ${SENTENCE}`);
   });
 

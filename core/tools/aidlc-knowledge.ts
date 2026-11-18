@@ -617,7 +617,7 @@ function builtinKind(mime: string): BuiltinKind | null {
  * octet-stream before Excel was recognised), or an HTML page stored as its
  * markup, or as no type when it was not UTF-8. A page is judged by its bytes
  * at `abs`, so an .html that holds plain text is never read again; a file that
- * cannot be read here is left to say what it says today.
+ * cannot be read here answers false, and a sync goes on.
  */
 function builtinReadsRow(row: DocumentRow, abs: string): boolean {
   const rec = row.extraction;
@@ -730,7 +730,8 @@ function htmlText(html: string): string {
   const closeCell = (): void => {
     flush();
     if (cell === null) return;
-    (row ??= []).push(cell.join("\n"));
+    row ??= [];
+    row.push(cell.join("\n"));
     cell = null;
   };
   // An empty cell under a spanning one, as Word writes a merged cell.
