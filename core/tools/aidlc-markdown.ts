@@ -57,9 +57,7 @@ export function extractMarkdownSection(content: string, heading: string): string
   );
   const startMatch = headingRegex.exec(stripped);
   if (!startMatch) return "";
-  const afterHeading = startMatch.index + startMatch[0].length;
-  // Skip the newline immediately after the heading line, if any.
-  const bodyStart = stripped[afterHeading] === "\n" ? afterHeading + 1 : afterHeading;
+  const bodyStart = bodyStartAfter(stripped, startMatch);
   // Find the next `## ` heading at the same level (not `### ` or deeper).
   const nextHeading = /^## [^\n]*$/m;
   nextHeading.lastIndex = bodyStart;
@@ -67,6 +65,13 @@ export function extractMarkdownSection(content: string, heading: string): string
   const nextMatch = nextHeading.exec(remainder);
   const bodyEnd = nextMatch ? bodyStart + nextMatch.index : stripped.length;
   return stripped.slice(bodyStart, bodyEnd);
+}
+
+// A multiline `$` matches before the `\r` of a CRLF line, so the heading's line break may be two characters.
+function bodyStartAfter(content: string, heading: RegExpExecArray): number {
+  const end = heading.index + heading[0].length;
+  if (content.startsWith("\r\n", end)) return end + 2;
+  return content[end] === "\n" ? end + 1 : end;
 }
 
 // Replace fenced-code contents with blank lines while preserving all other
@@ -1114,8 +1119,7 @@ export function appendUnderHeading(
   if (!startMatch) {
     throw new Error(`appendUnderHeading: heading not found: ${heading}`);
   }
-  const afterHeading = startMatch.index + startMatch[0].length;
-  const bodyStart = content[afterHeading] === "\n" ? afterHeading + 1 : afterHeading;
+  const bodyStart = bodyStartAfter(content, startMatch);
   const nextHeading = /^## [^\n]*$/m;
   const remainder = content.slice(bodyStart);
   const nextMatch = nextHeading.exec(remainder);
@@ -1164,8 +1168,7 @@ export function replaceSection(
   if (!startMatch) {
     throw new Error(`replaceSection: heading not found: ${heading}`);
   }
-  const afterHeading = startMatch.index + startMatch[0].length;
-  const bodyStart = content[afterHeading] === "\n" ? afterHeading + 1 : afterHeading;
+  const bodyStart = bodyStartAfter(content, startMatch);
   const nextHeading = /^## [^\n]*$/m;
   const remainder = content.slice(bodyStart);
   const nextMatch = nextHeading.exec(remainder);
