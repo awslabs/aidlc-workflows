@@ -2009,6 +2009,26 @@ describe("t314 receipt stamping + completion guard (cli)", () => {
     expect(r.out).not.toContain(".hypothesis");
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
+  test("an edit after the review in a worktree kept in a folder the project ignores still refuses, naming it", () => {
+    writeFileSync(join(proj, ".gitignore"), ".worktrees/\n", "utf-8");
+    git(proj, ["add", ".gitignore"]);
+    git(proj, ["commit", "-qm", "the project ignores its worktrees folder"]);
+    git(proj, ["worktree", "add", "-q", "-b", "feature", join(proj, ".worktrees", "feature")]);
+    appendAuditEntry(
+      "WORKFLOW_STARTED",
+      { Scope: "feature", ...sourceBaselineAuditFields(proj, "code-generation") },
+      proj,
+    );
+    const boundarySecond = Math.floor(Date.now() / 1000);
+    while (Math.floor(Date.now() / 1000) === boundarySecond) {}
+    recordReview(proj);
+    writeFileSync(join(proj, ".worktrees", "feature", "app.ts"), "export const answer = 7; // edited after review\n", "utf-8");
+    const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(r.rc).not.toBe(0);
+    expect(r.out).toContain("project source changed after");
+    expect(r.out).toContain(".worktrees/feature/app.ts");
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
   test("under relaxed, a post-review source edit is carried to the gate as the changed paths", () => {
     const statePath = seededStateFile(proj);
     writeFileSync(statePath, readFileSync(statePath, "utf-8").replace(
