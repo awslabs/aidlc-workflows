@@ -519,7 +519,7 @@ switching examples, and what is committed.
 
 ### `/aidlc knowledge <verb>` — Index and read your own documents
 
-Put your documents (PDFs, Word and Excel files, Markdown, plain text, CSV) under
+Put your documents (PDFs, Word and Excel files, HTML pages, Markdown, plain text, CSV) under
 `aidlc/spaces/<space>/knowledge/documents/`, organised however you like, then index
 them so agents can cite them instead of guessing.
 
@@ -543,7 +543,9 @@ are worth reading, because "no output changed" and "nothing happened" are differ
 results.
 
 **Batch limits.** A pathless `onboard` and `sync` apply the 20-document/256 MiB
-limits to new, changed, or retrying work, not to already-current catalog rows. An
+limits to new and changed work, not to already-current catalog rows. Rows `sync`
+reads again unchanged (an extractor installed, a reader added) take the room the
+limits leave, and the rest are read by the following runs of `sync`. An
 already-reconciled catalog can be larger. When a work batch exceeds a cap, onboard
 the affected files individually before syncing again. Nothing is indexed when a cap
 is hit, so the refusal is never half-finished. A single document over 32 MiB is
@@ -562,14 +564,19 @@ document). Scoping to an intent that has finished is refused unless you add
 (`.docx`) and Excel (`.xlsx`) files are read by AI-DLC itself, with nothing to
 install: a Word file's paragraphs and tables, and every sheet of a workbook as a
 table, with each formula's last saved result (dates and numbers as the file stores
-them; images, charts, comments and headers are not read). A project can configure
+them; images, charts, comments and headers are not read). HTML pages (`.html`,
+`.htm`) are read by AI-DLC itself too: their text, without markup, styles, scripts or
+embedded images, and their tables as tables, read as UTF-8 when the bytes are UTF-8,
+otherwise in the charset the page declares, otherwise as Windows-1252. To keep a
+page's markup instead (a UI mockup), add a copy of it saved with a `.txt` name. A project can configure
 its own extractor for any type, and a configured one wins. PDF gets a default
 extractor (`pdftotext`) if none is configured; any other type is catalogued and
 citable as `unsupported_type`; after configuring an extractor, run `sync` to retry
 unchanged rows of that detected type. A Word or Excel file AI-DLC cannot open (one
 that is password-protected, damaged, or in the older `.doc` or `.xls` format saved
 under the new name) is catalogued as `extraction_failed` with the reason. A Word or
-Excel file added before AI-DLC read them gets its text on the next `sync`. If a CONFIGURED extractor is not installed the
+Excel file or an HTML page added before AI-DLC read them gets its text on the next
+`sync` (up to 20 a run, see Batch limits). If a CONFIGURED extractor is not installed the
 document is catalogued as `extractor_unavailable` — visible in `list`, and fixed by
 installing the tool and running `/aidlc knowledge sync`. Re-running `onboard` on the
 same unchanged path reports `already` and does NOT retry extraction — only `sync`
@@ -577,7 +584,7 @@ re-probes rows in this state. Nothing is silently skipped.
 
 **Extraction is capped**: 50 pages for PDF with the default extractor
 (`pdftotext -l 50`, then a check for a page 51) and 200,000
-characters of extractor output (a Word or Excel file's text too). Past a cap the text is cut and the row records
+characters of extractor output (a Word, Excel or HTML file's text too). Past a cap the text is cut and the row records
 `truncated` — `show` prints a `truncated  yes` line above the content (`after
 page 50` when the page cap cut it) and the `--json` payload carries the flag
 inside `extraction`, with `pages_kept` for a page cut. Treat a truncated
