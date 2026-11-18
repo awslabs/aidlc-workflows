@@ -1,6 +1,6 @@
 // covers: subcommand:aidlc-orchestrate:wait, function:handleWait, function:unrecordedFinishSince,
 // hook:aidlc-log-subagent, hook:aidlc-deliver-stage-rules, audit:SUBAGENT_COMPLETED, audit:REVIEW_COMPLETED,
-// function:leadFinishRecorded
+// function:leadFinishRecorded, function:resumeNext
 
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
@@ -21,6 +21,8 @@ import {
   reviewFileDigest,
   type ReviewRecord,
   setGuardPolicyLine,
+  stateDigest,
+  writeActiveDirectiveMarker,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   AIDLC_SRC,
@@ -634,5 +636,14 @@ describe("t341 orchestrate wait: artifacts with the lead's host id", () => {
       expect(r.status, r.out).toBe(1);
       expect(r.out).toContain("--agent-id goes with --for artifacts");
     }
+  });
+
+  test("its way back after a resumed chat names the stage run on its own when that is the step issued last", () => {
+    project = activeIntentProject("state-construction.md");
+    expect(String(leadWait("dev-1").next)).toMatch(/orchestrate next` instead/);
+    writeActiveDirectiveMarker(project, {
+      kind: "run-stage", stage: "code-generation", single: true, state_sha256: stateDigest(readFileSync(seededStateFile(project), "utf-8")),
+    });
+    expect(String(leadWait("dev-1").next)).toContain("orchestrate next --stage code-generation --single` instead");
   });
 });

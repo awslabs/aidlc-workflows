@@ -279,6 +279,7 @@ import {
   openReviewRequests,
   latestReviewerRowAfter,
   hooksHealthReadDir,
+  issuedStepIsIsolatedRun,
   personMayApproveOverUnfinishedReview,
   personSpokeSinceReviewRequest,
   type GuardAttemptState,
@@ -23974,6 +23975,16 @@ function leadFinishRecorded(pd: string, agentId: string): boolean {
   }
 }
 
+// The engine call that picks this work up again: the stage run on its own when
+// the step issued last is one (`--single`), else the workflow's own next.
+function resumeNext(pd: string, stage: string): string {
+  try {
+    return issuedStepIsIsolatedRun(pd, stage) ? `orchestrate next --stage ${stage} --single` : "orchestrate next";
+  } catch {
+    return "orchestrate next";
+  }
+}
+
 function fileHasBytes(path: string): boolean {
   try {
     return statSync(path).size > 0;
@@ -24120,8 +24131,7 @@ function handleWait(args: string[], projectDir: string | undefined): void {
           "in this same turn until it settles, rather than ending your turn to wait for it. When the host's own " +
           "notice says this helper finished or stopped, stop waiting and read what it reports. When this chat was " +
           "resumed after the host quit while the helper worked, that helper is gone: run " +
-          `\`${aidlcDispatcherInvocation("orchestrate next")}\` instead (for a stage run on its own, the same ` +
-          "`next` you started it with). Never replace it with a shell loop or a sleep."
+          `\`${aidlcDispatcherInvocation(resumeNext(pd, node.slug))}\` instead. Never replace it with a shell loop or a sleep.`
         : "Not yet: run this same command again. Never replace it with a shell loop or a sleep.",
   }));
 }
