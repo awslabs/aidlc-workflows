@@ -5551,7 +5551,7 @@ function claimUnit(args: string[], projectDir?: string): void {
       return;
     }
     fail(
-      `Nothing is claimed here: this work's teams each take their Unit in their own clone, with ${entrySkillInvocation()} there.`,
+      `Nothing is claimed here: others take a Unit of this work in their own clone, with ${entrySkillInvocation()} there.`,
     );
   }
   const identity = activeIdentity(pd);
@@ -5616,7 +5616,7 @@ function claimUnit(args: string[], projectDir?: string): void {
   // for it by name, so the claim is taken and they hear it once.
   const walkedIn = unitsWalkedWithoutClaim(pd).get(unit);
   const walkedWarning = walkedIn !== undefined && walkedIn !== knownAuditShardName(pd)
-    ? `Unit "${unit}" was being built in the checkout that started it, before any team took a Unit; from now on ` +
+    ? `Unit "${unit}" was being built in the checkout that started it, before anyone took a Unit; from now on ` +
       "it is yours, and that checkout sees it claimed."
     : null;
   const generation =
@@ -5850,8 +5850,8 @@ function openAgainNamed(pd: string, unit: string, live: UnitClaimView | null): v
   const notice = wasDone
     ? (its !== null
       ? `Taken off the plan: ${its} ${named.length === 1 ? "is" : "are"} no longer named as ${unit}'s build, and ${unit} is no longer counted merged by ${named.length === 1 ? "it" : "them"}.`
-      : `Taken off the plan: ${unit} is no longer counted merged in ${joinNames(byWord)} by your word.`) + ` ${unit} is open for a team to take.${after}`
-    : `Taken off the plan: ${its} ${named.length === 1 ? "is" : "are"} no longer named as ${unit}'s build. ${unit} is open for a team to take.`;
+      : `Taken off the plan: ${unit} is no longer counted merged in ${joinNames(byWord)} by your word.`) + ` ${unit} is open for a person or a team to take.${after}`
+    : `Taken off the plan: ${its} ${named.length === 1 ? "is" : "are"} no longer named as ${unit}'s build. ${unit} is open for a person or a team to take.`;
   console.log(JSON.stringify({ released: taken !== null, unit, notice: withPlanNotes(notice) }));
 }
 
@@ -6475,7 +6475,7 @@ export function belowRepoTop(projectDir: string): string | null {
   const folder = prefix.ok ? prefix.stdout.trim().replace(/\/$/, "") : "";
   if (folder === "") return null;
   const top = git(projectDir, ["rev-parse", "--show-toplevel"]).stdout.trim();
-  return `Team work needs this project at the top of its git repository; it sits in ${folder} of ${top}.`;
+  return `For its Units to be taken, this project needs to be at the top of its git repository; it sits in ${folder} of ${top}.`;
 }
 
 // Whether a share can run here: team work, a checkout holding no Unit claim, a
@@ -6487,7 +6487,7 @@ export function shareRefusal(projectDir: string, plan = true): { reason: string;
   const pd = resolveProjectDir(projectDir);
   try {
     if (readApplicableTeamUnitScopeStamp(pd)) return { reason: "This checkout holds a Unit claim; share main from a checkout that holds none." };
-    if (!isTeamUnitOwnership(readStateFile(pd))) return { reason: "Sharing main is for work that several teams build." };
+    if (!isTeamUnitOwnership(readStateFile(pd))) return { reason: "Sharing main is for work whose Units are open for a person or a team to take." };
     const below = belowRepoTop(pd);
     if (below !== null) return { reason: below };
     // The plan goes to a code repository by its address: neither this
@@ -6546,7 +6546,7 @@ function getItMerged(repos?: string): string {
 // How the plan reaches the teams when the share committed it here and cannot
 // push it.
 export function planWayOn(branch: string): string {
-  return `The plan is committed here: ${BRANCH_AND_MERGE}; the teams can take Units once it is in ${branch}.`;
+  return `The plan is committed here: ${BRANCH_AND_MERGE}; its Units can be taken once it is in ${branch}.`;
 }
 
 // Units landed here that the remote does not have yet, for the board and for
@@ -6719,7 +6719,7 @@ export function planWaitLine(wait: PlanWait, branch: string, projectDir?: string
   }
   if (wait.state === "branch") {
     return code === null
-      ? `The plan is on its own branch, ${wait.name}, waiting for its pull request; teams can take Units once it is in ${branch}.`
+      ? `The plan is on its own branch, ${wait.name}, waiting for its pull request; its Units can be taken once it is in ${branch}.`
       : `${code.name} ${code.is} on its own branch, ${wait.name}, and not in ${branch} yet. The other Units wait on ${code.units} until it is.`;
   }
   return null;
@@ -6759,7 +6759,7 @@ function putPlanOnItsBranch(pd: string, remote: string, branch: string, madeNow:
   const ahead = shareCommitsAhead(pd, remote, branch, "HEAD");
   if (ahead === null) {
     stays(`This clone knows of no ${branch} on ${remote} for a pull request to go into, so the plan stays committed here; ` +
-      `sharing it with the teams pushes ${branch} itself.`);
+      `sharing it pushes ${branch} itself.`);
   }
   if (ahead.oids.length === 0) return false;
   if (!ahead.noted) stays(`Your ${branch} has commits of yours that ${remote} lacks, so the plan stays committed here.`);
@@ -7417,7 +7417,7 @@ function sharePlanRef(pd: string, given: ReturnType<typeof givenCommitMessage>, 
 // (another repository only before the plan is shared).
 export const planNoRemoteLine = (repo: string, later = false): string =>
   `${repo} has no remote here, so there is nowhere to put the plan yet. ` +
-  (later ? "Give me its address and I'll share it." : "Give me its address, or name another repository the teams can read, and I'll share it there.");
+  (later ? "Give me its address and I'll share it." : "Give me its address, or name another repository everyone who takes a Unit can read, and I'll share it there.");
 export const PLAN_NOT_NOW = "Nothing is pushed; say when you want it shared.";
 
 // The share's write of the plan: where it goes, written on its tip, and what
@@ -7439,7 +7439,7 @@ function writeSharedPlan(pd: string, message?: string, named?: string, carry?: C
   if (!("ref" in place)) fail(planNoRemoteLine(place.repo, later));
   // Once the plan is shared, naming another repository is the move, so the
   // way on is the same at every share.
-  const retry = "Say when to try again, or name another repository the teams can read.";
+  const retry = "Say when to try again, or name another repository everyone who takes a Unit can read.";
   // Another repository named once the plan is shared: the plan moves there.
   const kept = named === undefined ? null : keptPlan(pd, place.id8);
   if (kept !== null && repoCopyKey(kept.plan.plan_repo.address) !== repoCopyKey(place.address)) {
@@ -7572,7 +7572,7 @@ function writeSharedPlan(pd: string, message?: string, named?: string, carry?: C
           : "from your own record here. What you had decided on its Units was not there to carry, so it is not on the plan now.")
       : written.created
         ? `The plan is shared in ${repo}${place.branch === undefined ? "" : ` on the branch ${place.branch.ref.slice("refs/heads/".length)}. ` +
-          `${PLAN_BRANCH_IS(repo)} ${BRANCH_PATTERN.slice(0, -1)}`}. AI-DLC sends no notice of it: the teams hear it from you. A team whose workspace has no ` +
+          `${PLAN_BRANCH_IS(repo)} ${BRANCH_PATTERN.slice(0, -1)}`}. AI-DLC sends no notice of it, so tell whoever will take a Unit. Anyone whose workspace has no ` +
           `${repo} needs this address: ${address}`
         : added.length > 0 || released !== null
           ? [...(added.length > 0 ? [`The plan in ${repo} has ${namesInProse(added)} now.`] : []),
@@ -7603,10 +7603,10 @@ function writeSharedPlan(pd: string, message?: string, named?: string, carry?: C
     const file = commitMessageFile(pd, "share", "plan");
     return { notShared: {
       notice: `${repo} did not take the plan's branch: ${written.words}. If it is the commit message, tell me the one to use; or name another ` +
-        "repository the teams can read and I will share it there.",
+        "repository everyone who takes a Unit can read and I will share it there.",
       step: "Tell the person in plain words what it reports, then end your turn. When they give the commit message, write it to " +
         `${file} with your file tool, exactly as they gave it, then run \`${aidlcInvocation()} unit share --plan --visible${repoFlag} --commit-message-file ${file}\` ` +
-        "and tell them in plain words what it reports. When they name another repository the teams can read, run " +
+        "and tell them in plain words what it reports. When they name another repository for the plan, run " +
         `\`${aidlcInvocation()} unit share --plan --repo <its name>\` and tell them in plain words what it reports.`,
     } };
   }
@@ -7622,7 +7622,7 @@ function writeSharedPlan(pd: string, message?: string, named?: string, carry?: C
   }
   if (written.kind === "refused" && written.inTheWay !== undefined) {
     fail(`${repo} has a branch in the way of the plan's branch (git says "${written.inTheWay}"). The plan is not shared there; name another ` +
-      "repository the teams can read and I will share it there.");
+      "repository everyone who takes a Unit can read and I will share it there.");
   }
   fail(`${repo} did not take the plan: ${written.words}. ${retry}`);
 }
@@ -8075,8 +8075,8 @@ function movePlan(pd: string, start: PlanPlace, to: PlanPlace, message: string |
     const noted = gone !== undefined ? { ok: true as const } : pushPlan(pd, from, noteOid, old.kind === "none" ? null : old.commit);
     let overLine: string | null = gone === undefined ? null :
       `The plan is in ${to.repo} now, with what you decided on each Unit as this computer last had it. ${from.repo} could not be reached` +
-      `${gone === null ? "" : ` (git says "${gone}")`}, so nothing was written there and ${from.repo} does not say where the plan went. Give each team ` +
-      `${to.repo}'s address: until a team's AI-DLC has it, its builds look for the plan in ${from.repo}. Its earlier versions are readable in ${to.repo}.`;
+      `${gone === null ? "" : ` (git says "${gone}")`}, so nothing was written there and ${from.repo} does not say where the plan went. Give ` +
+      `${to.repo}'s address to everyone who takes a Unit: until their AI-DLC has it, their builds look for the plan in ${from.repo}. Its earlier versions are readable in ${to.repo}.`;
     if (!noted.ok) {
       const after = noted.timedOut ? { unreached: null } : lookAtPlan(pd, from);
       // The old place refusing the note, still as it was: it refuses the lead's
@@ -8095,8 +8095,8 @@ function movePlan(pd: string, start: PlanPlace, to: PlanPlace, message: string |
       if (keep && already && there.kind === "plan") return followThere(there.plan, moved);
       if (keep) {
         overLine = `The plan is in ${to.repo} now, with what was decided on each Unit. ${from.repo} did not take the note that the plan moved ` +
-          `(${noted.words}), so nothing was written there and ${from.repo} does not say where the plan went. Give each team ${to.repo}'s address: ` +
-          `until a team's AI-DLC has it, its builds read the plan in ${from.repo} as it was. Its earlier versions stay readable in both.`;
+          `(${noted.words}), so nothing was written there and ${from.repo} does not say where the plan went. Give ${to.repo}'s address to everyone who takes a Unit: ` +
+          `until their AI-DLC has it, their builds read the plan in ${from.repo} as it was. Its earlier versions stay readable in both.`;
       }
     }
     if (!noted.ok && overLine === null) {
@@ -8131,7 +8131,7 @@ function movePlan(pd: string, start: PlanPlace, to: PlanPlace, message: string |
         // Its history is under the note there and under the plan here; a
         // plan moved from this computer's copy has none under the note.
         "Its earlier versions stay readable in both.");
-    const readAccess = `Each team needs read access to ${to.repo}; AI-DLC sends no notice of the move.`;
+    const readAccess = `Everyone who takes a Unit needs read access to ${to.repo}; AI-DLC sends no notice of the move.`;
     const addressLine = `${to.repo}'s address: ${address}`;
     // The share rides the move only as the yes of the open share question.
     if (!shareQuestionOpen(pd, step, added)) {
@@ -8557,7 +8557,7 @@ function assignUnits(args: string[], projectDir?: string): void {
   if (!isTeamUnitOwnership(state) || homeLocation(state) === null) {
     fail("Units are given to teams once teams are chosen for this work.");
   }
-  if (readApplicableTeamUnitScopeStamp(pd)) fail("Units are given to teams at the lead's project, not from a checkout scoped to one Unit.");
+  if (readApplicableTeamUnitScopeStamp(pd)) fail("A Unit is kept to build here at the lead's project, not from a checkout scoped to one Unit.");
   const words = leadSpoke(pd) ? personWordsOf(pd, flags) : "";
   buildLeftOpenHere(pd, state, (flags.here ?? "").split(",").map((entry) => entry.trim()).filter((entry) => entry && entry !== "true"), words);
 }
@@ -8651,7 +8651,7 @@ export function recordLeadsOwnStart(projectDir: string, unit: string): void {
 }
 
 function hereNotSeenLine(unit: string, repo: string, why: string): string {
-  return `${unit} is built here now. Its record in ${repo} could not be written (${why}), so a teammate could still take it meanwhile.`;
+  return `${unit} is built here now. Its record in ${repo} could not be written (${why}), so someone else could still take it meanwhile.`;
 }
 
 // The teams' clones see the work as a team home only once the remote's main
@@ -8771,7 +8771,7 @@ function buildLeftOpenHere(pd: string, state: string, units: string[], words: st
       ? hereNotSeenLine(unit, notSeen.get(unit)!.repo, notSeen.get(unit)!.why)
       : mergedBy.get(unit)
         ? `${unit} is built here now, on top of what ${mergedBy.get(unit)} merged.`
-        : `${unit} is built here now, no longer open for the teams.`),
+        : `${unit} is built here now, no longer open for others to take.`),
     ...lines,
   ].join(" ");
   // The line rides the step that follows, as the take's carry-on line does, so
@@ -9013,7 +9013,7 @@ function findHomeWork(projectDir: string, dirName: string, space: string): HomeW
   const solo = !isTeamUnitOwnership(state) && getField(state, "Construction Iteration")?.trim() === "unit-major";
   const workspaceOrigin = workspaceHomeLocation(projectDir);
   const location = solo ? (workspaceOrigin === "local" ? null : workspaceOrigin) : homeLocation(state);
-  if ((!solo && !isTeamUnitOwnership(state)) || location === null) fail(`${dirName} is not work that teams build.`);
+  if ((!solo && !isTeamUnitOwnership(state)) || location === null) fail(`${dirName} is not work whose Units others take.`);
   refuseOptionAddress(location, recordedAddressRefusal(dirName));
   const row = readIntentRegistry(projectDir, space).find((entry) => entry.dirName === dirName);
   if (!row?.uuid) fail(`${dirName} has no entry in its space's list of work.`);
@@ -11298,7 +11298,7 @@ export function heldCommitMessage(projectDir: string, file: string | null): { fi
 // The message the share's own commit carries when no draft was given.
 export function shareDefaultMessage(projectDir: string): string {
   const landed = landedNotOnRemote(projectDir).map((row) => row.unit);
-  return landed.length > 0 ? `Record the ${landed.join(" and ")} landing` : "Share the plan with the teams";
+  return landed.length > 0 ? `Record the ${landed.join(" and ")} landing` : "Share the plan";
 }
 
 // The push's own commits that did not go yet, by repo: each commit's id and
@@ -11773,7 +11773,7 @@ function takeUnit(args: string[], projectDir?: string, rhythm?: UnitClaimPayload
   // is next --units's step.
   if (!fromPlan && home !== null && !home.solo) {
     const step = isGitAddress(home.location) ? "next" : "next --units";
-    fail(`${flags.home} is built by teams: its Units are taken from the plan. Run \`${aidlcInvocation()} ${step}\` for what is ready to take.`);
+    fail(`${flags.home}'s Units are taken from its plan. Run \`${aidlcInvocation()} ${step}\` for what is ready to take.`);
   }
   if (home !== null) validateClaimRefUnit(home.id8, unit);
   // Taken here before (this clone or another of this workspace): carry it on.
@@ -11952,7 +11952,7 @@ function takeUnit(args: string[], projectDir?: string, rhythm?: UnitClaimPayload
   const taken = `${closed === null ? "" : `The plan of ${closed.label} in ${closed.repo} was closed by ${closed.name}, ${closed.day}, so its Units are no longer offered. `}` +
     `${src.moved === undefined ? "" : `${src.moved} `}${unit} is yours. You build it${spaceWords(build.space)} under your team's rules${leadsToo}, from what the lead approved.` +
     // The way back (release, run in this build), said once with the take.
-    " If it is not your team's to build, tell me and I will hand it back." +
+    " If it is not yours to build, tell me and I will hand it back." +
     earlyLines.map((line) => ` ${line}`).join("") +
     notThere.lines +
     (planChanging !== null
@@ -12750,7 +12750,7 @@ export class GitWriteRefused extends Error {
 
 // What a step says once the news could not be written into this workspace's
 // .git and its way on was already given in this chat: from the lead's project
-// in a team's build, from the teams at the lead's project.
+// in a team's build, from the shared repository at the lead's project.
 export function newsNotTakenIn(from: string): string {
   return `News from ${from} could not be taken in here: this workspace's .git cannot be written in this session, ` +
     "so what you see may be behind.";
@@ -16027,7 +16027,7 @@ function amendInput(args: string[], projectDir?: string): void {
   });
   if (answer === "approve") {
     const proposed = recordText(pd, live.oid, `proposals/${proposal.input}`);
-    if (proposed === null) fail(`The proposed ${name} is not on ${unit}'s claim; ask the team to send it again.`);
+    if (proposed === null) fail(`The proposed ${name} is not on ${unit}'s claim; ask whoever proposed it to send it again.`);
     const path = join(activeRecordDir(pd), ...proposal.input.split("/"));
     // Only the team's change goes in: made on the copy the team took, it is put
     // onto the text approved here since, never written over it.
@@ -16046,7 +16046,7 @@ function amendInput(args: string[], projectDir?: string): void {
       fail(
         `${builderOf(live)}'s change was made on an older copy of the ${name}, and it does not fit onto the ${name} as it ` +
           `stands here now, so nothing was changed. Show the lead both: their version${theirs === null ? "" : ` (${theirs})`} ` +
-          `and the current one (${relative(pd, path).split(sep).join("/")}); the team can send the change again on the current one. ` +
+          `and the current one (${relative(pd, path).split(sep).join("/")}); ${builderOf(live)} can send the change again on the current one. ` +
           `When the lead puts the two together (or asks you to), write that text to a file and approve it as written with ` +
           `\`${aidlcInvocation()} unit amend ${shellArg(unit)} --input ${shellArg(proposal.input)} --answer approve --file <that file> ` +
           `${unitWordsArg("amend", unit)}\`.`,
@@ -16233,7 +16233,7 @@ function planWriteRefusedLine(pd: string, written: LeadWrite, what: string, kept
   }
   if (written.kind === "refused") {
     return `${repo} did not take the change to the plan (${words(written.words)}), so ${what} is not written. Say when to try again, or name another ` +
-      `repository the teams can read and I will move the plan there${kept ? "; I have your words" : ""}.`;
+      `repository everyone who takes a Unit can read and I will move the plan there${kept ? "; I have your words" : ""}.`;
   }
   return `The plan in ${repo} kept changing while I wrote on it, so ${what} is not written. ${way}`;
 }
@@ -16364,7 +16364,7 @@ function sendBack(args: string[], projectDir?: string): void {
   const failure = personWordsOf(pd, flags);
   const lead = leadsWord(pd, flags, "Sending a Unit back");
   const live = leadsRecordNow(pd, unit);
-  if (live?.status !== "claimed" || (!live.payload.result && !live.payload.done)) fail(`${unit} has no result from a team to send back.`);
+  if (live?.status !== "claimed" || (!live.payload.result && !live.payload.done)) fail(`${unit} has no result to send back.`);
   const heads = resultHeads(live.payload);
   const sent = writeUnitWord(pd, live, `${unit} sent back`, ({ done: _done, verdicts: _verdicts, ...word }) => ({
     ...word, turned_down: { repo: "", heads, words: failure.trim(), at: isoTimestamp(), from: "build-and-test" },
@@ -16394,7 +16394,7 @@ function turnedDown(args: string[], projectDir?: string): void {
   const lead = leadsWord(pd, flags, "A turn-down");
   const said = lead.said;
   const live = leadsRecordNow(pd, unit);
-  if (live?.status !== "claimed" || !live.payload.result) fail(`${unit} has no result from its team to turn down.`);
+  if (live?.status !== "claimed" || !live.payload.result) fail(`${unit} has no result to turn down.`);
   const heads = resultHeads(live.payload);
   const sent = writeUnitWord(pd, live, `${unit} turned down in ${flags.repo}`, (word) => ({
     ...word,
@@ -16631,7 +16631,7 @@ export function namedCloneOffer(projectDir: string, unread: readonly string[] = 
 function saidMergedWithNoRecord(pd: string, unit: string, repo: string, words: string, message?: string): void {
   const plan = keptPlan(pd, activeIdentity(pd).intentId8)?.plan ?? null;
   const repos = plan?.units.find((entry) => entry.name === unit)?.repos ?? [];
-  if (repos.length === 0) fail(`${unit} has no result from its team to count merged.`);
+  if (repos.length === 0) fail(`${unit} has no result to count merged.`);
   if (!repos.includes(repo)) fail(`${unit} changed ${joinNames(repos)}, not ${repo}.`);
   const signOffOn = leadSignOffOn(readStateFile(pd), pd, plan);
   let counted: string[] = [];
@@ -16919,7 +16919,7 @@ export function switchSoloToTeams(projectDir: string, sessionId?: string): strin
   // The lead's sign-off is theirs to ask for; the line says so once, and the
   // step that carries the line carries its setter (SIGN_OFF_CLAUSE), never only the board.
   const signOff = leadSignOffOn(readStateFile(projectDir), projectDir) ? "" : `, ${SIGN_OFF_CLAUSE}`;
-  return `Your teammate ${who} took ${units}; this session carries on with the rest, one Unit at a time${signOff}.`;
+  return `${who} took ${units}; this session carries on with the rest, one Unit at a time${signOff}.`;
 }
 
 // --- The lead's sign-off ------------------------------------------------------------
@@ -16950,7 +16950,7 @@ function leadHere(args: string[], projectDir?: string): void {
   const pd = resolveProjectDir(projectDir);
   const state = readStateFile(pd);
   if (!isTeamUnitOwnership(state) || homeLocation(state) === null || unitBuildOf(state) !== null) {
-    fail("lead-here is for the lead's work built by teams, selected in this checkout.");
+    fail("lead-here is for the lead's work whose Units others take, selected in this checkout.");
   }
   // `--off`: their word that they do not lead it here takes the earlier one back; this clone's newest row decides.
   const parsed = parseArgs(args);
@@ -16987,7 +16987,7 @@ function leadSignOffSetting(args: string[], projectDir?: string): void {
   const value = args[0];
   if (value !== "on" && value !== "off") fail(`usage: ${unitUsage("lead-sign-off")}`);
   const pd = resolveProjectDir(projectDir);
-  if (!isTeamUnitOwnership(readStateFile(pd))) fail("The lead's sign-off is for work that teams build.");
+  if (!isTeamUnitOwnership(readStateFile(pd))) fail("The lead's sign-off is for work whose Units are open for a person or a team to take.");
   // The lead's own words for it, recorded whole beside the setting.
   const words = personWordsOf(pd, parseArgs(args.slice(1)).flags);
   withAuditLock(pd, () => {
@@ -17017,8 +17017,8 @@ function leadSignOffSetting(args: string[], projectDir?: string): void {
   console.log(JSON.stringify({
     lead_sign_off: value,
     notice: withPlanNotes(unwritten ?? (value === "on"
-      ? "Each team's result now waits for your sign-off before its Unit counts as done."
-      : "A team's Unit counts as done once every repo it changed has merged; no sign-off is asked.")),
+      ? "Each taken Unit's result now waits for your sign-off before it counts as done."
+      : "A taken Unit counts as done once every repo it changed has merged; no sign-off is asked.")),
   }));
 }
 
@@ -17039,7 +17039,7 @@ function signOff(args: string[], projectDir?: string): void {
     signOffNamed(pd, unit, flags, given);
     return;
   }
-  if (live?.status !== "claimed" || !live.payload.result) fail(`${unit} has no result from its team to sign off.`);
+  if (live?.status !== "claimed" || !live.payload.result) fail(`${unit} has no result to sign off.`);
   const lead = leadsWord(pd, flags, "The sign-off", "unit-signoff");
   const words = lead.said ?? given;
   const sent = writeUnitWord(pd, live, `${unit} signed off`, (word) => ({ ...word, signoff: { words, at: isoTimestamp() } }));

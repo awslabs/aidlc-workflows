@@ -1319,7 +1319,7 @@ function switchBackOnFollowUps(directive: Directive): string[] {
         .map((entry) => `When the person asks to go back to it, run \`${entry.command}\` and follow what it returns.`)
       : []),
     ...(carried.some((line) => line.includes(SIGN_OFF_CLAUSE))
-      ? [`When the person asks to sign off a teammate's result themselves, run \`${aidlcToolInvocation("unit")} lead-sign-off on ` +
+      ? [`When the person asks to sign off each taken Unit's result themselves, run \`${aidlcToolInvocation("unit")} lead-sign-off on ` +
         `${unitWordsArg("lead-sign-off")}\` and tell them in plain words what it reports. ${UNIT_WORDS_NOTE}`]
       : []),
   ];
@@ -5315,7 +5315,7 @@ function unselectedWordsReplyDirective(
 ): PrintDirective {
   const orchestrate = aidlcToolInvocation("orchestrate");
   const backToFinished = finished === undefined ? "" : ` ${finishedWorkReading(finished, "")}`;
-  const leads = lead === undefined ? "" : `This clone has the lead's work (${lead.works.join(", ")}), built by teams; the work itself is ` +
+  const leads = lead === undefined ? "" : `This clone has the lead's work (${lead.works.join(", ")}), whose Units others take; the work itself is ` +
     `not picked here. ${lead.sentence} `;
   if (lead !== undefined && work.length === 0) {
     return printDirective(`${leads}Read the person's words. If they only ask what is here, run \`${orchestrate} next\` with nothing after ` +
@@ -5393,7 +5393,7 @@ function unitsWordsReplyDirective(requestId: string, offer: AskDirective | Print
   const choices = offer.kind !== "ask" ? "" : (offer.choices ?? [])
     .filter((choice) => choice.command !== undefined).map((choice) => `${choice.label}: \`${choice.command}\``).join("; ");
   return printDirective(
-    `This clone has the lead's work${work.length > 0 ? ` (${work.join(", ")})` : ""}, built by teams; the work itself is not picked here. ` +
+    `This clone has the lead's work${work.length > 0 ? ` (${work.join(", ")})` : ""}, whose Units others take; the work itself is not picked here. ` +
       `The Units offer says: ${said} Read the person's words. ` +
       (choices === "" ? "" : `If they ask for one of these Units (to take it, start it, or start it early), run that choice's ` +
         `command and follow what it returns: ${choices}. ${TAKE_SPACE_NOTE} `) +
@@ -5855,10 +5855,10 @@ function teamCommandsNote(projectDir?: string): string {
     `\`${unitTool} turned-down <unit> --repo <repo> ${unitWordsArg("turned-down")}\`; when they say a repo merged it ` +
     `where the board does not see it, run \`${unitTool} merged <unit> --repo <repo> ${unitWordsArg("merged")}\`; when they say a ` +
     `pull request is a Unit's build, run \`${unitTool} merged <unit> --repo <repo> --pull-request <n> ${unitWordsArg("merged")}\`. ` +
-    `When they sign a team's result off, run \`${unitTool} sign-off <unit> ${unitWordsArg("sign-off")}\`; when they ` +
-    `answer a team's proposed change, run \`${unitTool} amend <unit> --input <file> --answer <approve|reject> ` +
+    `When they sign a Unit's result off, run \`${unitTool} sign-off <unit> ${unitWordsArg("sign-off")}\`; when they ` +
+    `answer a builder's proposed change, run \`${unitTool} amend <unit> --input <file> --answer <approve|reject> ` +
     `${unitWordsArg("amend")}\`. ` +
-    `When they ask for their sign-off on every team's result, run \`${unitTool} lead-sign-off on\` (\`off\` to stop); ` +
+    `When they ask for their sign-off on every taken Unit's result, run \`${unitTool} lead-sign-off on\` (\`off\` to stop); ` +
     `when they ask to free a Unit, run \`${unitTool} release <unit>\`; when they ask to build a Unit ` +
     `left open here, run \`${unitTool} assign --here <unit> ${unitWordsArg("assign")}\`. ` +
     `${UNIT_WORDS_NOTE} Say the notice line each prints.${moved}` +
@@ -6143,7 +6143,7 @@ function constructionStaffingAsk(
     if (speaks) {
       sayWithStepOnce(
         projectDir,
-        `This session builds the ${units} Units ${order}. To have several teams each own a Unit instead, ` +
+        `This session builds the ${units} Units ${order}. To leave them open for a person or a team to take instead, ` +
           "say so before the first Unit is built.",
       );
     }
@@ -6161,9 +6161,9 @@ function constructionStaffingAsk(
     choices: [
       { label: "Just me", detail: `This session builds the Units ${order}.`, command: `${state} set-unit-ownership solo` },
       {
-        label: "Several teams",
-        detail: "Each team owns one Unit, builds it in its own copy of this project and approves it after every " +
-          "stage, or once at the end of the Unit if you say so." +
+        label: "Several teams or people",
+        detail: "Each Unit is open for a person or a team to take. They build it in their own copy of this project and " +
+          "approve it after every stage, or once at the end of the Unit if you say so." +
           (order === "stage by stage" ? " Each Unit is then built start to finish, one at a time, instead of stage by stage." : ""),
         command: `${state} set-unit-ownership team`,
       },
@@ -6199,8 +6199,9 @@ function whoBuildsNote(projectDir: string, phase: string): string | null {
       : null;
   if (when === null) return null;
   const setter = `${aidlcToolInvocation("state")} set-unit-ownership`;
-  return `${when}: run \`${setter} solo --message <id>\` when this session builds them, or ` +
-    `\`${setter} team --message <id>\` when several teams each own one, with the id of the message they said it in, ` +
+  return `${when}: run \`${setter} solo --message <id>\` when this session builds them all, or ` +
+    `\`${setter} team --message <id>\` when other people take some or all of them, whether or not the person builds ` +
+    "one too (it leaves every Unit open to take), with the id of the message they said it in, " +
     "and tell them in one plain line of its own what it recorded, with the notice line it prints, if any.";
 }
 
@@ -6280,7 +6281,7 @@ function planWaitStep(projectDir: string, planOnly: boolean): AskDirective | Pri
       handovers: ["share"],
       marks: [wait.offer],
       question: code === null
-        ? `The plan is in ${target.branch} now, so teams can take Units. Want me to switch you back to ${target.branch}?`
+        ? `The plan is in ${target.branch} now, so its Units can be taken. Want me to switch you back to ${target.branch}?`
         : `${code.name} ${code.is} in ${target.branch} now. Want me to switch you back to ${target.branch}?`,
       choices: [{
         label: `Switch back to ${target.branch}`,
@@ -6325,21 +6326,21 @@ function teamShareOffer(
   const message = work === null ? null : shareMessageStep(projectDir, unit, work);
   if (message !== null && "draft" in message) return message.draft;
   const flag = message?.flag ?? "";
-  const plural = unitsLeft === 1 ? "The plan's last Unit is ready for the teams. Share it now?" :
-    `The plan's ${unitsLeft} Units are ready for the teams. Share them now?`;
+  const plural = unitsLeft === 1 ? "The plan's last Unit is ready for others to take. Share it now?" :
+    `The plan's ${unitsLeft} Units are ready for others to take. Share them now?`;
   const way = changesReachMain(projectDir);
   return teamHandoverAsk(projectDir, {
     handovers: ["share"],
     marks: [mark],
     question: `${plural} I'd ${work === null ? "" : `commit ${work} with this commit message and `}` +
       (way === "pull request"
-        ? `push the plan on its own branch for a pull request, so each team can take a Unit once it is in ${target.branch}, `
-        : `push ${target.branch} to ${target.remote}, so each team can take a Unit `) +
-      `by opening its own clone and running ${entrySkillInvocation()}.${message === null ? "" : `\n\n${message.text}`}`,
+        ? `push the plan on its own branch for a pull request, so anyone can take a Unit once it is in ${target.branch}, `
+        : `push ${target.branch} to ${target.remote}, so anyone can take a Unit `) +
+      `by opening their own clone and running ${entrySkillInvocation()}.${message === null ? "" : `\n\n${message.text}`}`,
     ...(message?.file === undefined ? {} : { messageFile: message.file }),
     choices: shareWays(way, {
-      label: "Share them with the teams",
-      detail: `Pushes ${target.branch} to ${target.remote} as a plain push; it never overwrites what a team pushed.`,
+      label: "Share by direct push",
+      detail: `Pushes ${target.branch} to ${target.remote} as a plain push; it never overwrites what anyone pushed.`,
       command: `${aidlcInvocation()} unit share${flag}`,
     }, { label: "Share by pull request", detail: planByPullRequestDetail(projectDir), command: `${aidlcInvocation()} unit share --branch${flag}` }),
     notNow: {
@@ -6409,7 +6410,7 @@ function buildOutShareOffer(projectDir: string): AskDirective | PrintDirective |
       return teamHandoverAsk(projectDir, {
         handovers: ["share"],
         marks: [hereMark],
-        question: `${refused.reason} Do you want me to share the plan with the teams? I'd put it in ${place.repo}: ${planContents(projectDir)}; ` +
+        question: `${refused.reason} Do you want me to share the plan? I'd put it in ${place.repo}: ${planContents(projectDir)}; ` +
           `everyone who can read ${place.repo} can read it. I'd also commit ${files === null ? "" : `${code.name}, ${files}, and `}AI-DLC's record here ` +
           `on ${here}, using this commit message; I would not push ${here}.` +
           (waits ? ` The other Units wait on ${code.units} until ${code.is === "is" ? "it is" : "they are"} in ${refused.off.branch}.` : "") +
@@ -6443,9 +6444,9 @@ function buildOutShareOffer(projectDir: string): AskDirective | PrintDirective |
   const code = added === null ? skeletonCodeName(projectDir) : null;
   if (code !== null) return skeletonShareOffer(projectDir, target, way, code, shareKey, mark);
   const said = added !== null
-    ? `${namesInProse(added)} ${added.length === 1 ? "was" : "were"} added to the plan since you shared it, so the ` +
-      `teams cannot take ${added.length === 1 ? "it" : "them"} yet.`
-    : "The Units are open for any team to take.";
+    ? `${namesInProse(added)} ${added.length === 1 ? "was" : "were"} added to the plan since you shared it, so ` +
+      `nobody else can take ${added.length === 1 ? "it" : "them"} yet.`
+    : "The Units are open for a person or a team to take.";
   // A Unit built here before the share has no record yet: the share writes it.
   const builtHere = added === null ? unitsAskedHereForShare(projectDir) : [];
   const note = builtHereRecordClause(projectDir, builtHere);
@@ -6457,19 +6458,19 @@ function buildOutShareOffer(projectDir: string): AskDirective | PrintDirective |
   return teamHandoverAsk(projectDir, {
     handovers: ["share"],
     marks: [mark],
-    question: `${said} Share the plan with them now? I'd commit ${planShareWords(projectDir)} ` +
+    question: `${said} Share the plan now? I'd commit ${planShareWords(projectDir)} ` +
       `${message === null ? "" : "with this commit message "}` +
       `and ${byPullRequest ? "push it on its own branch for a pull request" : `push ${target.branch} to ${target.remote}`}` +
-      `, so each team can take its Unit ` +
-      `${byPullRequest ? `once it is in ${target.branch}, ` : ""}by opening its own clone and running ${entrySkillInvocation()}.` +
+      `, so anyone can take a Unit ` +
+      `${byPullRequest ? `once it is in ${target.branch}, ` : ""}by opening their own clone and running ${entrySkillInvocation()}.` +
       `${note === null ? "" : ` ${note}`}` +
       `${message === null ? "" : `\n\n${message.text}`}`,
     choices: shareWays(way, {
-      label: "Share them with the teams",
-      detail: `Pushes ${target.branch} to ${target.remote} as a plain push; it never overwrites what a team pushed.`,
+      label: "Share by direct push",
+      detail: `Pushes ${target.branch} to ${target.remote} as a plain push; it never overwrites what anyone pushed.`,
       command: `${aidlcInvocation()} unit share --plan${flag}`,
     }, { label: "Share by pull request", detail: planByPullRequestDetail(projectDir), command: `${aidlcInvocation()} unit share --branch --plan${flag}` }),
-    notNow: { label: "Not now", detail: `Nothing is pushed; a team's clone sees the plan once ${target.branch} is pushed.` },
+    notNow: { label: "Not now", detail: `Nothing is pushed; other clones see the plan once ${target.branch} is pushed.` },
     ...(message?.file === undefined ? {} : { messageFile: message.file }),
   });
 }
@@ -6498,7 +6499,7 @@ function skeletonShareOffer(
   const ask = teamHandoverAsk(projectDir, {
     handovers: ["share"],
     marks: [mark],
-    question: `Do you want me to share the plan with the teams? I'd put it in ${place.repo}: ${planContents(projectDir)}; ` +
+    question: `Do you want me to share the plan? I'd put it in ${place.repo}: ${planContents(projectDir)}; ` +
       `everyone who can read ${place.repo} can read it. I'd also commit ${files === null ? "" : `${code.name}, ${files}, and `}AI-DLC's ` +
       "record, using this commit message, and " +
       // After a push to main it has the code, so only the pull request's form says what waits.
@@ -6572,7 +6573,7 @@ function planRefShareOffer(projectDir: string): AskDirective | PrintDirective | 
   const builtHere = added === null ? unitsAskedHereForShare(projectDir) : [];
   const onBranch = added === null ? null : leadsPlanBranch(projectDir);
   const question = added === null
-    ? `Do you want me to share the plan with the teams? I'd put it in ${place.repo}: ${planContents(projectDir)}. ` +
+    ? `Do you want me to share the plan? I'd put it in ${place.repo}: ${planContents(projectDir)}. ` +
       "Nothing is added to a branch or to your files. " +
       `Everyone who can read ${place.repo} can read it.` +
       (builtHere.length > 0 ? ` I'd also record that ${namesInProse(builtHere)} ${builtHere.length === 1 ? "is" : "are"} built here.` : "")
@@ -6673,14 +6674,14 @@ function teamReviewOrJoinOffer(
   const held = [...holders].map(([owner, units]) =>
     `; ${namesInProse(units.sort(compareBoardKeys))} ${units.length === 1 ? "is" : "are"} with ${owner}`
   );
-  const joinWords = `${join.length === 1 ? "1 Unit is" : `${join.length} Units are`} open for a team to take: ` +
+  const joinWords = `${join.length === 1 ? "1 Unit is" : `${join.length} Units are`} open to take: ` +
     `${namesInProse(join)}${held.join("")}.`;
   const label = `I'd label your team "${defaultTeamLabel(projectDir)}"; say another name to use it instead.`;
   const question = ready.length > 0 && join.length > 0
-    ? `${joinWords} ${readyWords}. Take one for your team, or review and merge? ${label}`
+    ? `${joinWords} ${readyWords}. Take one, or review and merge? ${label}`
     : ready.length > 0
     ? `${readyWords}: review and merge ${ready.length === 1 ? "it" : "them"}?`
-    : `${joinWords} Take one for your team? ${label}`;
+    : `${joinWords} Take one? ${label}`;
   const waitingOn = (unit: string): string[] =>
     [...overview.waiting, ...overview.claimed].filter((row) => row.blockedBy?.includes(unit)).map((row) => row.unit)
       .sort(compareBoardKeys);
@@ -6701,7 +6702,7 @@ function teamReviewOrJoinOffer(
       }),
       ...ready.map((row) => ({
         label: `Review and merge ${row.unit}`,
-        detail: "Shows what the team built and its checks, then asks whether to merge it.",
+        detail: "Shows what was built and its checks, then asks whether to merge it.",
         command: `${aidlcInvocation()} unit pin ${quoteCommandArgument(row.unit)}`,
       })),
     ],
@@ -6723,12 +6724,12 @@ function teamPushOffer(projectDir: string): AskDirective | PrintDirective | null
   return teamHandoverAsk(projectDir, {
     handovers: ["push"],
     marks: fresh.map((row) => teamHandoverMarkName("push", row.commit.slice(0, 12))),
-    question: `Push ${target.branch} to ${target.remote} now so the other teams see ${units.join(" and ")} landed?` +
+    question: `Push ${target.branch} to ${target.remote} now so everyone else sees ${units.join(" and ")} landed?` +
       (message === null ? "" : ` I'd commit ${work} first, with this commit message.\n\n${message.text}`),
     choices: [{
       label: `Push ${target.branch}`,
       detail: `${work === null ? "Pushes" : "Commits, then pushes"} ${target.branch} to ${target.remote} as a plain push; ` +
-        "it never overwrites what a team pushed.",
+        "it never overwrites what anyone pushed.",
       command: `${aidlcInvocation()} unit share${message?.flag ?? ""}`,
     }],
     ...(message?.file === undefined ? {} : { messageFile: message.file }),
@@ -6752,17 +6753,17 @@ function teamHandoutLine(projectDir: string, stateContent: string, first: string
   const offered = shareBlocker(projectDir) === null;
   // Below its repository's top no team can take one (belowRepoTop), so the line says that instead.
   const below = offered ? null : belowRepoTop(projectDir);
-  const take = `each team then runs \`${entrySkillInvocation()}\` in its own clone to take one.`;
-  const building = `No team has taken a Unit yet, so this session builds them here, starting with the ` +
+  const take = `whoever takes one then runs \`${entrySkillInvocation()}\` in their own clone.`;
+  const building = `Nobody has taken a Unit yet, so this session builds them here, starting with the ` +
     `${unitPlainName(first)} Unit`;
   if (teamSkeletonOn(stateContent)) {
     return offered
       ? `${building}, the walking skeleton the others build on. Once it is built and approved, I'll offer to share ` +
-        "the work so each team can take one of the others."
-      : `${building}, the walking skeleton the others build on. ${below ?? "To hand the others to teams, share " +
+        "the work so the others are open for a person or a team to take."
+      : `${building}, the walking skeleton the others build on. ${below ?? "To leave the others open for a person or a team to take, share " +
         `this work through git once it is built and approved; ${take}`}`;
   }
-  return offered ? null : `${building}. ${below ?? `To hand Units to teams instead, share this work through git; ${take}`}`;
+  return offered ? null : `${building}. ${below ?? `To leave the Units open for a person or a team to take instead, share this work through git; ${take}`}`;
 }
 
 // What reading a large repo set costs, said once with the step that starts
@@ -7347,7 +7348,7 @@ export function renderTeamConstructionBoard(
   if (nextActions.length === 0) {
     nextActions.push(
       claimedUnits.length === 0 && board.walked.length === 0
-        ? "- Nothing waits on the teams: the main checkout can go on with Construction as usual."
+        ? "- Nothing waits on anyone else: the main checkout can go on with Construction as usual."
         : mode === "dispatcher"
         ? "- Nothing runs from this checkout: every Unit not yet merged is claimed, waits on one, or is built " +
           "where it was started. Each claimed Unit is worked in its own checkout:"
@@ -7357,7 +7358,7 @@ export function renderTeamConstructionBoard(
     nextActions.push("- Each claimed Unit is worked in its own checkout:");
   }
   for (const unit of board.walked) {
-    nextActions.push(`  - \`${unit}\` is being built in the checkout that started it, before any team took a Unit.`);
+    nextActions.push(`  - \`${unit}\` is being built in the checkout that started it, before anyone took a Unit.`);
   }
   for (const claim of claimedUnits) {
     nextActions.push(
@@ -7371,8 +7372,8 @@ export function renderTeamConstructionBoard(
   return [
     title,
     mode === "snapshot"
-      ? "_Read-only snapshot; last activity is what this checkout has seen, not when a team pushed._"
-      : "_Last activity is what this checkout has seen, not when a team pushed._",
+      ? "_Read-only snapshot; last activity is what this checkout has seen, not when someone pushed._"
+      : "_Last activity is what this checkout has seen, not when someone pushed._",
     `**Claimed:** ${claimedSummary}. **Claimable:** ${
       board.claimable.join(", ") || "none"
     }. **Waiting:** ${blockedSummary}.`,
@@ -9906,7 +9907,7 @@ function unitTakeAsk(projectDir: string): AskDirective | PrintDirective | null {
   for (const home of ledHere) {
     choices.push({
       label: `Carry on ${intentDisplayLabel(home)} here, as the lead`,
-      detail: "Where its Units are given out and come back.",
+      detail: "Where its Units are taken from and come back to.",
       command: selectCommands([home.dirName!])[0].command,
     });
   }
@@ -11540,7 +11541,7 @@ function oversizeAdvice(directive: { kind: string; ask_type?: string }): string 
       "plan's Summary section. Shorten those Summary sections, then ask AI-DLC to continue.";
   }
   if (directive.kind === "notice") {
-    return "It lists the team's Units. Run " +
+    return "It lists every Unit of this work. Run " +
       `\`${aidlcToolInvocation("orchestrate")} team-board\` in a terminal to see the whole board.`;
   }
   return "AI-DLC does not expect a step of this kind to be this long. Please report it to the AI-DLC " +
@@ -13674,7 +13675,7 @@ function claimsOpenAtPlanChange(projectDir: string, stateContent: string, target
       if (payload.result) return `${claim.unit} (pushed by ${builderOf(claim)}${where}, not merged yet)`;
       return `${claim.unit} (being built by ${builderOf(claim)}${where})`;
     });
-    return `Still with teams: ${named.join(", ")}. A Unit a team has started keeps the plan it took.`;
+    return `Still taken: ${named.join(", ")}. A Unit someone has started keeps the plan it took.`;
   }
   return `Still claimed: ${claimed.map((claim) => `${claim.unit} (${claim.owner})`).join(", ")}. Their work carries ` +
     "on and lands as it is; one whose own entry the revised plan changes brings in the new main and publishes " +
@@ -16705,9 +16706,9 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
           }
         })();
         const lastSeen = (): void => {
-          if (refused) sayWithStepOnce(pd, newsNotTakenIn("the teams"));
+          if (refused) sayWithStepOnce(pd, newsNotTakenIn("the shared repository"));
           else if (!reached) {
-            sayWithStepOnce(pd, "The shared repository did not answer just now, so this shows the teams' work as this clone last saw it.");
+            sayWithStepOnce(pd, "The shared repository did not answer just now, so this shows the Units as this clone last saw them.");
           }
         };
         const participant = existsSync(unitParticipantPath(pd));
@@ -16743,7 +16744,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
         if (heldBack !== null) {
           sayWithStepOnce(
             pd,
-            `The teams still see every Unit waiting on ${heldBack.unit}, because your answer about ` +
+            `The shared plan still has every Unit waiting on ${heldBack.unit}, because your answer about ` +
               `building a thin slice first hasn't been shared yet. I can share the plan when you say so, or you can run ` +
               `\`${aidlcInvocation()} unit share\`.`,
           );
@@ -19700,7 +19701,7 @@ function teamHomeClaims(
       unreached.push(repo.repo);
       unread.add(repo.repo);
     }
-    if (refreshed.refused) sayWithStepOnce(projectDir, newsNotTakenIn("the teams"));
+    if (refreshed.refused) sayWithStepOnce(projectDir, newsNotTakenIn("the shared repository"));
     if (refreshed.fetched || refreshed.lookedThisCommand === true) {
       overview = readOverview();
       left = leftNow();
@@ -19741,7 +19742,7 @@ function teamHomeClaims(
     try {
       results = checkTeamResults(projectDir, unreached, unsent, told, query, tookIn, maybe, unread, noHead);
     } catch (e) {
-      sayWithStepOnce(projectDir, `The teams' results could not be checked just now: ${errorMessage(e)}`);
+      sayWithStepOnce(projectDir, `The Units' results could not be checked just now: ${errorMessage(e)}`);
     }
   }
   for (const candidate of maybe) sayWithStepOnce(projectDir, mergeCandidateLine(candidate.unit, candidate.repo, candidate));
@@ -19909,7 +19910,7 @@ function unitBoardRows(
     const team = claim?.status === "claimed" && !own.has(unit) ? (claim.owner === DEFAULT_SPACE ? "" : `${claim.owner} space`) : null;
     const builtBy = team === null ? "" : `built by ${builderOf(claim!)}, `;
     if (done(unit)) return { unit, team: team ?? "here", status: `${builtBy}done` };
-    if (team === null && left.has(unit)) return { unit, team: null, status: "waiting for a team to take it" };
+    if (team === null && left.has(unit)) return { unit, team: null, status: "waiting for someone to take it" };
     if (team === null) {
       const waits = (dependencies.get(unit) ?? []).filter((dep) => !done(dep));
       return { unit, team: "here", status: unitHereStatus(standing.get(unit), waits) };
@@ -21390,7 +21391,7 @@ function teamRedoNarrowed(
   const why = and([...groups].map(([what, names]) => `${and(names)} ${names.length === 1 ? "is" : "are"} ${what}`));
   const name = nodeForSlug(targetSlug)?.name || targetSlug;
   if (here.length === 0) {
-    const said = `${name} is not redone for every unit once a team has taken a unit: ${why}.`;
+    const said = `${name} is not redone for every unit once someone has taken a unit: ${why}.`;
     return { held: false, directive: turnEndingPrint(`Run nothing. Tell the person in one line: "${said}"`) };
   }
   const line = `Redoing ${name} for unit${here.length === 1 ? "" : "s"} ${and(here)}. ${why}, so ` +

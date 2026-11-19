@@ -211,7 +211,7 @@ describe("while the lead's project waits on the teams at Code Generation", () =>
     next(home.dir, LEAD);
     // The wait is recorded: the agent's own write hears it, an open Unit in its own words.
     expect(reason(write(home.dir, "notes/for-data.md").out).trim())
-      .toStartWith("refunds waits for a team to take it and reporting on its build in the data space");
+      .toStartWith("refunds waits for someone to take it and reporting on its build in the data space");
     leadSays(home.dir, "build refunds here");
     const here = run(UNIT, ["assign", "--here", "refunds", "--person-words", "build refunds here"], home.dir, LEAD);
     expect(here.status, here.out).toBe(0);

@@ -543,7 +543,7 @@ describe("t325 atomic team Unit claims", () => {
     const directive = nextDirective(seed);
     expect(directive).toMatchObject({ stage: "functional-design", unit: "skeleton" });
     expect(directive.change_notices).toContain(
-      "The shared repository did not answer just now, so this shows the teams' work as this clone last saw it.",
+      "The shared repository did not answer just now, so this shows the Units as this clone last saw them.",
     );
   });
 

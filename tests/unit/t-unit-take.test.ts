@@ -298,7 +298,7 @@ describe("a team member's clone of the home's workspace", () => {
     const plan = planShared(home);
     const claimed = run(UTILITY, ["claim", "refunds"], home.dir);
     expect(claimed.status).not.toBe(0);
-    expect(claimed.out).toContain("Nothing is claimed here: this work's teams each take their Unit in their own clone");
+    expect(claimed.out).toContain("Nothing is claimed here: others take a Unit of this work in their own clone");
     expect(recordAt(plan, "refunds")).toBeNull();
   });
 
@@ -668,7 +668,7 @@ describe("the lead who says so in a clone that did not make the plan", () => {
     const { laptop, plan } = leadsSecondClone(false);
     git(plan.hosts.app, ["update-ref", "-d", planRefOf(plan.id8)]);
     const text = String(says(laptop, "t-unit-take-i-lead-plan-gone", I_LEAD).json?.message);
-    expect(text).toStartWith(`This clone has the lead's work (${HOME}), built by teams; the work itself is not picked here. If they say ${LEAD}, run \``);
+    expect(text).toStartWith(`This clone has the lead's work (${HOME}), whose Units others take; the work itself is not picked here. If they say ${LEAD}, run \``);
     expect(text).not.toContain("()");
   });
 
@@ -1093,10 +1093,10 @@ describe("taking a Unit starts its build in the team's space", () => {
     expect(run(ORCH, ["next"], alice, chat).out).not.toContain("could not be read just now");
   });
 
-  test("at the lead's project the learnings choice says a project learning is offered to any team that takes a Unit", () => {
+  test("at the lead's project the learnings choice says a project learning is offered to whoever takes a Unit", () => {
     const home = homeWithTeams();
     const lead = readFileSync(join(home.dir, "aidlc", "spaces", "default", "intents", HOME, "aidlc-state.md"), "utf-8");
-    expect(learningsCorrectionChoices(lead)).toEqual(["Yes, for this project, and offered to any team that takes a Unit", "Yes, for the team", "No"]);
+    expect(learningsCorrectionChoices(lead)).toEqual(["Yes, for this project, and offered to whoever takes a Unit", "Yes, for the team", "No"]);
     expect(learningsCorrectionChoices(homeState())).toEqual(["Yes, for this project", "Yes, for the team", "No"]);
     const alice = cloneOf(home.remote, "alice");
     expect(takeFrom("payments", alice, "refunds").status).toBe(0);
@@ -1106,6 +1106,11 @@ describe("taking a Unit starts its build in the team's space", () => {
     for (const choices of [learningsCorrectionChoices(lead), learningsCorrectionChoices(homeState())]) {
       expect(offersLearningsCorrectionChoices((choice) => choices.includes(choice))).toBe(true);
     }
+  });
+
+  test("a learnings question logged at the lead's project before an update, in the words it had then, is still read as one", () => {
+    const logged = ["Yes, for this project, and offered to any team that takes a Unit", "Yes, for the team", "No"];
+    expect(offersLearningsCorrectionChoices((choice) => logged.includes(choice))).toBe(true);
   });
 
   test("a lead's project with no rules of its own offers each Unit once, as before", () => {
@@ -1582,7 +1587,7 @@ describe("who takes what", () => {
     git(home.dir, ["config", "user.name", "lee"]);
     const here = run(UNIT, ["assign", "--here", "refunds"], home.dir);
     expect(here.status, here.out).toBe(0);
-    expect(here.json?.notice).toBe("refunds is built here now, no longer open for the teams.");
+    expect(here.json?.notice).toBe("refunds is built here now, no longer open for others to take.");
     commitAll(home.dir, "refunds here");
     git(home.dir, ["push", "-q", "origin", "main"]);
     const ask = next(cloneOf(home.remote, "riley"));
@@ -1593,7 +1598,7 @@ describe("who takes what", () => {
     // Asked again, it is the same word: one more Here row, the same line, the claim untouched.
     const claim = recordAt(home, "refunds")?.json;
     const again = run(UNIT, ["assign", "--here", "refunds"], home.dir);
-    expect(again.json?.notice).toBe("refunds is built here now, no longer open for the teams.");
+    expect(again.json?.notice).toBe("refunds is built here now, no longer open for others to take.");
     expect(recordAt(home, "refunds")?.json).toEqual(claim);
   });
 
@@ -1619,7 +1624,7 @@ describe("who takes what", () => {
     const here = run(UNIT, ["assign", "--here", "checkout-ui"], home.dir);
     expect(here.status, here.out).toBe(0);
     expect(String(here.json?.notice)).toStartWith("checkout-ui is built here now. Its record in app could not be written (");
-    expect(String(here.json?.notice)).toEndWith("), so a teammate could still take it meanwhile.");
+    expect(String(here.json?.notice)).toEndWith("), so someone else could still take it meanwhile.");
     takePushes(home.hosts.app);
     const step = next(home.dir);
     expect(step.unit, JSON.stringify(step)).toBe("checkout-ui");
@@ -2350,7 +2355,7 @@ describe("the way back from a take, and the lead's release", () => {
     const took = takeFrom("payments", sam, "refunds");
     expect(took.status, took.out).toBe(0);
     // Said once, where the take is.
-    expect(String(took.json?.notice)).toContain(" If it is not your team's to build, tell me and I will hand it back.");
+    expect(String(took.json?.notice)).toContain(" If it is not yours to build, tell me and I will hand it back.");
     const record = buildDir(sam, "payments", "refunds");
     const back = run(UNIT, ["release", "refunds"], sam);
     expect(back.status, back.out).toBe(0);
@@ -2438,7 +2443,7 @@ describe("the way back from a take, and the lead's release", () => {
     expect(run(UNIT, ["release", "checkout-ui"], home.dir).status).toBe(0);
     // The lead's walk leaves it now, and a teammate takes it.
     const board = next(home.dir);
-    expect(String(board.narration ?? ""), JSON.stringify(board).slice(0, 500)).toContain("- checkout-ui, open: waiting for a team to take it");
+    expect(String(board.narration ?? ""), JSON.stringify(board).slice(0, 500)).toContain("- checkout-ui, open: waiting for someone to take it");
     const took = takeFrom("web", cloneOf(home.remote, "wes"), "checkout-ui");
     expect(took.status, took.out).toBe(0);
   });

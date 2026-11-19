@@ -173,7 +173,7 @@ options:
     description: Stop here; the workflow can resume later.
 ```
 
-At a lead's project that teams build for, a Unit the diagnosis names that
+At a lead's project whose Units others take, a Unit the diagnosis names that
 someone else built and merged keeps "Retry with fix" (description: it is taken
 back and fixed here, on top of what they merged), with one more option beside
 it: **Send it back to <who built it> with this failure** (description: they get

@@ -379,12 +379,12 @@ describe("the lead takes back a merge counted through a wrong number or by their
     const opened = run(UNIT, ["release", "checkout-ui"], home.dir);
     expect(opened.status, opened.out).toBe(0);
     expect(String(opened.json?.notice)).toBe("Taken off the plan: pull request 7 in checkout-web is no longer named as checkout-ui's build, " +
-      "and checkout-ui is no longer counted merged by it. checkout-ui is open for a team to take.");
+      "and checkout-ui is no longer counted merged by it. checkout-ui is open for a person or a team to take.");
     const word = planWordAt(home, "checkout-ui") as Record<string, unknown>;
     expect(word.pull_requests).toBeUndefined();
     expect(word.done).toBeUndefined();
     expect(takenBack(home.dir, "checkout-ui")).toBe(1);
-    expect(board(home.dir)).toContain("- checkout-ui, open: waiting for a team to take it");
+    expect(board(home.dir)).toContain("- checkout-ui, open: waiting for someone to take it");
   });
 
   test("open-again on a Unit counted merged by the lead's word alone: the word comes off, and it is open to take", () => {
@@ -394,7 +394,7 @@ describe("the lead takes back a merge counted through a wrong number or by their
     const opened = run(UNIT, ["release", "checkout-ui"], home.dir);
     expect(opened.status, opened.out).toBe(0);
     expect(String(opened.json?.notice)).toBe("Taken off the plan: checkout-ui is no longer counted merged in checkout-web by your word. " +
-      "checkout-ui is open for a team to take.");
+      "checkout-ui is open for a person or a team to take.");
     expect((planWordAt(home, "checkout-ui") as Record<string, unknown>).said_merged).toBeUndefined();
     expect(takenBack(home.dir, "checkout-ui")).toBe(1);
   });
@@ -409,7 +409,7 @@ describe("the lead takes back a merge counted through a wrong number or by their
     const opened = run(UNIT, ["release", "checkout-ui"], home.dir);
     expect(opened.status, opened.out).toBe(0);
     expect(String(opened.json?.notice)).toBe("Taken off the plan: checkout-ui is no longer counted merged in checkout-web by your word. " +
-      "checkout-ui is open for a team to take.");
+      "checkout-ui is open for a person or a team to take.");
     const word = planWordAt(home, "checkout-ui") as Record<string, unknown>;
     expect(word.said_merged).toBeUndefined();
     expect(word.done).toBeUndefined();
@@ -579,7 +579,7 @@ describe("the lead takes back a merge counted through a wrong number or by their
     const opened = run(UNIT, ["release", "checkout-ui"], home.dir);
     expect(opened.status, opened.out).toBe(0);
     expect(String(opened.json?.notice)).toBe("Taken off the plan: pull request 7 in checkout-web is no longer named as checkout-ui's build. " +
-      "checkout-ui is open for a team to take.");
+      "checkout-ui is open for a person or a team to take.");
     expect(takenBack(home.dir, "checkout-ui")).toBe(0);
   });
 

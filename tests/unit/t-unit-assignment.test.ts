@@ -48,14 +48,14 @@ setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 afterEach(cleanupTeamBuild);
 
 const UNITS = ["refunds", "checkout-ui", "reporting"];
-const RHYTHM_OFFER = "Each team will approve its Unit after every stage. Do you want them to approve once at the end of " +
+const RHYTHM_OFFER = "Whoever builds a Unit will approve it after every stage. Do you want them to approve once at the end of " +
   "each Unit instead? I'd keep after every stage, so a wrong turn is caught at the stage where it happens.";
 
 // Said once, last, on the lead's first share of team work that an older
 // AI-DLC stops at (State Version 9).
 const TEAMMATES = "Taking a Unit of this work needs AI-DLC 2.12 or newer.";
 // The share question at Home Location work, as far as the lead's own rules.
-const SHARE_ASKED = "Do you want me to share the plan with the teams? I'd put it in app: the Units " +
+const SHARE_ASKED = "Do you want me to share the plan? I'd put it in app: the Units " +
   "(refunds in checkout-api and billing, checkout-ui in checkout-web, reporting in billing) and what each is built from";
 
 type Offer = { question: string; choices: Array<{ label: string; detail?: string; command?: string; recommended?: boolean }> };
@@ -156,7 +156,7 @@ describe("after choosing teams the plan goes to them the way main's share questi
     expect(isShare(ask), JSON.stringify(ask)).toBe(true);
     expect(ask.ask_type).not.toBe("unit-assignment");
     expect(ask.assign_command).toBeUndefined();
-    expect(String(ask.question)).toStartWith("Do you want me to share the plan with the teams? I'd put it in app:");
+    expect(String(ask.question)).toStartWith("Do you want me to share the plan? I'd put it in app:");
     expect(JSON.stringify(ask)).not.toContain("Who builds which Unit");
   });
 
@@ -299,7 +299,7 @@ describe("after choosing teams the plan goes to them the way main's share questi
 // refused the plan's share and the way on said "pull main, then share again",
 // which cannot work; and the plan's share took a file the person had staged.
 describe("the plan's share fits the team's own git: a protected main, a branch of the lead's, a file the person staged", () => {
-  const WAY_ON = "The plan is committed here: push it on a branch and get it merged your usual way; the teams can take Units once it is in main.";
+  const WAY_ON = "The plan is committed here: push it on a branch and get it merged your usual way; its Units can be taken once it is in main.";
   const RULE = "origin takes no direct push to main (error: GH013: Repository rule violations found for refs/heads/main. " +
     `- Changes must be made through a pull request. (pre-receive hook declined)). ${WAY_ON}`;
 
@@ -323,7 +323,7 @@ describe("the plan's share fits the team's own git: a protected main, a branch o
     expect(shared.json).toMatchObject({ shared: false, notice: NOT_SHARED });
     expect(git(home.remote, ["rev-parse", "main"])).toBe(before);
     expect(git(home.dir, ["status", "--porcelain", "--", "aidlc"])).toBe("");
-    expect(git(home.dir, ["log", "-1", "--format=%s"])).toBe("Share the plan with the teams");
+    expect(git(home.dir, ["log", "-1", "--format=%s"])).toBe("Share the plan");
     appendAuditEntry("HUMAN_TURN", { "Person Reply": "ok" }, home.dir);
     const look = next(home.dir);
     expect(String(look.question), JSON.stringify(look).slice(0, 600)).toBe(BRANCH_OFFER);
@@ -631,8 +631,8 @@ describe("the plan's share fits the team's own git: a protected main, a branch o
   const COMMITTED_HERE = "The plan is committed here and not shared yet: say when you want me to put it on its own branch and push that.";
   const onItsBranch = (branch: string) =>
     `The plan is on its own branch, ${branch}, pushed to origin, and your checkout is on it; main is as it was.`;
-  const WAITING = `The plan is on its own branch, ${PLAN_BRANCH}, waiting for its pull request; teams can take Units once it is in main.`;
-  const BACK_OFFER = "The plan is in main now, so teams can take Units. Want me to switch you back to main?";
+  const WAITING = `The plan is on its own branch, ${PLAN_BRANCH}, waiting for its pull request; its Units can be taken once it is in main.`;
+  const BACK_OFFER = "The plan is in main now, so its Units can be taken. Want me to switch you back to main?";
   const ON_MAIN = "You are on main now, level with origin.";
   const STAYED = `You stay on ${PLAN_BRANCH} and nothing changed: git says`;
   const chatOf = (name: string): NodeJS.ProcessEnv => ({ ...ENV, AIDLC_SESSION_OVERRIDE: `t-unit-assignment-plan-branch-${name}` });
@@ -713,7 +713,7 @@ describe("the plan's share fits the team's own git: a protected main, a branch o
       expect(after.kind, JSON.stringify(after).slice(0, 600)).not.toBe("ask");
       expect(after.kind).not.toBe("run-stage");
       expect(JSON.stringify(after)).toContain(COMMITTED_HERE);
-      expect(JSON.stringify(after)).not.toContain("waiting for a team to take it");
+      expect(JSON.stringify(after)).not.toContain("waiting for someone to take it");
       expect(JSON.stringify(after)).not.toContain("Claimable");
       expect(String(next(home.dir, chat).question ?? "")).not.toBe(BRANCH_OFFER);
     }
@@ -739,7 +739,7 @@ describe("the plan's share fits the team's own git: a protected main, a branch o
     expect(git(home.remote, ["rev-parse", PLAN_BRANCH])).toBe(git(home.dir, ["rev-parse", "HEAD"]));
     expect(git(home.dir, ["rev-parse", "main"])).toBe(m0);
     expect(git(home.remote, ["rev-parse", "main"])).toBe(m0);
-    expect(git(home.dir, ["log", "--format=%s %P", `${m0}..HEAD`])).toBe(`Share the plan with the teams ${m0}`);
+    expect(git(home.dir, ["log", "--format=%s %P", `${m0}..HEAD`])).toBe(`Share the plan ${m0}`);
     expect(git(home.dir, ["diff", "--cached", "--name-only"])).toBe("staged-only.txt");
     expect(git(home.dir, ["diff", "--name-only", "--", "shared.ts"])).toBe("shared.ts");
     expect(git(home.dir, ["ls-files", "--others", "--", "z-deploy.env"])).toBe("z-deploy.env");
@@ -836,7 +836,7 @@ describe("the plan's share fits the team's own git: a protected main, a branch o
     expect(done.out).toContain(`origin did not take the branch ${PLAN_BRANCH} (`);
     expect(done.out).toContain("so nothing is pushed: the plan is committed here.");
     expect(git(home.dir, ["symbolic-ref", "HEAD"])).toBe("refs/heads/main");
-    expect(git(home.dir, ["log", "-1", "--format=%s"])).toBe("Share the plan with the teams");
+    expect(git(home.dir, ["log", "-1", "--format=%s"])).toBe("Share the plan");
     expect(planBranches(home.dir)).toBe("");
     const again = next(home.dir);
     expect(isShare(again), JSON.stringify(again).slice(0, 600)).toBe(true);
@@ -853,7 +853,7 @@ describe("the plan's share fits the team's own git: a protected main, a branch o
         expect(look.kind, JSON.stringify(look).slice(0, 600)).not.toBe("ask");
         expect(look.kind).not.toBe("run-stage");
         expect(JSON.stringify(look)).toContain(WAITING);
-        expect(JSON.stringify(look)).not.toContain("waiting for a team to take it");
+        expect(JSON.stringify(look)).not.toContain("waiting for someone to take it");
         expect(JSON.stringify(look)).not.toContain("Claimable");
       }
       const status = run(UTILITY, ["status"], home.dir);
@@ -941,7 +941,7 @@ describe("the plan's share fits the team's own git: a protected main, a branch o
       expect(shared.json?.notice, args.join(" ")).toBeUndefined();
       expect(git(home.dir, ["symbolic-ref", "HEAD"])).toBe("refs/heads/main");
       expect(git(home.remote, ["rev-parse", "main"])).toBe(git(home.dir, ["rev-parse", "HEAD"]));
-      expect(git(home.dir, ["log", "-1", "--format=%s"])).toBe("Share the plan with the teams");
+      expect(git(home.dir, ["log", "-1", "--format=%s"])).toBe("Share the plan");
       expect(planBranches(home.dir)).toBe("");
       expect(git(home.dir, ["status", "--porcelain", "--", "aidlc"])).toBe("");
       expect(JSON.stringify(next(home.dir))).not.toContain("own branch");
@@ -958,7 +958,7 @@ describe("the plan's share fits the team's own git: a protected main, a branch o
     mainTakesNoDirectPush(home.remote);
     expect(run(UNIT, ["share", "--plan"], home.dir).json?.error).toBe(RULE);
     expect(git(home.dir, ["symbolic-ref", "HEAD"])).toBe("refs/heads/main");
-    expect(git(home.dir, ["log", "-2", "--format=%s"])).toBe("Share the plan with the teams\nthe lead's notes");
+    expect(git(home.dir, ["log", "-2", "--format=%s"])).toBe("Share the plan\nthe lead's notes");
     expect(planBranches(home.dir)).toBe("");
   });
 
@@ -978,7 +978,7 @@ describe("the plan's share fits the team's own git: a protected main, a branch o
       expect(shared.json?.notice, args.join(" ")).toBe(`This checkout is on plan-review, not main. ${WAY_ON}`);
       expect(git(home.remote, ["rev-parse", "main"])).toBe(before);
       expect(git(home.remote, ["branch", "--list", "plan-review"])).toBe("");
-      expect(git(home.dir, ["log", "-1", "--format=%s"])).toBe("Share the plan with the teams");
+      expect(git(home.dir, ["log", "-1", "--format=%s"])).toBe("Share the plan");
       expect(git(home.dir, ["status", "--porcelain", "--", "aidlc"])).toBe("");
       const went = git(home.dir, ["diff-tree", "-r", "--no-commit-id", "--name-only", "HEAD"]).split("\n").filter(Boolean);
       expect(went.filter((path) => !path.startsWith("aidlc/")), went.join(", ")).toEqual([]);
@@ -1136,7 +1136,7 @@ describe("the plan's share fits the team's own git: a protected main, a branch o
     const file = String(ask.commit_message_file);
     expect(file).toMatch(new RegExp(`^${REQUEST_TEXT_DIR}/unit-share-message-[a-z-]+\\.txt$`));
     expect(String(ask.question)).toContain(" with this commit message and push");
-    expect(String(ask.question)).toEndWith("\n\nShare the plan with the teams");
+    expect(String(ask.question)).toEndWith("\n\nShare the plan");
     const choices = ask.choices as Array<{ label: string; command?: string }>;
     for (const choice of choices.slice(0, -1)) expect(String(choice.command), choice.label).toEndWith(` --commit-message-file ${file}`);
     writeFileSync(join(home.dir, ...file.split("/")), "chore(plan): share the refunds plan\n");
@@ -1209,14 +1209,14 @@ describe("the plan's share fits the team's own git: a protected main, a branch o
 });
 
 describe("after the share nothing is built at the lead's project until the lead asks", () => {
-  test("the step is the board, each Unit open and waiting for a team to take it", () => {
+  test("the step is the board, each Unit open and waiting for someone to take it", () => {
     const home = makeHome();
     chooseTeams(home.dir);
     share(home.dir);
     const step = next(home.dir);
     expect(step.kind, JSON.stringify(step)).toBe("print");
     expect(String(step.narration)).toStartWith("Units of fixture:");
-    for (const unit of UNITS) expect(String(step.narration)).toContain(`- ${unit}, open: waiting for a team to take it`);
+    for (const unit of UNITS) expect(String(step.narration)).toContain(`- ${unit}, open: waiting for someone to take it`);
     expect(tellsWhatToType(step.message, step.offers)).toBe(false);
     expect(next(home.dir).kind).toBe("print");
     expect(readAuditShardEvents(home.dir).some((row) => row.event === "UNIT_STARTED")).toBe(false);
@@ -1246,7 +1246,7 @@ describe("after the share nothing is built at the lead's project until the lead 
     const after = next(home.dir, chat("after"));
     expect(after.kind, JSON.stringify(after)).toBe("print");
     expect(rhythm(after)).toBeUndefined();
-    expect(JSON.stringify(after.offers ?? [])).not.toContain("Each team will approve its Unit");
+    expect(JSON.stringify(after.offers ?? [])).not.toContain("Whoever builds a Unit will approve it");
   });
 
   // A computer of the lead's that has not recorded the merges yet still shows
@@ -1314,7 +1314,7 @@ describe("the lead's word builds a Unit here: assign --here", () => {
     const words = "let's build refunds here ourselves";
     const here = run(UNIT, ["assign", "--here", "refunds", "--person-words", words], home.dir);
     expect(here.status, here.out).toBe(0);
-    expect(here.json?.notice).toBe("refunds is built here now, no longer open for the teams.");
+    expect(here.json?.notice).toBe("refunds is built here now, no longer open for others to take.");
     expect(tellsWhatToType(here.json?.notice)).toBe(false);
     const id8 = fixtureIntentId8(home.dir);
     expect(claimPayload(hosts.app, id8, "refunds")).toMatchObject({ status: "claimed", owner: "default", taken_by: "lee" });
@@ -1342,7 +1342,7 @@ describe("the lead's word builds a Unit here: assign --here", () => {
     expect(here.json?.notice, here.out).toBeUndefined();
     const step = next(home.dir, chat);
     expect((step.change_notices ?? []) as string[], JSON.stringify(step).slice(0, 600))
-      .toContain("refunds is built here now, no longer open for the teams.");
+      .toContain("refunds is built here now, no longer open for others to take.");
     expect(JSON.stringify(next(home.dir, chat))).not.toContain("refunds is built here now");
   });
 
@@ -1357,13 +1357,13 @@ describe("the lead's word builds a Unit here: assign --here", () => {
     const before = refs();
     const here = run(UNIT, ["assign", "--here", "refunds", "--person-words", "build refunds here"], home.dir);
     expect(here.status, here.out).toBe(0);
-    expect(here.json?.notice).toBe("refunds is built here now, no longer open for the teams.");
+    expect(here.json?.notice).toBe("refunds is built here now, no longer open for others to take.");
     expect(refs()).toBe(before);
     const shared = run(UNIT, ["share", "--plan"], home.dir);
     expect(shared.status, shared.out).toBe(0);
     const app = git(join(home.dir, "app"), ["remote", "get-url", "origin"]);
-    expect(shared.json?.notice).toBe("The plan is shared in app. AI-DLC sends no notice of it: the teams hear it from you. " +
-      `A team whose workspace has no app needs this address: ${app} Recorded in app that refunds is built here. ${TEAMMATES}`);
+    expect(shared.json?.notice).toBe("The plan is shared in app. AI-DLC sends no notice of it, so tell whoever will take a Unit. " +
+      `Anyone whose workspace has no app needs this address: ${app} Recorded in app that refunds is built here. ${TEAMMATES}`);
     expect(claimPayload(app, id8, "refunds")).toMatchObject({ status: "claimed", owner: "default", taken_by: "lee" });
     expect(claimPayload(app, id8, "checkout-ui")).toBeNull();
     // The lead's record reaches main their own way, as a team's clone reads it today.
@@ -1441,14 +1441,14 @@ describe("the walking skeleton is built at the lead's project first, and every o
     share(home.dir);
     const board = next(home.dir);
     expect(board.kind, JSON.stringify(board)).toBe("print");
-    for (const unit of UNITS) expect(String(board.narration)).toContain(`- ${unit}, open: waiting for a team to take it`);
+    for (const unit of UNITS) expect(String(board.narration)).toContain(`- ${unit}, open: waiting for someone to take it`);
   });
 
   // A live run (Claude Code, Linux): the share question said every Unit was
   // open while the slice was the lead's to build and the others waited on it.
   // As main does: its handout line, once, and the share once the slice is approved.
-  const HANDOUT = "No team has taken a Unit yet, so this session builds them here, starting with the checkout ui Unit, " +
-    "the walking skeleton the others build on. Once it is built and approved, I'll offer to share the work so each team can take one of the others.";
+  const HANDOUT = "Nobody has taken a Unit yet, so this session builds them here, starting with the checkout ui Unit, " +
+    "the walking skeleton the others build on. Once it is built and approved, I'll offer to share the work so the others are open for a person or a team to take.";
   const sliceOn = () => makeHome({ state: homeState().replace("- **Skeleton Stance**: off", "- **Skeleton Stance**: on") });
   // Once the slice is approved the share question comes as today (t-unit-board).
   test("on and not approved: the lead's look says main's handout line once, builds the slice, and puts no share question", () => {
@@ -1496,7 +1496,7 @@ describe("the approval rhythm is offered only while it can still change", () => 
     appendAuditEntry("STAGE_AWAITING_APPROVAL", { Stage: "functional-design", Unit: "refunds", "Gate Scope": "per-stage" }, home.dir);
     const board = next(home.dir);
     expect(board.kind, JSON.stringify(board)).toBe("print");
-    expect(JSON.stringify(board.offers ?? [])).not.toContain("Each team will approve its Unit");
+    expect(JSON.stringify(board.offers ?? [])).not.toContain("Whoever builds a Unit will approve it");
     expect(run(STATE, ["set-unit-gate-rhythm", "unit-end"], home.dir).status).not.toBe(0);
   });
 });
@@ -1556,7 +1556,7 @@ describe("work that is never asked", () => {
     expect(existsSync(join(home.dir, "repos.json"))).toBe(false);
     // The plan's share, as for teams across repos: each team takes its Unit from its own clone.
     expect(isShare(step), JSON.stringify(step)).toBe(true);
-    expect(String(step.question)).toStartWith("Do you want me to share the plan with the teams?");
+    expect(String(step.question)).toStartWith("Do you want me to share the plan?");
   });
 
   // Main's own flow stays where nothing reaches the work but this machine, and
@@ -1566,7 +1566,7 @@ describe("work that is never asked", () => {
     git(home.dir, ["remote", "remove", "origin"]);
     chooseTeams(home.dir);
     expect(field(stateOf(home.dir), "Home Location")).toBeUndefined();
-    expect(String(next(home.dir).question ?? "")).not.toStartWith("The Units are open for any team to take.");
+    expect(String(next(home.dir).question ?? "")).not.toStartWith("The Units are open for a person or a team to take.");
   });
 
   test("team work on one repo that chose teams before keeps main's flow: no home, and main's share", () => {
@@ -1575,7 +1575,7 @@ describe("work that is never asked", () => {
     expect(field(stateOf(home.dir), "Home Location")).toBeUndefined();
     const step = next(home.dir);
     expect(isShare(step), JSON.stringify(step)).toBe(true);
-    expect(String(step.question)).toStartWith("The plan's 3 Units are ready for the teams. Share them now?");
+    expect(String(step.question)).toStartWith("The plan's 3 Units are ready for others to take. Share them now?");
   });
 
   test("team work on one repo with main's claims out, switched to one Unit at a time and back to teams, keeps main's flow", () => {

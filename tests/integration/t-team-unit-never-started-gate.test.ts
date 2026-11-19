@@ -71,7 +71,7 @@ function leadsOwnUnit(rhythm: "per-stage" | "unit-end") {
   let step = agent.next();
   if (step.ask_type === "team-handover") {
     const later = (step.choices as Array<{ label: string; command: string }>).find((c) => c.label === "Not now")!;
-    person.pick(String(step.question), ["Share them with the teams", "Not now"], "Not now");
+    person.pick(String(step.question), ["Share by direct push", "Not now"], "Not now");
     expect(host.bash(later.command).status).toBe(0);
     step = agent.next();
   }

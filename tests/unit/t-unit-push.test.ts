@@ -117,7 +117,7 @@ describe("teams build Units across repos when the workspace is in git", () => {
     // Every Unit is open for any team: the step after is the offer to share the plan.
     const step = next(home.dir);
     expect(step.ask_type, JSON.stringify(step).slice(0, 400)).not.toBe("unit-assignment");
-    expect(String(step.question)).toStartWith("Do you want me to share the plan with the teams? I'd put it in checkout-api:");
+    expect(String(step.question)).toStartWith("Do you want me to share the plan? I'd put it in checkout-api:");
   });
 });
 

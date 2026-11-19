@@ -154,8 +154,8 @@ describe("scenario 1: one shared workspace repo, the repos side by side", () => 
     expect(boardAt(home)).toBe([
       "Units of fixture:",
       "- refunds, payments space: built by alice, checkout-api not merged yet, billing not merged yet (0 of 2 merged)",
-      "- checkout-ui, open: waiting for a team to take it",
-      "- reporting, open: waiting for a team to take it",
+      "- checkout-ui, open: waiting for someone to take it",
+      "- reporting, open: waiting for someone to take it",
     ].join("\n"));
     mergeOnHost(hosts["checkout-api"], "refunds", "merge");
     expect(boardAt(home)).toContain("- refunds, payments space: built by alice, checkout-api merged, billing not merged yet (1 of 2 merged)");
@@ -248,7 +248,7 @@ describe("scenario 2: one big code repo", () => {
     expect(field(stateOf(home.dir), "Home Location")).toBe(home.remote);
     const step = next(home.dir);
     expect(step.ask_type, JSON.stringify(step)).toBe("team-handover");
-    expect(String(step.question)).toStartWith("Do you want me to share the plan with the teams?");
+    expect(String(step.question)).toStartWith("Do you want me to share the plan?");
     expect(run(UNIT, ["share", "--plan"], home.dir).status).toBe(0);
     const alice = cloneOf(home.remote, "alice");
     expect(takeWith(UNIT, "payments", ["take", "refunds", "--plan", fixtureIntentId8(home.dir), "--from", home.remote], alice).status).toBe(0);
@@ -301,7 +301,7 @@ describe("scenario 5: solo work, then a second person joins", () => {
 
     fetchRecords(home.dir);
     const step = next(home.dir);
-    expect(notices(step)).toContain("Your teammate bob took checkout-ui; this session carries on with the rest, one Unit at a time, and you can ask to sign off a teammate's result yourself before it counts as done.");
+    expect(notices(step)).toContain("bob took checkout-ui; this session carries on with the rest, one Unit at a time, and you can ask to sign off each taken Unit's result yourself before it counts as done.");
     expect(field(stateOf(home.dir), "Unit Ownership")).toBe("team");
     expect(step.unit).toBe("reporting");
     expect(next(home.dir).ask_type).toBeUndefined();

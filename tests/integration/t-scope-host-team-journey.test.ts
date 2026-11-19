@@ -332,7 +332,7 @@ describe("one piece of work, a team on every tool", () => {
     const board = lead.agent.next();
     expect(board.kind, JSON.stringify(board)).toBe("print");
     expect(String(board.narration)).toContain("- refunds, payments space: built by alice, checkout-api not merged yet, billing not merged yet (0 of 2 merged)");
-    expect(String(board.narration)).toContain("- reporting, open: waiting for a team to take it");
+    expect(String(board.narration)).toContain("- reporting, open: waiting for someone to take it");
 
     // Each repo merges its own way.
     for (const p of FIRST) for (const { repo, merge } of p.repos) mergeOnHost(hosts[repo], p.unit, merge);
@@ -488,12 +488,12 @@ describe("a teammate on Copilot CLI and the open Units", () => {
     const board = lead.agent.next();
     expect(board.kind, JSON.stringify(board).slice(0, 400)).toBe("print");
     expect(String(board.narration)).toMatch(/- refunds, payments space: building since \d{1,2} [A-Z][a-z]{2}, taken by alice/);
-    expect(String(board.narration)).toContain("- checkout-ui, open: waiting for a team to take it");
+    expect(String(board.narration)).toContain("- checkout-ui, open: waiting for someone to take it");
     expect(String(board.board_note)).toMatch(/`[^`]*\bassign --here <unit>[^`]*`/);
     // x2783-s9 4: how often the teams approve is put on the board until the
     // lead answers, and once answered it is not asked again.
     const offers = (board.offers ?? []) as Array<{ question: string; choices: Array<{ label: string; command?: string }> }>;
-    const rhythm = offers.find((o) => o.question.startsWith("Each team will approve its Unit after every stage."));
+    const rhythm = offers.find((o) => o.question.startsWith("Whoever builds a Unit will approve it after every stage."));
     expect(rhythm?.choices.map((c) => c.label), JSON.stringify(offers)).toEqual(["Keep approvals after every stage", "Approve once at the end of each Unit"]);
     lead.person.pick(rhythm!.question, rhythm!.choices.map((c) => c.label), "Keep approvals after every stage");
     const kept = lead.agent.host.bash(rhythm!.choices[0].command!);
@@ -502,6 +502,6 @@ describe("a teammate on Copilot CLI and the open Units", () => {
     lead.person.say("/aidlc");
     const again = lead.agent.next();
     expect(again.kind, JSON.stringify(again).slice(0, 400)).toBe("print");
-    expect(JSON.stringify(again.offers ?? [])).not.toContain("Each team will approve its Unit");
+    expect(JSON.stringify(again.offers ?? [])).not.toContain("Whoever builds a Unit will approve it");
   });
 });

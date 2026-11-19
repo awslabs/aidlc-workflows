@@ -487,7 +487,7 @@ describe("the plan on a branch people can open, on the lead's own words (--visib
     const shared = run(UNIT, VISIBLE, home.dir);
     expect(shared.status, shared.out).toBe(0);
     expect(String(shared.json?.notice)).toStartWith(`The plan is shared in checkout-api on the branch ${name(home.id8)}. ${IS} ${PATTERN} ` +
-      "AI-DLC sends no notice of it: the teams hear it from you. A team whose workspace has no checkout-api needs this address: ");
+      "AI-DLC sends no notice of it, so tell whoever will take a Unit. Anyone whose workspace has no checkout-api needs this address: ");
     expect(has(host, `refs/heads/${name(home.id8)}`)).toBe(true);
     expect(has(host, planRefOf(home.id8))).toBe(false);
     const sam = teamWorkspace(home.hosts, "sam", ["checkout-api"]);
@@ -550,9 +550,9 @@ describe("the plan on a branch people can open, on the lead's own words (--visib
     const first = makePlanHome({ share: false });
     refuse(first.hosts["checkout-api"], ["refs/heads/aidlc/"]);
     const refused = run(UNIT, VISIBLE, first.dir);
-    expect(String(refused.json?.notice), refused.out).toMatch(/^checkout-api did not take the plan's branch: .*\. If it is the commit message, tell me the one to use; or name another repository the teams can read and I will share it there\.$/);
+    expect(String(refused.json?.notice), refused.out).toMatch(/^checkout-api did not take the plan's branch: .*\. If it is the commit message, tell me the one to use; or name another repository everyone who takes a Unit can read and I will share it there\.$/);
     expect(String(refused.json?.step)).toContain("unit share --plan --visible --commit-message-file ");
-    expect(String(refused.json?.step)).toContain("When they name another repository the teams can read, run `");
+    expect(String(refused.json?.step)).toContain("When they name another repository for the plan, run `");
     expect(String(refused.json?.step)).toContain("unit share --plan --repo <its name>` and tell them in plain words what it reports.");
     expect(String(refused.json?.step)).not.toMatch(/unit share --plan`/);
     const shared = makePlanHome();
@@ -570,7 +570,7 @@ describe("the plan on a branch people can open, on the lead's own words (--visib
     git(host, ["update-ref", "refs/heads/aidlc", git(host, ["rev-parse", "refs/heads/main"])]);
     const refused = run(UNIT, VISIBLE, first.dir);
     expect(refused.status).not.toBe(0);
-    expect(String(refused.json?.error)).toMatch(/^checkout-api has a branch in the way of the plan's branch \(git says ".*exists; cannot create.*"\)\. The plan is not shared there; name another repository the teams can read and I will share it there\.$/);
+    expect(String(refused.json?.error)).toMatch(/^checkout-api has a branch in the way of the plan's branch \(git says ".*exists; cannot create.*"\)\. The plan is not shared there; name another repository everyone who takes a Unit can read and I will share it there\.$/);
     const shared = makePlanHome();
     const at = shared.hosts["checkout-api"];
     git(at, ["update-ref", "refs/heads/aidlc", git(at, ["rev-parse", "refs/heads/main"])]);

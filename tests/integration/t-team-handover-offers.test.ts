@@ -59,7 +59,7 @@ function detailFor(directive: Record<string, unknown>, label: string): string | 
   return choicesOf(directive).find((choice) => choice.label === label)?.detail;
 }
 
-const PLAIN_PUSH = "main to origin as a plain push; it never overwrites what a team pushed.";
+const PLAIN_PUSH = "main to origin as a plain push; it never overwrites what anyone pushed.";
 
 function isHandover(directive: Record<string, unknown>, kind?: string): boolean {
   if (directive.kind !== "ask" || directive.ask_type !== "team-handover") return false;
@@ -177,22 +177,22 @@ function expectResultNames(stdout: string, dir: string, words: string): void {
 }
 
 describe("step 1: the lead shares the plan with the teams", () => {
-  test("Several teams, claims open, a remote: the first Unit step is the share offer, once", () => {
+  test("Several teams or people, claims open, a remote: the first Unit step is the share offer, once", () => {
     const { seed: lead } = makeSeed();
     asLeadsOwnCheckout(lead);
     const offer = nextDirective(lead);
     expect(isHandover(offer, "share"), JSON.stringify(offer)).toBe(true);
     expect(String(offer.question)).toContain("Share them now?");
     expect(String(offer.question)).toContain("push the plan on its own branch for a pull request");
-    expect(labels(offer)).toEqual(["Share by pull request (Recommended)", "Share them with the teams", "Build them here for now"]);
+    expect(labels(offer)).toEqual(["Share by pull request (Recommended)", "Share by direct push", "Build them here for now"]);
     // Each carries the file the share's commit message was drafted in.
-    expect(commandFor(offer, "Share them with the teams")).toMatch(/ unit share --commit-message-file \S+\/unit-share-message-alpha\.txt$/);
+    expect(commandFor(offer, "Share by direct push")).toMatch(/ unit share --commit-message-file \S+\/unit-share-message-alpha\.txt$/);
     expect(commandFor(offer, "Share by pull request (Recommended)")).toMatch(/ unit share --branch --commit-message-file \S+\/unit-share-message-alpha\.txt$/);
-    expect(String(offer.question)).toEndWith("with this commit message and push the plan on its own branch for a pull request, so each team " +
-      "can take a Unit once it is in main, by opening its own clone and running /aidlc.\n\nShare the plan with the teams");
+    expect(String(offer.question)).toEndWith("with this commit message and push the plan on its own branch for a pull request, so anyone " +
+      "can take a Unit once it is in main, by opening their own clone and running /aidlc.\n\nShare the plan");
     expect(commandFor(offer, "Build them here for now")).toMatch(/ next$/);
-    expect(detailFor(offer, "Share them with the teams")).toBe(`Pushes ${PLAIN_PUSH}`);
-    expect(JSON.stringify(offer)).not.toContain("Team work needs this project at the top");
+    expect(detailFor(offer, "Share by direct push")).toBe(`Pushes ${PLAIN_PUSH}`);
+    expect(JSON.stringify(offer)).not.toContain("For its Units to be taken, this project needs to be at the top");
     // No self-loop: the reply that does not take it runs next, and the walk goes on.
     const walk = nextDirective(lead);
     expect(isHandover(walk), JSON.stringify(walk)).toBe(false);
@@ -376,7 +376,7 @@ describe("step 1: the lead shares the plan with the teams", () => {
     writeFileSync(join(outer, "other", "staged.md"), "staged outside the project\n");
     git(outer, ["add", "other/staged.md"]);
     writeFileSync(join(app, "z-deploy.env"), "API_KEY=not-for-the-team\n");
-    const line = "Team work needs this project at the top of its git repository; it sits in app of " +
+    const line = "For its Units to be taken, this project needs to be at the top of its git repository; it sits in app of " +
       `${git(outer, ["rev-parse", "--show-toplevel"])}.`;
     const chat = "01995000-7a11-7000-8000-000000003822";
     const step = nextInChat(app, chat);
@@ -484,7 +484,7 @@ describe("step 2: another clone takes a Unit", () => {
     const mate = clone(remote, "mate");
     const offer = nextDirective(mate);
     expect(isHandover(offer, "join"), JSON.stringify(offer)).toBe(true);
-    expect(String(offer.question)).toContain("Take one for your team?");
+    expect(String(offer.question)).toContain("Take one? I'd label your team");
     expect(labels(offer)).toEqual(["Take alpha", "Take beta", "Not now"]);
     expect(commandFor(offer, "Take alpha")).toMatch(/ next --claim alpha$/);
     expect(commandFor(offer, "Not now")).toMatch(/ next$/);
@@ -803,10 +803,10 @@ describe("step 4: a published Unit is reviewed and merged", () => {
     expect(isHandover(offer, "review"), JSON.stringify(offer)).toBe(true);
     expect(isHandover(offer, "join")).toBe(true);
     expect(labels(offer)).toEqual(["Take beta", "Review and merge alpha", "Not now"]);
-    expect(String(offer.question)).toContain("Take one for your team, or review and merge?");
+    expect(String(offer.question)).toContain("Take one, or review and merge?");
     expect(String(offer.numbered_prose_question)).toContain("1. **Take beta**");
     expect(detailFor(offer, "Review and merge alpha"))
-      .toBe("Shows what the team built and its checks, then asks whether to merge it.");
+      .toBe("Shows what was built and its checks, then asks whether to merge it.");
     // No self-loop: Not now runs next, which never puts the same question again.
     expect(commandFor(offer, "Not now")).toMatch(/ next$/);
     expect(isHandover(nextDirective(fresh))).toBe(false);
@@ -825,7 +825,7 @@ describe("step 5: main is pushed after a land", () => {
     expect(String(land.next_step)).toMatch(/ next`/);
     const offer = nextDirective(lead);
     expect(isHandover(offer, "push"), JSON.stringify(offer)).toBe(true);
-    expect(String(offer.question)).toBe("Push main to origin now so the other teams see alpha landed?");
+    expect(String(offer.question)).toBe("Push main to origin now so everyone else sees alpha landed?");
     expect(labels(offer)).toEqual(["Push main", "Not now"]);
     expect(commandFor(offer, "Push main")).toMatch(/ unit share$/);
     expect(detailFor(offer, "Push main")).toBe(`Pushes ${PLAIN_PUSH}`);
@@ -836,7 +836,7 @@ describe("step 5: main is pushed after a land", () => {
     expect(JSON.parse(shared.stdout).committed_files).toBeUndefined();
     expect(git(remote, ["merge-base", "--is-ancestor", land.git_commit_oid, "main"])).toBe("");
     // What the push committed first, if anything, is named for the landing, never as the plan.
-    expect(git(lead, ["log", "-1", "--format=%s"])).not.toBe("Share the plan with the teams");
+    expect(git(lead, ["log", "-1", "--format=%s"])).not.toBe("Share the plan");
     expect(git(lead, ["status", "--porcelain"])).toBe("");
   });
 
@@ -853,7 +853,7 @@ describe("step 5: main is pushed after a land", () => {
     const offer = nextDirective(lead);
     expect(isHandover(offer, "push"), JSON.stringify(offer)).toBe(true);
     expect(String(offer.question)).toBe(
-      "Push main to origin now so the other teams see alpha landed? I'd commit the 3 changed files here " +
+      "Push main to origin now so everyone else sees alpha landed? I'd commit the 3 changed files here " +
         "(changed: src/shared.ts; new: z-deploy.env) first, with this commit message.\n\nRecord the alpha landing",
     );
     const shared = runMergeTool(UNIT, ["share"], lead);
@@ -950,7 +950,7 @@ describe("step 5: main is pushed after a land", () => {
     expect(isHandover(again, "push"), JSON.stringify(again).slice(0, 400)).toBe(true);
     // The refusal's mark stays until a push goes; a new head no longer reads it.
     expect(refusedMarks(lead)).toHaveLength(1);
-    expect(String(again.question)).toBe("Push main to origin now so the other teams see alpha landed?");
+    expect(String(again.question)).toBe("Push main to origin now so everyone else sees alpha landed?");
     const board = runMergeTool(ORCH, ["team-board", "--snapshot"], lead);
     expect(board.stdout).toContain("- main has alpha landed here and not on origin yet: `");
     writeFileSync(hook, "#!/bin/sh\nexit 0\n");

@@ -124,11 +124,11 @@ const BLOCK = [
 ];
 
 // What the lead reads with the first team step, and when the rhythm holds.
-const APPROVALS_LINE = "Each team will approve its Unit after every stage. Do you want them to approve once at the " +
+const APPROVALS_LINE = "Whoever builds a Unit will approve it after every stage. Do you want them to approve once at the " +
   "end of each Unit instead? I'd keep after every stage, so a wrong turn is caught at the stage where it happens.";
 const RHYTHM_STAYS_PER_STAGE = "The Units are already being approved after every stage, so that stays for this " +
   "work. Carry on with `/aidlc`.";
-const OWNERSHIP_STAYS = "The teams are already building their Units, so they keep them for this work. Carry on " +
+const OWNERSHIP_STAYS = "Units of this work are already being built, so they stay with whoever is building them. Carry on " +
   "with `/aidlc`.";
 
 const tempDirs: string[] = [];
@@ -1674,7 +1674,7 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
     const result = runState(proj, ["set-unit-ownership", "team"]);
     expect(result.rc).not.toBe(0);
     expect(result.out).toContain("This work spans 2 repos and this workspace is not a git repository, so this " +
-      "session builds its Units: for teams to each own a Unit, put the workspace in git first. Carry on with `/aidlc`.");
+      "session builds its Units: to leave them open for a person or a team to take, put the workspace in git first. Carry on with `/aidlc`.");
     expect(state(proj)).toBe(stateBefore);
     expect(readAllAuditShards(proj)).toContain("**Event**: ERROR_LOGGED");
     expect(readAllAuditShards(proj)).not.toContain(

@@ -250,7 +250,7 @@ describe("a step that waits on the person, and every way on the round added, nev
     expect(share.ask_type, JSON.stringify(share)).toBe("team-handover");
     const board = movesOn(home.dir, chat, share, choice(share, "Not now"));
     expect(board.kind, JSON.stringify(board)).toBe("print");
-    expect(String(board.narration)).toContain("- checkout-ui, open: waiting for a team to take it");
+    expect(String(board.narration)).toContain("- checkout-ui, open: waiting for someone to take it");
     // The lead's words to build checkout-ui here run the board's own command for them.
     const here = /`([^`]*assign --here <unit>[^`]*)`/.exec(String(board.board_note ?? ""))?.[1];
     expect(here, JSON.stringify(board)).toBeDefined();
@@ -896,7 +896,7 @@ describe("the take's own line reaches the person with the build's next step, onc
     const took = runPrinted(bob, chat, choice(offer, "Start refunds"));
     expect(took.status, took.out).toBe(0);
     const line = "refunds is yours. You build it in the payments space under your team's rules, from what the lead approved. " +
-      "If it is not your team's to build, tell me and I will hand it back.";
+      "If it is not yours to build, tell me and I will hand it back.";
     expect(JSON.parse(took.out.trim().split("\n").at(-1)!).notice, took.out).toBeUndefined();
     const step = next(bob, chat);
     expect((step.change_notices ?? []) as string[], JSON.stringify(step)).toContain(line);

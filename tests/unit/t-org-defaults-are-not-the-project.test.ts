@@ -66,7 +66,7 @@ describe("org.md's defaults never speak as the person's project", () => {
     const section = wayOfWorking();
     expect(section).toMatch(/^- \*\*Integration branch\*\*: main\n- \*\*Changes reach main\*\*: by pull request$/m);
     const words = section.replace(/\s+/g, " ");
-    expect(words).toContain("The second line only sets which way AI-DLC offers first when you share a plan with the teams");
+    expect(words).toContain("The second line only sets which way AI-DLC offers first when you share a plan:");
     expect(words).toContain("by pull request, which is the default when no file says");
     expect(words).toContain("A commit you ask for still goes where you already are.");
   });

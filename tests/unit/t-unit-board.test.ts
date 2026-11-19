@@ -110,7 +110,7 @@ describe("with a thin slice first, the plan is shared once the slice is approved
     const end = leadsChat(home.dir, { until: isShare });
     expect(isShare(end), JSON.stringify(end).slice(0, 600)).toBe(true);
     expect(String(end.question)).toStartWith(
-      "Do you want me to share the plan with the teams? I'd put it in checkout-api: the Units (refunds in checkout-api and billing, " +
+      "Do you want me to share the plan? I'd put it in checkout-api: the Units (refunds in checkout-api and billing, " +
         "checkout-ui in checkout-web, reporting in billing) and what each is built from",
     );
     expect(teamBoard(home.dir)).toContain("- checkout-ui, here: done");
@@ -133,7 +133,7 @@ describe("with a thin slice first on the workspace's own repository, the share c
     const end = leadsChat(home.dir, { until: isShare, codeRepo: () => undefined });
     expect(isShare(end), JSON.stringify(end).slice(0, 600)).toBe(true);
     expect(String(end.question)).toMatch(new RegExp(
-      `^Do you want me to share the plan with the teams\\? I'd put it in ${basename(home.remote)}: the Units and what each is built from` +
+      `^Do you want me to share the plan\\? I'd put it in ${basename(home.remote)}: the Units and what each is built from` +
         `(, with your [a-z' ]+)?; everyone who can read ${basename(home.remote)} can read it\\. I'd also commit checkout-ui's code, ` +
         "the \\d+ changed files here \\(new: src/checkout-ui\\.ts, test/checkout-ui\\.test\\.ts\\), and AI-DLC's record, using this " +
         "commit message, and push that on its own branch for a pull request\\. The other Units wait on checkout-ui until it is in main\\.\n\n",
@@ -193,7 +193,7 @@ describe("with a thin slice first, on a branch of the lead's own, the share says
     const end = leadsChat(home.dir, { until: isShare, codeRepo: () => undefined });
     expect(isShare(end), JSON.stringify(end).slice(0, 600)).toBe(true);
     const repo = basename(home.remote);
-    expect(String(end.question)).toStartWith(`This checkout is on my-work, not main. Do you want me to share the plan with the teams? I'd put it in ${repo}: `);
+    expect(String(end.question)).toStartWith(`This checkout is on my-work, not main. Do you want me to share the plan? I'd put it in ${repo}: `);
     expect(String(end.question)).toContain("and AI-DLC's record here on my-work, using this commit message; I would not push my-work. " +
       "The other Units wait on checkout-ui until it is in main.\n\n");
     const choices = (end.choices ?? []) as Array<{ label: string; detail?: string; command?: string }>;
@@ -202,7 +202,7 @@ describe("with a thin slice first, on a branch of the lead's own, the share says
     const shared = run(UNIT, ["share", "--plan"], home.dir);
     expect(shared.status, shared.out).toBe(0);
     const said = String(shared.json?.notice);
-    expect(said).toStartWith(`The plan is shared in ${repo}. AI-DLC sends no notice of it: the teams hear it from you. A team whose workspace has no ${repo} needs this address: `);
+    expect(said).toStartWith(`The plan is shared in ${repo}. AI-DLC sends no notice of it, so tell whoever will take a Unit. Anyone whose workspace has no ${repo} needs this address: `);
     expect(said).toEndWith("checkout-ui's code and AI-DLC's record are committed on my-work and not pushed: push my-work and get it merged your " +
       "usual way. The other Units wait on checkout-ui until it is in main.");
     expect(git(home.remote, ["rev-parse", "main"])).toBe(main);
@@ -265,7 +265,7 @@ describe("a Unit the lead's project builds reads where its Unit Progress has it"
     expect(String(end.narration)).toBe([
       "Units of fixture:",
       "- refunds, here: done",
-      "- checkout-ui, open: waiting for a team to take it",
+      "- checkout-ui, open: waiting for someone to take it",
       "- reporting, here: done",
     ].join("\n"));
     expect(teamBoard(home.dir)).toContain("- reporting, here: done");
@@ -371,10 +371,10 @@ describe("going back to change the Unit plan while teams build Units", () => {
     const step = next(home.dir, undefined, ["--stage", "units-generation"]);
     const notices = (step.change_notices ?? []) as string[];
     expect(notices, JSON.stringify(step)).toContain(
-      "Still with teams: refunds (being built by alice in payments). A Unit a team has started keeps the plan it took.",
+      "Still taken: refunds (being built by alice in payments). A Unit someone has started keeps the plan it took.",
     );
     // checkout-ui and reporting, which nobody took, are not with a team.
-    expect(notices.find((notice) => notice.startsWith("Still with teams:"))).not.toMatch(/checkout-ui|reporting/);
+    expect(notices.find((notice) => notice.startsWith("Still taken:"))).not.toMatch(/checkout-ui|reporting/);
     expect(JSON.stringify(step)).not.toContain("Still claimed");
     expect(JSON.stringify(step)).not.toContain("publishes again");
   });
@@ -394,7 +394,7 @@ describe("going back to change the Unit plan while teams build Units", () => {
     const took = takeIn("payments", ["refunds", ...planFrom(plan)], alice);
     expect(took.status, took.out).toBe(0);
     const step = next(home.dir, chat, ["--stage", "units-generation"]);
-    const line = ((step.change_notices ?? []) as string[]).find((notice) => notice.startsWith("Still with teams:"));
+    const line = ((step.change_notices ?? []) as string[]).find((notice) => notice.startsWith("Still taken:"));
     expect(line, JSON.stringify(step)).toContain("refunds (being built by alice in payments)");
   });
 
@@ -404,7 +404,7 @@ describe("going back to change the Unit plan while teams build Units", () => {
     expect(run(UNIT, ["push"], alice).status).toBe(0);
     git(home.dir, ["fetch", "-q", "origin"]);
     const step = next(home.dir, undefined, ["--stage", "units-generation"]);
-    const line = ((step.change_notices ?? []) as string[]).find((notice) => notice.startsWith("Still with teams:"));
+    const line = ((step.change_notices ?? []) as string[]).find((notice) => notice.startsWith("Still taken:"));
     expect(line, JSON.stringify(step)).toContain("refunds (pushed by alice in payments, not merged yet)");
     expect(line).not.toContain("being built");
   });

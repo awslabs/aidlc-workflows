@@ -354,7 +354,7 @@ const UNIT_BUILT_ENGINE_SPELLING = "Run AI-DLC's command exactly as the step giv
   "`cd` before it, no pipe or second command after it).";
 // The lead's project at Code Generation while its Units wait on the teams: the
 // board is the step there, so `next` cannot be the way on (leadWaitsOnTeams).
-const TEAMS_WAIT_ASKED = "the lead's project waits on the teams, and its files change only at the person's word";
+const TEAMS_WAIT_ASKED = "the lead's project waits on its Units, and its files change only at the person's word";
 // The wait in the person's own words for the refusal (leadWaitSentence), set where the wait is read.
 let teamsWaitSaid: string | null = null;
 

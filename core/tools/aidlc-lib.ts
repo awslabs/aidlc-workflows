@@ -28096,8 +28096,8 @@ export function clearUnitsReposAsked(projectDir: string): void {
 export function teamsAcrossReposLine(repoCount: number, unitCount?: number): string {
   const where = repoCount === 1 ? "This work's code is in a repo of its own" : `This work spans ${repoCount} repos`;
   const units = unitCount === undefined ? "its Units" : `its ${unitCount} Units`;
-  return `${where} and this workspace is not a git repository, so this session builds ${units}: for teams to ` +
-    "each own a Unit, put the workspace in git first.";
+  return `${where} and this workspace is not a git repository, so this session builds ${units}: to leave them ` +
+    "open for a person or a team to take, put the workspace in git first.";
 }
 
 /** Recovery operates exactly where the framework recorded parking this slug;

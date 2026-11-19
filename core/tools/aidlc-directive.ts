@@ -725,7 +725,7 @@ export interface ProjectTypeAskDirective extends AskDirectiveBase {
 }
 
 // As Inception ends, a plan of two or more Units: who builds them, this
-// session or several teams each owning one. Each choice is one complete
+// session, or each left open for a person or a team to take. Each choice is one complete
 // command that records the answer.
 export interface ConstructionStaffingAskDirective extends AskDirectiveBase {
   ask_type: "construction-staffing";

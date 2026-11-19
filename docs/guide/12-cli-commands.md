@@ -50,20 +50,20 @@ diagnostic and lifecycle routes.
 | `/aidlc unit assign --here <unit>` | At the lead's project, build a Unit here: its claim is taken for the lead's project, like any take |
 | `/aidlc unit take <unit> --plan <work id> --from <address>` | Take a Unit of the lead's plan, shared in the code repository at that address, as your team's own piece of work, or carry its build on |
 | `/aidlc unit push [--later] [--remote <repo>=<name>] [--branch <name>] [--commit-message-file <file>] [--finish-merge] [--merge-main [--put-aside]] [--undo-merge] [--replace] [--to-fork]` | In a Unit's build, commit and push exactly its files on its branch in each repo, and send the result back to the lead's project |
-| `/aidlc unit send-back <unit>` | At the lead's project, send a team's Unit back from Build and Test in the failure's words |
+| `/aidlc unit send-back <unit>` | At the lead's project, send a taken Unit back from Build and Test in the failure's words |
 | `/aidlc unit propose --input <file>` | In a Unit's build, send the lead a change to an input the Unit was approved with |
 | `/aidlc unit rebase` | In a Unit's build started early, move it onto the branch the Unit it waited on merged into |
-| `/aidlc unit amend <unit> --input <file> --answer <approve\|reject>` | At the lead's project, answer a team's proposed change, in your own words |
-| `/aidlc unit lead-sign-off on\|off` | At the lead's project, make each team's result wait for your sign-off, or not (off by default) |
+| `/aidlc unit amend <unit> --input <file> --answer <approve\|reject>` | At the lead's project, answer a builder's proposed change, in your own words |
+| `/aidlc unit lead-sign-off on\|off` | At the lead's project, make each taken Unit's result wait for your sign-off, or not (off by default) |
 | `/aidlc unit plan-change keep\|take-out --tip <commit>` | At the lead's project, answer the question about a change on the shared plan that this computer did not write: keep it, or put the plan back as you last had it at your next write to it |
 | `/aidlc unit lead-here [--off]` | In a checkout that did not make the plan (the lead on another machine), record the lead's own word that they lead the work there, so the lead's questions are put there; `--off` takes that word back |
-| `/aidlc unit sign-off <unit>` | At the lead's project, sign a team's result off, in your own words |
+| `/aidlc unit sign-off <unit>` | At the lead's project, sign a Unit's result off, in your own words |
 | `/aidlc unit turned-down <unit> --repo <repo>` | At the lead's project, send one repo of a team's Unit back to the team, with your words |
 | `/aidlc unit merged <unit> --repo <repo> [--pull-request <n>]` | At the lead's project, count one repo of a team's Unit as merged where the board does not see it, in your words; with `--pull-request <n>`, name that pull request as the Unit's build there |
 | `/aidlc unit adopt <unit>` | Adopt the checked-out live claim branch in a fresh clone |
 | `/aidlc unit participate` | Mark this clone for the guided Unit-claim picker |
 | `/aidlc unit catch-up` | At the lead's project, before Build and Test, bring each repo here that lacks a merged Unit up to date with its remote, a fast-forward only |
-| `/aidlc unit share [--plan [--repo <name or address>] [--carry-words] [--stands <unit>=here\|plan[,...]] [--visible \| --off-branch [--tip <plan commit>]]] [--branch \| --back] [--commit-message-file <file>]` | Commit the work here and push the integration branch so the teams can take Units, or see a landed one; `--plan` commits AI-DLC's record only, and at work whose teams each build a Unit in their own workspace puts the plan in one code repository instead (the work's first, or the one `--repo` names; once it is shared, `--repo` moves it there) and commits nothing here; `--visible` puts the plan there on a branch people can open, `--off-branch` takes it off that branch again; `--branch` pushes the share's commit on a branch of its own for a pull request; `--back` switches back to the integration branch once that commit is in it |
+| `/aidlc unit share [--plan [--repo <name or address>] [--carry-words] [--stands <unit>=here\|plan[,...]] [--visible \| --off-branch [--tip <plan commit>]]] [--branch \| --back] [--commit-message-file <file>]` | Commit the work here and push the integration branch so its Units can be taken, or a landed one seen; `--plan` commits AI-DLC's record only, and at work whose Units are each built in the workspace of whoever takes it puts the plan in one code repository instead (the work's first, or the one `--repo` names; once it is shared, `--repo` moves it there) and commits nothing here; `--visible` puts the plan there on a branch people can open, `--off-branch` takes it off that branch again; `--branch` pushes the share's commit on a branch of its own for a pull request; `--back` switches back to the integration branch once that commit is in it |
 | `/aidlc unit commit-record [--update [--leave <path>]...] [--commit-message-file <file>]` | Commit AI-DLC's record in `aidlc/` (and a `repos.json` still at the project root) on this branch, nothing else, and push nothing; with `--update`, AI-DLC's own files an update changed instead |
 | `/aidlc unit publish <unit> [--commit [--include <path>]...]` | CAS-publish the scoped checkout's clean committed candidate onto its claim ref; `--commit` commits the Unit's own work first, and `--include` puts in a new file or folder it left out |
 | `/aidlc unit pin <unit>` | Pin and validate one completed candidate OID from unscoped main |
@@ -329,8 +329,8 @@ operation (worktree, swarm, Bolt) targets one repo; the conductor passes
 repo. An intent with no recorded repos is the single-repo default (git runs in the
 workspace/project dir). Work with recorded sibling repos is asked who builds its
 Units, as other work is, when the workspace is the top of a git repository:
-**Several teams** records where the lead's project is, and each team builds a
-Unit as work of its own ([Teams across repos](workshop-mode.md#teams-across-repos)).
+**Several teams or people** records where the lead's project is, and whoever takes a
+Unit builds it as work of its own ([Teams across repos](workshop-mode.md#teams-across-repos)).
 When the workspace is not a git repository, it is not asked: the first
 Construction step says in one line that this session builds the Units and to
 put the workspace in git first, and `set-unit-ownership team` refuses with the
@@ -766,8 +766,8 @@ remote (in the lead's project's own repository when it has none) with a
 compare-and-swap, held for the lead's own work by your git `user.name`, so no
 teammate takes it meanwhile, and the lead's walk builds it. A Unit someone took
 first stays theirs, and the command says who builds it. When the claim cannot be
-written, the Unit is built here all the same and the line says the teams cannot
-see that yet, with git's words. `unit release <unit>` there opens it again. The
+written, the Unit is built here all the same and the line says, with git's
+words, that someone else could still take it meanwhile. `unit release <unit>` there opens it again. The
 agent writes the words it came from to the request file the command names
 (`--request-file aidlc/.aidlc-engine/request-text/unit-assign.txt`), and they go into
 the `UNITS_ASSIGNED` audit row when a turn of yours stands behind them.
@@ -804,7 +804,7 @@ the plan's repository as its `Home Location` and the plan's commit, and each
 later step reads the plan from there. An address that starts with `-` is
 refused before any git call. `--home <record>` (with `--home-space <space>`)
 takes a Unit of solo work whose record is in this clone, for a second person
-building it one Unit at a time; for work teams build it is refused with the
+building it one Unit at a time; for work whose Units are taken from a plan it is refused with the
 way to the plan.
 
 The take is the Unit's claim where the plan is shared, with a compare-and-swap
@@ -1000,12 +1000,12 @@ record with `SHARED_INPUT_AMENDED` for each stage there that used it, and goes
 onto the claim of every Unit whose stages read it; a team it did not reach is
 named.
 
-### `/aidlc unit send-back` - Send a team's Unit back from Build and Test
+### `/aidlc unit send-back` - Send a taken Unit back from Build and Test
 
-At the lead's project, when Build and Test finds a Unit a team built wanting,
-`send-back <unit> --request-file <file>` sends it back to that team in the
+At the lead's project, when Build and Test finds a Unit someone took wanting,
+`send-back <unit> --request-file <file>` sends it back to whoever built it in the
 failure's own words (written to the file first): its result and its done come
-off its claim, the board shows it back with the team, the team hears it once
+off its claim, the board shows it back with whoever built it, who hears it once
 with the words, and the lead's project records it again once it merges again
 (`UNIT_SENT_BACK`, which keeps the lead's own words to send it back and the
 message they came in, beside the failure). Nothing of it is rebuilt at the
@@ -1046,7 +1046,7 @@ changes kept git from making it.
 ### `/aidlc unit lead-here` - Lead the work from another checkout
 
 In a checkout that did not make the work's plan (a fresh clone on another machine), the lead's own questions (a sign-off,
-an answer to a team's change) are not put: the step shows the board and the Units to take, as a
+an answer to a builder's proposed change) are not put: the step shows the board and the Units to take, as a
 teammate's clone does. When you say you lead this work, whether or not you ask to carry it on there, the agent runs `unit
 lead-here` with your words and shows the lead's view in the same turn; it records `LEAD_HERE_SET` in that checkout's own audit,
 and from then on the lead's questions are put there. When you say you do not lead this work there, the agent runs
@@ -1057,8 +1057,8 @@ anything the checkout wrote to the plan while it was the lead's stays, for the l
 ### `/aidlc unit lead-sign-off` and `/aidlc unit sign-off <unit>` - The lead's sign-off
 
 `lead-sign-off on|off` records `Lead Sign-off` in the work's state at the lead's project;
-it is off by default. While it is on, a Unit counts as done only once the lead
-signed its team's result off and every repo it changed merged. The lead's project asks
+it is off by default. While it is on, a taken Unit counts as done only once the
+lead signed its result off and every repo it changed merged. The lead's project asks
 once as a result arrives, and the board keeps the choice after a "Not now"; the
 agent runs `sign-off <unit> --request-file <file>` with their reply written to
 that file, under the same rules as any answer of theirs (their own words, after
@@ -1099,7 +1099,7 @@ reads no other pull request. The board then reads "its build is pull request 7 i
 reports". Naming another number for the same repo replaces it; where the Unit was already
 counted merged through the earlier one (or by your word), that merge is taken back and the
 Unit counts once the new one merges. `/aidlc unit release <unit>` takes the naming off and
-opens the Unit for a team to take again; a merge counted through it, or by your word alone,
+opens the Unit for a person or a team to take again; a merge counted through it, or by your word alone,
 is taken back the same way. Each take-back is one change on the plan and one
 `UNIT_MERGE_TAKEN_BACK` row in the audit; a Unit taken meanwhile stays taken.
 
@@ -1142,7 +1142,7 @@ successor attempt and prevents a lost-output retry from tombstoning it.
 In a Unit's build (a team's take of the lead's Unit), `unit release <unit>` is
 the way back from the take: the lead's project's claim is released, open again,
 and the build is archived with its record and audit kept. At the lead's project,
-`unit release <unit>` opens a Unit a team took, or one the lead built here,
+`unit release <unit>` opens a Unit someone took, or one the lead built here,
 again.
 
 ### `/aidlc unit participate` — Enable the guided picker
@@ -1157,7 +1157,7 @@ checkout without the marker receives the terminal fan-out notice instead.
 /aidlc unit participate
 ```
 
-### `/aidlc unit share` - Share main with the teams
+### `/aidlc unit share` - Share main
 
 Run from a checkout of team work that holds no Unit claim, on the integration
 branch:
@@ -1169,8 +1169,8 @@ branch:
 It commits what git shows changed here (files git does not track included,
 ignored files and AI-DLC's own part of `.gitignore`, `AGENTS.md` and
 `opencode.json` left out), then pushes the integration branch to the remote
-with a plain push, never forced, so the teams can take Units from the plan or
-see a Unit that landed. Once it has pushed, it names what it committed: how
+with a plain push, never forced, so Units can be taken from the plan, and a
+Unit that landed is seen. Once it has pushed, it names what it committed: how
 many files and, by name as changed, new or deleted, up to ten outside
 `aidlc/`, with how many more. With `Home Location` recorded (the plan shared
 as a ref of its own), it commits only AI-DLC's record, with the code of a Unit
@@ -1194,22 +1194,22 @@ yes runs this. On the plan's own
 branch it pushes that branch, so its pull request has the newer plan. `/aidlc` offers this step itself when it is due:
 before a Unit would start on the lead's checkout, and after a land the remote
 does not have yet. Its commit takes the message in the file
-`--commit-message-file` names, whole (`Share the plan with the teams`, or
+`--commit-message-file` names, whole (`Share the plan`, or
 `Record the <unit> landing` after a land, without one); each offer that ends in
 it shows the message the agent drafted for it in the repo's own style, and your
 own words replace it. The file goes once the share is done; a push that did not
 go keeps it, so the same command runs again as written.
 
-At work whose teams each build a Unit in a workspace of their own (`Home
+At work whose Units are each built in the workspace of whoever takes it (`Home
 Location` recorded), `unit share --plan` shares the plan as a git ref of its
-own, `refs/aidlc/plans/<work id>`, in one code repository the teams can read:
+own, `refs/aidlc/plans/<work id>`, in one code repository everyone who takes a Unit can read:
 the first of the work's repositories with an address, or the one `--repo <name
 or address>` names. The ref holds `plan.json` (the Units, the repositories each
 is built in, the stages and settings), the approved inputs, and your team's
 practices and project rules. It is pushed with your own git as a commit on the
 ref's tip, never forced, and nothing is committed or pushed in the workspace:
 no branch is made, and no code clone gains a remote or a setting. It says where
-the plan is and the address a team needs; run again with nothing new, it writes
+the plan is and the address anyone taking a Unit needs; run again with nothing new, it writes
 nothing. A repository that cannot be reached, refuses the push or has no address
 here is said in git's or the host's words, and nothing is written. When what is
 at the ref is not a plan this AI-DLC can read, the share writes the plan over it
@@ -1222,7 +1222,7 @@ version changed, then a note on the old repository's ref saying where it went,
 which a team reading the plan there follows; the plan's earlier versions stay
 readable in both repositories. When the old repository does not take the note,
 the plan stays in the new one. AI-DLC says that the old one holds no note of
-where the plan went, so that you give each team the new address. In three cases
+where the plan went, so that you give everyone who takes a Unit the new address. In three cases
 the copy just written is taken back instead and the plan stays where it was: the
 old repository could not be reached for the note, its plan kept changing
 meanwhile, or the old plan was written with a commit message of your own (a rule

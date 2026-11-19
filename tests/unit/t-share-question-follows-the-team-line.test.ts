@@ -31,18 +31,18 @@ afterEach(cleanupTempDirs);
 type Choice = { label: string; detail?: string; command?: string };
 
 const MEMORY = join("aidlc", "spaces", "default", "memory");
-const PLAIN = "Share them with the teams";
+const PLAIN = "Share by direct push";
 const BY_PR = "Share by pull request";
 const MARK = " (Recommended)";
-const PLAIN_PUSH = "Pushes main to origin as a plain push; it never overwrites what a team pushed.";
+const PLAIN_PUSH = "Pushes main to origin as a plain push; it never overwrites what anyone pushed.";
 // The message the share's commit carries, shown after the question.
-const MESSAGE = "\n\nShare the plan with the teams";
+const MESSAGE = "\n\nShare the plan";
 const HERE = "Build them here for now";
 const PR_COMMAND = / unit share --branch --commit-message-file \S+\/unit-share-message-[^/ ]+\.txt$/;
 const PLAIN_COMMAND = / unit share --commit-message-file \S+\/unit-share-message-[^/ ]+\.txt$/;
-const DIRECT = "push main to origin, so each team can take a Unit by opening its own clone";
-const ONE_REPO_PR = "push the plan on its own branch for a pull request, so each team can take a Unit once it is in main, " +
-  `by opening its own clone and running /aidlc.${MESSAGE}`;
+const DIRECT = "push main to origin, so anyone can take a Unit by opening their own clone";
+const ONE_REPO_PR = "push the plan on its own branch for a pull request, so anyone can take a Unit once it is in main, " +
+  `by opening their own clone and running /aidlc.${MESSAGE}`;
 
 const choicesOf = (step: Record<string, unknown>): Choice[] => (step.choices ?? []) as Choice[];
 const labels = (step: Record<string, unknown>): string[] => choicesOf(step).map((choice) => choice.label);
@@ -137,7 +137,7 @@ describe("a home's share question on main's own team flow follows the team's Cha
     expectPullRequestFirst(ask);
   });
 
-  test("team.md says by direct push: Share them with the teams comes first, marked Recommended, and the question is as it was", () => {
+  test("team.md says by direct push: Share by direct push comes first, marked Recommended, and the question is as it was", () => {
     const ask = homeShare(teamLine("by direct push"));
     expect(labels(ask)).toEqual([`${PLAIN}${MARK}`, BY_PR, HERE]);
     expect(String(choice(ask, `${PLAIN}${MARK}`).command)).toMatch(PLAIN_COMMAND);
@@ -184,10 +184,10 @@ describe("the one-repo share question follows the same line", () => {
     expect(String(ask.question)).toEndWith(ONE_REPO_PR);
   });
 
-  test("team.md says by direct push: Share them with the teams first, marked Recommended, the question as it was", () => {
+  test("team.md says by direct push: Share by direct push first, marked Recommended, the question as it was", () => {
     const ask = oneRepoShare(teamLine("by direct push"));
     expect(labels(ask)).toEqual([`${PLAIN}${MARK}`, BY_PR, "Build them here for now"]);
     expect(String(choice(ask, `${PLAIN}${MARK}`).command)).toMatch(/ unit share --commit-message-file \S+\/unit-share-message-[^/ ]+\.txt$/);
-    expect(String(ask.question)).toContain("push main to origin, so each team can take a Unit by opening its own clone");
+    expect(String(ask.question)).toContain("push main to origin, so anyone can take a Unit by opening their own clone");
   });
 });

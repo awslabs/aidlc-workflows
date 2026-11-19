@@ -107,7 +107,7 @@ export function claimsOnBranchesFor(projectDir: string, space: string, intentUui
 // The offer to approve each team's Unit once at its end instead of after every
 // stage, said with the step of a Unit the lead's walk builds and put on the
 // lead's board, while it can still change (unitGateRhythmCanBe).
-export const TEAM_RHYTHM_OFFER = "Each team will approve its Unit after every stage. Do you want them to approve once " +
+export const TEAM_RHYTHM_OFFER = "Whoever builds a Unit will approve it after every stage. Do you want them to approve once " +
   "at the end of each Unit instead? I'd keep after every stage, so a wrong turn is caught at the stage where it happens.";
 
 // The offer is put only until the lead answers it: either answer runs the
@@ -152,7 +152,7 @@ export function buildOutBlockedLine(projectDir: string, unitCount?: number): str
   if (at === null || !inFolder) return teamsAcrossReposLine(repos.length, unitCount);
   const units = unitCount === undefined ? "its Units" : `its ${unitCount} Units`;
   return `This project sits in ${at.prefix.replace(/\/$/, "")} of ${at.top}, not at the top of its git repository, so ` +
-    `this session builds ${units}: for teams to each own a Unit, start the work in a workspace of its own beside ` +
+    `this session builds ${units}: to leave them open for a person or a team to take, start the work in a workspace of its own beside ` +
     "that repository, with repos.json giving its path.";
 }
 
@@ -637,10 +637,10 @@ export function unitsTakenBackHere(rows: readonly AuditShardEvent[]): Map<string
   return taken;
 }
 
-// At the lead's project teams build for, a project learning is offered to any
-// team that takes a Unit (its project rules, at the take), and the learnings
+// At a lead's project whose Units others take, a project learning is offered
+// to whoever takes a Unit (its project rules, at the take), and the learnings
 // choice says so (Arden's call).
-export const LEARNINGS_PROJECT_CHOICE_AT_HOME = "Yes, for this project, and offered to any team that takes a Unit";
+export const LEARNINGS_PROJECT_CHOICE_AT_HOME = "Yes, for this project, and offered to whoever takes a Unit";
 export function learningsCorrectionChoices(stateContent: string): string[] {
   const home = homeLocation(stateContent) !== null && unitBuildOf(stateContent) === null;
   return home ? [LEARNINGS_PROJECT_CHOICE_AT_HOME, ...LEARNINGS_CORRECTION_CHOICES.slice(1)] : [...LEARNINGS_CORRECTION_CHOICES];
@@ -649,7 +649,9 @@ export function learningsCorrectionChoices(stateContent: string): string[] {
 // Whether the options offered are the learnings correction question's, in either wording.
 export function offersLearningsCorrectionChoices(has: (choice: string) => boolean): boolean {
   return LEARNINGS_CORRECTION_CHOICES.slice(1).every(has) &&
-    (has(LEARNINGS_CORRECTION_CHOICES[0]) || has(LEARNINGS_PROJECT_CHOICE_AT_HOME));
+    (has(LEARNINGS_CORRECTION_CHOICES[0]) || has(LEARNINGS_PROJECT_CHOICE_AT_HOME) ||
+      // A question logged before an update still reads by the words it was logged with.
+      has("Yes, for this project, and offered to any team that takes a Unit"));
 }
 
 // The line for likely repos the work does not record: said once, kept as
@@ -1278,7 +1280,7 @@ export function catchUpAsk(
 
 // The clause of the line solo work's switch to teams says, while the lead's
 // sign-off is off: the step carrying it carries the setter too.
-export const SIGN_OFF_CLAUSE = "and you can ask to sign off a teammate's result yourself before it counts as done";
+export const SIGN_OFF_CLAUSE = "and you can ask to sign off each taken Unit's result yourself before it counts as done";
 
 export const UNIT_WORDS_NOTE =
   "Where a command names a --request-file, write the person's words to it first, as they typed them, with your " +
@@ -1708,7 +1710,7 @@ export function leadWaitsOnTeams(projectDir: string, stateContent: string): Wait
 // written, so it is their sentence and names no step (the step is theirs).
 export function leadWaitSentence(waiting: readonly WaitingUnit[]): string {
   const parts = waiting.map(({ unit, team }, at) =>
-    `${unit}${at === 0 ? " waits" : ""} ${team === null ? "for a team to take it" : `on its build${spaceWords(team)}`}`);
+    `${unit}${at === 0 ? " waits" : ""} ${team === null ? "for someone to take it" : `on its build${spaceWords(team)}`}`);
   const list = parts.length === 1 ? parts[0] : `${parts.slice(0, -1).join(", ")} and ${parts.at(-1)}`;
   return `${list}, so nothing is built here meanwhile: the files here change only when you ask for a change.`;
 }

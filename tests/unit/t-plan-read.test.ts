@@ -621,7 +621,7 @@ describe("a team takes a Unit from the plan where it is shared", () => {
     const bea = cloneOf(home.remote, "bea");
     const took = run(UNIT, ["take", "refunds", "--home", HOME_RECORD], bea);
     expect(took.status).not.toBe(0);
-    expect(took.out).toContain(`${HOME_RECORD} is built by teams: its Units are taken from the plan.`);
+    expect(took.out).toContain(`${HOME_RECORD}'s Units are taken from its plan.`);
     expect(recordAt(home, "refunds")).toBeNull();
   });
 
@@ -637,7 +637,7 @@ describe("a team takes a Unit from the plan where it is shared", () => {
     const before = git(home.remote, ["for-each-ref", "refs/aidlc"]);
     const took = run(UNIT, ["take", "refunds", "--home", HOME_RECORD], bea);
     expect(took.status, took.out).not.toBe(0);
-    expect(took.out).toContain(`${HOME_RECORD} is built by teams: its Units are taken from the plan. Run \``);
+    expect(took.out).toContain(`${HOME_RECORD}'s Units are taken from its plan. Run \``);
     expect(took.out).toContain(" next --units` for what is ready to take.");
     expect(readdirSync(join(bea, "aidlc", "spaces", "default", "intents")).some((name) => name.endsWith("-refunds"))).toBe(false);
     expect(git(home.remote, ["for-each-ref", "refs/aidlc"])).toBe(before);

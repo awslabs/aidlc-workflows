@@ -1754,7 +1754,7 @@ function handleSetUnitOwnership(given: string[]): void {
     const current = getField(content, "Unit Ownership")?.trim() || "solo";
     if (value !== current && hasCurrentTeamUnitActivity(pd, content)) {
       error(
-        "The teams are already building their Units, so they keep them for this work. " +
+        "Units of this work are already being built, so they stay with whoever is building them. " +
           `Carry on with \`${entrySkillInvocation()}\`.`,
       );
     }

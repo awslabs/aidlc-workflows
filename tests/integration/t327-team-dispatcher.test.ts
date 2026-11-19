@@ -526,7 +526,7 @@ describe("t327 team construction dispatcher", () => {
     for (const view of [rendered, renderTeamConstructionBoard(board, "snapshot")]) {
       expect(view.replace(/`[^`]*`/g, "`x`")).not.toMatch(BOARD_TERMS);
     }
-    expect(rendered).toStartWith("# Team Construction Board\n_Last activity is what this checkout has seen, not when a team pushed._");
+    expect(rendered).toStartWith("# Team Construction Board\n_Last activity is what this checkout has seen, not when someone pushed._");
     expect(rendered).toContain("## Claims\n| unit | status | owner | attempt | last activity |");
     expect(rendered).toContain("| unit | step | commit | what is next |");
     expect(rendered).toContain("| unit | waits on |");

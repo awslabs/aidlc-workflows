@@ -519,8 +519,8 @@ describe("at the home", () => {
     expect(String(first.narration)).toBe([
       "Units of fixture:",
       "- refunds, payments space: built by alice, checkout-api not merged yet, billing not merged yet (0 of 2 merged)",
-      "- checkout-ui, open: waiting for a team to take it",
-      "- reporting, open: waiting for a team to take it",
+      "- checkout-ui, open: waiting for someone to take it",
+      "- reporting, open: waiting for someone to take it",
     ].join("\n"));
     mergeOnHost(hosts["checkout-api"], "refunds", "squash");
     expect(String(next(home.dir).narration)).toContain(
