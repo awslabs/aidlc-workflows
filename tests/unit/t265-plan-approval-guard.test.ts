@@ -550,6 +550,14 @@ function scratchProject(): string {
     "aidlc-log.ts",
     // aidlc-log.ts writes and removes the Kiro reviewer copy through this.
     "aidlc-kiro-review-copy.ts",
+    // aidlc-log.ts reads the lead's rules for a Kiro reviewer's brief from
+    // aidlc-steering.ts, which brings the stage graph and the schemas it reads.
+    "aidlc-steering.ts",
+    "aidlc-graph.ts",
+    "aidlc-plugin-rules.ts",
+    "aidlc-rule-schema.ts",
+    "aidlc-sensor-schema.ts",
+    "aidlc-stage-schema.ts",
     "aidlc-message-store.ts",
     // aidlc-message-store.ts reads what an archive replaced through this.
     "aidlc-doctor-bundle.ts",
