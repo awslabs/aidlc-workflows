@@ -919,8 +919,9 @@ Build and Test reads them, and marks the claim done, so the Units waiting on it
 open for the lead's project and for every team. A merge the lead's project sees is the one thing it
 writes for the teams, and the board says it once, naming who took it: "I've told
 bea refunds is merged." Another clone or machine of the lead's project reads a Unit done on its claim
-as done too. A repo the lead's project has no checkout of stays
-"not merged yet" there. A team that can read a repository and push only to its fork
+as done too. A repo the lead's project has no checkout of reads
+"not read here: billing is not cloned in this workspace" there, and the board
+offers to clone it; once it is cloned, the merge counts. A team that can read a repository and push only to its fork
 sends its Unit as a pull request from the fork; the lead says which pull request is
 the Unit's build ("pull request 7 in reports is the partner's build of reporting"),
 AI-DLC runs `aidlc unit merged <unit> --repo <repo> --pull-request <n>`, and the

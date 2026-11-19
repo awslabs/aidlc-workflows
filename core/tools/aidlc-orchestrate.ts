@@ -725,6 +725,7 @@ import {
   sendLeadsApprovedChanges,
   namedCloneOffer,
   namedOnlyDone,
+  resultReposNotHere,
   namedPullRequests,
   takeDayOf,
   GitWriteRefused,
@@ -11102,6 +11103,14 @@ function joinRepoNames(repos: string[]): string {
   return names.length <= 1 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
 }
 
+// Where a Unit's repos stand, for the board and the sign-off ask: a repo with
+// no clone here (`notHere`) is said so, in place of a count that leaves it out.
+function mergedOrNotHere(verdicts: ReadonlyArray<{ repo: string; merged: boolean }>, notHere: string[]): string {
+  if (notHere.length === 0) return mergedStatus(verdicts);
+  return [...verdicts.filter((verdict) => !notHere.includes(verdict.repo)).map((verdict) => mergedStatus([verdict])),
+    `not read here: ${joinRepoNames(notHere)} ${notHere.length === 1 ? "is" : "are"} not cloned in this workspace`].join(", ");
+}
+
 // The selected work's own name, for the lines the person reads.
 function workLabel(projectDir: string): string {
   const selection = engineSelection(projectDir);
@@ -19856,7 +19865,8 @@ function unitBoardRows(
   results: ReturnType<typeof checkTeamResults>,
   mergedHere: ReadonlySet<string>,
   progress: string,
-): { rows: UnitBoardRow[] } {
+): { rows: UnitBoardRow[]; notRead: string[] } {
+  const notRead: string[] = [];
   const dependencies = unitDependencies(projectDir);
   const standing = unitProgressStanding(progress);
   const home = homeLocation(stateContent) === null ? null : leftForTakesAtHome(projectDir, overview);
@@ -19877,7 +19887,7 @@ function unitBoardRows(
     const its = namedBuildWords(pulls);
     if (results.get(unit)?.done === true) return `${its}, done`;
     const notHere = pulls.map((pr) => pr.repo).filter((repo) => !isGitRepoDir(repo === "." ? projectDir : repoDir(projectDir, repo)));
-    if (notHere.length > 0) return `${its}, not read here: ${joinRepoNames(notHere)} ${notHere.length === 1 ? "is" : "are"} not cloned in this workspace`;
+    if (notHere.length > 0) return `${its}, ${mergedOrNotHere([], notHere)}`;
     const verdicts = pulls.map((pr) => ({ repo: pr.repo, merged: results.get(unit)?.verdicts.some((verdict) => verdict.repo === pr.repo && verdict.merged) === true }));
     return `${its}, ${verdicts.length === 1 ? (verdicts[0].merged ? "merged" : "not merged yet") : mergedStatus(verdicts)}`;
   };
@@ -19916,7 +19926,9 @@ function unitBoardRows(
       const unrecorded = opens === null ? "" : past !== null
         ? `, not recorded yet: it is recorded once the work is back on ${past.back}`
         : `, not recorded yet: the next step here records it${named ? ` and opens ${named}` : ""}`;
-      return { unit, team, status: `${builtBy}${mergedStatus(verdicts)}${waiting}${unrecorded}` };
+      const unread = resultReposNotHere(projectDir, payload, verdicts);
+      notRead.push(...unread);
+      return { unit, team, status: `${builtBy}${mergedOrNotHere(verdicts, unread)}${waiting}${unrecorded}` };
     }
     const early = (payload.early_on ?? []).map((dep) => dep.unit);
     const day = takeDayOf(projectDir, claim!);
@@ -19927,7 +19939,7 @@ function unitBoardRows(
         (byNaming === null ? "" : `; ${byNaming}`),
     };
   });
-  return { rows };
+  return { rows, notRead };
 }
 
 // `team-board` at a team home: the home's own board, from the same builders as
@@ -20263,11 +20275,13 @@ function emitTeamUnitMajorRunStage(
       noteEngineAskMark(projectDir, askName);
       const verdicts = results.get(toSignOff.unit)?.verdicts ?? toSignOff.payload.verdicts ??
         toSignOff.payload.result!.repos.map((repo) => ({ repo: repo.repo, merged: false }));
+      // Joined as the board's row is where a repo is not read here.
+      const unread = resultReposNotHere(projectDir, toSignOff.payload, verdicts);
       emit({
         kind: "ask",
         ask_type: "unit-signoff",
         response_route: "command",
-        question: `${toSignOff.unit} came back from ${builderOf(toSignOff)}: ${mergedStatus(verdicts)}. Sign it off?`,
+        question: `${toSignOff.unit} came back from ${builderOf(toSignOff)}${unread.length > 0 ? "," : ":"} ${mergedOrNotHere(verdicts, unread)}. Sign it off?`,
         choices: [
           {
             label: "Sign it off",
@@ -20283,7 +20297,7 @@ function emitTeamUnitMajorRunStage(
     }
   }
   if ([...heldElsewhere].some((unit) => !mergedHere.has(unit))) {
-    const { rows } = unitBoardRows(projectDir, stateContent, resolution.batches.flat(), overview, results, mergedHere, refreshedState);
+    const { rows, notRead } = unitBoardRows(projectDir, stateContent, resolution.batches.flat(), overview, results, mergedHere, refreshedState);
     const unitTool = aidlcToolInvocation("unit");
     // A sign-off or a proposal the lead was asked about once stays theirs to answer, from the board.
     const answers = [...(overview?.claims.values() ?? [])].filter((claim) => claim.status === "claimed").flatMap((claim) => [
@@ -20323,7 +20337,7 @@ function emitTeamUnitMajorRunStage(
       }]
       : [];
     // A Unit whose build is a named pull request, merged and waiting for the lead's sign-off; and the clone of a
-    // repository the lead named one in that is not here, as a build is offered its own.
+    // repository not here that a named pull request or a team's pushed build is in, as a build is offered its own.
     const namedOffers: StepOffer[] = [];
     if (leadSignOffOn(stateContent)) {
       for (const [unit, pulls] of namedPullRequests(projectDir)) {
@@ -20338,7 +20352,7 @@ function emitTeamUnitMajorRunStage(
         });
       }
     }
-    const clone = namedCloneOffer(projectDir);
+    const clone = namedCloneOffer(projectDir, notRead);
     if (clone !== null) namedOffers.push(clone);
     // Each offer is put once in a chat; its command stays in the board's note.
     const allOffers = offersOnce(projectDir, [...answers, ...namedOffers, ...rhythm]);

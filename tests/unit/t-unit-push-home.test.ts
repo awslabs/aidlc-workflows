@@ -569,6 +569,40 @@ describe("at the home", () => {
     expect(building.unit).toBe("reporting");
   });
 
+  // A new worktree of the lead's checkout has none of the clones git leaves out
+  // of it: the board says which repos it cannot read there, offers their
+  // clone, and counts the merge once they are there.
+  test("a worktree of the lead's checkout without the clones: the board says they are not cloned there and offers them; with them the merge counts and what waits opens", () => {
+    const { hosts, home, alice, record } = refundsTakenInClone();
+    codeGenerated(alice, record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    mergeOnHost(hosts["checkout-api"], "refunds", "squash");
+    mergeOnHost(hosts.billing, "refunds", "merge");
+    const tree = join(tempDir("lead-worktree"), "lead-worktree");
+    git(home.dir, ["worktree", "add", "-q", "-b", "lead-worktree", tree, "main"]);
+    expect(run(UTILITY, ["intent", "switch", HOME_RECORD], tree).status).toBe(0);
+    const board = next(tree);
+    expect(String(board.narration), JSON.stringify(board).slice(0, 600)).toContain(
+      "- refunds, payments space: built by alice, not read here: checkout-api and billing are not cloned in this workspace",
+    );
+    const offers = JSON.stringify(board.offers ?? []);
+    expect(offers).toContain("intent add-repo checkout-api");
+    expect(offers).toContain("intent add-repo billing");
+    const carol = cloneOf(home.remote, "carol");
+    cloneCode(hosts.billing, carol, "billing", "carol");
+    expect(takeIn("reports", ["reporting", ...planFrom(home)], carol).out).toContain("reporting waits on refunds, which is not done yet.");
+    expect(run(UTILITY, ["intent", "add-repo", "checkout-api"], tree).status).toBe(0);
+    expect(String(next(tree).narration)).toContain(
+      "- refunds, payments space: built by alice, checkout-api merged, not read here: billing is not cloned in this workspace",
+    );
+    expect(run(UTILITY, ["intent", "add-repo", "billing"], tree).status).toBe(0);
+    const after = next(tree);
+    expect(String(after.narration), JSON.stringify(after).slice(0, 600)).toContain("- refunds, payments space: built by alice, done");
+    expect(planWordAt(home, "refunds")).toMatchObject({ done: true });
+    const taken = run(UNIT, ["take", "reporting", ...planFrom(home)], carol);
+    expect(taken.status, taken.out).toBe(0);
+  });
+
   test("what a team sent shows at the home's next step, with no fetch by the lead", () => {
     const { home, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);

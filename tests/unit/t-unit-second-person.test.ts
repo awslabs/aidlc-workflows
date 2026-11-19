@@ -34,6 +34,7 @@ import {
   refundsTaken,
   run,
   STATE,
+  UTILITY,
   stateOf,
   tempDir,
   UNIT,
@@ -526,6 +527,25 @@ describe("the lead's sign-off", () => {
     git(home.dir, ["fetch", "-q", "origin"]);
     expect(next(home.dir).ask_type).not.toBe("unit-signoff");
     expect(planWordAt(home, "refunds")).toMatchObject({ done: true });
+  });
+
+  test("on, in a worktree of the lead's checkout without the clones: the ask says those repos are not cloned there", () => {
+    const { home, hosts, alice, record } = refundsTaken();
+    expect(run(UNIT, ["lead-sign-off", "on"], home.dir).status).toBe(0);
+    git(home.dir, ["add", "-A"]);
+    git(home.dir, ["commit", "-q", "-m", "sign-off on"]);
+    codeGenerated(alice, record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    mergeOnHost(hosts["checkout-api"], "refunds", "squash");
+    mergeOnHost(hosts.billing, "refunds", "squash");
+    const tree = join(tempDir("lead-worktree"), "lead-worktree");
+    git(home.dir, ["worktree", "add", "-q", "-b", "lead-worktree", tree, "main"]);
+    expect(run(UTILITY, ["intent", "switch", HOME_RECORD], tree).status).toBe(0);
+    const ask = next(tree);
+    expect(ask.ask_type, JSON.stringify(ask).slice(0, 600)).toBe("unit-signoff");
+    expect(ask.question).toBe(
+      "refunds came back from alice, not read here: checkout-api and billing are not cloned in this workspace. Sign it off?",
+    );
   });
 
   test("on: the result waits for the lead's own word, asked once as it arrives", () => {

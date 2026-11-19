@@ -14878,6 +14878,15 @@ export function mergedAtTeamLook(projectDir: string, payload: UnitClaimPayload):
   return teamMergeSeen(projectDir, payload) === true;
 }
 
+// The repos of a pushed result with no clone here to read its merge in (a
+// look reads a repo only where its folder is a git repository), the lead's
+// word aside; with `verdicts`, only those not counted merged, never ".".
+export function resultReposNotHere(projectDir: string, payload: UnitClaimPayload, verdicts?: ReadonlyArray<{ repo: string; merged: boolean }>): string[] {
+  return (payload.result?.repos ?? []).filter((repo) => !payload.said_merged?.some((entry) => entry.repo === repo.repo) &&
+    !isGitRepoDir(repo.repo === "." ? projectDir : repoDir(projectDir, repo.repo)) &&
+    (verdicts === undefined || (repo.repo !== "." && verdicts.some((verdict) => verdict.repo === repo.repo && !verdict.merged)))).map((repo) => repo.repo);
+}
+
 // The same read, for a line that says where a pushed build stands: true when
 // every repo has it, false when every repo is here and was reached and one
 // does not have it yet, null when a repo is not here or was not reached now.
@@ -14886,9 +14895,7 @@ export function teamMergeSeen(projectDir: string, payload: UnitClaimPayload): bo
   try {
     return quietly(() => {
       const repos = payload.result?.repos ?? [];
-      const notHere = repos.some((repo) => !payload.said_merged?.some((entry) => entry.repo === repo.repo) &&
-        !isGitRepoDir(repo.repo === "." ? pd : repoDir(pd, repo.repo)));
-      if (repos.length === 0 || notHere) return null;
+      if (repos.length === 0 || resultReposNotHere(pd, payload).length > 0) return null;
       const unreached: string[] = [];
       const verdicts = resultVerdicts(pd, payload, unreached);
       if (unreached.length > 0) return null;
@@ -16598,12 +16605,13 @@ export function namedOnlyDone(projectDir: string): Array<{ unit: string; pulls: 
   }
 }
 
-// The offer to clone a repository the lead named a pull request in that this
+// The offer to clone a repository the lead named a pull request in, or one of
+// a team's pushed build the board could not read (`unread`), that this
 // workspace has no checkout of: a build's own clone offer (likelyReposNotHere),
 // with the address this workspace's list or the plan gives. Null with none.
-export function namedCloneOffer(projectDir: string): { question: string; choices: Array<{ label: string; command?: string }> } | null {
+export function namedCloneOffer(projectDir: string, unread: readonly string[] = []): { question: string; choices: Array<{ label: string; command?: string }> } | null {
   const pd = resolveProjectDir(projectDir);
-  const repos = [...new Set([...namedPullRequests(pd).values()].flat().map((pr) => pr.repo))].filter((repo) => repo !== ".");
+  const repos = [...new Set([...[...namedPullRequests(pd).values()].flat().map((pr) => pr.repo), ...unread])].filter((repo) => repo !== ".");
   if (repos.length === 0) return null;
   const plan = keptPlan(pd, activeIdentity(pd).intentId8)?.plan ?? null;
   const addresses = new Map((plan?.repos ?? []).flatMap((repo) => (repo.address === null ? [] : [[repo.name, repo.address] as [string, string]])));
