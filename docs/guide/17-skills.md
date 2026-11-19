@@ -125,7 +125,7 @@ The three bootstrap **initialization** stages ship no stage-runner - creating ha
 | Document knowledge | `/aidlc-knowledge` | Index and read the team's own documents (per-space DocumentKB) | `/aidlc knowledge <verb>` |
 | Issue report | `/aidlc-issue-report` | A run's records, with sensitive details removed, to send to the AI-DLC team | builds on `/aidlc --doctor --export` |
 
-There's one stage-runner for every runnable stage in the lifecycle. To see the full set, list your skills directory. In a project set up for Claude Code with `aidlc config` (shortened):
+There's one stage-runner for every runnable stage in the lifecycle, unless the stage's file says `runner: false`. To see the full set, list your skills directory. In a project set up for Claude Code with `aidlc config` (shortened):
 
 ```text
 $ ls .claude/skills/
