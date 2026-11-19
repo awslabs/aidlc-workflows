@@ -31,6 +31,7 @@ import {
   makeHome,
   mergeOnHost,
   next,
+  ORCH,
   personsChat,
   planFrom,
   planRefOf,
@@ -601,14 +602,14 @@ describe("the lead's sign-off, from another checkout of the lead's", () => {
   // The lead's own checkout (its approval in its own shard), committed and
   // pushed; the sign-off then turned on there and not committed; refunds
   // pushed by alice and merged in both repos.
-  function signOffOnHereOnly() {
+  function signOffOnHereOnly(on = true) {
     const taken = refundsTaken();
     const { home, hosts, alice, record } = taken;
     asLeadsOwnCheckout(home.dir);
     git(home.dir, ["add", "-A"]);
     git(home.dir, ["commit", "-q", "-m", "the lead's checkout"]);
     git(home.dir, ["push", "-q", "origin", "main"]);
-    expect(run(UNIT, ["lead-sign-off", "on"], home.dir).status).toBe(0);
+    if (on) expect(run(UNIT, ["lead-sign-off", "on"], home.dir).status).toBe(0);
     codeGenerated(alice, record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
     mergeOnHost(hosts["checkout-api"], "refunds", "squash");
@@ -635,6 +636,8 @@ describe("the lead's sign-off, from another checkout of the lead's", () => {
     test(`${where}: the plan keeps it on, the sign-off is asked there, and refunds is done only after it`, () => {
       const { home, hosts } = signOffOnHereOnly();
       const dir = other(home);
+      // The lead's own word that they lead it here: the sign-off is theirs.
+      expect(run(ORCH, ["team-board"], dir).out).toContain("(2 of 2 merged), waiting for your sign-off");
       const ask = next(dir);
       expect(ask.ask_type, JSON.stringify(ask).slice(0, 600)).toBe("unit-signoff");
       expect(ask.question).toBe("refunds came back from alice: checkout-api merged, billing merged (2 of 2 merged). Sign it off?");
@@ -642,6 +645,7 @@ describe("the lead's sign-off, from another checkout of the lead's", () => {
       expect(planWordAt(home, "refunds")?.done).toBeUndefined();
       const signed = run(UNIT, ["sign-off", "refunds", "--person-words", "looks right, sign it off"], dir);
       expect(signed.status, signed.out).toBe(0);
+      expect(run(ORCH, ["team-board"], dir).out).toContain("(2 of 2 merged), not recorded yet: the next step here records it and opens reporting");
       next(dir);
       expect(planWordAt(home, "refunds")).toMatchObject({ done: true });
       expect(settingAt(home)).toBe("on");
@@ -681,6 +685,47 @@ describe("the lead's sign-off, from another checkout of the lead's", () => {
     expect(step.ask_type, JSON.stringify(step).slice(0, 600)).not.toBe("unit-signoff");
     expect(planWordAt(home, "refunds")?.done).toBeUndefined();
     expect(git(recordHost(home), ["rev-parse", planRefOf(home.id8)])).toBe(tip);
+  });
+
+  test("a teammate's clone of the lead's workspace reads the sign-off as the lead's, on the board, the team board and status", () => {
+    const { home, hosts } = signOffOnHereOnly();
+    const carl = cloneOf(home.remote, "carl");
+    for (const name of ["checkout-api", "billing"]) cloneCode(hosts[name as keyof typeof hosts], carl, name, "carl");
+    expect(run(UTILITY, ["intent", "switch", HOME_RECORD], carl).status).toBe(0);
+    const row = "- refunds, payments space: built by alice, checkout-api merged, billing merged (2 of 2 merged), waiting for the lead's sign-off";
+    expect(String(next(carl).narration)).toContain(row);
+    expect(run(ORCH, ["team-board"], carl).out).toContain(row);
+    expect(run(UTILITY, ["status"], carl).out).toContain(row);
+    // The lead's own checkout reads it as theirs.
+    expect(run(ORCH, ["team-board"], home.dir).out).toContain("(2 of 2 merged), waiting for your sign-off");
+  });
+
+  // A teammate's clone of the lead's workspace, the lead's work selected, no lead-here.
+  const mateOf = (home: ReturnType<typeof refundsTaken>["home"], hosts: ReturnType<typeof refundsTaken>["hosts"]): string => {
+    const mate = cloneOf(home.remote, "carl");
+    for (const name of ["checkout-api", "billing"]) cloneCode(hosts[name as keyof typeof hosts], mate, name, "carl");
+    expect(run(UTILITY, ["intent", "switch", HOME_RECORD], mate).status).toBe(0);
+    return mate;
+  };
+  const MERGED_ROW = "- refunds, payments space: built by alice, checkout-api merged, billing merged (2 of 2 merged)";
+
+  test("a teammate's clone says no step of its own records the merge, with the sign-off off; the lead's checkout does", () => {
+    const { home, hosts } = signOffOnHereOnly(false);
+    const board = String(next(mateOf(home, hosts)).narration);
+    expect(board).toContain(`${MERGED_ROW}\n`);
+    expect(board).not.toContain("not recorded yet");
+    expect(run(ORCH, ["team-board"], home.dir).out).toContain(`${MERGED_ROW}, not recorded yet: the next step here records it and opens reporting`);
+  });
+
+  test("a teammate's clone after a teammate's sign-off, the lead's record not committed: no step of its own records it", () => {
+    const { home, hosts } = signOffOnHereOnly();
+    const mate = mateOf(home, hosts);
+    next(mate);
+    const signed = run(UNIT, ["sign-off", "refunds", "--person-words", "looks right, sign it off"], mate);
+    expect(signed.status, signed.out).toBe(0);
+    const board = String(next(mate).narration);
+    expect(board).toContain(`${MERGED_ROW}\n`);
+    expect(board).not.toContain("not recorded yet");
   });
 
   test("the lead's own off takes it off the plan, from the main checkout and from another computer of theirs", () => {

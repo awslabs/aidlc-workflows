@@ -19869,7 +19869,12 @@ function unitBoardRows(
   const notRead: string[] = [];
   const dependencies = unitDependencies(projectDir);
   const standing = unitProgressStanding(progress);
-  const signOffOn = leadSignOffOn(stateContent, projectDir);
+  // A checkout that did not make the plan and has not said it leads the work
+  // (planMadeElsewhere) records nothing on it: the sign-off there is the
+  // lead's, and its next step records no merge.
+  const leadsHere = !planMadeElsewhere(projectDir);
+  const signOffWaits = !leadSignOffOn(stateContent, projectDir) ? ""
+    : leadsHere ? ", waiting for your sign-off" : ", waiting for the lead's sign-off";
   const home = homeLocation(stateContent) === null ? null : leftForTakesAtHome(projectDir, overview);
   const left = home?.units ?? new Set<string>();
   // The lead's own build-here claims are built here, done ones too (leadsOwnClaims).
@@ -19914,7 +19919,7 @@ function unitBoardRows(
     if (payload.result) {
       const verdicts = results.get(unit)?.verdicts ?? payload.verdicts ??
         payload.result.repos.map((repo) => ({ repo: repo.repo, merged: false }));
-      const waiting = signOffOn && !payload.signoff ? ", waiting for your sign-off" : "";
+      const waiting = payload.signoff ? "" : signOffWaits;
       // Every repo seen merged by a look that records nothing (`team-board`):
       // the step records it, and the Units waiting only on it open then; past
       // the Unit stages, only once the work is back on them.
@@ -19924,7 +19929,7 @@ function unitBoardRows(
         : null;
       const named = opens === null || opens.length === 0 ? "" : opens.length === 1 ? opens[0] : `${opens.slice(0, -1).join(", ")} and ${opens.at(-1)}`;
       const past = opens === null ? null : pastUnitStages(stateContent);
-      const unrecorded = opens === null ? "" : past !== null
+      const unrecorded = opens === null || !leadsHere ? "" : past !== null
         ? `, not recorded yet: it is recorded once the work is back on ${past.back}`
         : `, not recorded yet: the next step here records it${named ? ` and opens ${named}` : ""}`;
       const unread = resultReposNotHere(projectDir, payload, verdicts);
