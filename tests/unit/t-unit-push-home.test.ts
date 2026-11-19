@@ -27,6 +27,7 @@ import {
   fetchRecords,
   codeGenerated,
   codeHost,
+  commitOnHost,
   DEPENDENCIES,
   ENV,
   git,
@@ -54,6 +55,7 @@ import {
   takeIn,
   sharePlan,
   planFrom,
+  squashOnHost,
 } from "../harness/team-build.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
@@ -67,38 +69,12 @@ const TEAMMATES_SEE = "teammates see where this work stands";
 
 afterEach(cleanupTeamBuild);
 
-// A commit on a Unit's branch on its code host that AI-DLC did not push: a
-// review fix by hand with plain git, or the host's own "Commit suggestion".
-function commitOnHost(host: string, branch: string, files: Record<string, string>, message: string): string {
-  const dir = join(tempDir("reviewer"), "repo");
-  git(tempDir("reviewer-parent"), ["clone", "-q", "--branch", branch, host, dir]);
-  git(dir, ["config", "user.name", "reviewer"]);
-  git(dir, ["config", "user.email", "reviewer@example.test"]);
-  for (const [path, text] of Object.entries(files)) writeFileSync(join(dir, path), text);
-  git(dir, ["commit", "-q", "-am", message]);
-  git(dir, ["push", "-q", "origin", branch]);
-  return git(dir, ["rev-parse", "HEAD"]);
+// A teammate's own look in a new chat with nothing selected: what they can take now.
+function unitsLook(dir: string): Record<string, unknown> {
+  writeFileSync(join(dir, "aidlc", "spaces", "payments", "intents", "active-intent"), "");
+  return next(dir, ENV, ["--units"]);
 }
-
-// A pull request squashed on its code host in the host's own words, its branch
-// deleted after. GitLab's merge commit method puts the squash under a merge
-// commit (`mergeCommit`, its message).
-function squashOnHost(host: string, branch: string, message: string, mergeCommit?: string): void {
-  const dir = join(tempDir("squasher"), "repo");
-  git(tempDir("squasher-parent"), ["clone", "-q", host, dir]);
-  git(dir, ["config", "user.name", "reviewer"]);
-  git(dir, ["config", "user.email", "reviewer@example.test"]);
-  git(dir, ["fetch", "-q", "origin", branch]);
-  git(dir, ["merge", "-q", "--squash", `origin/${branch}`]);
-  git(dir, ["commit", "-q", "-m", message]);
-  if (mergeCommit !== undefined) {
-    const squash = git(dir, ["rev-parse", "HEAD"]);
-    git(dir, ["reset", "-q", "--hard", "HEAD^"]);
-    git(dir, ["merge", "-q", "--no-ff", "-m", mergeCommit, squash]);
-  }
-  git(dir, ["push", "-q", "origin", "main"]);
-  git(host, ["branch", "-q", "-D", branch]);
-}
+const labels = (step: Record<string, unknown>): string[] => ((step.choices ?? []) as Array<{ label: string }>).map((choice) => choice.label);
 
 describe("at the home", () => {
   test("while the home builds the walking skeleton, the claims are fetched once in a chat, not at every step", () => {
@@ -186,6 +162,9 @@ describe("at the home", () => {
     git(hosts["checkout-api"], ["branch", "-q", "-D", "refunds"]);
     const squash = git(hosts["checkout-api"], ["rev-parse", "--short=7", "main"]);
     const line = `checkout-api has ${squash} "refunds (squashed)" changing every file of refunds; if that is refunds merged, say so.`;
+    // Nothing git can read proves it: the team's own look waits for the lead's word too.
+    expect(teamMergeSeen(alice, claimPayload(recordHost(home), home.id8, "refunds") as unknown as Parameters<typeof teamMergeSeen>[1])).toBe(false);
+    expect(labels(unitsLook(alice))).toContain("Start reporting early");
     const chat = personsChat("t-unit-push-maybe-merged");
     const seen = personsNext(home.dir, chat, "t-unit-push-maybe-merged");
     expect(planWordAt(home, "refunds")?.verdicts).toEqual([
@@ -227,7 +206,63 @@ describe("at the home", () => {
       expect(git(api, ["for-each-ref", "--format=%(refname)"]).split("\n").filter((ref) => !refsBefore.split("\n").includes(ref)))
         .toEqual([]);
     });
+
+    // The team's side of the same merge: its own look reads it by the lead's
+    // rule, with its own git, before the lead's look writes it on the plan.
+    test(`a fix, a squash and the branch's deletion, on ${host.name}: the team's own look counts it merged before the lead's, what waits on it opens, and the plan is not written`, () => {
+      const { hosts, home, alice, record } = refundsTakenInClone();
+      codeGenerated(alice, record);
+      finishBuild(record);
+      expect(run(UNIT, ["push"], alice).status).toBe(0);
+      const fix = commitOnHost(hosts["checkout-api"], "refunds", { "src/refunds.ts": "export const refunds = 1; // reviewed\n" }, "review fix");
+      git(hosts["checkout-api"], ["update-ref", host.ref, fix]);
+      squashOnHost(hosts["checkout-api"], "refunds", host.subject, host.mergeCommit);
+      mergeOnHost(hosts.billing, "refunds", "squash");
+      const plan = git(recordHost(home), ["rev-parse", planRefOf(home.id8)]);
+      const api = join(alice, "checkout-api");
+      const refsBefore = git(api, ["for-each-ref", "--format=%(refname)"]);
+      const look = unitsLook(alice);
+      expect(String(look.question), JSON.stringify(look)).toContain("refunds (pushed by alice in payments, merged)");
+      expect(String(look.question)).toContain("reporting (open");
+      expect(labels(look)).toContain("Start reporting");
+      expect(labels(look).filter((label) => label.includes("early"))).toEqual([]);
+      // A look writes nothing on the plan and keeps nothing in the team's code clone.
+      expect(git(recordHost(home), ["rev-parse", planRefOf(home.id8)])).toBe(plan);
+      expect(git(api, ["remote"])).toBe("origin");
+      expect(git(api, ["for-each-ref", "--format=%(refname)"]).split("\n").filter((ref) => !refsBefore.split("\n").includes(ref)))
+        .toEqual([]);
+      git(home.dir, ["fetch", "-q", "origin"]);
+      const seen = next(home.dir);
+      expect((seen.change_notices ?? []) as string[], JSON.stringify(seen)).toContain("refunds is merged in checkout-api and billing. Written on the plan.");
+    });
   }
+
+  // A fix then a squash with the branch kept, on a Unit in two repos: the
+  // team's own look reads the branch as it is, and counts the merge only once
+  // every repo has it; a teammate with no build of it reads the same.
+  test("a fix then a squash with the branch kept, one repository merged and one not: the team's own look waits, then counts it once both have it, and a teammate with the repos and no build of it takes what waits", () => {
+    const { hosts, home, alice, record } = refundsTakenInClone();
+    codeGenerated(alice, record);
+    finishBuild(record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    commitOnHost(hosts["checkout-api"], "refunds", { "src/refunds.ts": "export const refunds = 1; // reviewed\n" }, "review fix");
+    mergeOnHost(hosts["checkout-api"], "refunds", "squash");
+    const waiting = unitsLook(alice);
+    expect(String(waiting.question), JSON.stringify(waiting)).toContain("refunds (pushed by alice in payments, waiting for its merge)");
+    expect(labels(waiting)).toContain("Start reporting early");
+    mergeOnHost(hosts.billing, "refunds", "squash");
+    const merged = unitsLook(alice);
+    expect(String(merged.question), JSON.stringify(merged)).toContain("refunds (pushed by alice in payments, merged)");
+    expect(labels(merged)).toContain("Start reporting");
+    const bob = cloneOf(home.remote, "bob");
+    for (const [name, host] of Object.entries(hosts)) cloneCode(host, bob, name, "bob");
+    const bobs = next(bob, ENV, ["--units"]);
+    expect(String(bobs.question), JSON.stringify(bobs)).toContain("reporting (open");
+    const took = takeIn("reports", ["reporting", ...planFrom(home)], bob);
+    expect(took.status, took.out).toBe(0);
+    expect(String(took.json?.notice)).toContain("reporting is yours.");
+    expect(planWordAt(home, "refunds")?.verdicts).toBeUndefined();
+  });
 
   // The person's own prune (fetch.prune on, or git fetch --prune) takes git's
   // copy of a deleted branch; the host's pull request head still proves it.
@@ -379,6 +414,8 @@ describe("at the home", () => {
     // the push and more.
     for (const [session, head] of [["t-unit-push-no-pr-head", null], ["t-unit-push-other-pr-head", "main~1"], ["t-unit-push-later-pr-head", later]]) {
       if (head !== null) git(host, ["update-ref", "refs/pull/41/head", git(host, ["rev-parse", head!])]);
+      expect(teamMergeSeen(alice, claimPayload(recordHost(home), home.id8, "refunds") as unknown as Parameters<typeof teamMergeSeen>[1]), session!)
+        .toBe(false);
       const seen = personsNext(home.dir, personsChat(session!), session!);
       expect((seen.change_notices ?? []) as string[], `${session} ${JSON.stringify(seen)}`).toContain(line);
     }
@@ -458,6 +495,7 @@ describe("at the home", () => {
     git(other, ["push", "-q", "--force", "origin", "refunds"]);
     mergeOnHost(hosts["checkout-api"], "refunds", "squash");
     mergeOnHost(hosts.billing, "refunds", "squash");
+    expect(teamMergeSeen(alice, claimPayload(recordHost(home), home.id8, "refunds") as unknown as Parameters<typeof teamMergeSeen>[1])).toBe(false);
     next(home.dir);
     expect(planWordAt(home, "refunds")?.verdicts).toEqual([
       expect.objectContaining({ repo: "checkout-api", merged: false }),

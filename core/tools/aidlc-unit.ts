@@ -14745,18 +14745,19 @@ export function skeletonCodeInMain(pd: string, skeleton: string): boolean {
   return paths.every((path) => blob("HEAD", path) !== "" && blob(`refs/remotes/${target.remote}/${target.branch}`, path) === blob("HEAD", path));
 }
 
-// The lead's merge rule for a Unit's result, read only: a repo the lead counted
-// merged by word, else its integration branch fetched quietly (no sign-in, the
-// lead's own time limits) and the result's heads looked for there. A repo whose
-// fetch failed goes on `unreached`, its verdict the last fetch's. At the lead's
-// look (`look`), a repo its project already proved merged at the result's last
-// head (its verdict on the plan, which the view carries) stays merged with no
-// read, since nothing in a code clone keeps the tip it was proved at; a repo
-// not merged as the result was sent is read again as at its Unit branch's
-// later tip (keptUnitTip), then, reached this look, as at its pull request's
-// last head on the host (mergedAtPullRequestHead), and one still not merged
-// puts the commit that may be its merge on `look.maybe` (mergeCandidate). A
-// team's own look reads with its own git only.
+// The lead's merge rule for a Unit's result, read only, the same at the lead's
+// look and at a team's own: a repo the lead counted merged by word, else its
+// integration branch fetched quietly (no sign-in, the lead's own time limits)
+// and the result's heads looked for there. A repo whose fetch failed goes on
+// `unreached`, its verdict the last fetch's. A repo not merged as the result
+// was sent is read again as at its Unit branch's later tip (keptUnitTip), then,
+// reached this look, as at its pull request's last head on the host
+// (mergedAtPullRequestHead). The lead's look (`look`) alone counts a repo its
+// project already proved merged at the result's last head (its verdict on the
+// plan, which the view carries) with no read, since nothing in a code clone
+// keeps the tip it was proved at, and puts the commit that may be the merge of
+// one still not merged on `look.maybe` (mergeCandidate). A team's own look
+// reads with its own git only.
 function resultVerdicts(
   pd: string,
   payload: UnitClaimPayload,
@@ -14780,8 +14781,8 @@ function resultVerdicts(
     const reached = repoRemote !== null && quietFetch(dir, ["-q", repoRemote, integration.slice(repoRemote.length + 1)]).ok;
     if (repoRemote !== null && !reached) unreached?.push(repo.repo === "." ? repoRemote : repo.repo);
     let verdict = unitMergeVerdict(dir, integration, repo);
-    if (!verdict.merged && look !== undefined && repoRemote !== null) {
-      const tip = keptUnitTip(dir, repoRemote, repo);
+    if (!verdict.merged && repoRemote !== null) {
+      const tip = keptUnitTip(dir, repoRemote, repo, reached);
       const atTip = tip === null ? null : resultAtTip(dir, integration, repo, tip);
       if (atTip !== null) verdict = unitMergeVerdict(dir, integration, atTip);
       const named = payload.pull_requests?.find((entry) => entry.repo === repo.repo)?.number;
@@ -14802,15 +14803,17 @@ export interface MaybeMerged {
 }
 
 // A Unit branch's later tip as git's own copy of the branch in that repo has
-// it: fetched quietly first, and still there after the branch is deleted on
-// the host until the person's own prune takes it (a fetch with prune on), so
-// nothing of AI-DLC's is kept in a code clone for it. Read whatever the fetch
-// gave: a branch no longer there fetches nothing. Null when git has no copy;
-// whether the tip is the Unit's (it holds the result's last head) is
-// resultAtTip's.
-function keptUnitTip(dir: string, remote: string, repo: RepoResult): string | null {
+// it: fetched quietly first when this look's fetch of the repo's integration
+// branch went through (`reached`), and still there after the branch is deleted
+// on the host until the person's own prune takes it (a fetch with prune on), so
+// nothing of AI-DLC's is kept in a code clone for it. A remote whose fetch did
+// not go through is not asked again, so a look offline waits no longer for it.
+// Read whatever the fetch gave: a branch no longer there fetches nothing.
+// Null when git has no copy; whether the tip is the Unit's (it holds the
+// result's last head) is resultAtTip's.
+function keptUnitTip(dir: string, remote: string, repo: RepoResult, reached: boolean): string | null {
   const tracking = `refs/remotes/${remote}/${repo.branch}`;
-  quietFetch(dir, ["-q", remote, `+refs/heads/${repo.branch}:${tracking}`]);
+  if (reached) quietFetch(dir, ["-q", remote, `+refs/heads/${repo.branch}:${tracking}`]);
   return git(dir, ["rev-parse", "--verify", "--quiet", `${tracking}^{commit}`]).stdout.trim() || null;
 }
 

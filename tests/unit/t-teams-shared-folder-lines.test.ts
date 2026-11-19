@@ -224,7 +224,8 @@ describe("Carry on in a shared workspace", () => {
         expect((Date.now() - started) / 1000, url).toBeLessThan(30);
       }
       expect(readFileSync(log, "utf-8")).toContain("auth ");
-      expect(readFileSync(log, "utf-8")).toContain("silent ");
+      // A remote that never answers is asked once in a read, never again for the Unit's branch.
+      expect(readFileSync(log, "utf-8").split("\n").filter((line) => line.startsWith("silent "))).toHaveLength(1);
       expect(existsSync(marker)).toBe(false);
     } finally {
       if (before.askpass === undefined) delete process.env.GIT_ASKPASS;

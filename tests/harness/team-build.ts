@@ -610,6 +610,39 @@ export function mergeOnHost(host: string, branch: string, how: "squash" | "merge
   git(dir, ["push", "-q", "origin", "main"]);
 }
 
+// A commit on a Unit's branch on its code host that AI-DLC did not push: a
+// review fix by hand with plain git, or the host's own "Commit suggestion".
+export function commitOnHost(host: string, branch: string, files: Record<string, string>, message: string): string {
+  const dir = join(tempDir("reviewer"), "repo");
+  git(tempDir("reviewer-parent"), ["clone", "-q", "--branch", branch, host, dir]);
+  git(dir, ["config", "user.name", "reviewer"]);
+  git(dir, ["config", "user.email", "reviewer@example.test"]);
+  for (const [path, text] of Object.entries(files)) writeFileSync(join(dir, path), text);
+  git(dir, ["commit", "-q", "-am", message]);
+  git(dir, ["push", "-q", "origin", branch]);
+  return git(dir, ["rev-parse", "HEAD"]);
+}
+
+// A pull request squashed on its code host in the host's own words, its branch
+// deleted after. GitLab's merge commit method puts the squash under a merge
+// commit (`mergeCommit`, its message).
+export function squashOnHost(host: string, branch: string, message: string, mergeCommit?: string): void {
+  const dir = join(tempDir("squasher"), "repo");
+  git(tempDir("squasher-parent"), ["clone", "-q", host, dir]);
+  git(dir, ["config", "user.name", "reviewer"]);
+  git(dir, ["config", "user.email", "reviewer@example.test"]);
+  git(dir, ["fetch", "-q", "origin", branch]);
+  git(dir, ["merge", "-q", "--squash", `origin/${branch}`]);
+  git(dir, ["commit", "-q", "-m", message]);
+  if (mergeCommit !== undefined) {
+    const squash = git(dir, ["rev-parse", "HEAD"]);
+    git(dir, ["reset", "-q", "--hard", "HEAD^"]);
+    git(dir, ["merge", "-q", "--no-ff", "-m", mergeCommit, squash]);
+  }
+  git(dir, ["push", "-q", "origin", "main"]);
+  git(host, ["branch", "-q", "-D", branch]);
+}
+
 // Every planned stage of the build done and approved, and the build finished.
 export function finishBuild(record: string): void {
   const statePath = join(record, "aidlc-state.md");

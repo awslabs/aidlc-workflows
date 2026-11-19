@@ -18,7 +18,9 @@ import {
   claimPayload,
   cleanupTeamBuild,
   cloneOf,
+  commitOnHost,
   ENV,
+  finishBuild,
   git,
   makeHome,
   next,
@@ -28,6 +30,7 @@ import {
   UNIT,
   takeIn,
   commitMessage,
+  squashOnHost,
   TICKET_RULE_WORDS,
 } from "../harness/team-build.ts";
 
@@ -525,6 +528,27 @@ describe("a Unit on the workspace's own repository", () => {
     const { dana, notice } = earlyTake(true);
     expect(notice).toContain("Branch reporting in the repo starts there; your uncommitted changes kept you on your branch, so switch when you are ready.");
     expect(git(dana, ["branch", "--show-current"])).toBe("main");
+  });
+
+  // A review on GitLab: a suggestion committed on the Unit's branch, then a
+  // squash under GitLab's merge commit with the branch deleted, before the
+  // lead's look. The team's own look reads the merge request's last head, as
+  // the lead's does.
+  test("on the workspace's own repository, a suggestion commit then a squash under GitLab's merge commit with the branch deleted: the builder's own look counts it merged, and another teammate takes what waits on it without starting early", () => {
+    const home = oneRepoTeams();
+    const alice = cloneOf(home.remote, "alice");
+    finishBuild(builtHere(alice, "refunds", "refunds.ts"));
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    const fix = commitOnHost(home.remote, "refunds", { "src/refunds.ts": "export const built = \"refunds\"; // suggested\n" }, "Apply 1 suggestion(s) to 1 file(s)");
+    git(home.remote, ["update-ref", "refs/merge-requests/2/head", fix]);
+    squashOnHost(home.remote, "refunds", "Refunds", "Merge branch 'refunds' into 'main'\n\nRefunds\n\nSee merge request payments/checkout!2");
+    writeFileSync(join(alice, "aidlc", "spaces", "payments", "intents", "active-intent"), "");
+    const look = next(alice, ENV, ["--units"]);
+    expect(String(look.question), JSON.stringify(look)).toContain("refunds (pushed by alice in payments, merged)");
+    expect(((look.choices ?? []) as Array<{ label: string }>).map((choice) => choice.label)).toContain("Start reporting");
+    const took = takeIn("reports", ["reporting", ...fromHome(home)], cloneOf(home.remote, "wen"));
+    expect(took.status, took.out).toBe(0);
+    expect(String(took.json?.notice)).toContain("reporting is yours.");
   });
 
   test("the lead's look reads the squash of the Unit's pull request, record and all, as merged, and the Unit's result names only its code", () => {

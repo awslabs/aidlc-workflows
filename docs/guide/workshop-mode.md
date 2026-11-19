@@ -996,13 +996,14 @@ with the branch deleted after. A review fix can go through AI-DLC (ask for the
 push again) or by hand: a commit you push with your own git, the host's
 **Commit suggestion**, or **Update branch**. The team's next look and the lead's
 next look read the branch as it is then, so its merge is seen. When a fix, the
-merge and the branch's deletion all happen between two looks, the lead's look
-reads the pull request's last head where the host keeps it, with the lead's own
-git: GitHub's `refs/pull/<n>/head`, and GitLab's `refs/merge-requests/<n>/head`
-for 14 days after the merge, for the number the squash or merge commit names
-("(#12)", "!12"). Where that head does not prove the merge (a rebase merge, a
-branch rewritten by force, another host, an older GitLab merge), the board names
-the commit that may be the merge, once, and the lead's word records it:
+merge and the branch's deletion all happen between two looks, each look, the
+lead's and a team's, reads the pull request's last head where the host keeps
+it, with its own git: GitHub's `refs/pull/<n>/head`, and GitLab's
+`refs/merge-requests/<n>/head` for 14 days after the merge, for the number the
+squash or merge commit names ("(#12)", "!12"). Where that head does not prove
+the merge (a rebase merge, a branch rewritten by force, another host, an older
+GitLab merge), the board names the commit that may be the merge, once, and the
+lead's word records it:
 
 ```text
 app has a8c3f21 "refunds" changing every file of refunds; if that is refunds merged, say so.
