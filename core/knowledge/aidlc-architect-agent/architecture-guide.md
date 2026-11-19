@@ -58,8 +58,8 @@ Common patterns and their AI-DLC application:
 ## Consequences
 [What becomes easier? What becomes harder? What are the trade-offs?]
 
-## Alternatives Considered
-[What other options were evaluated and why were they rejected?]
+## Alternatives Rejected
+[What other options were evaluated and why were they not chosen?]
 ```
 
 ## Infrastructure Pattern Alignment
