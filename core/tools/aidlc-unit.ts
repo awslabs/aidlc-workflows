@@ -6532,6 +6532,15 @@ export function shareBlocker(projectDir: string): string | null {
 // plan and for a landing alike: by the person's own branch and merge.
 const BRANCH_AND_MERGE = "push it on a branch and get it merged your usual way";
 
+// The way on after a push whose host printed no link of its own, for the
+// plan's own branch and a team's Unit branch alike: a team merges its usual
+// way, by a pull request or with none. `repos` names the repos it is said for
+// when it is not said for every one (another's host printed its own link, or
+// its branch was replaced).
+function getItMerged(repos?: string): string {
+  return `Get it merged${repos === undefined ? "" : ` in ${repos}`} your usual way.`;
+}
+
 // How the plan reaches the teams when the share committed it here and cannot
 // push it.
 export function planWayOn(branch: string): string {
@@ -6786,7 +6795,7 @@ function putPlanOnItsBranch(pd: string, remote: string, branch: string, madeNow:
       skeletonCodeName(pd) === null
         ? `The plan is on its own branch, ${plan.name}, pushed to ${remote}, and your checkout is on it; ${branch} is as it was.`
         : `${planShareName(pd)} are on their own branch, ${plan.name}, pushed to ${remote}, and your checkout is on it; ${branch} is as it was.`,
-      words === "" ? "Get it merged your usual way." : hostSaysLine(null, words),
+      words === "" ? getItMerged() : hostSaysLine(null, words),
       ...claims.lines,
       ...(needs === null ? [] : [needs]),
     ].join(" "),
@@ -13588,8 +13597,9 @@ function pushUnit(args: string[], projectDir?: string,
   const names = results.map(nameOf);
   const plain = names.filter((name) => !replacedFrom.has(name) && !unlisted.has(name));
   // A host's own words stand in for ours (GitLab's say "merge request"):
-  // "Open a PR" is said only for the repos whose host said nothing about it,
-  // and never for a replaced branch, whose pull request is the same one.
+  // the way on is said only when a repo's host said nothing about it, and
+  // never for a replaced branch, which goes on as it was (a pull request open
+  // from it stays the same one).
   const quiet = hostSaid.filter((said) => said.words === "" && !replacedFrom.has(said.name)).map((said) => said.name);
   const lines = [
     joinSaid([
@@ -13598,7 +13608,7 @@ function pushUnit(args: string[], projectDir?: string,
       ...[...replacedFrom].map(([name, was]) => `Pushed branch ${branch} in ${name} in place of the build pushed there before (it was at ${was}).`),
       ...unlisted.values(),
       ...hostSaid.filter((said) => said.words !== "").map((said) => hostSaysLine(names.length === 1 ? null : said.name, said.words)),
-      quiet.length === 0 ? "" : `Open a PR in ${quiet.length < names.length ? joinNames(quiet) : names.length === 1 ? "it" : "each"} your usual way.`,
+      quiet.length === 0 ? "" : getItMerged(quiet.length < names.length ? joinNames(quiet) : undefined),
       whereNow(true).trimStart(),
     ]),
   ];

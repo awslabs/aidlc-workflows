@@ -873,8 +873,8 @@ hook or your host refuses the record, the code stays pushed, the branch stays
 where the code's push left it, the line says so once in their words, and the
 record is yours to check in. The lead's merge check reads only the Unit's code.
 
-Open a pull request in each repo your usual way and merge it the way that repo
-merges: a merge commit, a squash or a rebase. The push also sends the result
+Get it merged in each repo your usual way (a pull request, where your host has
+them): a merge commit, a squash or a rebase. The push also sends the result
 back on the Unit's claim: in each repo the branch, every head pushed and each
 changed file's blob, and the Unit outputs the lead's project's later stages read (Code
 Generation's summary and test instructions). A review fix pushed later goes

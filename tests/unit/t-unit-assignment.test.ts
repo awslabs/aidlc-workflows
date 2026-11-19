@@ -922,6 +922,8 @@ describe("the plan's share fits the team's own git: a protected main, a branch o
     const offer = refusedThenOffered(home.dir, home.remote, ["share", "--plan"], chatOf("taken"));
     const done = runPrinted(commandOf(offer, "Put it on its own branch"), home.dir);
     expect(done.out).toContain(onItsBranch(`${PLAN_BRANCH}-2`));
+    // A host that prints no link of its own: the way on in the plan's own words.
+    expect(done.out).toContain(`${onItsBranch(`${PLAN_BRANCH}-2`)} Get it merged your usual way.`);
     expect(git(home.dir, ["symbolic-ref", "HEAD"])).toBe(`refs/heads/${PLAN_BRANCH}-2`);
     expect(git(home.dir, ["rev-parse", PLAN_BRANCH])).toBe(theirs);
   });

@@ -296,7 +296,8 @@ describe("the replace of a pushed Unit branch", () => {
     expect(git(hosts.billing, ["show", "refunds:lib/refund.ts"])).toBe("export const refund = 2;");
     const short = git(join(alice, "billing"), ["rev-parse", "--short", before]);
     expect(String(replaced.json?.notice)).toContain(`Pushed branch refunds in billing in place of the build pushed there before (it was at ${short}).`);
-    expect(String(replaced.json?.notice)).not.toContain("Open a PR in billing");
+    // Said for checkout-api's plain push only; the replaced branch goes on as it was.
+    expect(String(replaced.json?.notice)).toContain(`(it was at ${short}). Get it merged in checkout-api your usual way.`);
     // The build replaced is still in this clone, by the commit the line names.
     expect(spawnSync("git", ["cat-file", "-e", `${short}^{commit}`], { cwd: join(alice, "billing") }).status).toBe(0);
   });
@@ -338,7 +339,7 @@ describe("the replace of a pushed Unit branch", () => {
     codeGenerated(alice, record);
     const pushed = run(UNIT, ["push", "--replace"], alice);
     expect(pushed.status, pushed.out).toBe(0);
-    expect(String(pushed.json?.notice)).toStartWith("Pushed branch refunds in checkout-api and billing. Open a PR in each your usual way.");
+    expect(String(pushed.json?.notice)).toStartWith("Pushed branch refunds in checkout-api and billing. Get it merged your usual way.");
     expect(git(hosts.billing, ["show", "refunds:lib/refund.ts"])).toBe("export const refund = 1;");
   });
 

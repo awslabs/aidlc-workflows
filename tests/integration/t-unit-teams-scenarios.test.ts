@@ -148,7 +148,7 @@ describe("scenario 1: one shared workspace repo, the repos side by side", () => 
     const pushed = run(cursor.unit, ["push"], alice);
     expect(pushed.status, pushed.out).toBe(0);
     expect(pushed.json?.notice).toBe(
-      "Pushed branch refunds in checkout-api and billing. Open a PR in each your usual way. You're on refunds now in checkout-api and billing. Switch back to main any time.",
+      "Pushed branch refunds in checkout-api and billing. Get it merged your usual way. You're on refunds now in checkout-api and billing. Switch back to main any time.",
     );
 
     expect(boardAt(home)).toBe([
@@ -223,7 +223,7 @@ describe("scenario 2: one big code repo", () => {
     const pushed = run(codex.unit, ["push"], alice);
     expect(pushed.status, pushed.out).toBe(0);
     expect(pushed.json?.notice).toBe(
-      "Pushed branch refunds in platform. Open a PR in it your usual way. You're on refunds now in platform. Switch back to main any time.",
+      "Pushed branch refunds in platform. Get it merged your usual way. You're on refunds now in platform. Switch back to main any time.",
     );
     expect(git(platform, ["ls-tree", "-r", "--name-only", "refunds"]).split("\n").sort())
       .toEqual(["README.md", "services/billing/lib/refund.ts", "services/checkout-api/src/refunds.ts"]);

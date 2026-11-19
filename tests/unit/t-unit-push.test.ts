@@ -130,7 +130,7 @@ describe("the push", () => {
     const pushed = run(UNIT, ["push"], alice);
     expect(pushed.status, pushed.out).toBe(0);
     expect(pushed.json?.notice).toBe(
-      "Pushed branch refunds in checkout-api and billing. Open a PR in each your usual way. You're on refunds now in " +
+      "Pushed branch refunds in checkout-api and billing. Get it merged your usual way. You're on refunds now in " +
         "checkout-api and billing; your other changes are still yours, uncommitted. Switch back to main any time.",
     );
     expect(git(hosts["checkout-api"], ["ls-tree", "-r", "--name-only", "refunds"]).split("\n")).toEqual(["README.md", "src/refunds.ts"]);
@@ -164,7 +164,7 @@ describe("the push", () => {
     expect(pushed.status, pushed.out).toBe(0);
     const unlisted = (repo: string): string => `Pushed branch refunds in ${repo}, but git could not list the files of that commit ` +
       '(git says "fatal: not a tree object"), so refunds\'s result is not sent. Say when to send it again.';
-    expect(pushed.json?.notice).toBe(`${unlisted("checkout-api")} ${unlisted("billing")} Open a PR in each your usual way. ` +
+    expect(pushed.json?.notice).toBe(`${unlisted("checkout-api")} ${unlisted("billing")} Get it merged your usual way. ` +
       "You're on refunds now in checkout-api and billing. Switch back to main any time.");
     expect((recordAt(home, "refunds")?.json as { result?: unknown } | undefined)?.result).toBeUndefined();
     expect(JSON.stringify(next(alice))).not.toContain("Its last push did not go through.");
@@ -816,7 +816,7 @@ describe("the push", () => {
     const again = run(UNIT, ["push"], alice);
     expect(again.status, again.out).toBe(0);
     expect(String(again.json?.notice)).toBe(
-      "Pushed branch refunds in checkout-api and billing. Open a PR in each your usual way.",
+      "Pushed branch refunds in checkout-api and billing. Get it merged your usual way.",
     );
   });
 
@@ -829,7 +829,7 @@ describe("the push", () => {
     const notice = String(pushed.json?.notice);
     expect(notice).toStartWith(
       "Pushed branch checkout-api in checkout-api and billing. checkout-api's host says: Create a pull request for 'checkout-api' " +
-        "on GitHub by visiting: https://github.com/owner/checkout-api/pull/new/checkout-api\nOpen a PR in billing your usual way.",
+        "on GitHub by visiting: https://github.com/owner/checkout-api/pull/new/checkout-api\nGet it merged in billing your usual way.",
     );
     expect(notice).not.toContain("vulnerabilities");
   });
@@ -843,12 +843,12 @@ describe("the push", () => {
     const pushed = run(UNIT, ["push"], alice);
     expect(pushed.status, pushed.out).toBe(0);
     expect(pushed.json?.notice).toBe(
-      "Pushed branch refunds in checkout-api and billing. Open a PR in each your usual way. You're on refunds now in " +
+      "Pushed branch refunds in checkout-api and billing. Get it merged your usual way. You're on refunds now in " +
         "checkout-api and billing. Switch back to main any time.",
     );
   });
 
-  test("the push again after one repo's host refused it: the link for the repo it pushed now, and Open a PR for the other", () => {
+  test("the push again after one repo's host refused it: the link for the repo it pushed now, and the way to get it merged for the other", () => {
     const { hosts, alice, record } = refundsTakenInClone();
     printsLikeGitHub(hosts["checkout-api"], "checkout-api");
     printsLikeGitHub(hosts.billing, "billing");
@@ -863,7 +863,7 @@ describe("the push", () => {
     expect(again.status, again.out).toBe(0);
     expect(again.json?.notice).toBe(
       "Pushed branch refunds in checkout-api and billing. billing's host says: Create a pull request for 'refunds' on GitHub by " +
-        `visiting: https://github.com/owner/billing/pull/new/refunds\nOpen a PR in checkout-api your usual way.`,
+        `visiting: https://github.com/owner/billing/pull/new/refunds\nGet it merged in checkout-api your usual way.`,
     );
   });
 
