@@ -103,6 +103,9 @@ function auditBody(p: string): string {
   return existsSync(path) ? readFileSync(path, "utf-8") : "";
 }
 
+// Where the row's document would be; only an HTML page recorded before its reader is read from it.
+const ROW_FILE = "/nonexistent/documents/p.pdf";
+
 /** A row shaped like one the writer produces, for the pure decision table. */
 function row(extraction: Record<string, unknown>): Record<string, unknown> {
   return {
@@ -339,6 +342,7 @@ describe("t284 the retry INVERSION: the environment changed, not the document", 
     // AI-DLC's own reader where it is not.
     expect(shouldRetryExtraction(
       row({ state: "extractor_unavailable", extractor: { name: "pdftotext" } }) as never,
+      ROW_FILE,
     )).toBe(true);
   });
 
@@ -346,7 +350,7 @@ describe("t284 the retry INVERSION: the environment changed, not the document", 
     expect(shouldRetryExtraction(row({
       state: "extracted", source_revision: DIGEST, chars: 5, truncated: false,
       extractor: { name: "pdftotext", version: "v1" },
-    }) as never)).toBe(false);
+    }) as never, ROW_FILE)).toBe(false);
   });
 
   test.skipIf(!PDFTOTEXT_AVAILABLE)("extraction_failed is NOT retried on the SAME extractor version", () => {
@@ -356,7 +360,7 @@ describe("t284 the retry INVERSION: the environment changed, not the document", 
     expect(shouldRetryExtraction(row({
       state: "extraction_failed", reason: "malformed",
       extractor: { name: "pdftotext", version },
-    }) as never)).toBe(false);
+    }) as never, ROW_FILE)).toBe(false);
   });
 
   test.skipIf(!PDFTOTEXT_AVAILABLE)("extraction_failed IS retried when the version CHANGED", () => {
@@ -364,12 +368,13 @@ describe("t284 the retry INVERSION: the environment changed, not the document", 
     expect(shouldRetryExtraction(row({
       state: "extraction_failed", reason: "malformed",
       extractor: { name: "pdftotext", version: "pdftotext version 0.0.1-ancient" },
-    }) as never)).toBe(true);
+    }) as never, ROW_FILE)).toBe(true);
   });
 
   test("unsupported_type is not retried while no extractor is configured", () => {
     expect(shouldRetryExtraction(
       row({ state: "unsupported_type", detectedType: "image/png" }) as never,
+      ROW_FILE,
     )).toBe(false);
   });
 

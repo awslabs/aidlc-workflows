@@ -191,6 +191,7 @@ import {
 } from "./aidlc-utility.ts";
 import {
   aidlcInvocation,
+  compiledExecutable,
   discoverProjectHarnesses,
   isCompiledExecutable,
   projectedDispatcher,
@@ -6885,6 +6886,70 @@ function unrecordedLegacyProviderMigration(
   return null;
 }
 
+// A pinned project's runner skills come from its pinned release, as every other
+// file of the refresh does: their texts are templates in the generator's code,
+// so the running release would write its own. The release's own `aidlc` writes
+// them (`engine gen runners`, `engine gen runner-scopes`), or its source's
+// generator when this runs from source. A release this computer does not have
+// installed, or a generator that fails, leaves them to the running release, and
+// the refresh says so in one line.
+
+function stampedRelease(stagedHarness: string): string | null {
+  try {
+    const stamp = JSON.parse(readFileSync(join(stagedHarness, "tools", "data", "aidlc-stamp.json"), "utf-8"));
+    return typeof stamp.frameworkVersion === "string" && VERSION_ID.test(stamp.frameworkVersion)
+      ? stamp.frameworkVersion
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+export function runnerGenerator(
+  stagedHarness: string,
+  pinned: boolean,
+): { release: string; commands: string[][] } | { release: string; missing: true } | null {
+  const release = stampedRelease(stagedHarness);
+  if (!pinned || release === null || release === AIDLC_VERSION) return null;
+  if (compiledExecutable() !== null) {
+    const executable = installedExecutablePath(release);
+    if (!existsSync(executable)) return { release, missing: true };
+    return { release, commands: [[executable, "engine", "gen", "runners"], [executable, "engine", "gen", "runner-scopes"]] };
+  }
+  const tool = join(stagedHarness, "tools", "aidlc-runner-gen.ts");
+  if (!existsSync(tool)) return null;
+  return { release, commands: [[process.execPath, tool, "write"], [process.execPath, tool, "scopes"]] };
+}
+
+// What the pinned release's generator said when it could not write the runner
+// skills in the staged tree, or null when it wrote them.
+export function pinnedRunnersFailure(stagedRoot: string, commands: string[][]): string | null {
+  for (const [command, ...args] of commands) {
+    const result = spawnSync(command, args, { cwd: stagedRoot, encoding: "utf-8", env: process.env });
+    if (result.error || result.status !== 0) {
+      return (result.error?.message || result.stderr || result.stdout || `exit ${result.status ?? 1}`).trim().split("\n")[0];
+    }
+  }
+  return null;
+}
+
+// The refresh's one line when the running release wrote a pinned project's runner skills.
+export function runnersFallbackLine(release: string, failure: string | null): string {
+  return failure === null
+    ? `AI-DLC ${release} is not installed on this computer, so AI-DLC ${AIDLC_VERSION} wrote the runner skills.`
+    : `AI-DLC ${release} could not write its runner skills (${failure}), so AI-DLC ${AIDLC_VERSION} wrote them.`;
+}
+
+// Writes the staged tree's runner skills, and returns the refresh's line when
+// the running release wrote them for a pinned project.
+export function regenerateRunnersFor(stagedRoot: string, stagedHarness: string, pinned: boolean): string | null {
+  const generator = runnerGenerator(stagedHarness, pinned);
+  const failure = generator !== null && "commands" in generator ? pinnedRunnersFailure(stagedRoot, generator.commands) : null;
+  if (generator !== null && "commands" in generator && failure === null) return null;
+  regenerateRunnerSurfaces();
+  return generator === null ? null : runnersFallbackLine(generator.release, failure);
+}
+
 function prepareRefreshSource(
   projectDir: string,
   sourceRoot: string,
@@ -7506,7 +7571,8 @@ function prepareRefreshSource(
     writeFileSync(process.env.AIDLC_STAGE_GRAPH, compiled.json);
     writeFileSync(stagedGrid, compiled.gridJson);
     resetProjectionCaches();
-    regenerateRunnerSurfaces();
+    const runnersLine = regenerateRunnersFor(root, stagedHarness, pathPresent(join(projectDir, ".aidlc-version")));
+    if (runnersLine !== null) notes.push(runnersLine);
     resetProjectionCaches();
 
     // The harness's skills folder: inside the harness dir, or one of the shared

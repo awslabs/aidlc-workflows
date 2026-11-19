@@ -121,6 +121,7 @@ import {
   type QuestionAskedAbout,
   type QuestionOrigin,
   type QuestionSettings,
+  type QuestionTarget,
   questionTargetSelected,
   readComposeEntry,
   readQuestion,
@@ -278,6 +279,7 @@ import {
   openReviewRequests,
   latestReviewerRowAfter,
   hooksHealthReadDir,
+  issuedStepIsIsolatedRun,
   personMayApproveOverUnfinishedReview,
   personSpokeSinceReviewRequest,
   type GuardAttemptState,
@@ -730,7 +732,12 @@ import {
   isPlanApprovalBeat,
   codeGenerationBuildFinishes,
   codeGenerationFinishedBuild,
+  gateLinesThatFit,
+  gateNoticesInBox,
   keepRoutedPlanApprovalReply,
+  NO_GIT_LINE,
+  noGitLineSaid,
+  writeNoGitLineSaid,
   legacyPlanApprovalOffNotice,
   noteOpenEngineQuestion,
   openPlanApprovalQuestion,
@@ -892,15 +899,11 @@ function broughtFilesGateLine(
 // meeting it. Silent when the project folder, a repo of the work or a git
 // checkout in the workspace is in git (those files have their undo). `git init`
 // alone puts nothing back, so the line names the commit.
-export const NO_GIT_LINE =
-  "This project has no git, so AI-DLC can't undo the changes it makes to your files; " +
-  "to get an undo, run `git init` and commit them.";
-const NO_GIT_SAID_FILE = "no-git-said";
 let noGitLineHanded: string | null = null;
 
 function addNoGitLine(reply: { kind: string; change_notices?: string[] }, projectDir: string): void {
   try {
-    if (existsSync(join(sessionsDir(projectDir), NO_GIT_SAID_FILE))) return;
+    if (noGitLineSaid(projectDir)) return;
     const repos = [...intentRepos(projectDir), ...discoverSiblingRepos(projectDir)];
     if (isGitRepo(projectDir) || repos.some((name) => isGitRepo(repoDir(projectDir, name)))) return;
   } catch {
@@ -911,24 +914,19 @@ function addNoGitLine(reply: { kind: string; change_notices?: string[] }, projec
   if (!isReadOnlyEngineProbe() && process.env.AIDLC_UNATTENDED !== "1") noGitLineHanded = projectDir;
 }
 
-// Kept as said once the step that carries it is written (writePrepared). A
+// Kept as said once the step that carries it is written (writePrepared): the
+// step that added it, or a later one carrying it from the chat's kept lines. A
 // rules part carries it too, but it is said with the step after the parts,
 // which still carries it (the record waits), so it is recorded there.
 function recordNoGitLineSaid(written: { kind?: unknown; change_notices?: unknown }): void {
-  const projectDir = noGitLineHanded;
+  const projectDir = noGitLineHanded ??
+    (isReadOnlyEngineProbe() || process.env.AIDLC_UNATTENDED === "1" ? null : engineProjectDir ?? null);
   noGitLineHanded = null;
   const notices = written.change_notices;
   if (projectDir === null || written.kind === "load-steering" || !Array.isArray(notices) || !notices.includes(NO_GIT_LINE)) {
     return;
   }
-  try {
-    const dir = sessionsDir(projectDir);
-    assertNoSymlinkInChainOrThrow(projectDir, relative(projectDir, dir));
-    mkdirSync(dir, { recursive: true });
-    writeFileAtomic(join(dir, NO_GIT_SAID_FILE), `${isoTimestamp()}\n`);
-  } catch {
-    // Unrecorded: the next gate says it once more.
-  }
+  writeNoGitLineSaid(projectDir);
 }
 
 // " (3 questions, 2 answered)" for a questions file: its `[Answer]:` lines
@@ -1605,6 +1603,14 @@ const CLEAN_CHAT_LEAD = "To start this in a clean chat instead, ";
 // a stage's gate, before the gate is shown, and a reading it may answer from
 // (saysWaitingLines).
 const leadsToSpeech = new WeakSet<Directive>();
+// The lines a gate step built for the person, for a question box to show
+// (keepGateLinesForTheBox); never a review check offer, a question of its own.
+const gateBoxLines = new WeakMap<Directive, string[]>();
+const reviewCheckOffers = new Set<string>();
+function markGateBoxLines(gate: Directive): void {
+  const lines = (gate.change_notices ?? []).filter((line) => !reviewCheckOffers.has(line));
+  if (lines.length > 0) gateBoxLines.set(gate, lines);
+}
 
 // A step the agent speaks from: one that ends its turn, or one with its own
 // line or a line for the person. A rules part never is; its run-stage is.
@@ -1626,6 +1632,36 @@ function speaksToPerson(directive: Directive): boolean {
 function withPersonLines(transported: Directive, lines: readonly string[]): Directive | null {
   const carried = withChangeNotices(transported, [...new Set([...lines, ...(transported.change_notices ?? [])])]);
   return Buffer.byteLength(JSON.stringify(carried), "utf-8") <= directiveMaxBytes() ? carried : null;
+}
+
+// Where the question box carries them (gateNoticesInBox), a gate step's own
+// lines that fit (gateLinesThatFit) are kept for the chat for the box to show.
+// After sayPendingPersonLines: before, it would read them back onto this step;
+// after, its said() leaves an entry written after its read as it is. A step
+// issued again unchanged (retainedIssuedDirective) hands nothing over, so the
+// lines its first issue kept are not kept twice.
+function keepGateLinesForTheBox(
+  requested: Directive,
+  carried: { directive: Directive; said?: () => void },
+): { directive: Directive; said?: () => void } {
+  const own = gateBoxLines.get(requested);
+  const step = carried.directive;
+  const projectDir = engineProjectDir;
+  const sessionId = engineSessionId;
+  if (
+    !own || !projectDir || !sessionId || step.kind === "load-steering" || isReadOnlyEngineProbe() ||
+    !gateNoticesInBox(projectDir)
+  ) return carried;
+  const lines = gateLinesThatFit((step.change_notices ?? []).filter((line) => own.includes(line)));
+  const kept = carried.said ? [] : pendingPersonLines(projectDir, sessionId, { ordinaryOnly: true }).lines;
+  const fresh = lines.filter((line) => !kept.includes(line));
+  if (lines.length === 0 || (fresh.length > 0 && !addPendingPersonLines(projectDir, sessionId, fresh))) return carried;
+  const directive = { ...step, change_notices: (step.change_notices ?? []).filter((line) => !lines.includes(line)) };
+  if (directive.change_notices.length === 0) {
+    delete (directive as Directive).change_notices;
+    delete directive.change_notices_note;
+  }
+  return { directive, said: carried.said };
 }
 
 // A chat picking the work back up (`next --resume`) hears where it picks up and
@@ -2104,7 +2140,7 @@ function prepareEmission(directive: Directive): PreparedEmission {
     transported, aidlcToolInvocation("orchestrate"), aidlcToolInvocation("log"), undefined,
     switchBackOnFollowUps(transported),
   );
-  const personLines = sayPendingPersonLines(requested, transported);
+  const personLines = keepGateLinesForTheBox(requested, sayPendingPersonLines(requested, transported));
   transported = personLines.directive;
   const personLinesSaid = personLines.said;
   // The bytes the host's tool panel shows first are the person's words.
@@ -5153,24 +5189,35 @@ function routingQuestionOptions(question: StoredQuestion): readonly RoutingOptio
 
 // The routing question the person was asked and has not answered: the latest
 // question this engine kept, asked with options (its digest marks that), with
-// nothing started from it, and no other question put to them or decision
-// recorded since. It answers however far the work it named has moved on (its
-// commands act on that work or ask again). Words handed to `next` while it is
+// nothing started from it, no words passed on as a request beside it (it is
+// then replaced by the request they became: handleNext), and no other question
+// put to them or decision recorded since. It answers however far the work it
+// named has moved on (its commands act on that work or ask again), and it never
+// offers work that is finished or archived. Words handed to `next` while it is
 // open may be its answer, which only the agent can tell.
 function openRoutingQuestion(projectDir: string): StoredQuestion | null {
   try {
     const question = latestQuestion(projectDir);
-    if (question?.origin !== "routing" || question.stateSha256 === undefined || !question.askedAbout) return null;
+    if (question?.origin !== "routing" || question.replacedBy !== undefined || question.stateSha256 === undefined ||
+      !question.askedAbout) return null;
     if (intentStartedByQuestion(projectDir, question.id) !== null) return null;
     if (question.approvedRequest && intentStartedByQuestion(projectDir, question.approvedRequest)) return null;
+    const targets = openTargets(projectDir, question.askedAbout);
     const asked = Date.parse(question.createdAt);
     const movedOn = readAuditShardEvents(projectDir).some((row) =>
       (row.event === "DECISION_RECORDED" || row.event === "STAGE_AWAITING_APPROVAL" ||
         MESSAGE_SPENDING_EVENTS.has(row.event)) && Date.parse(row.timestamp) > asked);
-    return movedOn ? null : question;
+    return movedOn ? null : { ...question, askedAbout: { ...question.askedAbout, targets } };
   } catch {
     return null;
   }
+}
+
+function openTargets(projectDir: string, { space, targets }: QuestionAskedAbout): QuestionTarget[] {
+  const closed = new Set(readIntentRegistry(projectDir, space)
+    .filter((row) => typeof row?.status === "string" && (isCompletedIntent(row) || isArchivedIntent(row)))
+    .map((row) => row.uuid));
+  return targets.filter((target) => target.uuid === "" || !closed.has(target.uuid));
 }
 
 // Words handed to `next` while the routing question is open: the agent has the
@@ -5195,7 +5242,8 @@ function routingQuestionReplyDirective(question: StoredQuestion, words: string, 
     question.id,
     question.proposedScope,
     carried,
-    pick ? question.askedAbout?.targets.map(({ intent }) => intent) : undefined,
+    // With none of the work it offered left open, its late answers stand in.
+    pick && question.askedAbout?.targets.length ? question.askedAbout.targets.map(({ intent }) => intent) : undefined,
     question.approvedRequest,
   );
   const named = (route: NewWorkRoute, command: string, record?: string): string =>
@@ -11345,6 +11393,11 @@ let settledNotices: string[] = [];
 // which the step's publication binds a tracked Copilot claim over.
 let jumpsMade = 0;
 let ownJumpMove: { from: string; to: string } | null = null;
+// The routing question open when the agent ran `next` with only the person's
+// words, marked as their request (routeNext): once the pass has kept the
+// request they became, the question is marked replaced by it, so it no longer
+// waits and its own commands still answer it.
+let passedOnRoutingQuestion: string | null = null;
 
 function handleNext(args: string[], projectDir: string | undefined): void {
   routingPassActive = true;
@@ -11353,9 +11406,15 @@ function handleNext(args: string[], projectDir: string | undefined): void {
   settledNotices = [];
   jumpsMade = 0;
   ownJumpMove = null;
+  passedOnRoutingQuestion = null;
   try {
     routeNext(args, projectDir);
+    const passed = passedOnRoutingQuestion;
+    const pd = resolveProjectDir(projectDir);
+    const newer = passed === null || isReadOnlyEngineProbe() ? null : latestQuestion(pd);
+    if (passed !== null && newer !== null && newer.id !== passed) markReplaced(pd, [passed], newer.id);
   } finally {
+    passedOnRoutingQuestion = null;
     routingEvidence = null;
     routingPassActive = false;
     routingArgs = null;
@@ -12018,6 +12077,12 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       key === "intent" || key === "markedWords" || value === undefined || value === false);
   const unmarkedProse = onlyProse && flags.markedWords !== true;
   const openRouting = unmarkedProse ? openRoutingQuestion(questionDir) : null;
+  // Their words alone, marked as their request in the line the agent ran (the "something else" command of
+  // routingQuestionReplyDirective, or another step's that hands their words on), are passed on beside the open
+  // routing question; a line the engine took from their chat itself (takePersonsOwnLine) was passed on by no one.
+  if (onlyProse && flags.markedWords === true && taken === agentArgs) {
+    passedOnRoutingQuestion ??= openRoutingQuestion(questionDir)?.id ?? null;
+  }
   const routingStep = openRouting === null ? null : routingQuestionReplyDirective(openRouting, flags.intent ?? "", questionDir);
   if (routingStep !== null) {
     emit(routingStep);
@@ -14643,6 +14708,7 @@ function applyGateOnlyShape(
     // Counted as the gate is reported: a Unit's own only at a team Unit gate.
     addRevisionCycle(directive, projectDir, directive.stage, directive.unit_gate ? unit : null);
     addApproveAcceptsLine(directive, projectDir, gateNode, directive.unit_gate ? unit : null);
+    if (!directive.unit_gate) markGateBoxLines(directive);
   }
   directive.protocol_modules = (directive.protocol_modules ?? []).filter(
     (module) =>
@@ -15222,7 +15288,16 @@ function unitLedgerFor(
   stateContent?: string,
 ): UnitLedger {
   const policyState = stateContent ?? loadStateFileIfPresent(projectDir);
-  const receiptsRequired = policyState !== null && checkpointPolicyEnabled(policyState);
+  // A team Unit's gate takes its step only on UNIT_COMPLETED
+  // (verifyTeamUnitGateEvidence). With one gate at the Unit's end, a step
+  // settled here by its files alone is passed by, and that gate asks the person
+  // about the missing receipt after the Unit's later stages are built; so the
+  // walk stays on the step and its start is named (refuseWithoutUnitStart).
+  // A per-stage gate comes right after the step and asks there.
+  const receiptsRequired = policyState !== null && (
+    checkpointPolicyEnabled(policyState) ||
+    (isTeamUnitOwnership(policyState) && effectiveUnitGateRhythm(projectDir, policyState) === "unit-end")
+  );
   // A Unit's checkpoint re-checks or accepts a change to its completed work,
   // and a Guard Policy of relaxed or off accepts it at the stage's gate, so the
   // stage is not handed back for it.
@@ -15376,6 +15451,9 @@ function unitReceiptOnlyStep(
   ledger: UnitLedger,
   stateContent: string | null,
   scope: string,
+  // The person's change for a Unit paused on the step asks whether only its
+  // records are left (its review or its completion), as if it carried on.
+  pausedCounts = false,
 ): UnitRecordStep | null {
   if (stateContent === null) return null;
   if (!ledger.inUse || ledger.receipts.has(unit) || ledger.skipped.has(unit)) return null;
@@ -15383,7 +15461,7 @@ function unitReceiptOnlyStep(
   const unitMajor = getField(stateContent, "Construction Iteration")?.trim() === "unit-major";
   if (!unitMajor && waveEligible(node) && ledger.mode === "none" && ledger.checkpoint === null) return null;
   const own = ledger.open.find((entry) => entry.unit === unit);
-  if (own?.state === "paused") return null;
+  if (own?.state === "paused" && !pausedCounts) return null;
   if (ledger.checkpoint !== null && ledger.checkpoint.unit !== unit) return null;
   if (!unitCovered(projectDir, node, unit, recordPrefix, codekbCtx, unitKind)) return null;
   if (redoChosenForUnitStep(projectDir, node.slug, unit)) return null;
@@ -18259,6 +18337,54 @@ function walkStepUnit(step: UnitJumpStep): string | null {
   return step.kind === "paused" ? step.checkpoint.unit : step.kind === "covered" ? null : step.unit;
 }
 
+function unitStepOwedOnlyReceipt(
+  projectDir: string,
+  scope: string,
+  stateContent: string,
+  walk: { step: UnitJumpStep; block: GraphStage[]; context: UnitWorkContext },
+  stageSlug: string,
+  unit: string,
+): boolean {
+  const step = walk.step;
+  const paused = unitPausedOnStep(step, stageSlug, unit);
+  if (!paused && (step.kind !== "work" || step.stage.slug !== stageSlug || step.unit !== unit)) return false;
+  const target = walk.block.find((stage) => stage.slug === stageSlug);
+  if (target === undefined) return false;
+  const owed = unitReceiptOnlyStep(
+    projectDir, target, unit, walk.context.recordPrefix, walk.context.codekbCtx,
+    walk.context.kinds?.get(unit) ?? null, unitLedgerFor(projectDir, stageSlug), stateContent, scope, paused,
+  );
+  // Paused with its files all written, a Unit owes only its records (its review
+  // or its completion): picking it up would leave no work to make the person's
+  // change in, so that counts too.
+  return paused ? owed !== null : owed?.receipt === true;
+}
+
+// The walk's step is that Unit's own pause on that stage.
+function unitPausedOnStep(step: UnitJumpStep, stageSlug: string, unit: string): boolean {
+  return step.kind === "paused" && step.stage === stageSlug && step.checkpoint.unit === unit;
+}
+
+function unitStepChangeReopen(
+  projectDir: string,
+  scope: string,
+  stateContent: string,
+  flags: ReportFlags,
+): PrintDirective | null {
+  const unit = flags.unit?.trim();
+  const stageSlug = flags.stage?.trim();
+  if (!unit || !stageSlug || !validScopes().has(scope)) return null;
+  const walk = unitJumpWalk(projectDir, scope, stateContent, true);
+  if (
+    walk === null ||
+    !(unitPausedOnStep(walk.step, stageSlug, unit) || unitStepOwedOnlyReceipt(projectDir, scope, stateContent, walk, stageSlug, unit))
+  ) return null;
+  const reopen = unitMajorReopen(projectDir, scope, stateContent, stageSlug, {
+    stage: stageSlug, jumpUnit: unit, everyUnit: false, change: true,
+  });
+  return reopen !== null && reopen !== "route" && reopen.kind === "print" ? reopen : null;
+}
+
 function unitMajorReopen(
   projectDir: string,
   scope: string,
@@ -18337,11 +18463,19 @@ function unitMajorReopen(
       };
     }
     // The Unit in flight on the target itself: that is where the walk already is.
-    if (named === inFlight && liveStage === targetSlug) return "route";
+    // Asked for by name with no change, it carries on there; only the person's
+    // change reopens it, once nothing but its completion is left (paused there,
+    // nothing but its records). Paused with work still to do, their change picks
+    // it up, and is made on the step as live.
+    const onItsStep = named === inFlight && liveStage === targetSlug;
+    const reopens = onItsStep && flags.change === true &&
+      unitStepOwedOnlyReceipt(projectDir, scope, stateContent, walk, targetSlug, named);
+    const picksUp = onItsStep && flags.change === true && !reopens && unitPausedOnStep(step, targetSlug, named);
+    if (onItsStep && !reopens && !picksUp) return "route";
     // A Unit set aside on the target is picked up where it stopped.
     const parked = open.get(named);
-    if (named !== inFlight && parked?.stage === targetSlug && parked.checkpoint.setAsideFor !== null) {
-      const aside = inFlight === null ? null : setAside(inFlight, named, `the person went back to ${named}`);
+    if (picksUp || (named !== inFlight && parked?.stage === targetSlug && parked.checkpoint.setAsideFor !== null)) {
+      const aside = inFlight === null || inFlight === named ? null : setAside(inFlight, named, `the person went back to ${named}`);
       const resume = `${aidlcToolInvocation("state")} unit resume --stage ${targetSlug} --unit ${named}`;
       const line = aside && inFlight !== null
         ? `Paused unit ${inFlight} at ${nameOf(aside.stage)} and picked unit ${named} up at ${stageName}. ` +
@@ -20405,7 +20539,10 @@ function addReviewCheckOffer(
   const found = reviewCheckOffer(projectDir, node, unit);
   if (found === null) return;
   const at = reply.change_notices?.lastIndexOf(found.change) ?? -1;
-  if (at >= 0) reply.change_notices![at] = `${found.change} ${found.offer}`;
+  if (at >= 0) {
+    reply.change_notices![at] = `${found.change} ${found.offer}`;
+    reviewCheckOffers.add(reply.change_notices![at]);
+  }
   else reply.narration = reply.narration ? `${reply.narration}\n${found.offer}` : found.offer;
 }
 
@@ -22653,6 +22790,11 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     // The person's decision (their approval, or the changes they asked for)
     // is the stage's in a solo walk: it is recorded for the stage, as the same
     // report without --unit would be, so it is never lost.
+    const change = flags.result === "rejected" ? unitStepChangeReopen(pd, scope, stateContent, flags) : null;
+    if (change !== null) {
+      emit(change);
+      return;
+    }
     flags.unit = undefined;
   } else if (flags.unit) {
     // A solo Unit cannot be reported on its own; when its work is done and
@@ -22986,6 +23128,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         addContextParkOffer(gateReply, pd);
         addRevisionCycle(gateReply, pd, slug, unit);
         addApproveAcceptsLine(gateReply, pd, node, unit);
+        if (!agentApproves) markGateBoxLines(gateReply);
       }
     }
     emit(gateReply);
@@ -23797,7 +23940,8 @@ function handleContinue(line: string[], projectDir: string | undefined): void {
 // A harness that returns from an Agent/Task dispatch before the worker finishes
 // leaves the conductor with nothing to read. This verb is the sanctioned wait:
 // it polls the same on-disk evidence the engine itself checks (collaborator
-// contribution files, the stage's required artifacts, or the reviewer's review
+// contribution files, the stage's required artifacts or, given the host's own id
+// for the lead it started, that helper's finish row, or the reviewer's review
 // file) and always returns within the bound, so the conductor re-runs one bare
 // engine command instead of minting its own shell loop. Read-only: it publishes
 // no directive, touches no marker, and writes no audit row.
@@ -23806,13 +23950,14 @@ interface WaitFlags {
   unit?: string;
   for?: string;
   reviewFile?: string;
+  agentId?: string;
   timeout?: number;
 }
 
 const WAIT_TARGETS = ["collaborators", "artifacts", "review"] as const;
 const WAIT_USAGE =
   "Usage: wait --stage <slug> --for collaborators|artifacts|review " +
-  "[--unit <unit>] [--review-file <path>] [--timeout <seconds>]";
+  "[--unit <unit>] [--review-file <path>] [--agent-id <id>] [--timeout <seconds>]";
 const WAIT_DEFAULT_SECONDS = 90;
 const WAIT_MAX_SECONDS = 540;
 // A review file unchanged this long ends the wait for a reviewer whose finish left no trace.
@@ -23828,9 +23973,35 @@ function parseWaitFlags(args: string[]): WaitFlags {
     else if (a === "--unit") { flags.unit = v; i++; }
     else if (a === "--for") { flags.for = v; i++; }
     else if (a === "--review-file") { flags.reviewFile = v; i++; }
+    else if (a === "--agent-id") { flags.agentId = v; i++; }
     else if (a === "--timeout") { flags.timeout = Number(v); i++; }
   }
   return flags;
+}
+
+// Whether the selected record holds the finish of the helper the host started
+// under `agentId` (SUBAGENT_COMPLETED's Agent ID, from the SubagentStop payload).
+// While it does not, the wait holds: the host's own notice of the finish, or of a
+// helper that stopped, is the agent's way on.
+function leadFinishRecorded(pd: string, agentId: string): boolean {
+  try {
+    const { intent: chosen, space: chosenSpace } = engineSelection(pd);
+    const intent = chosen ?? undefined;
+    return readAuditShardEvents(pd, intent, intent ? chosenSpace : undefined).some((row) =>
+      row.event === "SUBAGENT_COMPLETED" && auditBlockField(row.block, "Agent ID") === agentId);
+  } catch {
+    return false;
+  }
+}
+
+// The engine call that picks this work up again: the stage run on its own when
+// the step issued last is one (`--single`), else the workflow's own next.
+function resumeNext(pd: string, stage: string): string {
+  try {
+    return issuedStepIsIsolatedRun(pd, stage) ? `orchestrate next --stage ${stage} --single` : "orchestrate next";
+  } catch {
+    return "orchestrate next";
+  }
 }
 
 function fileHasBytes(path: string): boolean {
@@ -23858,6 +24029,15 @@ function handleWait(args: string[], projectDir: string | undefined): void {
     console.error(`--for review needs --review-file <path>. ${WAIT_USAGE}`);
     process.exit(1);
   }
+  if (args.includes("--agent-id") && (!flags.agentId || flags.agentId.startsWith("-"))) {
+    console.error(`--agent-id needs the id the dispatch's answer gave the helper. ${WAIT_USAGE}`);
+    process.exit(1);
+  }
+  if (flags.agentId !== undefined && target !== "artifacts") {
+    console.error(`--agent-id goes with --for artifacts (the lead's finish). ${WAIT_USAGE}`);
+    process.exit(1);
+  }
+  const leadFinish = flags.agentId;
   const seconds =
     flags.timeout !== undefined && Number.isFinite(flags.timeout) && flags.timeout > 0
       ? Math.min(flags.timeout, WAIT_MAX_SECONDS)
@@ -23929,6 +24109,12 @@ function handleWait(args: string[], projectDir: string | undefined): void {
           missing.push(`${agent} (missing identity-marker first line)`);
         }
       }
+    } else if (leadFinish !== undefined) {
+      // The host's id for the lead it started in the background, as its answer
+      // to the dispatch named it: the finish under that id is the hand-back. The
+      // stage's files are no sign of it, because some of them (Code Generation's
+      // summary and traceability) are the conductor's to write after the lead returns.
+      if (!leadFinishRecorded(pd, leadFinish)) missing.push(`lead ${node.lead_agent ?? "agent"} (no finish recorded yet)`);
     } else {
       for (const entry of reviewArtifactEntries(pd, node, flags.unit) ?? []) {
         if (!entry.required) continue;
@@ -23956,8 +24142,16 @@ function handleWait(args: string[], projectDir: string | undefined): void {
     waited_ms: Date.now() - started,
     missing,
     next: settled
-      ? "The dispatched work has landed: read its outputs and continue the stage body."
-      : "Not yet: run this same command again. Never replace it with a shell loop or a sleep.",
+      ? leadFinish !== undefined
+        ? "The lead's finish is recorded: read its summary (the host's notice brings it) and continue the stage body."
+        : "The dispatched work has landed: read its outputs and continue the stage body."
+      : leadFinish !== undefined
+        ? "Not yet: run this same command again. No finish of the lead is recorded yet: keep running this command " +
+          "in this same turn until it settles, rather than ending your turn to wait for it. When the host's own " +
+          "notice says this helper finished or stopped, stop waiting and read what it reports. When this chat was " +
+          "resumed after the host quit while the helper worked, that helper is gone: run " +
+          `\`${aidlcDispatcherInvocation(resumeNext(pd, node.slug))}\` instead. Never replace it with a shell loop or a sleep.`
+        : "Not yet: run this same command again. Never replace it with a shell loop or a sleep.",
   }));
 }
 

@@ -330,7 +330,7 @@ import {
   shownAgainFields,
 } from "./aidlc-questions.ts";
 import { codeGenerationPlanWaitsStep, promotableTestingPosture } from "./aidlc-testing-posture.ts";
-import { recordIntegrationBranch } from "./aidlc-unit.ts";
+import { recordIntegrationBranch, unitSkippedFields } from "./aidlc-unit.ts";
 import {
   approvedOverUnfinishedReview,
   approvedUnitChanges,
@@ -9251,21 +9251,8 @@ function handleSkip(args: string[]): void {
     // UNIT_STARTED and UNIT_COMPLETED rows are.
     const checkpoints = unitScopedLifecycleFloors(content);
     try {
-      emitAudit(pd, "UNIT_SKIPPED", {
-        Stage: slug,
-        Unit: unit,
-        Reason: reason,
-        "Run floor": unitLifecycleRunFloorForProject(
-          pd,
-          slug,
-          true,
-          unit,
-          undefined,
-          checkpoints,
-        ),
-        ...claimAttemptFields(pd, unit),
-        ...(isPersonAskedSkipReason(reason) ? personGitNameField(pd) : {}),
-      });
+      const name = isPersonAskedSkipReason(reason) ? personGitNameField(pd) : {};
+      emitAudit(pd, "UNIT_SKIPPED", unitSkippedFields(pd, slug, unit, reason, checkpoints, claimAttemptFields(pd, unit), name));
     } catch (e) {
       error(`Audit emission failed: ${errorMessage(e)}`);
     }

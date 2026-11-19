@@ -14,6 +14,9 @@
 //     lines, an answered question, a payload or record that cannot be read;
 //   - past Claude Code's 2,000 characters of question text only the plan's
 //     path is added, and past that nothing;
+//   - in work with several repositories, the repositories the plan names are
+//     said in one line under the summary, or under the path when the summary
+//     does not fit, and once for several Units; nothing in one-repository work;
 //   - a question about several Units always gets each Unit's name and path,
 //     and the changed-source line once, never the summaries, so a short window
 //     never shows several plans as one; nothing once one plan is answered;
@@ -341,6 +344,65 @@ describe("the code plan question's box shows the plan's lines", () => {
   });
 });
 
+// In work with several repositories the box says which of them the plan names
+// files in, whole, in every form it fills: under the summary, and under the
+// path when the summary does not fit.
+describe("in work with several repositories the box names the plan's repositories", () => {
+  const TOUCHES = "api/src/routes/orders.ts, api/src/routes/payments.ts, api/src/services/orders-service.ts, " +
+    "api/src/services/payments-service.ts, api/src/models/order.ts, api/src/models/payment.ts, " +
+    "api/src/db/migrations.ts, web/src/pages/Checkout.tsx";
+
+  function reposAsked(repos: string[]): { proj: string; question: string } {
+    const proj = project();
+    const registry = join(intentsDirOf(proj), "intents.json");
+    const rows = JSON.parse(readFileSync(registry, "utf-8"));
+    rows[0].repos = repos;
+    writeFileSync(registry, `${JSON.stringify(rows, null, 2)}\n`);
+    for (const repo of repos) mkdirSync(join(proj, repo, "src"), { recursive: true });
+    mkdirSync(planDir(proj), { recursive: true });
+    writeFileSync(join(planDir(proj), "code-generation-plan.md"),
+      `# Code Generation Plan\n\n## Summary\n\n- Builds: checkout\n- Touches: ${TOUCHES}\n- Tests: 6 unit tests\n\n` +
+        `## Steps\n\n- [ ] Step 1: write it\n\n${renderTestingContract(resolveTestingPosture(proj))}`, "utf-8");
+    writeFileSync(join(planDir(proj), "unit-test-instructions.md"), "# Unit Test Instructions\n\nRun `bun test`.\n", "utf-8");
+    const ask = next(proj);
+    expect(ask.ask_type, JSON.stringify(ask)).toBe("plan-approval");
+    return { proj, question: ask.question ?? "" };
+  }
+
+  const CUT = `- ${`Touches: ${TOUCHES}`.slice(0, 197)}...`;
+
+  test("two repositories: the line under the cut summary, then the path; the answer reads the agent's question", () => {
+    const { proj, question } = reposAsked(["api", "web"]);
+    expect(CUT).not.toContain("web/");
+    const shown = filled(proj, [planBox(question)])?.[0];
+    expect(shown?.question).toBe([
+      question, "", "- Builds: checkout", CUT, "- Tests: 6 unit tests", "- Names files in api and web.", "",
+      `Full plan: ${planPath(proj)}`,
+    ].join("\n"));
+    // A question that already shows every other line still gets this one.
+    const own = [question, "- Builds: checkout", CUT, "- Tests: 6 unit tests", `Full plan: ${planPath(proj)}`].join("\n");
+    expect(filled(proj, [planBox(own)])?.[0].question).toBe(`${own}\n\n- Names files in api and web.`);
+    answered(proj, shown!, "Request Changes");
+    expect(field(rows(proj, "QUESTION_REPLIED")[0], "Question")).toBe(question);
+  });
+
+  test("past 2,000 characters the line is under the path, whole, and past that nothing is added", () => {
+    const { proj } = reposAsked(["api", "web"]);
+    const long = `${"Please read the whole plan before you answer. ".repeat(38)}Approve the code plan?`;
+    expect(filled(proj, [planBox(long)])?.[0].question)
+      .toBe(`${long}\n\nFull plan: ${planPath(proj)}\n\nNames files in api and web.`);
+    quiet(proj, boxPayload([planBox(`${"x".repeat(1900)} Approve?`)]));
+  });
+
+  test("one repository: the box is as it always was", () => {
+    const { proj, question } = reposAsked(["api"]);
+    expect(filled(proj, [planBox(question)])?.[0].question).toBe([
+      question, "", "- Builds: checkout", `- ${`Touches: ${TOUCHES}`.slice(0, 197)}...`, "- Tests: 6 unit tests", "",
+      `Full plan: ${planPath(proj)}`,
+    ].join("\n"));
+  });
+});
+
 // What the record says from the plan question on, in the fields a person or
 // a reader meets, with ids and times left out (only whether a Question Id is
 // there): the same steps through the filled box and the plain one must say
@@ -484,10 +546,11 @@ describe("planQuestionBoxAsAsked", () => {
 
 // Two Units asked about in one question (the swarm set-up of
 // t-plan-approval-ask's groupedProject), with the person's source change since
-// the stage started when `changed` is set.
+// the stage started when `changed` is set, in work with `repos` when given (each
+// Unit's plan naming its file in the next one).
 const GROUP = ["alpha", "beta"];
 
-function groupedProject(changed: boolean): { pd: string; question: string; choices: string[]; paths: string[] } {
+function groupedProject(changed: boolean, repos: string[] = []): { pd: string; question: string; choices: string[]; paths: string[] } {
   const pd = setupWorktreeFixture();
   worktrees.push(pd);
   seedAidlcMemory(pd);
@@ -503,16 +566,23 @@ function groupedProject(changed: boolean): { pd: string; question: string; choic
   ].join("\n"), "utf-8");
   seedBoltDagBatches(pd, [GROUP]);
   mkdirSync(join(pd, "src"), { recursive: true });
+  if (repos.length > 0) {
+    const registry = join(intentsDirOf(pd), "intents.json");
+    const rows = JSON.parse(readFileSync(registry, "utf-8"));
+    rows[0].repos = repos;
+    writeFileSync(registry, `${JSON.stringify(rows, null, 2)}\n`);
+    for (const repo of repos) mkdirSync(join(pd, repo, "src"), { recursive: true });
+  }
   const baseline = writeBaselineSourceSnapshot(pd, "code-generation", workspaceSourceListing(pd)!);
   appendAuditEntry("WORKFLOW_STARTED", { Scope: "feature", "Source Baseline": baseline }, pd);
   appendAuditEntry("STAGE_STARTED", { Stage: "code-generation", "Source Baseline": baseline }, pd);
   if (changed) writeFileSync(join(pd, "src", "theirs.ts"), "export const theirs = 1;\n", "utf-8");
   const contract = renderTestingContract(resolveTestingPosture(pd));
-  for (const unit of GROUP) {
+  for (const [index, unit] of GROUP.entries()) {
     const dir = codeGenerationRecordDir(pd, unit);
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, "code-generation-plan.md"),
-      `# Plan for ${unit}\n\n## Summary\n\n- Builds: ${unit}\n- Touches: src/${unit}.ts\n- Tests: 2 unit tests\n\n` +
+      `# Plan for ${unit}\n\n## Summary\n\n- Builds: ${unit}\n- Touches: ${repos.length > 0 ? `${repos[index % repos.length]}/` : ""}src/${unit}.ts\n- Tests: 2 unit tests\n\n` +
         `## Steps\n- [ ] Implement ${unit}\n\n${contract}`, "utf-8");
     writeFileSync(join(dir, "unit-test-instructions.md"), `# Tests\n\nRun ${unit} tests.\n`, "utf-8");
   }
@@ -541,6 +611,17 @@ describe("a question about several Units", () => {
     expect(filled(pd, [groupBox(question, choices)])?.[0].question).toBe([
       question, "", "alpha", `Full plan: ${paths[0]}`, "", "beta", `Full plan: ${paths[1]}`,
     ].join("\n"));
+  });
+
+  test("in work with several repositories, one line for all the plans, said once after the paths", () => {
+    const { pd, question, choices, paths } = groupedProject(false, ["api", "web"]);
+    const shown = filled(pd, [groupBox(question, choices)])?.[0];
+    expect(shown?.question).toBe([
+      question, "", "alpha", `Full plan: ${paths[0]}`, "", "beta", `Full plan: ${paths[1]}`, "",
+      "These plans name files in api and web.",
+    ].join("\n"));
+    answered(pd, shown!, "Request Changes");
+    expect(field(rows(pd, "QUESTION_REPLIED")[0], "Question")).toBe(question);
   });
 
   test("the source that already changed is said once, last", () => {
