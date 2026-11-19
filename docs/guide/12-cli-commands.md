@@ -772,6 +772,10 @@ agent writes the words it came from to the request file the command names
 (`--request-file aidlc/.aidlc-engine/request-text/unit-assign.txt`), and they go into
 the `UNITS_ASSIGNED` audit row when a turn of yours stands behind them.
 
+In a checkout that does not lead the work (a teammate's clone of the lead's workspace), the same words are the take
+of that Unit, as a teammate takes one from the Units offer, one Unit at a time: the first one named is taken, and the
+line says where the others stand.
+
 A Unit someone else built and merged, named here (the lead's Build and Test
 asked to fix it at the lead's project), is taken back as a new attempt and built
 here on top of what they merged, and the line says so ("<unit> is built here
@@ -1057,6 +1061,14 @@ When you say you do not lead this work there, the agent runs
 gets a teammate's view again, whatever the lead's work did there in between. Nothing is written on the plan either way:
 anything the checkout wrote to the plan while it was the lead's stays, for the lead's own look to ask about.
 
+In a checkout that does not lead the work, the lead's own words write nothing: a sign-off, a repo turned down, a merge
+counted in your words, a pull request named as a build, an answer on a builder's proposed change, the sign-off setting,
+a Unit freed, a send-back from Build and Test, the plan's share, its move to another repository, and taking it off its
+branch. You are asked once, in that clone for that piece of work, whether you lead the work from there. Yes records it,
+shows where the work stands, then does what you asked, and from then on the lead's questions come there; no
+leaves it with the lead (`unit lead-here --off`), and a later one of the lead's words there says so, with the way on if
+you do lead it after all. A practice kept there stays there and is not written on the plan.
+
 ### `/aidlc unit lead-sign-off` and `/aidlc unit sign-off <unit>` - The lead's sign-off
 
 `lead-sign-off on|off` records `Lead Sign-off` in the work's state at the lead's project;
@@ -1146,7 +1158,8 @@ In a Unit's build (a team's take of the lead's Unit), `unit release <unit>` is
 the way back from the take: the lead's project's claim is released, open again,
 and the build is archived with its record and audit kept. At the lead's project,
 `unit release <unit>` opens a Unit someone took, or one the lead built here,
-again.
+again. In a checkout that does not lead the work, `unit release <unit>` of a Unit you took there is the way back from
+your take, and for any other Unit it is one of the lead's words (see `unit lead-here` above).
 
 ### `/aidlc unit participate` — Enable the guided picker
 

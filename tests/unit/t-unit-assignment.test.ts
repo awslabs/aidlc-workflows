@@ -39,6 +39,7 @@ import {
   stateOf,
   tempDir,
   takeIn,
+  teammateWithLeadsWork,
   tellsWhatToType,
   UNIT,
   UTILITY,
@@ -1623,5 +1624,24 @@ describe("a Unit the lead's project started stays there", () => {
     expect(took.status).not.toBe(0);
     expect(took.out).toContain("refunds is already taken: lead builds it.");
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toBeNull();
+  });
+});
+
+describe("built here, in a checkout that does not lead the work", () => {
+  test("is the take of that Unit, asking nothing about leading; with a list, the first is taken and the rest said where they stand", () => {
+    const { carl } = teammateWithLeadsWork();
+    // Their first look, as a bare /aidlc there is: the board and the Units offer.
+    expect(String(next(carl).board_note)).toStartWith("This checkout did not make this work's plan");
+    const wrong = run(UNIT, ["assign", "--here", "checkout-ui,nope", "--person-words", "we build these here"], carl);
+    expect(String(wrong.json?.error), wrong.out).toBe("nope is not one of this work's Units (refunds, checkout-ui, reporting).");
+    const here = run(UNIT, ["assign", "--here", "checkout-ui,reporting,refunds", "--person-words", "we build these here"], carl);
+    expect(here.status, here.out).toBe(0);
+    expect(here.json).toMatchObject({ taken: true, unit: "checkout-ui" });
+    const said = `${String(here.json?.notice ?? "")} ${JSON.stringify(next(carl).change_notices ?? [])}`;
+    expect(said).toContain("checkout-ui is yours. You build it under your team's rules, from what the lead approved. " +
+      "If it is not yours to build, tell me and I will hand it back.");
+    expect(said).toContain("refunds is already taken: alice builds it");
+    expect(said).toContain("reporting is still open: a take is one Unit at a time, so say if you want it too.");
+    expect(said).not.toContain("Do you lead");
   });
 });

@@ -20,6 +20,7 @@ import {
 } from "./fixtures.ts";
 import { readConductorSurface } from "./conductor-skill.ts";
 import { copyOf } from "../../dist/claude/.claude/tools/aidlc-unit-teams.ts";
+import { asLeadsOwnCheckout } from "./team-unit-merge.ts";
 
 export const UNIT = join(AIDLC_SRC, "tools", "aidlc-unit.ts");
 export const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
@@ -674,4 +675,42 @@ export function commitMessage(workspace: string, record: string, text: string): 
   mkdirSync(join(workspace, "aidlc", ".aidlc-engine", "request-text"), { recursive: true });
   writeFileSync(join(workspace, ...file.split("/")), text);
   return file;
+}
+
+/**
+ * The lead's work in a teammate's clone of the lead's workspace: the plan approved in the lead's own checkout (its
+ * shard holds the plan's rows), teams chosen, the plan shared in checkout-api, the workspace on a host of its own;
+ * `signOff`: the lead's sign-off on, committed and pushed; alice took refunds in a workspace of her own and pushed
+ * it, merged on both hosts with `merged`; carl cloned the lead's workspace with every repo and selected the lead's
+ * work, and has not said he leads it.
+ */
+export function teammateWithLeadsWork(options: { signOff?: boolean; merged?: boolean } = {}) {
+  const hosts = { "checkout-api": codeHost("checkout-api"), billing: codeHost("billing"), "checkout-web": codeHost("checkout-web") };
+  const home = makeHome({ repos: hosts });
+  expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+  asLeadsOwnCheckout(home.dir);
+  git(home.dir, ["add", "-A"]);
+  git(home.dir, ["commit", "-q", "-m", "teams"]);
+  git(home.dir, ["push", "-q", "origin", "main"]);
+  const plan = sharePlan(home);
+  if (options.signOff) {
+    expect(run(UNIT, ["lead-sign-off", "on", "--person-words", "I want to sign off every team's result"], home.dir).status).toBe(0);
+    git(home.dir, ["add", "-A"]);
+    git(home.dir, ["commit", "-q", "-m", "sign-off on"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+  }
+  const alice = teamWorkspace(hosts, "alice", ["checkout-api", "billing"]);
+  inSpace(alice, "payments");
+  expect(run(UNIT, ["take", "refunds", ...planFrom(plan)], alice).status).toBe(0);
+  const intents = join(alice, "aidlc", "spaces", "payments", "intents");
+  codeGenerated(alice, join(intents, readdirSync(intents).find((name) => name.endsWith("-refunds"))!));
+  expect(run(UNIT, ["push"], alice).status).toBe(0);
+  if (options.merged) {
+    mergeOnHost(hosts["checkout-api"], "refunds", "squash");
+    mergeOnHost(hosts.billing, "refunds", "squash");
+  }
+  const carl = cloneOf(home.remote, "carl");
+  for (const [name, host] of Object.entries(hosts)) cloneCode(host, carl, name, "carl");
+  expect(run(UTILITY, ["intent", "switch", HOME_RECORD], carl).status).toBe(0);
+  return { hosts, home, plan, alice, carl };
 }

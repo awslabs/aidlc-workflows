@@ -689,7 +689,10 @@ reads **Yes, for this project, and offered to whoever takes a Unit**.
   when it is there; otherwise it asks whether to carry the work on, as for
   work one person builds. Even with the lead's
   work picked there, the lead's own questions (a sign-off, a builder's proposed
-  change) are not put in such a clone. The lead in a fresh clone
+  change) are not put in such a clone, and the lead's own words given there
+  (a sign-off, a Unit freed, the sign-off setting and the rest) are written only
+  after the person says, once, that they lead the work from there; building a
+  Unit there is a take. The lead in a fresh clone
   on another machine says so in their own words, and AI-DLC records it there
   (`unit lead-here`); from then on that checkout gets the lead's questions, until they say they do not lead it
   there (`unit lead-here --off`).

@@ -717,14 +717,15 @@ describe("the lead's sign-off, from another checkout of the lead's", () => {
     expect(run(ORCH, ["team-board"], home.dir).out).toContain(`${MERGED_ROW}, not recorded yet: the next step here records it and opens reporting`);
   });
 
-  test("a teammate's clone after a teammate's sign-off, the lead's record not committed: no step of its own records it", () => {
+  test("a teammate's clone where a teammate asked to sign off, the lead's record not committed: nothing is written, and no step of its own records it", () => {
     const { home, hosts } = signOffOnHereOnly();
     const mate = mateOf(home, hosts);
     next(mate);
     const signed = run(UNIT, ["sign-off", "refunds", "--person-words", "looks right, sign it off"], mate);
-    expect(signed.status, signed.out).toBe(0);
+    expect(String(signed.json?.error), signed.out).toBe("refunds's sign-off is the lead's word, and fixture's plan was not made here, so I have not " +
+      "written it. Do you lead fixture from here?");
     const board = String(next(mate).narration);
-    expect(board).toContain(`${MERGED_ROW}\n`);
+    expect(board).toContain(`${MERGED_ROW}, waiting for the lead's sign-off`);
     expect(board).not.toContain("not recorded yet");
   });
 

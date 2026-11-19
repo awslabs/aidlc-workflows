@@ -16,8 +16,8 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
-import { readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
-import { planNotFollowedLine, planShareAgainOffer, skeletonCodeInMain, viewWithWord, type UnitClaimView, type UnitWord } from "../../dist/claude/.claude/tools/aidlc-unit.ts";
+import { auditBlockField, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { checkTeamResults, planNotFollowedLine, planShareAgainOffer, sendLeadsApprovedChanges, skeletonCodeInMain, viewWithWord, type UnitClaimView, type UnitWord } from "../../dist/claude/.claude/tools/aidlc-unit.ts";
 import { AIDLC_SRC, seededRecordDir, seededStateFile, writeLearningsSelections } from "../harness/fixtures.ts";
 import {
   cleanupTeamBuild,
@@ -45,7 +45,11 @@ import {
   refundsTakenInClone,
   run,
   teamWorkspace,
+  stateOf,
+  teammateWithLeadsWork,
+  tempDir,
   UNIT,
+  UTILITY,
 } from "../harness/team-build.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
@@ -825,5 +829,169 @@ describe("which take and push a word is for", () => {
     expect(sent.payload.done).toBeUndefined();
     const opened = viewWithWord(view(1, { billing: "h1" }), { generation: 1, open_again: { at: "t" } });
     expect([opened.status, opened.payload.open_again, opened.payload.status]).toEqual(["released", { at: "t" }, "claimed"]);
+  });
+});
+
+describe("the lead's words in a checkout that does not lead the work", () => {
+  const TEAMMATE = "This checkout did not make this work's plan, so the lead's own questions are not put here.";
+  const asked = (name: string, lead = "the lead's word", notDone = "written it"): string =>
+    `${name} is ${lead}, and fixture's plan was not made here, so I have not ${notDone}. Do you lead fixture from here?`;
+  const tipOf = (plan: { hosts: Record<string, string>; id8: string }): string => git(Object.values(plan.hosts)[0], ["rev-parse", planRefOf(plan.id8)]);
+  // The scene, its teammate's view asserted first.
+  function scene(options: { signOff?: boolean; merged?: boolean } = {}) {
+    const found = teammateWithLeadsWork(options);
+    expect(String(next(found.carl).board_note), "carl's clone reads as a teammate's").toStartWith(TEAMMATE);
+    return found;
+  }
+  // The rows a lead's word writes in this clone's own record.
+  const leadRows = (dir: string): string[] => readAuditShardEvents(dir).map((row) => row.event)
+    .filter((event) => ["LEAD_SIGN_OFF_SET", "QUESTION_ANSWERED", "UNIT_SENT_BACK", "UNITS_ASSIGNED", "UNIT_MERGED"].includes(event));
+  // The command an on_yes step runs after the yes, as `run` takes it.
+  const wordAgain = (onYes: string, verb: string): string[] => {
+    const again = new RegExp(`then \`([^\`]*aidlc-unit\\.ts ${verb}[^\`]*)\``).exec(onYes)?.[1];
+    expect(again, onYes).toBeDefined();
+    const args = again!.split(" ").slice(2);
+    const at = args.indexOf("--project-dir");
+    return at === -1 ? args : [...args.slice(0, at), ...args.slice(at + 2)];
+  };
+  const say = (dir: string, chat: string, words: string): void => {
+    Bun.sleepSync(1000 - (Date.now() % 1000) + 20);
+    expect(hookRun(dir, personsChat(chat), { hook_event_name: "UserPromptSubmit", session_id: chat, prompt: words }).status).toBe(0);
+  };
+  const field = (content: string, name: string) => new RegExp(`^- \\*\\*${name}\\*\\*: ?(.*)$`, "m").exec(content)?.[1]?.trim();
+
+  test("each of the lead's words writes nothing there and asks once whether they lead the work, word for word", () => {
+    const { plan, carl } = scene();
+    const tip = tipOf(plan);
+    const record = recordAt(plan, "refunds")?.json;
+    const words: Array<[string[], string]> = [
+      [["turned-down", "refunds", "--repo", "billing", "--person-words", "the tests fail"], asked("refunds's turn-down in billing")],
+      [["merged", "refunds", "--repo", "checkout-api", "--person-words", "merged by hand"], asked("refunds's merge in checkout-api")],
+      [["sign-off", "refunds", "--person-words", "looks right"], asked("refunds's sign-off")],
+      [["send-back", "refunds", "--person-words", "the totals are wrong"], asked("refunds's send-back")],
+      [["release", "refunds"], asked("refunds's reopening")],
+      [["lead-sign-off", "on", "--person-words", "sign off every result"], asked("The sign-off setting", "the lead's to change", "changed it")],
+      [["share", "--plan"], asked("Sharing the plan", "the lead's to do", "shared it")],
+      [["share", "--plan", "--repo", "billing"], asked("The plan's move to billing", "the lead's to do", "moved it")],
+      [["share", "--plan", "--off-branch"], asked("Taking the plan off its branch", "the lead's to do", "taken it off")],
+    ];
+    for (const [args, question] of words) {
+      const said = run(UNIT, args, carl);
+      expect(said.status, said.out).not.toBe(0);
+      expect(said.json?.error, args.join(" ")).toBe(question);
+      const onYes = String(said.json?.on_yes);
+      expect(onYes).toContain(`"Yes, I lead it from here" (I'll record that, show you where the work stands, then `);
+      expect(onYes).toContain(" From then on the lead's questions come here, and everyone reads what is written on the plan from here as the lead's word.)");
+      expect(onYes).toContain(` and "No, the lead does" (Nothing is written on the plan, and I won't ask this here again. ${question.split(" is the lead's")[0]} stays with the lead.).`);
+    }
+    expect(tipOf(plan)).toBe(tip);
+    expect(recordAt(plan, "refunds")?.json).toEqual(record);
+    expect(field(stateOf(carl), "Lead Sign-off")).toBeUndefined();
+    expect(leadRows(carl)).toEqual([]);
+  });
+
+  test("an answer on a team's proposed change, and a pull request named as a build, ask the same and write nothing", () => {
+    const { plan, alice, carl, hosts } = scene();
+    const intents = join(alice, "aidlc", "spaces", "payments", "intents");
+    const build = join(intents, readdirSync(intents).find((name) => name.endsWith("-refunds"))!);
+    const requirements = "inception/requirements-analysis/requirements.md";
+    writeFileSync(join(build, ...requirements.split("/")), "# Requirements\n\nFR1 refunds, partial amounts too.\n");
+    expect(run(UNIT, ["propose", "--input", "requirements.md", "--person-words", "refunds need partial amounts"], alice).status).toBe(0);
+    const pr = join(tempDir("partner"), "repo");
+    git(tempDir("partner-parent"), ["clone", "-q", hosts["checkout-web"], pr]);
+    writeFileSync(join(pr, "ui.ts"), "export const ui = 1;\n");
+    git(pr, ["add", "-A"]);
+    git(pr, ["-c", "user.name=partner", "-c", "user.email=partner@example.test", "commit", "-q", "-m", "Checkout UI"]);
+    git(pr, ["push", "-q", "origin", "HEAD:refs/pull/7/head"]);
+    const tip = tipOf(plan);
+    const answer = run(UNIT, ["amend", "refunds", "--input", requirements, "--answer", "approve", "--person-words", "yes, partial refunds"], carl);
+    expect(answer.json?.error, answer.out).toBe(asked("Your answer on alice's change to the requirements"));
+    const named = run(UNIT, ["merged", "checkout-ui", "--repo", "checkout-web", "--pull-request", "7", "--person-words", "that is the build"], carl);
+    expect(named.json?.error, named.out).toBe(asked("checkout-ui's pull request in checkout-web"));
+    expect(tipOf(plan)).toBe(tip);
+  });
+
+  test("yes: their word that they lead is recorded, the look comes, and the word they asked for is written with the words they first gave", () => {
+    const { plan, carl } = scene({ signOff: true, merged: true });
+    const chat = "carl-yes";
+    say(carl, chat, "looks right, sign refunds off");
+    const first = run(UNIT, ["sign-off", "refunds"], carl, personsChat(chat));
+    expect(first.json?.error, first.out).toBe(asked("refunds's sign-off"));
+    const again = wordAgain(String(first.json?.on_yes), "sign-off");
+    expect(again).toContain("--message");
+    say(carl, chat, "yes, I lead it from here");
+    const lifted = run(UNIT, ["lead-here"], carl, personsChat(chat));
+    expect(String(lifted.json?.notice), lifted.out).toBe("This checkout carries the work on as yours, the lead's, from here.");
+    next(carl, personsChat(chat));
+    const signed = run(UNIT, again, carl, personsChat(chat));
+    expect(String(signed.json?.notice), signed.out).toStartWith("Signed off refunds; every repo it changed has merged, so it is done.");
+    expect(planWordAt(plan, "refunds")).toMatchObject({ signoff: { words: "looks right, sign refunds off" } });
+    expect(auditBlockField(readAuditShardEvents(carl).findLast((row) => row.event === "LEAD_HERE_SET")?.block ?? "", "Person Words"))
+      .toBe("yes, I lead it from here");
+  });
+
+  test("no: it stays with the lead, and a later word says so with the way on, never the question again", () => {
+    const { plan, carl } = scene({ signOff: true, merged: true });
+    const chat = "carl-no";
+    say(carl, chat, "sign refunds off, it looks right");
+    expect(run(UNIT, ["sign-off", "refunds"], carl, personsChat(chat)).json?.error).toBe(asked("refunds's sign-off"));
+    say(carl, chat, "no, the lead does");
+    const no = run(UNIT, ["lead-here", "--off"], carl, personsChat(chat));
+    expect(no.json?.notice, no.out).toBe("Nothing is written on the plan. AI-DLC does not tell the lead you asked.");
+    expect(no.json?.step).toBe("Tell the person in plain words what it reports, then end your turn.");
+    const tip = tipOf(plan);
+    for (const [args, name] of [[["sign-off", "refunds"], "refunds's sign-off"], [["lead-sign-off", "off"], "the sign-off setting"]] as const) {
+      say(carl, chat, `${args.join(" ")} please`);
+      const later = run(UNIT, [...args], carl, personsChat(chat));
+      expect(later.json?.error, later.out).toBe(`You said you do not lead fixture from here, so ${name} stays with the lead and nothing is written. ` +
+        "If you do lead it from here now, say so.");
+      expect(String(later.json?.on_yes)).toStartWith("When they say they lead it from here, run `");
+    }
+    expect(tipOf(plan)).toBe(tip);
+  });
+
+  test("the writers that carry no word of the person's write nothing there and say nothing", () => {
+    const { plan, home, carl } = scene({ merged: true });
+    // The lead approved a change to an input after alice's take, and carl pulled it.
+    const requirements = join(seededRecordDir(home.dir), "inception", "requirements-analysis", "requirements.md");
+    writeFileSync(requirements, "# Requirements\n\nFR1 refunds, partial amounts too.\n");
+    appendAuditEntry("GATE_APPROVED", { Stage: "requirements-analysis", "User Input": "Approve", "Run floor": "0" }, home.dir);
+    git(home.dir, ["add", "-A"]);
+    git(home.dir, ["commit", "-q", "-m", "requirements approved again"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    git(carl, ["pull", "-q", "--no-rebase", "origin", "main"]);
+    const tip = tipOf(plan);
+    // The look's count of a merge, and the lead's approved inputs.
+    expect(checkTeamResults(carl)).toBeDefined();
+    expect(sendLeadsApprovedChanges(carl)).toEqual([]);
+    expect(tipOf(plan)).toBe(tip);
+    // A practice kept there stays there.
+    const path = writeLearningsSelections(carl, {
+      space: "default", intent: HOME_RECORD, stage_slug: "functional-design",
+      selections: [{ candidate_id: "c1", type: "learning", scope: "project", heading: "Corrections", text: "Keep refund handlers thin", source: "orchestrator" }],
+    });
+    const kept = run(join(AIDLC_SRC, "tools", "aidlc-learnings.ts"), ["persist", "--slug", "functional-design", "--selections-json", path], carl);
+    expect(kept.status, kept.out).toBe(0);
+    expect(kept.json?.rule_learned).toBe(1);
+    expect(kept.json?.notes ?? []).toEqual([]);
+    expect(tipOf(plan)).toBe(tip);
+  });
+
+  test("where the checkout leads, every word is written as before: the lead's checkout, its worktree, a seat that said yes, a second computer", () => {
+    for (const where of ["main", "worktree", "seat", "laptop"] as const) {
+      const { hosts, home, plan } = teammateWithLeadsWork({ signOff: true, merged: true });
+      let dir = home.dir;
+      if (where !== "main") {
+        dir = where === "laptop" ? cloneOf(home.remote, "lead-laptop") : join(tempDir(`lead-${where}`), "worktree");
+        if (where !== "laptop") git(home.dir, ["worktree", "add", "-q", "-b", `lead-${where}`, dir, "main"]);
+        for (const [name, host] of Object.entries(hosts)) cloneCode(host, dir, name);
+        if (where === "laptop") expect(run(UTILITY, ["intent", "switch", HOME_RECORD], dir).status).toBe(0);
+        if (where !== "worktree") expect(run(UNIT, ["lead-here", "--person-words", "I lead this work from here"], dir).status).toBe(0);
+        next(dir);
+      }
+      const signed = run(UNIT, ["sign-off", "refunds", "--person-words", "looks right"], dir);
+      expect(signed.status, `${where}: ${signed.out}`).toBe(0);
+      expect(planWordAt(plan, "refunds"), where).toMatchObject({ signoff: { words: "looks right" } });
+    }
   });
 });

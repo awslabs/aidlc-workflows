@@ -71,6 +71,7 @@ import {
   UTILITY,
   takeIn,
   inSpace,
+  teammateWithLeadsWork,
   teamWorkspace as ownWorkspace,
 } from "../harness/team-build.ts";
 
@@ -2622,6 +2623,47 @@ describe("the way back from a take, and the lead's release", () => {
       expect(refused.status, verb).not.toBe(0);
       expect(refused.out, verb).toContain("This command must run from the unscoped main checkout, not sibling worktree");
     }
+  });
+});
+
+describe("a Unit a teammate took, freed in their clone of the lead's workspace", () => {
+  test("with the lead's work selected there is the hand-back of their own take, and the lead's work stays", () => {
+    const { carl, plan } = teammateWithLeadsWork();
+    expect(run(UNIT, ["take", "checkout-ui", ...planFrom(plan)], carl).status).toBe(0);
+    expect(run(UTILITY, ["intent", "switch", HOME], carl).status).toBe(0);
+    const back = run(UNIT, ["release", "checkout-ui"], carl);
+    expect(back.status, back.out).toBe(0);
+    expect(String(back.json?.notice)).toStartWith("checkout-ui is given back. Written on its record in checkout-web.");
+    expect(String(back.json?.notice)).not.toContain("Do you lead");
+    expect(run(UTILITY, ["intent", "list"], carl).out).toContain(`${HOME}  [in-flight]`);
+  });
+
+  test("with its build in a team space, the step names the switches and the release there; a Unit someone else took is still asked about", () => {
+    const { carl, plan } = teammateWithLeadsWork();
+    inSpace(carl, "web");
+    expect(run(UNIT, ["take", "checkout-ui", ...planFrom(plan)], carl).status).toBe(0);
+    const build = buildDir(carl, "web", "checkout-ui");
+    expect(run(UTILITY, ["space", "switch", "default"], carl).status).toBe(0);
+    expect(run(UTILITY, ["intent", "switch", HOME], carl).status).toBe(0);
+    const step = run(UNIT, ["release", "checkout-ui"], carl);
+    expect(step.status, step.out).toBe(0);
+    expect(step.json).toMatchObject({ released: false, unit: "checkout-ui" });
+    expect(String(step.json?.step)).toMatch(new RegExp(`^Run \`[^\`]* space switch web\`, then \`[^\`]* intent switch ${basename(build)}\`; once they switch, run ` +
+      "`[^`]*aidlc-unit\\.ts release checkout-ui` in the same turn, and tell the person in plain words what it reports\\. If a switch does not go, its " +
+      "own line is the answer: leave the release unrun\\.$"));
+    // The commands as the agent runs them.
+    expect(run(UTILITY, ["space", "switch", "web"], carl).status).toBe(0);
+    expect(run(UTILITY, ["intent", "switch", basename(build)], carl).status).toBe(0);
+    const back = run(UNIT, ["release", "checkout-ui"], carl);
+    expect(String(back.json?.notice), back.out).toBe("checkout-ui is given back. Written on its record in checkout-web. Its build here is set aside, with everything in it kept.");
+    expect(recordAt(plan, "checkout-ui")?.json.status).toBe("released");
+    // Afterwards the team space stays selected with nothing in flight: the build set aside is not selected.
+    expect(run(UTILITY, ["intent", "list"], carl).out).toContain('No in-flight intents in space "web" (1 archived;');
+    // A Unit someone else took: the lead's word, asked about.
+    expect(run(UTILITY, ["space", "switch", "default"], carl).status).toBe(0);
+    expect(run(UTILITY, ["intent", "switch", HOME], carl).status).toBe(0);
+    expect(String(run(UNIT, ["release", "refunds"], carl).json?.error)).toBe(
+      "refunds's reopening is the lead's word, and fixture's plan was not made here, so I have not written it. Do you lead fixture from here?");
   });
 });
 

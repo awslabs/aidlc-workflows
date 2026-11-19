@@ -929,7 +929,8 @@ starts (never after each message inside a Unit), so a teammate's take is heard
 and its Unit is never started there too. In a clone with no copy of the work's
 records yet (a second computer's fresh clone), the look that says a team's result
 past the Unit stages, and the one that sends the lead's approved change, run there
-too. Each of these fetches on a step nobody typed (`quietFetch`) looks
+too, once that clone leads the work (`unit lead-here`); in a clone that does not lead
+it, the lead's writes to the plan write nothing. Each of these fetches on a step nobody typed (`quietFetch`) looks
 first with an `ls-remote` of the refs it names and fetches only what the remote
 has that is not here yet.
 That fetch and the merge check's git go through `quietly`, whose env is built

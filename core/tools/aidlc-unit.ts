@@ -286,10 +286,11 @@ import {
   testingContractCurrent,
 } from "./aidlc-testing-posture.ts";
 import { beforePerUnitBlock, memoryDirFor } from "./aidlc-graph.ts";
-import { LEAD_HERE_FIELD, planMadeElsewhere, spacesRoot, stateFilePath } from "./aidlc-record-core.ts";
+import { LEAD_HERE_FIELD, leadHereByWord, planMadeElsewhere, spacesRoot, stateFilePath } from "./aidlc-record-core.ts";
 import { withWorkPinned } from "./aidlc-locks.ts";
 import { approvalDecidesOpenFindings, approvalOpenFindings } from "./aidlc-review-brief.ts";
 import {
+  aidlcDispatcherInvocation,
   aidlcEngineCommand,
   aidlcInvocation,
   aidlcToolInvocation,
@@ -5542,11 +5543,8 @@ function claimUnit(args: string[], projectDir?: string): void {
     // command the Units offer gives it (unitTakeLook). A team named with it
     // names no space; a rhythm typed with it is the build's.
     const selected = resolveWorkflowSelection(pd);
-    const location = homeLocation(state)!;
     if (selected.intent !== null && unitBuildOf(state) === null && planMadeElsewhere(pd)) {
-      takeUnit(isGitAddress(location) ? [unit, ...planTakeFlags(activeIdentity(pd).intentId8, location)]
-        : [unit, "--home", selected.intent, ...(selected.space === DEFAULT_SPACE ? [] : ["--home-space", selected.space])], pd,
-        flags.rhythm as UnitClaimPayload["gate_rhythm"] | undefined);
+      takeFromLeadsPlan(pd, state, [unit], flags.rhythm as UnitClaimPayload["gate_rhythm"] | undefined);
       spend();
       return;
     }
@@ -5884,6 +5882,20 @@ function releaseUnit(args: string[], projectDir?: string): void {
   // is the record, so any checkout of the lead's writes it, a worktree too;
   // main's own team flow keeps its claims in the main checkout.
   if (isTeamUnitOwnership(state) && homeLocation(state) !== null) {
+    // A Unit this clone took, freed where the work is led from elsewhere: that take's hand-back, from its own build.
+    const claim = ledFromElsewhere(pd) ? cachedClaims(pd).get(unit) : undefined;
+    const own = claim?.status === "claimed" && claimIsMine(pd, claim) ? findUnitBuild(pd, activeIdentity(pd).intentUuid, unit) : null;
+    // A build in another space is given back from there: its set-aside names it in the space the chat is in.
+    if (own !== null && own.space !== resolveWorkflowSelection(pd).space) {
+      console.log(JSON.stringify({ released: false, unit, step: `Run \`${aidlcDispatcherInvocation("space")} switch ${own.space}\`, then ` +
+        `\`${aidlcDispatcherInvocation("intent")} switch ${own.dirName}\`; once they switch, run \`${aidlcToolInvocation("unit")} release ${unit}\` ` +
+        "in the same turn, and tell the person in plain words what it reports. If a switch does not go, its own line is the answer: leave the release unrun." }));
+      return;
+    }
+    if (own !== null) {
+      withWorkPinned({ space: own.space, intent: own.dirName }, () => giveBack(pd, unitBuildOf(readStateFile(pd, own.dirName, own.space))!));
+      return;
+    }
     openAgain(pd, unit);
     return;
   }
@@ -7178,6 +7190,10 @@ function planOffBranch(pd: string, tipAsked?: string): void {
 }
 
 function planOffBranchNow(pd: string, tipAsked?: string): void {
+  if (ledFromElsewhere(pd)) {
+    askWhoLeads(pd, { name: "taking the plan off its branch", start: "Taking the plan off its branch", lead: "the lead's to do",
+      doIt: "take the plan off its branch", notDone: "taken it off" }, sameCommand());
+  }
   const place = planPlaceForShare(pd);
   if ("refused" in place) fail(`usage: ${unitUsage("share")}`);
   const notOn = `The plan in ${place.repo} is not on a branch, so there is nothing to take down.`;
@@ -8220,6 +8236,11 @@ function shareMain(args: string[], projectDir?: string): void {
     planOffBranch(pd, parsed.flags.tip);
     return;
   }
+  if (flags.has("plan") && ledFromElsewhere(pd)) {
+    const moved = repoNamed === undefined ? null : `the plan's move to ${repoNamed}`;
+    askWhoLeads(pd, moved === null ? { name: "sharing the plan", start: "Sharing the plan", lead: "the lead's to do", doIt: "share the plan", notDone: "shared it" }
+      : { name: moved, start: `The plan's move to ${repoNamed}`, lead: "the lead's to do", doIt: `move the plan to ${repoNamed}`, notDone: "moved it" }, sameCommand());
+  }
   const refused = shareRefusal(pd, flags.has("plan"));
   // On a branch of the person's own, the share goes on to commit AI-DLC's
   // record there and pushes nothing (below).
@@ -8558,6 +8579,15 @@ function assignUnits(args: string[], projectDir?: string): void {
     fail("Units are given to teams once teams are chosen for this work.");
   }
   if (readApplicableTeamUnitScopeStamp(pd)) fail("A Unit is kept to build here at the lead's project, not from a checkout scoped to one Unit.");
+  // Built here, in a checkout that does not lead the work, is a take, as a typed claim is there.
+  if (ledFromElsewhere(pd)) {
+    const units = (flags.here ?? "").split(",").map((entry) => entry.trim()).filter((entry) => entry && entry !== "true");
+    const known = localOpeningStatus(pd).units;
+    for (const unit of units) if (!known.includes(unit)) fail(`${unit} is not one of this work's Units (${known.join(", ")}).`);
+    if (units.length === 0) fail(`usage: ${unitUsage("assign")}`);
+    takeFromLeadsPlan(pd, state, units, undefined, ["request-file", "person-words"].flatMap((name) => flags[name] ? [`--${name}`, flags[name]!] : []));
+    return;
+  }
   const words = leadSpoke(pd) ? personWordsOf(pd, flags) : "";
   buildLeftOpenHere(pd, state, (flags.here ?? "").split(",").map((entry) => entry.trim()).filter((entry) => entry && entry !== "true"), words);
 }
@@ -10737,7 +10767,8 @@ function planBelow(projectDir: string, tip: string, id: string): { commit: strin
 // the share. Work whose plan is not shared, or whose plan is not there, has
 // nowhere for it, and nothing is written: a lead's step never shares the plan.
 // `gone`: the plan this computer had is not in its repository now.
-export type LeadWrite = PlanWrite | { kind: "unshared"; gone?: PlanJson };
+// `led-elsewhere`: the work is led from another checkout (ledFromElsewhere): nothing is written.
+export type LeadWrite = PlanWrite | { kind: "unshared"; gone?: PlanJson } | { kind: "led-elsewhere" };
 
 export function leadsPlanWrite(projectDir: string, change: {
   what: string | ((tip: PlanJson | null) => string);
@@ -10751,6 +10782,7 @@ export function leadsPlanWrite(projectDir: string, change: {
   const write = (): LeadWrite => {
     const place = planPlaceForShare(pd);
     if (!("ref" in place)) return { kind: "unshared" };
+    if (ledFromElsewhere(pd)) return { kind: "led-elsewhere" };
     const had = keptPlan(pd, place.id8);
     if (had === null) {
       const look = lookAtPlan(pd, place);
@@ -10897,7 +10929,7 @@ export function planEndNow(projectDir: string, work: { space: string; dirName: s
     }
     if (written.kind === "written") return { line: withPlanNotes(`Written on the plan: ${led.kept.plan.work.label} is ${closed ? "closed" : "open again"}.`) };
     if (written.kind === "stopped") return { change: written.detail as PlanChange };
-    return written.kind === "unchanged" || written.kind === "unshared" ? null : { unsent: leadWriteWords(written) ?? null };
+    return written.kind === "unchanged" || written.kind === "unshared" || written.kind === "led-elsewhere" ? null : { unsent: leadWriteWords(written) ?? null };
   });
 }
 
@@ -11744,11 +11776,26 @@ export function buildOutOpening(plan: PlanJson, seen: ReadonlySet<string> = new 
   return { units, blockers, completed, landed: new Set(), skeleton: plan.skeleton ?? units[0] ?? "" };
 }
 
+// The take of a Unit from the lead's plan, the command the Units offer gives, in a checkout that does not lead the
+// work: the first of `units` (a take is one Unit), the rest said with it. `words`: the person's words flags.
+function takeFromLeadsPlan(pd: string, state: string, units: string[], rhythm?: UnitClaimPayload["gate_rhythm"], words: string[] = []): void {
+  const selected = resolveWorkflowSelection(pd);
+  const location = homeLocation(state)!;
+  const live = new Map(units.slice(1).map((unit) => [unit, leadsRecordNow(pd, unit)]));
+  const held = [...live].flatMap(([unit, claim]) => claim?.status === "claimed" ? [takenLine(unit, claim)] : []);
+  const open = [...live].filter(([, claim]) => claim?.status !== "claimed").map(([unit]) => unit);
+  const rest = [...held, ...(open.length === 0 ? [] : [`${joinNames(open)} ${open.length === 1 ? "is" : "are"} still open: a take is one ` +
+    `Unit at a time, so say if you want ${open.length === 1 ? "it" : "them"} too.`])].join(" ");
+  takeUnit([units[0], ...(isGitAddress(location) ? planTakeFlags(activeIdentity(pd).intentId8, location)
+    : ["--home", selected.intent!, ...(selected.space === DEFAULT_SPACE ? [] : ["--home-space", selected.space])]), ...words], pd, rhythm, rest);
+}
+
 // Take a Unit of the home's work: claim it at the home, then start its build
 // in the space the person is working in (solo work's in its own space). The
 // first take wins; a Unit that waits on another is not taken yet.
 // `rhythm`: the gate rhythm the person typed with a claim (claimUnit), else the lead's plan's.
-function takeUnit(args: string[], projectDir?: string, rhythm?: UnitClaimPayload["gate_rhythm"]): void {
+// `rest`: a line said with the take, for the other Units of a list (takeFromLeadsPlan).
+function takeUnit(args: string[], projectDir?: string, rhythm?: UnitClaimPayload["gate_rhythm"], rest = ""): void {
   const { positional, flags, bareFlags } = parseArgs(args);
   const unit = positional[0];
   if (!unit) fail(`usage: ${unitUsage("take")}`);
@@ -11786,7 +11833,7 @@ function takeUnit(args: string[], projectDir?: string, rhythm?: UnitClaimPayload
     // fetched it, while it is taken: a claim given back or freed names nobody.
     const claim = buildClaimHere(pd, found);
     const whose = claim?.status !== "claimed" ? "its" : claimIsMine(pd, claim) ? "your" : `${builderOf(claim)}'s`;
-    const carrying = `${before}Carrying on ${unit}, ${whose} build${found.space === DEFAULT_SPACE ? " here" : spaceWords(found.space)}.${after}`;
+    const carrying = `${before}Carrying on ${unit}, ${whose} build${found.space === DEFAULT_SPACE ? " here" : spaceWords(found.space)}.${after}${rest ? ` ${rest}` : ""}`;
     console.log(JSON.stringify({
       taken: true,
       resumed: true,
@@ -11957,7 +12004,7 @@ function takeUnit(args: string[], projectDir?: string, rhythm?: UnitClaimPayload
     notThere.lines +
     (planChanging !== null
       ? ` The lead is changing the Unit plan (${planChanging} is open again there), so ${unit} is taken on the plan as it stands there.`
-      : "");
+      : "") + (rest ? ` ${rest}` : "");
   const noPush = pushed.ok ? (pushed.branch === undefined ? null : recordOnBranchLine(place.repo, unit, pushed.branch))
     : notRecorded === null ? null
     : inTheWay ? recordInTheWayLine(place.repo, unit, notRecorded)
@@ -14650,7 +14697,8 @@ function checkTeamResultsQuietly(
       if (chat !== null) markPersonLinesHeard(pd, chat, [held]);
     }
     // A change on the plan this checkout did not write: the step's question comes first, and the merge waits for it.
-    else if (sent.kind !== "unshared" && sent.kind !== "stopped") {
+    // Where the work is led from elsewhere, the lead's look writes the merge.
+    else if (sent.kind !== "unshared" && sent.kind !== "stopped" && sent.kind !== "led-elsewhere") {
       const merge = `The merge of ${joinNames(named)} could not be written on the plan in ${to}`;
       const words = (said: string): string => said.trim().replace(/[.!?]+$/, "");
       const over = sent.kind === "unreadable" && sent.format <= PLAN_FORMAT;
@@ -15910,7 +15958,7 @@ export function sendLeadsApprovedChanges(projectDir: string): string[] {
     }
     if (sent.kind !== "written") {
       // The step's question comes first when a change this checkout did not write stopped it.
-      if (sent.kind === "unchanged" || sent.kind === "unshared" || sent.kind === "stopped") return lines;
+      if (sent.kind === "unchanged" || sent.kind === "unshared" || sent.kind === "stopped" || sent.kind === "led-elsewhere") return lines;
       // A moved plan not followed: said when its place could not be read; the
       // offer to share it again, which needs its command, is the merge write's.
       if (sent.kind === "unfollowed" && sent.follow.kind === "not-followed") return lines;
@@ -16167,6 +16215,40 @@ function wordVerdicts(view: UnitClaimView, verdicts: NonNullable<UnitClaimPayloa
 // The arguments this command was run with, for the same command again.
 let invokedArgs: string[] = [];
 
+// This command as it was run, naming the message the person's words came in where there is one.
+function sameCommand(message?: string): string {
+  return [aidlcToolInvocation("unit"), ...invokedArgs.filter((arg, at, all) => arg !== "--message" && all[at - 1] !== "--message").map(shellArg),
+    ...(message === undefined ? [] : ["--message", shellArg(message)])].join(" ");
+}
+
+// The lead's work selected in a checkout that does not lead it (planMadeElsewhere): a teammate's clone of the
+// lead's workspace, or the lead's other computer before they say they lead there.
+function ledFromElsewhere(pd: string): boolean {
+  const state = stateHere(pd);
+  return state !== null && isTeamUnitOwnership(state) && homeLocation(state) !== null && unitBuildOf(state) === null && planMadeElsewhere(pd);
+}
+
+// A lead's word asked for where the work is led from elsewhere: nothing is written. The reply is the question, once
+// on this clone for this work; after their no (leadHereByWord), the line that says so. `again` runs the word as asked.
+function askWhoLeads(pd: string, word: { name: string; start?: string; lead?: string; doIt?: string; notDone?: string }, again: string): never {
+  const start = word.start ?? word.name.replace(/^your /, "Your ");
+  const work = keptPlan(pd, activeIdentity(pd).intentId8)?.plan.work.label ?? activeIdentity(pd).intentId8;
+  const unit = aidlcToolInvocation("unit");
+  const yes = `run \`${unit} lead-here\`, then \`${aidlcToolInvocation("orchestrate")} next\`, then \`${again}\``;
+  if (leadHereByWord(pd) === false) {
+    throw new LeadWordUnwritten(`You said you do not lead ${work} from here, so ${word.name} stays with the lead and nothing is written. ` +
+      "If you do lead it from here now, say so.", again, undefined, `When they say they lead it from here, ${yes}, as after a yes.`);
+  }
+  throw new LeadWordUnwritten(`${start} is ${word.lead ?? "the lead's word"}, and ${work}'s plan was not made here, so I have not ` +
+    `${word.notDone ?? "written it"}. Do you lead ${work} from here?`, again, undefined, `With two answers, which you put as given: ` +
+    `"Yes, I lead it from here" (I'll record that, show you where the work stands, then ${word.doIt ?? `write ${word.name}`}. From then on ` +
+    "the lead's questions come here, and everyone reads what is written on the plan from here as the lead's word.) and \"No, the lead " +
+    `does" (Nothing is written on the plan, and I won't ask this here again. ${start} stays with the lead.). When they say yes, ${yes} in ` +
+    "the same turn, also when the look puts a question; a question the look puts about that same word is answered by that command, so " +
+    "do not put it. If lead-here does not go, its own line is the answer and the word stays unrun. When they say no, run " +
+    `\`${unit} lead-here --off\`, say its line, and end the turn.`);
+}
+
 // A lead's word not written, with the same command naming the message their
 // words came in (`again`), so trying again never asks for them twice; with the
 // lead's question first (`ask`), the command to run once they answer it.
@@ -16184,8 +16266,9 @@ class LeadWordUnwritten extends Error {
 // same command.
 function failUnlessWritten(pd: string, written: LeadWrite, what: string, message?: string): void {
   if (written.kind === "written" || written.kind === "unchanged") return;
-  const same = [aidlcToolInvocation("unit"), ...invokedArgs.filter((arg, at, all) => arg !== "--message" && all[at - 1] !== "--message").map(shellArg)];
-  const again = message === undefined ? null : [...same, "--message", shellArg(message)].join(" ");
+  const same = sameCommand();
+  const again = message === undefined ? null : sameCommand(message);
+  if (written.kind === "led-elsewhere") askWhoLeads(pd, { name: what }, again ?? same);
   const stop = (said: string): never => {
     if (again === null) fail(said);
     throw new LeadWordUnwritten(said, again);
@@ -16193,12 +16276,12 @@ function failUnlessWritten(pd: string, written: LeadWrite, what: string, message
   // A change on the plan this checkout did not write: the lead's question again, never silence.
   if (written.kind === "stopped") {
     const ask = planChangeQuestion(written.detail as PlanChange);
-    throw new LeadWordUnwritten(`Before I write ${what}: ${ask.question}`, again ?? same.join(" "), ask);
+    throw new LeadWordUnwritten(`Before I write ${what}: ${ask.question}`, again ?? same, ask);
   }
   // A plan to share again first (a tip that is not a plan, or a plan gone
   // from its repository): the share, then this word, on the lead's yes.
   const shareFirst = (said: string, repo?: string): never => {
-    const word = again ?? same.join(" ");
+    const word = again ?? same;
     throw new LeadWordUnwritten(said, word, undefined, shareThenWord(word, repo));
   };
   if (written.kind === "unfollowed") {
@@ -16304,7 +16387,8 @@ export function planWriteNote(
 ): { line: string; again: string; ask?: ReturnType<typeof planChangeQuestion> } | null {
   const pd = resolveProjectDir(projectDir);
   const again = `${aidlcInvocation()} unit share --plan`;
-  if (written.kind === "written" || written.kind === "unchanged" || written.kind === "unshared") return null;
+  // Where the work is led from elsewhere, a practice kept stays here and nothing is said.
+  if (written.kind === "written" || written.kind === "unchanged" || written.kind === "unshared" || written.kind === "led-elsewhere") return null;
   if (written.kind === "stopped") {
     const ask = planChangeQuestion(written.detail as PlanChange);
     return { line: ask.question, again, ask };
@@ -16971,15 +17055,19 @@ function leadHere(args: string[], projectDir?: string): void {
   }
   const lead = leadsWord(pd, flags, off ? "Not leading this work here" : "Carrying this work on here as its lead", undefined,
     off ? "Not leading this work here is the person's own word, so nothing changed. Run it with `--message <id>` when they say it." : undefined);
+  // Their no in a checkout that never led the work: it stays with the lead, and the turn ends.
+  const never = off && ledFromElsewhere(pd);
   appendAuditEntry("LEAD_HERE_SET", {
     ...(off ? { [LEAD_HERE_FIELD]: "off" } : {}), ...(lead.said !== null ? { "Person Words": lead.said } : {}), ...lead.fields,
   }, pd);
   // The view that follows comes in the same turn.
   console.log(JSON.stringify({
     lead_here: !off,
-    notice: off ? "This checkout no longer carries the work on as the lead's; anything it wrote to the plan stays."
+    notice: never ? "Nothing is written on the plan. AI-DLC does not tell the lead you asked."
+      : off ? "This checkout no longer carries the work on as the lead's; anything it wrote to the plan stays."
       : "This checkout carries the work on as yours, the lead's, from here.",
-    step: `Tell the person in plain words what it reports, then run \`${aidlcToolInvocation("orchestrate")} next\` and follow what it returns.`,
+    step: never ? "Tell the person in plain words what it reports, then end your turn."
+      : `Tell the person in plain words what it reports, then run \`${aidlcToolInvocation("orchestrate")} next\` and follow what it returns.`,
   }));
 }
 
@@ -16988,6 +17076,9 @@ function leadSignOffSetting(args: string[], projectDir?: string): void {
   if (value !== "on" && value !== "off") fail(`usage: ${unitUsage("lead-sign-off")}`);
   const pd = resolveProjectDir(projectDir);
   if (!isTeamUnitOwnership(readStateFile(pd))) fail("The lead's sign-off is for work whose Units are open for a person or a team to take.");
+  if (ledFromElsewhere(pd)) {
+    askWhoLeads(pd, { name: "the sign-off setting", start: "The sign-off setting", lead: "the lead's to change", doIt: "change the sign-off setting", notDone: "changed it" }, sameCommand());
+  }
   // The lead's own words for it, recorded whole beside the setting.
   const words = personWordsOf(pd, parseArgs(args.slice(1)).flags);
   withAuditLock(pd, () => {
