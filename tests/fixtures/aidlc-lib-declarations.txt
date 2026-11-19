@@ -714,8 +714,6 @@ commandArgSpans
 commandAtPersonsTerminal
 commandTurnHint
 commitPlanApprovalBatch
-committedTextBytes
-committedTextParts
 committedTextSha256
 comparablePath
 completedPipelineLinks
