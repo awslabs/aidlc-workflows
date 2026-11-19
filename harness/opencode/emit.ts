@@ -111,7 +111,12 @@ function embedShippedEntrypoints(raw: string, distRoot: string): string {
 // The adapter imports its leaf modules from core/ in this repository; in a
 // project they sit in the engine tree beside .opencode/ (both channels ship
 // it), never inside .opencode/, which opencode scans for tools.
-const PLUGIN_LEAF_IMPORTS = ["tools/aidlc-executable-path.ts", "hooks/review-freeze-command.ts"];
+const PLUGIN_LEAF_IMPORTS = [
+  "tools/aidlc-executable-path.ts",
+  "hooks/review-freeze-command.ts",
+  "tools/aidlc-plugin-rules.ts",
+  "tools/aidlc-review-manifest.ts",
+];
 
 function projectedToolImports(raw: string, harnessDir: string): string {
   let out = raw;

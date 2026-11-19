@@ -240,6 +240,13 @@ describe("a Unit done without its receipts is offered recording them", () => {
       },
       humanAuthority: { freshTurn: false, unattended: false },
     });
+    // The team gate's choice names the stage it records, never the whole Unit as finished.
+    expect(teamGate.remedies.find((remedy) => remedy.op === "record-unit-completion")).toMatchObject({
+      label: "Mark Code Generation done",
+      description:
+        "The Code Generation documents for billing are already in place. I'll record Code Generation as " +
+        "done for it and bring it to you for approval.",
+    });
     // Mid-step, finishing with the review it has is first the agent's own step
     // (no command, no pick); the same way on with its command follows.
     expect(midStep.remedies[0]?.op).toBe("finish-unit-step");

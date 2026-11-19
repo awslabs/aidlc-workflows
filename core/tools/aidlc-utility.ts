@@ -11037,7 +11037,10 @@ async function handleDocumentInput(
   })();
 
   const mime = detectMimeType(absPath, bytes);
-  if (mime !== "text/plain" && mime !== "text/markdown") {
+  // A UTF-8 page is passed on as it is written, like a text file; the reader
+  // that takes its markup out is the knowledge base's.
+  const direct = mime === "text/plain" || mime === "text/markdown" || (mime === "text/html" && kb.decodesAsUtf8(bytes));
+  if (!direct) {
     if (mime !== "application/pdf" && mime !== kb.WORD_DOCX_MIME) {
       refuse(
         `${JSON.stringify(portablePath)} is ${mime}, not direct UTF-8 text, Markdown, PDF, ` +

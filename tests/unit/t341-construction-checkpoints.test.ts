@@ -503,7 +503,7 @@ describe("t341 Construction checkpoint verification and evidence", () => {
     expect(status.code, status.out).toBe(0);
     expect(JSON.parse(status.out).verification.stderr_tail).toBe(failed.verification!.stderr_tail);
     expect(readFileSync(failed.proof_path, "utf-8")).not.toContain("discarded output prefix");
-    expect(() => approveConstructionCheckpoint(dir, "alpha", "unit", "Approve", "t341-checkpoint")).toThrow("Verify");
+    expect(() => approveConstructionCheckpoint(dir, "alpha", "unit", "Approve", "t341-checkpoint")).toThrow("did not pass, so alpha is not approved yet");
     for (const cmd of ["", " \n\t", "a".repeat(1025), "echo\0bad"]) {
       expect(() => verificationCommandDetails(cmd)).toThrow("nonblank");
     }
@@ -594,7 +594,7 @@ describe("t341 Construction checkpoint verification and evidence", () => {
       expect(failed.verification!.evidence_unchanged).toBe(true);
       expect(failed.verified).toBe(false);
       expect(failed.approved).toBe(false);
-      expect(() => approveConstructionCheckpoint(dir, "alpha", "unit", "Approve", "t341-checkpoint")).toThrow("Verify");
+      expect(() => approveConstructionCheckpoint(dir, "alpha", "unit", "Approve", "t341-checkpoint")).toThrow("did not pass, so alpha is not approved yet");
       expect(approvals(dir)).toHaveLength(1);
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
   );
@@ -834,7 +834,7 @@ describe("t341 tool-owned checkpoint verification receipts", () => {
     writeFileSync(failed.proof_path, JSON.stringify({ ...failed.verification!, exit_code: 0, verified: true }));
     expect(resolveConstructionCheckpoint(dir, "alpha", "unit").verified).toBe(false);
     expect(() => approveConstructionCheckpoint(dir, "alpha", "unit", "Approve", "t341-checkpoint"))
-      .toThrow("CHECKPOINT_VERIFICATION_RECORDED");
+      .toThrow("did not pass, so alpha is not approved yet");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a proof written before an audit append failure remains unverified", async () => {

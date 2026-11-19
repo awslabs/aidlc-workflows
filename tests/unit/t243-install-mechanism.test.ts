@@ -4260,7 +4260,8 @@ describe("t243 project initialization", () => {
 
   // #1406: a run that leaves another harness on another release names it, with
   // the one command that brings it to the release just written, and that
-  // command runs as printed.
+  // command runs as printed (natively, a tree a newer release set up is the
+  // exception: a plain refresh never takes it down).
   test("a refresh names each harness left on another release with the command that brings it there", () => {
     const project = temp("aidlc-t243-trees-behind-");
     mkdirSync(join(project, ".git"));
@@ -4311,10 +4312,12 @@ describe("t243 project initialization", () => {
     expect(plain.stdout).toContain(
       `Claude Code (.claude) is on ${NEXT_VERSION}. To bring it to ${AIDLC_VERSION}: \`bun .kiro/tools/aidlc.ts config --harness claude\`.`,
     );
+    // This tree's own tool is the native one, and natively a plain refresh
+    // never takes down a tree a newer release set up: it says so instead.
     const level = run(join(".kiro", "tools", "aidlc.ts"), ["config", "--harness", "claude"], project, runtimeEnv);
-    expect(level.status, level.stdout + level.stderr).toBe(0);
-    expect(stampOf(".claude")).toBe(AIDLC_VERSION);
-    expect(level.stdout).not.toContain("To bring it to");
+    expect(level.status, level.stdout + level.stderr).toBe(5);
+    expect(level.stdout).toContain(`Nothing changed: this project was set up with AI-DLC ${NEXT_VERSION}`);
+    expect(stampOf(".claude")).toBe(NEXT_VERSION);
 
     // A copied tree no config run has recorded first records its own files,
     // as doctor's row says, so the command after it finds them owned.

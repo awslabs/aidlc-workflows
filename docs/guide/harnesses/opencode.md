@@ -119,9 +119,10 @@ then set `RUNTIME_ROOT` to the extracted `runtime/` directory.
    instead, step 2 adds those parts to it, comments kept, and creates no
    `opencode.json` beside it.
    The adapter enforces the permission boundary: the target must be an entrypoint
-   embedded from the packaged tree, invoked as one direct command with no
-   chaining, redirection, expansion, or command substitution. Engine-code edits
-   prompt for approval.
+   embedded from the packaged tree, or a plugin tool that plugin sync installed
+   in `.aidlc/tools/` and that has not changed since, invoked as one direct
+   command with no chaining, redirection, expansion, or command substitution.
+   Engine-code edits prompt for approval.
 
 2. Run the copy's own setup once, from the project:
 

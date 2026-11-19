@@ -9,6 +9,7 @@
 
 import { projectDirFlag, settleClaudeTurnsFirst } from "./aidlc-claude-turn-pending.ts";
 import { gitCommonDirOf, gitSubmoduleNames } from "./aidlc-git.ts";
+import { markdownBlocks, withoutCommentBlocks } from "./aidlc-markdown.ts";
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
@@ -951,6 +952,45 @@ function visiblePostureText(section: string): string {
   return markdownWithoutHtmlComments(section).trim();
 }
 
+// What an approved plan's contract binds of a Testing Posture section: the
+// text as the agent is handed it (the stage's rules drop comment blocks the
+// same way, readRuleBundle), its spacing aside: no blank line at either end or
+// after another, and no trailing whitespace outside code and HTML blocks,
+// whose bytes stay as written. A comment inside a line is handed to the agent,
+// so it is bound; `shown` cuts it, for the notes a person reads.
+function postureAsHanded(section: string): { handed: string; shown: string } {
+  const text = withoutCommentBlocks(section.replace(/\r\n?/g, "\n"));
+  const blocks = markdownBlocks(text).lines;
+  const handed: string[] = [];
+  const shown: string[] = [];
+  text.split("\n").forEach((line, index) => {
+    const block = blocks[index];
+    if (block.kind === "blank") {
+      if (handed.length > 0 && handed.at(-1) !== "") {
+        handed.push("");
+        shown.push("");
+      }
+      return;
+    }
+    const asWritten = block.kind === "codeFenced" || block.kind === "codeIndented" || block.kind === "htmlFlow";
+    let visible = "";
+    let cursor = 0;
+    for (const span of block.invisible) {
+      if (span.kind !== "htmlComment") continue;
+      visible += line.slice(cursor, span.start);
+      cursor = span.end;
+    }
+    visible += line.slice(cursor);
+    handed.push(asWritten ? line : line.trimEnd());
+    shown.push(asWritten ? visible : visible.trimEnd());
+  });
+  while (handed.at(-1) === "") {
+    handed.pop();
+    shown.pop();
+  }
+  return { handed: handed.join("\n"), shown: shown.join("\n") };
+}
+
 function classifiablePostureText(section: string): string {
   const lines = markdownWithoutHtmlComments(section).split("\n");
   const structuralLines = structuralMarkdownLines(section);
@@ -974,9 +1014,9 @@ function classifiablePostureText(section: string): string {
 }
 
 // Find the real Testing Posture section while ignoring headings hidden inside
-// HTML comments or fenced examples. Return the original raw lines so comments
-// and fences remain part of input_sha256 even though classification uses the
-// visible projection above.
+// HTML comments or fenced examples. Return the original raw lines: the earlier
+// contract reading hashes them as they are, and postureAsHanded reads its own
+// form from them.
 function extractTestingPostureSection(content: string): string {
   const rawLines = content.replace(/^\uFEFF/, "").replace(/\r\n/g, "\n").split("\n");
   const visibleLines = structuralMarkdownLines(content);
@@ -1220,6 +1260,12 @@ export function buildPlanProfile(
   };
 }
 
+/**
+ * The Testing Contract for these sections. `read` "raw" is the reading a plan
+ * approved on v2.11.4 or a preview since carries (the raw section text hashed,
+ * the notes cut by visiblePostureText), kept byte for byte so that approval is
+ * checked the way it was given (testingContractCurrent).
+ */
 export function resolveTestingPostureFromSections(
   sections: TestingPostureSections,
   options: {
@@ -1227,6 +1273,7 @@ export function resolveTestingPostureFromSections(
     testStrategy: TestStrategy;
     projectType: ProjectType;
   },
+  read: "as-handed" | "raw" = "as-handed",
 ): TestingPostureContract {
   const classified = {
     org: classifyPosture(sections.org ?? ""),
@@ -1261,17 +1308,21 @@ export function resolveTestingPostureFromSections(
                 components: ["test-after" as const],
               },
             };
-  const applicableNotes = (["org", "team", "project"] as const)
-    .map((layer) => ({
-      layer,
-      text: visiblePostureText(sections[layer] ?? ""),
-    }))
+  const layers = (["org", "team", "project"] as const).map((layer) => {
+    const section = sections[layer] ?? "";
+    if (read === "raw") return { layer, bound: section, shown: visiblePostureText(section) };
+    const { handed, shown } = postureAsHanded(section);
+    return { layer, bound: handed, shown };
+  });
+  const applicableNotes = layers
+    .map(({ layer, shown }) => ({ layer, text: shown }))
     .filter((entry) => entry.text.length > 0);
+  const bound = Object.fromEntries(layers.map(({ layer, bound }) => [layer, bound]));
   const input = {
     sections: {
-      org: sections.org ?? "",
-      team: sections.team ?? "",
-      project: sections.project ?? "",
+      org: bound.org,
+      team: bound.team,
+      project: bound.project,
     },
     scope: options.scope,
     test_strategy: options.testStrategy,
@@ -1311,6 +1362,7 @@ export function setTestingPostureRoute(isolatedTestStrategy: string | null): voi
 
 export function resolveTestingPosture(
   projectDir: string,
+  read: "as-handed" | "raw" = "as-handed",
 ): TestingPostureContract {
   const space = resolveWorkflowSelection(projectDir).space;
   const memoryDir = join(projectDir, "aidlc", "spaces", space, "memory");
@@ -1347,7 +1399,7 @@ export function resolveTestingPosture(
         getField(state, "Test Strategy") ?? "standard",
     ),
     projectType: normalizeProjectType(getField(state, "Project Type") ?? "greenfield"),
-  });
+  }, read);
 }
 
 export function renderTestingContract(contract: TestingPostureContract): string {
@@ -1517,6 +1569,22 @@ export function testingContractDefectMessage(
 function testingContractDefectReason(plan: string): string | null {
   const read = readTestingContract(plan);
   return "defect" in read ? testingContractDefectMessage(read.defect) : null;
+}
+
+/**
+ * Whether a plan's Testing Contract is the one in force: the one owner of that
+ * rule, every reader calls it. A plan approved before the contract was read as
+ * handed carries the raw reading's hash; it is in force while that reading of
+ * the memory is the same now, byte for byte, and only then.
+ */
+export function testingContractCurrent(
+  projectDir: string,
+  embedded: TestingPostureContract | null,
+  current: TestingPostureContract = resolveTestingPosture(projectDir),
+): boolean {
+  if (embedded === null) return false;
+  if (embedded.contract_sha256 === current.contract_sha256) return true;
+  return embedded.contract_sha256 === resolveTestingPosture(projectDir, "raw").contract_sha256;
 }
 
 /** Hash validity alone does not make a contract executable. */
@@ -3369,12 +3437,19 @@ export const REVIEW_TESTING_CONTRACT_FIELD = "Testing Contract";
 
 /**
  * The Testing Contract in force for a Code Generation review being recorded:
- * the boundary that says the build it reviews was finished under it. Null when
- * the posture cannot be read, so the row carries no boundary.
+ * the boundary that says the build it reviews was finished under it. The
+ * plan's own contract while it is in force, so a plan approved before the
+ * update names the contract reviewedUnderContract compares; null when the
+ * posture cannot be read, so the row carries no boundary.
  */
-export function reviewedTestingContract(projectDir: string): string | null {
+export function reviewedTestingContract(projectDir: string, unit: string | null = null): string | null {
   try {
-    return resolveTestingPosture(projectDir).contract_sha256;
+    const current = resolveTestingPosture(projectDir);
+    const planPath = join(codeGenerationRecordDir(projectDir, unit), "code-generation-plan.md");
+    const embedded = existsSync(planPath) ? parseTestingContract(readFileSync(planPath, "utf-8")) : null;
+    return embedded !== null && testingContractCurrent(projectDir, embedded, current)
+      ? embedded.contract_sha256
+      : current.contract_sha256;
   } catch {
     return null;
   }
@@ -3510,12 +3585,8 @@ function codeGenerationApprovalArtifacts(
   const approvedAnswer = recordedFingerprint !== null && !skipNoLongerStands(projectDir, authority, receipt) &&
     (receipt?.choice === "Approve Plan" || planApprovedOnRecord(projectDir, authority.targetId, recordedFingerprint));
   const embedded = planExists ? parseTestingContract(plan) : null;
-  const current = planExists ? resolveTestingPosture(contractProjectDir) : null;
   const contractHash = embedded?.contract_sha256 ?? null;
-  const contractValid =
-    embedded !== null &&
-    current !== null &&
-    embedded.contract_sha256 === current.contract_sha256;
+  const contractValid = planExists && testingContractCurrent(contractProjectDir, embedded);
   // A delegated approval (validateWorktreeDelegation) reads the parent's
   // contract while the review rows here are the worker checkout's, so the
   // exception is not read for it; handleReview records none in a swarm worker.
@@ -6501,11 +6572,7 @@ export function main(argv: string[]): void {
         // Regenerating changes nothing approved: the same plan in the same
         // attempt prints the fingerprint its approval already binds.
         const embedded = parseTestingContract(plan);
-        const current = resolveTestingPosture(projectDir);
-        if (
-          !embedded ||
-          embedded.contract_sha256 !== current.contract_sha256
-        ) {
+        if (embedded === null || !testingContractCurrent(projectDir, embedded)) {
           throw new Error(
             approval.reason ||
               "plan Testing Contract does not match the current effective posture",
@@ -6523,7 +6590,7 @@ export function main(argv: string[]): void {
         const fingerprint = approvalFingerprint(
           plan,
           instructions,
-          current.contract_sha256,
+          embedded.contract_sha256,
           authority,
         );
         console.log(`[Approval Fingerprint]: ${fingerprint}`);

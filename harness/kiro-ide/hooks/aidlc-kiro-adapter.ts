@@ -185,6 +185,7 @@ import {
   questionsFilePlanApprovalAnswer,
   resolveCodeGenerationAuthority,
   resolveTestingPosture,
+  testingContractCurrent,
   withPlanApprovalTags,
 } from "../tools/aidlc-testing-posture.ts";
 import { normalizeRetiredGuardPolicyField } from "../tools/aidlc-guard-switch.ts";
@@ -619,7 +620,7 @@ function processLegacyPlanApprovalWrite(
     // The engine's own writer replaces the whole section. A plan it cannot
     // write the block into is left as it is; the blank Plan Approval write
     // that follows tries again before it stops on the contract.
-    const written = parseTestingContract(plan)?.contract_sha256 !== contract.contract_sha256
+    const written = !testingContractCurrent(projectDir, parseTestingContract(plan), contract)
       ? planWithTestingContract(plan, contract)
       : null;
     if (written !== null) writeFileSync(planPath, written, "utf-8");
@@ -674,8 +675,8 @@ function processLegacyPlanApprovalWrite(
     }
     const plan = readFileSync(planPath, "utf-8");
     const instructions = readFileSync(instructionsPath, "utf-8");
-    const contract = resolveTestingPosture(projectDir);
-    if (parseTestingContract(plan)?.contract_sha256 !== contract.contract_sha256) {
+    const contract = parseTestingContract(plan);
+    if (contract === null || !testingContractCurrent(projectDir, contract)) {
       throw new LegacyPlanApprovalMediationError(
         "legacy Plan Approval mediation requires the current Testing Contract in code-generation-plan.md",
       );

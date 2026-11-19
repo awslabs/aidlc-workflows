@@ -373,6 +373,36 @@ function heldByLaterProcess(pid: number, recorded: unknown, ownerPath: string): 
   }
 }
 
+// Windows answers a read of a file its holder is deleting with an error, not
+// ENOENT, until the deleting handle closes. There a failed read is tried again
+// and only ENOENT changes its answer, so a lock still there stays unreadable.
+const VANISHING_LOCK_RETRY_MS = 10;
+const VANISHING_LOCK_WAIT_MS = 1_000;
+
+function readLockOwner(ownerPath: string, directory: boolean): string {
+  const read = (): string => {
+    if (directory && !lstatSync(ownerPath).isFile()) {
+      throw new Error("directory owner is not a regular file");
+    }
+    return readFileSync(ownerPath, "utf-8");
+  };
+  try {
+    return read();
+  } catch (error) {
+    if (process.platform !== "win32" || (error as NodeJS.ErrnoException).code === "ENOENT") throw error;
+    for (const deadline = Date.now() + VANISHING_LOCK_WAIT_MS; Date.now() < deadline;) {
+      Bun.sleepSync(VANISHING_LOCK_RETRY_MS);
+      try {
+        read();
+        break;
+      } catch (again) {
+        if ((again as NodeJS.ErrnoException).code === "ENOENT") throw again;
+      }
+    }
+    throw error;
+  }
+}
+
 function clearStaleLock(lockPath: string): void {
   // The lock can go at any moment, since its holder may not share the local
   // gate (a release from before it): one look here, and a lock gone by the
@@ -388,10 +418,7 @@ function clearStaleLock(lockPath: string): void {
   let raw: string | null;
   let unfinished = false;
   try {
-    if (directory && !lstatSync(ownerPath).isFile()) {
-      throw new Error("directory owner is not a regular file");
-    }
-    raw = readFileSync(ownerPath, "utf-8");
+    raw = readLockOwner(ownerPath, directory);
   } catch (error) {
     const absent = (error as NodeJS.ErrnoException).code === "ENOENT";
     if (absent && (!directory || !pathExists(lockPath))) return;

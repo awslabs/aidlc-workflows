@@ -569,7 +569,7 @@ switching examples, and what is committed.
 
 ### `/aidlc knowledge <verb>` — Index and read your own documents
 
-Put your documents (PDFs, Word and Excel files, Markdown, plain text, CSV) under
+Put your documents (PDFs, Word and Excel files, HTML pages, Markdown, plain text, CSV) under
 `aidlc/spaces/<space>/knowledge/documents/`, organised however you like, then index
 them so agents can cite them instead of guessing.
 
@@ -593,7 +593,9 @@ are worth reading, because "no output changed" and "nothing happened" are differ
 results.
 
 **Batch limits.** A pathless `onboard` and `sync` apply the 20-document/256 MiB
-limits to new, changed, or retrying work, not to already-current catalog rows. An
+limits to new and changed work, not to already-current catalog rows. Rows `sync`
+reads again unchanged (an extractor installed, a reader added) take the room the
+limits leave, and the rest are read by the following runs of `sync`. An
 already-reconciled catalog can be larger. When a work batch exceeds a cap, onboard
 the affected files individually before syncing again. Nothing is indexed when a cap
 is hit, so the refusal is never half-finished. A single document over 32 MiB is
@@ -612,14 +614,19 @@ document). Scoping to an intent that has finished is refused unless you add
 (`.docx`) and Excel (`.xlsx`) files are read by AI-DLC itself, with nothing to
 install: a Word file's paragraphs and tables, and every sheet of a workbook as a
 table, with each formula's last saved result (dates and numbers as the file stores
-them; images, charts, comments and headers are not read). A project can configure
+them; images, charts, comments and headers are not read). HTML pages (`.html`,
+`.htm`) are read by AI-DLC itself too: their text, without markup, styles, scripts or
+embedded images, and their tables as tables, read as UTF-8 when the bytes are UTF-8,
+otherwise in the charset the page declares, otherwise as Windows-1252. To keep a
+page's markup instead (a UI mockup), add a copy of it saved with a `.txt` name. A project can configure
 its own extractor for any type, and a configured one wins. PDF gets a default
 extractor (`pdftotext`) if none is configured; any other type is catalogued and
 citable as `unsupported_type`; after configuring an extractor, run `sync` to retry
 unchanged rows of that detected type. A Word or Excel file AI-DLC cannot open (one
 that is password-protected, damaged, or in the older `.doc` or `.xls` format saved
 under the new name) is catalogued as `extraction_failed` with the reason. A Word or
-Excel file added before AI-DLC read them gets its text on the next `sync`. If a CONFIGURED extractor is not installed the
+Excel file or an HTML page added before AI-DLC read them gets its text on the next
+`sync` (up to 20 a run, see Batch limits). If a CONFIGURED extractor is not installed the
 document is catalogued as `extractor_unavailable` — visible in `list`, and fixed by
 installing the tool and running `/aidlc knowledge sync`. Re-running `onboard` on the
 same unchanged path reports `already` and does NOT retry extraction — only `sync`
@@ -627,7 +634,7 @@ re-probes rows in this state. Nothing is silently skipped.
 
 **Extraction is capped**: 50 pages for PDF with the default extractor
 (`pdftotext -l 50`, then a check for a page 51) and 200,000
-characters of extractor output (a Word or Excel file's text too). Past a cap the text is cut and the row records
+characters of extractor output (a Word, Excel or HTML file's text too). Past a cap the text is cut and the row records
 `truncated` — `show` prints a `truncated  yes` line above the content (`after
 page 50` when the page cap cut it) and the `--json` payload carries the flag
 inside `extraction`, with `pages_kept` for a page cut. Treat a truncated
@@ -739,7 +746,9 @@ Unit gate rhythm is used. Claims are refused until dependencies and any required
 walking skeleton are complete, and a checkout with a live claim routes only its
 stamped Unit. While main is back at Units Generation changing the Unit plan, a
 claim still goes ahead, and its result says once that if the approved plan
-changes that Unit's own entry, pin asks for a rebase onto main.
+changes that Unit's own entry, pin asks for a rebase onto main. A step you
+skipped on main for every Unit before this claim stays skipped for the claimed
+Unit: its walk goes on past it, and the merge question says it was skipped.
 
 ### `/aidlc unit assign --here` - Build a Unit at the lead's project
 
@@ -1333,8 +1342,13 @@ Run from unscoped main:
 Pinning fetches the claim ref, records its exact OID/generation and a fresh pin
 transaction ID, and reads
 artifacts, Unit receipts, team gates, reviewer verdicts, Plan Approval, state,
-and audit-shard transport directly from that commit. It does not merge or create
-a worktree. The claim-bound team shard may carry only that Unit's attempt
+and audit-shard transport directly from that commit. It does not merge into main
+or create a worktree; it tries the merge with `git merge-tree`, and a candidate
+that conflicts with main is refused before the merge question, with the files
+and the step for the Unit's owner (merge main in the claimed checkout, resolve,
+publish again). When main here has commits the remote's integration branch does
+not have yet (a landing not pushed), the step says to push main first, since
+the owner's merge reads the remote. The claim-bound team shard may carry only that Unit's attempt
 receipts; main-authority rows, another Unit's record/receipt paths, extra shards,
 and other workflow-record paths are refused. Pin also compares the candidate
 base's entry for the Unit (its kind and dependencies) and the active per-Unit
@@ -2990,7 +3004,13 @@ proved and a review that was asked for, the Unit is verified and their words are
 approval (`review_not_finished.approved_in_words`: `approve` asks nothing more),
 recorded with the review as not finished, as at a stage gate. A verdict for that review that comes in later is
 recorded and leaves the Unit approved. Under a team's locked `strict` the review finishes
-first, without asking the person. A Unit whose review ended in the NOT-READY
+first, without asking the person. When the Unit's check ran and did not pass (every test green and a
+coverage floor not met, say) and the person says to approve it as it is, add `--over-failed-check --message <id>`
+to `verify` the same way: the check runs again, and if it still does not pass the record keeps `Verified: false`
+with `Check Not Passed: approved in words`, the result carries `check_not_passed.approved_in_words` and a
+`next_step` naming the `approve` to run with no question, and the person hears "Approved. <unit>'s check,
+`<command>`, did not pass."; under a team's locked `strict` the check has to pass, and `verify` says so in one
+line. Each flag lifts only what it names; pass both when both apply. A Unit whose review ended in the NOT-READY
 fallback the conductor records when a retried review still wrote no whole review is asked
 about once (`review_not_finished.question`) and approved the same way, with no
 option to pass. A Unit review never asked
@@ -3002,6 +3022,7 @@ before does not count) is required under every Guard Policy: `rereview` carries
 aidlc engine bolt checkpoint --action status --unit "<Unit>" --kind <unit|skeleton>
 aidlc engine bolt checkpoint --action verify --unit "<unit>" --kind <unit|skeleton>
 aidlc engine bolt checkpoint --action verify --unit "<unit>" --kind <unit|skeleton> --over-unfinished-review --message <id>
+aidlc engine bolt checkpoint --action verify --unit "<unit>" --kind <unit|skeleton> --over-failed-check --message <id>
 aidlc engine bolt checkpoint --action verify --unit "<unit>" --kind <unit|skeleton> --override-blocking-sensors --user-input "Override blocking sensors"
 ```
 

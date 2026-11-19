@@ -1148,7 +1148,7 @@ export const ROUTES: readonly Route[] = [
       "continue <token>",
       "report [args]",
       "park [args]",
-      "wait --stage <slug> --for collaborators|artifacts|review [--unit <unit>] [--review-file <path>] [--timeout <seconds>]",
+      "wait --stage <slug> --for collaborators|artifacts|review [--unit <unit>] [--review-file <path>] [--agent-id <id>] [--timeout <seconds>]",
       "team-board [--snapshot] [--space <name>] [--intent <name>]",
     ],
   },
@@ -3165,16 +3165,19 @@ async function runGroupMembers(
 }
 
 // Claude Code's box for the code plan question shows each plan's lines under
-// the agent's question (planQuestionBoxInput in aidlc-plan-approval-ask.ts).
-// Any other box, and any failure, prints nothing, so the box opens as the agent
-// wrote it and is never refused.
+// the agent's question (planQuestionBoxInput in aidlc-plan-approval-ask.ts), and
+// a stage gate's box the gate's own lines (gateNoticeBoxInput). Any other box,
+// and any failure, prints nothing, so the box opens as the agent wrote it and is
+// never refused.
 async function claudePlanQuestionBox(input: string): Promise<string> {
   try {
     const payload = JSON.parse(input) as { hook_event_name?: unknown; session_id?: unknown; tool_input?: unknown };
     if (payload.hook_event_name !== "PreToolUse" || runtimeHarnessName() !== "claude") return "";
     const { resolveProjectDirFromHook } = await import("./aidlc-lib.ts");
-    const { planQuestionBoxInput } = await import("./aidlc-plan-approval-ask.ts");
-    const updatedInput = planQuestionBoxInput(resolveProjectDirFromHook(import.meta.url), payload.tool_input, payload.session_id);
+    const { gateNoticeBoxInput, planQuestionBoxInput } = await import("./aidlc-plan-approval-ask.ts");
+    const projectDir = resolveProjectDirFromHook(import.meta.url);
+    const updatedInput = planQuestionBoxInput(projectDir, payload.tool_input, payload.session_id) ??
+      gateNoticeBoxInput(projectDir, payload.tool_input, payload.session_id);
     if (updatedInput === null) return "";
     return `${JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", updatedInput } })}\n`;
   } catch {

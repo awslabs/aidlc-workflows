@@ -49,12 +49,12 @@ function expectProject(root: string, committed = false, extra: string[] = []): v
 
 type Fault = "append" | "append-lost" | "read" | "identity" | "exclusive"
   | "file-rename" | "directory-rename" | "chmod" | "workflow" | "lock-mkdir"
-  | "directory-fsync" | "file-fsync" | "commit-fsync" | "commit-rename";
+  | "directory-fsync" | "file-fsync" | "commit-fsync" | "commit-rename" | "owner-read";
 type Options = {
-  fault?: Fault; code?: string; mode?: "probe" | "apply"; retaken?: boolean; noLinks?: boolean;
+  fault?: Fault; code?: string; once?: boolean; mode?: "probe" | "apply"; retaken?: boolean; noLinks?: boolean;
   failAfter?: number; closeError?: boolean; cleanupError?: boolean;
   replaceOwner?: boolean; requestedRoot?: string; contender?: boolean; releaseRetry?: boolean;
-  pause?: "acquire" | "locked" | "release"; letGo?: "lock" | "owner";
+  pause?: "acquire" | "locked" | "release"; letGo?: "lock" | "owner" | "read";
 };
 type Owner = {
   schemaVersion: number; pid: number; host: string; machine?: string; boot?: string;
@@ -109,9 +109,10 @@ function childSource(root: string, options: Options): string {
       }
     }
     function letGo(moment) {
-      if (cfg.letGo !== moment || !held || out.letGo) return;
+      if (cfg.letGo !== moment || !held || out.letGo) return false;
       out.letGo = true;
       fs.rmSync(lock, { recursive: true, force: true });
+      return true;
     }
     function pause(phase) {
       if (cfg.pause !== phase || paused) return;
@@ -195,6 +196,11 @@ function childSource(root: string, options: Options): string {
       },
       readFileSync(p, ...args) {
         if (cfg.fault === "read" && inProbe(p) && basename(p) === "candidate") fail();
+        if (p === lock || p === join(lock, "owner.json")) {
+          // Windows answers a read of a lock its holder is deleting with EPERM.
+          if (letGo("read")) throw Object.assign(new Error("simulated read of a lock being deleted"), { code: "EPERM" });
+          if (cfg.fault === "owner-read" && !(cfg.once && out.faultHits > 0)) fail();
+        }
         return fs.readFileSync(p, ...args);
       },
       renameSync(source, destination) {
@@ -625,10 +631,15 @@ describe("t330 lock ownership", () => {
   // A holder outside the local gate (a release older than the gate, a command
   // with another temp folder) can let its lock go while a waiter is still
   // looking at it. Gone by the waiter's next look, the lock is free: the waiter
-  // takes it, as it would a moment later, and clears nothing.
-  for (const [kind, moment] of [["file", "lock"], ["directory", "lock"], ["directory", "owner"]] as const) {
-    const when = moment === "lock" ? "after the waiter's first look" : "before its owner is read";
-    test(`a ${kind} lock let go ${when} is taken`, () => {
+  // takes it, as it would a moment later, and clears nothing. On Windows the
+  // read of a lock its holder is deleting fails for a moment before it is gone.
+  const letGoMoments = [
+    ["file", "lock"], ["directory", "lock"], ["directory", "owner"], ["file", "read"], ["directory", "read"],
+  ] as const;
+  for (const [kind, moment] of letGoMoments) {
+    const when = moment === "lock" ? "after the waiter's first look"
+      : moment === "owner" ? "before its owner is read" : "as its owner is read";
+    test.skipIf(moment === "read" && process.platform !== "win32")(`a ${kind} lock let go ${when} is taken`, () => {
       const root = project(), lock = join(root, LOCK);
       const live = { pid: process.pid, processGeneration: processGeneration(process.pid) };
       if (kind === "directory") {
@@ -642,6 +653,27 @@ describe("t330 lock ownership", () => {
       expect(out.error).toBeNull();
       expect(out.stderr).not.toContain(CLEARED);
       expectProject(root, true);
+    });
+  }
+
+  // Only a lock gone by a later read is free: one still there keeps today's
+  // words, even when a later read on Windows reads its live owner.
+  for (const once of [false, true]) {
+    test(`a lock still there whose owner cannot be read ${once ? "the first time" : "at all"} stays unreadable`, () => {
+      const root = project(), lock = join(root, LOCK);
+      const raw = JSON.stringify({ ...owner(), pid: process.pid, processGeneration: processGeneration(process.pid) });
+      mkdirSync(lock);
+      writeFileSync(join(lock, "owner.json"), raw);
+      const out = observe(root, { fault: "owner-read", code: "EPERM", once });
+      expect(out.error).toMatchObject({
+        message: `${lock} cannot be read.`,
+        remediation: "if no AI-DLC command is running, delete that folder, then run this command again.",
+      });
+      if (once || process.platform !== "win32") expect(out.faultHits).toBe(1);
+      else expect(out.faultHits).toBeGreaterThan(1);
+      expect(out.stderr).not.toContain(CLEARED);
+      expect(readFileSync(join(lock, "owner.json"), "utf8")).toBe(raw);
+      expectProject(root, false, [LOCK]);
     });
   }
 

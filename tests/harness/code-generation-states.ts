@@ -127,13 +127,13 @@ export function stageDir(proj: string, unit: string | null = null): string {
   return join(seededRecordDir(proj), "construction", ...(unit ? [unit] : []), "code-generation");
 }
 
-export function writePlan(proj: string, extra = "", unit: string | null = null): void {
+export function writePlan(proj: string, extra = "", unit: string | null = null, contract = resolveTestingPosture(proj)): void {
   mkdirSync(stageDir(proj, unit), { recursive: true });
   writeFileSync(
     join(stageDir(proj, unit), "code-generation-plan.md"),
     "# Code Generation Plan\n\n## Summary\n\n- Builds: slugify for titles\n- Touches: src/slugify.ts\n" +
       `- Tests: 3 unit tests\n\n## Steps\n\n- [ ] Step 1: write slugify\n${extra}\n` +
-      renderTestingContract(resolveTestingPosture(proj)),
+      renderTestingContract(contract),
     "utf-8",
   );
   writeFileSync(
@@ -508,6 +508,23 @@ export const STATES: StateBuilder[] = [
         throw new Error(`expected the plan asked about again, got ${JSON.stringify(step)}`);
       }
       return { proj, session: SESSION, approved: false, how: "approved, then the plan edited under strict: next asks again" };
+    },
+  },
+  {
+    id: "S13", name: "Guard Policy strict, the Testing Contract moved after approval",
+    build: () => {
+      const proj = createCodeGenerationProject("strict");
+      next(proj);
+      askOpen(proj);
+      approve(proj);
+      next(proj);
+      // A practice added to the posture, as a teammate's merged change brings it.
+      const memory = join(proj, "aidlc", "spaces", "default", "memory", "project.md");
+      const text = readFileSync(memory, "utf-8");
+      if (!text.includes("## Testing Posture\n")) throw new Error("project.md has no Testing Posture section");
+      writeFileSync(memory, text.replace("## Testing Posture\n",
+        "## Testing Posture\n\n- Run the unit tests of each changed module before reporting a build.\n"), "utf-8");
+      return { proj, session: SESSION, approved: false, how: "approved and building, then a Testing Posture line added under strict" };
     },
   },
   {

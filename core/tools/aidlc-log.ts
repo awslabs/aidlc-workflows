@@ -5725,7 +5725,7 @@ function handleReview(args: string[]): void {
       // (codeGenerationApprovalArtifacts), which covers a worker checkout whose
       // meta does not validate. A person's own Unit worktree records it.
       const reviewedContract = flags.stage === "code-generation" && swarmWorkerWorktreeMeta(pd) === null
-        ? reviewedTestingContract(pd)
+        ? reviewedTestingContract(pd, flags.unit ?? null)
         : null;
       if (reviewedContract !== null) fields[REVIEW_TESTING_CONTRACT_FIELD] = reviewedContract;
       recordPath = slot.recordRelative;

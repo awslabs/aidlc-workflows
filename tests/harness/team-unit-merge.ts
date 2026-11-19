@@ -593,6 +593,9 @@ export function prepareCandidate(
     /** The recorded Plan Approval answer line; the engine's recorder writes the
      *  chosen option with its letter by default. */
     answerLine?: string;
+    /** The plan's Testing Contract read the earlier way (over the raw section
+     *  text), as a plan approved before the update carries it. */
+    earlierContract?: boolean;
     /** Claim with the unit-end rhythm: one approval on the last stage, none per stage. */
     unitEnd?: boolean;
     /** Claim with the per-stage rhythm by name, as on a main whose own rhythm is unit-end. */
@@ -704,7 +707,7 @@ export function prepareCandidate(
   );
   // Its folder too when the stages leave Code Generation out (a case that skips it).
   mkdirSync(codeDir, { recursive: true });
-  const contract = resolveTestingPosture(checkout);
+  const contract = resolveTestingPosture(checkout, options.earlierContract ? "raw" : undefined);
   const plan =
     `# Code Generation Plan\n\n${renderTestingContract(contract)}\n` +
     "## Steps\n\n- [ ] Implement the Unit.\n";

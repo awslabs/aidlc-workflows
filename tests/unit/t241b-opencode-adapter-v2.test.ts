@@ -6,6 +6,7 @@
 // that each reaches the core hook it replaces.
 
 import { afterEach, describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -260,6 +261,102 @@ describe("t241b OpenCode 2 entry point", () => {
     ).rejects.toThrow(/AIDLC bash permission allows one direct invocation/);
     // Unrelated shell commands still run.
     await v2.before({ tool: "shell", sessionID: "ses_main", agent: "build", id: "call_2", input: { command: "echo hi" } });
+  });
+
+  test("a plugin tool engine plugin sync wrote runs, and its record still decides the rest", async () => {
+    const root = freshProject();
+    const tool = join(root, ".aidlc", "tools", "sample-tools-target.ts");
+    writeFileSync(tool, 'console.log("apply");\n');
+    const dataDir = join(root, ".aidlc", "tools", "data");
+    mkdirSync(dataDir, { recursive: true });
+    const record = join(dataDir, "plugin-owned-sample-tools.json");
+    const writeRecord = () =>
+      writeFileSync(
+        record,
+        JSON.stringify({
+          schemaVersion: 1,
+          name: "sample-tools",
+          files: [{
+            path: ".aidlc/tools/sample-tools-target.ts",
+            sha256: `sha256:${createHash("sha256").update(readFileSync(tool)).digest("hex")}`,
+          }],
+        }),
+      );
+    writeRecord();
+    const v2 = await setup(root);
+    const shell = (id: string, command: string) =>
+      v2.before({ tool: "shell", sessionID: "ses_main", agent: "build", id, input: { command } });
+    const applied = "bun .aidlc/tools/sample-tools-target.ts apply --record r";
+    const oneCommand =
+      "AIDLC bash permission allows one direct invocation of an .aidlc tool or hook only. " +
+      "Use an unchanged .aidlc entrypoint without chaining, redirection, expansion, or command substitution.";
+    const notInstalled = (path: string) =>
+      `${path} is not an installed AI-DLC or plugin file, so it was not run. Run a shipped tool, or run ` +
+      "`bun .aidlc/tools/aidlc.ts engine plugin sync --plugin-root <plugin's folder>` to install the plugin's tools.";
+    await shell("call_ok", applied);
+    await expect(shell("call_chain", `${applied} && echo done`)).rejects.toThrow(new Error(oneCommand));
+    await expect(shell("call_redirect", `${applied} > out.json`)).rejects.toThrow(new Error(oneCommand));
+    writeFileSync(join(root, ".aidlc", "tools", "sample-tools-extra.ts"), 'console.log("hand");\n');
+    await expect(shell("call_hand_written", "bun .aidlc/tools/sample-tools-extra.ts apply")).rejects.toThrow(
+      new Error(notInstalled(".aidlc/tools/sample-tools-extra.ts")),
+    );
+    writeFileSync(tool, 'console.log("edited");\n');
+    await expect(shell("call_edited", applied)).rejects.toThrow(
+      new Error(
+        ".aidlc/tools/sample-tools-target.ts has changed since the plugin sync installed it, so it was not run. " +
+          "To keep the change, move the file somewhere else, then run " +
+          "`bun .aidlc/tools/aidlc.ts engine plugin sync --plugin-root <sample-tools's folder>` again; " +
+          "it puts the plugin's own version back.",
+      ),
+    );
+    rmSync(tool, { force: true });
+    await expect(shell("call_moved_away", applied)).rejects.toThrow(
+      new Error(notInstalled(".aidlc/tools/sample-tools-target.ts")),
+    );
+    writeFileSync(tool, 'console.log("edited");\n');
+    rmSync(record, { force: true });
+    await expect(shell("call_unrecorded", applied)).rejects.toThrow(
+      new Error(notInstalled(".aidlc/tools/sample-tools-target.ts")),
+    );
+  });
+
+  // A synced tool in a checkout that writes CRLF (Git for Windows' default): the
+  // record holds the committed text, as the sync wrote it.
+  async function crlfSyncedTool(committed: Buffer): Promise<void> {
+    const root = freshProject();
+    const tools = join(root, ".aidlc", "tools");
+    writeFileSync(
+      join(tools, "sample-tools-target.ts"),
+      Buffer.from(committed.toString("latin1").replaceAll("\n", "\r\n"), "latin1"),
+    );
+    mkdirSync(join(tools, "data"), { recursive: true });
+    writeFileSync(
+      join(tools, "data", "plugin-owned-sample-tools.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        name: "sample-tools",
+        files: [{
+          path: ".aidlc/tools/sample-tools-target.ts",
+          sha256: `sha256:${createHash("sha256").update(committed).digest("hex")}`,
+        }],
+      }),
+    );
+    const v2 = await setup(root);
+    await v2.before({
+      tool: "shell",
+      sessionID: "ses_main",
+      agent: "build",
+      id: "call_crlf",
+      input: { command: "bun .aidlc/tools/sample-tools-target.ts apply" },
+    });
+  }
+
+  test("a synced plugin tool checked out with CRLF runs", async () => {
+    await crlfSyncedTool(Buffer.from('console.log("apply");\n'));
+  });
+
+  test("a synced plugin tool checked out with CRLF runs when its text is not UTF-8", async () => {
+    await crlfSyncedTool(Buffer.from('// caf\xe9\nconsole.log("apply");\n', "latin1"));
   });
 
   test("a subagent dispatch gets the stage-rules rewrite in its input", async () => {

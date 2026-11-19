@@ -239,9 +239,11 @@ function initGitWorkspace(dir: string, options: { applicationSourceOnly?: boolea
 
 function seedStageLevelPlanApproval(
   dir: string,
-  options: { bareSection?: boolean; unit?: string } = {},
+  // `earlierContract`: the plan's Testing Contract read the earlier way (over
+  // the raw section text), as a plan written before the update carries it.
+  options: { bareSection?: boolean; unit?: string; earlierContract?: boolean } = {},
 ): string {
-  const contract = resolveTestingPosture(dir);
+  const contract = resolveTestingPosture(dir, options.earlierContract ? "raw" : undefined);
   const authority = resolveCodeGenerationAuthority(dir, { unit: options.unit ?? null });
   const record = codeGenerationRecordDir(dir, options.unit ?? null);
   mkdirSync(record, { recursive: true });
@@ -3421,6 +3423,34 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
           routed[0].stderr.split("Directive:")[0],
         );
       }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // A plan written before the update and asked after it: the mediation reads
+  // its contract the way the engine does, so the question and the person's
+  // approval go through with the plan as it is.
+  test("legacy: a plan whose Testing Contract was rendered before the update is asked and approved", () => {
+    const dir = scratchProject(true);
+    try {
+      initGitWorkspace(dir);
+      seedCodeGenerationDirective(dir);
+      const choices = seedLegacyDirectiveChoices(dir);
+      expect(runIde(dir, "session-start", null).code).toBe(0);
+      const questions = seedStageLevelPlanApproval(dir, { bareSection: true, earlierContract: true });
+      const planPath = join(codeGenerationRecordDir(dir, null), "code-generation-plan.md");
+      const plan = readFileSync(planPath, "utf-8");
+      expect(plan).toContain(resolveTestingPosture(dir, "raw").contract_sha256);
+      const asked = runIde(dir, "audit-and-sensors", ctx("fs_write", `Created the ${relative(dir, questions)} file.`));
+      expect(asked.code, asked.stderr).toBe(0);
+      expect(readFileSync(planPath, "utf-8")).toBe(plan);
+      expect(runIde(dir, "record-human-turn", JSON.stringify({ prompt: choices.approve })).code).toBe(0);
+      writeFileSync(questions, readFileSync(questions, "utf-8").replace("[Answer]:", "[Answer]: Approve Plan"));
+      const answered = runIde(dir, "audit-and-sensors", ctx("fs_write", `Created the ${relative(dir, questions)} file.`));
+      expect(answered.code, answered.stderr).toBe(0);
+      expect(evaluateCodeGenerationApproval(dir, { unit: null }).ok).toBe(true);
+      expect(readFileSync(planPath, "utf-8")).toBe(plan);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

@@ -358,10 +358,14 @@ function newerWorkStep(projectDir: string, lead: string, needs: string): string 
         `to the release your teammate uses with \`${aidlcInvocation()} config --pin <that version> --yes\`; the pin changes for ` +
         "everyone on the project.";
     case "managed":
-      return `${lead}, and this computer has ${AIDLC_VERSION} from ${install.name}. To carry on: ` +
-        `${install.remediation}, then ${refresh} in this project.`;
+      return `${lead}, and this computer has ${AIDLC_VERSION} from ${install.name}. ` +
+        carryOnStep(install, "`aidlc update`", refresh);
     default:
-      return `${lead}, and this computer has ${AIDLC_VERSION}. To carry on: \`aidlc update\`, then ${refresh} in ` +
-        "this project.";
+      return `${lead}, and this computer has ${AIDLC_VERSION}. ${carryOnStep(install, "`aidlc update`", refresh)}`;
   }
+}
+
+/** The one step to a newer AI-DLC: `update` natively, a package manager's own update, then `refresh`. */
+export function carryOnStep(install: NewerWorkInstall, update: string, refresh: string, how = ""): string {
+  return `To carry on${how}: ${install.kind === "managed" ? install.remediation : update}, then ${refresh} in this project.`;
 }

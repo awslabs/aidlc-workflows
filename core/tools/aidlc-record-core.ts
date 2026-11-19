@@ -11,7 +11,7 @@ import { scopeStampLanded } from "./aidlc-unit-landing.ts";
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { accessSync, constants as fsConstants, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, unlinkSync, writeFileSync } from "node:fs";
-import { hostname } from "node:os";
+import { homedir, hostname } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve as resolvePath, sep } from "node:path";
 import { dlopen, FFIType, type Pointer } from "bun:ffi";
 import { ensureWorkspaceEngineFolder, runtimeHarnessDir, runtimeHarnessName, SPACE_NAME_REGEX, workspaceEngineFile, workspaceEnginePath } from "./aidlc-runtime-paths.ts";
@@ -860,14 +860,21 @@ export function processIdentityReader(deadlineMs: number): (pid: number) => Proc
   };
 }
 
-export function processIsAlive(pid: number): boolean {
-  if (!Number.isSafeInteger(pid) || pid <= 1) return false;
+// What a signal-0 probe says of a pid: there (a process this one may not
+// signal is there too), absent (ESRCH), or unknown (no valid pid, another error).
+function processProbe(pid: number): "alive" | "absent" | "unknown" {
+  if (!Number.isSafeInteger(pid) || pid <= 1) return "unknown";
   try {
     process.kill(pid, 0);
-    return true;
+    return "alive";
   } catch (e) {
-    return (e as NodeJS.ErrnoException).code === "EPERM";
+    const code = (e as NodeJS.ErrnoException).code;
+    return code === "EPERM" ? "alive" : code === "ESRCH" ? "absent" : "unknown";
   }
+}
+
+export function processIsAlive(pid: number): boolean {
+  return processProbe(pid) === "alive";
 }
 
 export function readSessionPidEntry(projectDir: string, pid: number): SessionPidEntry | null {
@@ -1220,10 +1227,11 @@ export function classifyFirstContact(
 //
 // A variable is only as good as the chat it names. A shell the person started
 // from inside a chat keeps the variable after that chat is gone, so Claude
-// Code's id counts only while the process it names is alive; a dead or absent
-// pid leaves the id unread and the process ancestry decides, as before. Kiro
-// CLI has no pid in the shell to check, so its id stands on its own, as Codex's
-// does. Every other harness names no chat in the shell.
+// Code's id counts only while the process it names is alive; outside Claude
+// Code's Linux sandbox (claudeNamedChat), a dead or absent pid leaves the id
+// unread and the process ancestry decides. Kiro CLI has no pid in the shell to
+// check, so its id stands on its own, as Codex's does. Every other harness
+// names no chat in the shell.
 function hostNamedChat(projectDir: string): string | null {
   switch (runtimeHarnessDir(projectDir)) {
     case ".codex":
@@ -1260,12 +1268,40 @@ export function hostNamesThisChat(projectDir: string): boolean {
   }
 }
 
+/**
+ * Claude Code's own record of the running chat `pid` belongs to:
+ * `sessions/<pid>.json` in its config folder, which names the chat a /clear
+ * moves to and is removed when Claude Code exits (a process killed outright may
+ * leave it). Its `cwd` is the folder the chat started in. Null when it cannot
+ * be read, or names another pid or chat.
+ */
+export function claudeChatRecord(pid: number, session: string): { cwd: unknown } | null {
+  try {
+    const config = process.env.CLAUDE_CONFIG_DIR?.trim() || join(homedir(), ".claude");
+    const record = JSON.parse(readFileSync(join(config, "sessions", `${pid}.json`), "utf-8")) as
+      | { pid?: unknown; sessionId?: unknown; cwd?: unknown }
+      | null;
+    return record?.pid === pid && record.sessionId === session ? { cwd: record.cwd } : null;
+  } catch {
+    return null;
+  }
+}
+
+// Claude Code's sandbox on Linux runs each agent command in its own PID
+// namespace (bubblewrap --unshare-pid), so the host process is absent there
+// while the chat lives, and the process ancestry cannot reach the host's pids
+// either. A command Claude Code marks as sandboxed (SANDBOX_RUNTIME=1) then
+// takes the id while Claude Code's own record of that chat is still there.
+// Its macOS sandbox answers EPERM, which already counts as alive.
 export function claudeNamedChat(): { pid: number; session: string } | null {
   const pid = Number.parseInt(process.env.CLAUDE_PID ?? "", 10);
-  const session = Number.isSafeInteger(pid) && processIsAlive(pid)
-    ? validSessionId(process.env.CLAUDE_CODE_SESSION_ID)
-    : null;
-  return session === null ? null : { pid, session };
+  const session = validSessionId(process.env.CLAUDE_CODE_SESSION_ID);
+  if (session === null) return null;
+  const probe = processProbe(pid);
+  const named = probe === "alive" ||
+    (probe === "absent" && process.platform === "linux" && process.env.SANDBOX_RUNTIME === "1" &&
+      claudeChatRecord(pid, session) !== null);
+  return named ? { pid, session } : null;
 }
 
 export function resolveInvokingSessionId(projectDir: string): string | null {

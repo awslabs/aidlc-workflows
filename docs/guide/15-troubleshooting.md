@@ -940,7 +940,7 @@ To have the stage that was in progress done again, say "redo this stage".
 
 **Symptom** (GitHub Copilot): you approved the code plan, the build started, and after the chat compacted every build step the assistant tries is refused.
 
-Your approval, the workflow state, and every file already written are kept; only what the assistant had not yet written to a file is gone from the chat. After a compaction the assistant must read its step again before it builds anything. It runs `next` as its own command, which hands the approved build straight back without asking you again. `/aidlc --doctor` shows the step as out of date, with the time and the reason (the chat was compacted, or the workflow state changed after the step was issued, naming what changed when it is known), until that `next` runs.
+Your approval, the workflow state, and every file already written are kept; only what the assistant had not yet written to a file is gone from the chat. After a compaction the assistant must read its step again before it builds anything. It runs `next` as its own command, which hands the approved build straight back without asking you again. The chat is also handed the workflow contract and its current position back with the next tool result it gets, so the commands it issues keep their flags and names. `/aidlc --doctor` shows the step as out of date, with the time and the reason (the chat was compacted, or the workflow state changed after the step was issued, naming what changed when it is known), until that `next` runs.
 
 ---
 

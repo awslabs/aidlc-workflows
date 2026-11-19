@@ -883,12 +883,12 @@ async function handleExecute(args: string[]): Promise<void> {
   const changedUpstreamArtifacts =
     direction === "backward" ? stageArtifactPaths(pd, targetStage) : [];
   // Under team ownership each Unit's per-Unit work belongs to its claim: going
-  // back to a stage before the per-Unit block (the Unit plan changing) keeps
-  // it, and a Unit goes back to work only by its own reopen (`jump reopen
-  // --units`). The row says so, as does the move past the block that keeps
-  // its stages open (`keepsUnitStages`); stageJumpReaches and
+  // back to a stage before the per-Unit block (the Unit plan changing), or
+  // redoing one there, keeps it, and a Unit goes back to work only by its own
+  // reopen (`jump reopen --units`). The row says so, as does the move past the
+  // block that keeps its stages open (`keepsUnitStages`); stageJumpReaches and
   // hasCurrentTeamUnitActivity (aidlc-state.ts) read it.
-  const keepsTeamUnitWork = direction === "backward" && isTeamUnitOwnership(content) &&
+  const keepsTeamUnitWork = direction !== "forward" && isTeamUnitOwnership(content) &&
     beforePerUnitBlock(graph, targetSlug);
   const downstreamStages = direction === "backward"
     ? stagesReset

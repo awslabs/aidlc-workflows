@@ -67,6 +67,7 @@ import {
 import { aidlcDispatcherInvocation } from "./aidlc-runtime-paths.ts";
 import { unitsBuiltHereGateOpen } from "./aidlc-unit-teams.ts";
 import {
+  checkpointGateStages,
   constructionCheckpointKind,
   resolveConstructionCheckpoint,
 } from "./aidlc-construction-checkpoints.js";
@@ -1712,21 +1713,25 @@ function approveAcceptsLine(
 // findings its approval accepts. A team Unit's end-of-Unit Approve decides
 // every stage of the Unit's walk (`endOfUnit`), so its gate shows each earlier
 // stage's review with an open finding, or that did not finish (`earlier`),
-// ahead of this stage's own, read as the approval reads them.
+// ahead of this stage's own, read as the approval reads them. So does the
+// Construction checkpoint of a Unit worked alone, at its walk's last stage
+// (`atCheckpoint`): its approval decides the stages unitOwnApproval names.
 function gateReviewScope(
   projectDir: string,
   stage: ReviewFingerprintStage,
   unit: string | undefined,
-): { contextUnit: string | undefined; endOfUnit: StageEntry[] | null; earlier: ReviewedContext[] } {
-  const contextUnit = stage.for_each === "unit-of-work" && !(unit && unitOwnApproval(projectDir, unit))
-    ? undefined
-    : unit;
-  const endOfUnit = contextUnit === undefined ? null : endOfUnitGateStages(projectDir, stage, contextUnit);
+): { contextUnit: string | undefined; endOfUnit: StageEntry[] | null; earlier: ReviewedContext[]; atCheckpoint: boolean } {
+  const own = stage.for_each === "unit-of-work" && unit ? unitOwnApproval(projectDir, unit) : null;
+  const contextUnit = stage.for_each === "unit-of-work" && own === null ? undefined : unit;
+  const checkpoint = Array.isArray(own) && own.at(-1) === stage.slug
+    ? own.flatMap((slug) => findStageBySlug(slug) ?? [])
+    : null;
+  const endOfUnit = contextUnit === undefined ? null : endOfUnitGateStages(projectDir, stage, contextUnit) ?? checkpoint;
   const earlier = endOfUnit === null
     ? []
     : reviewedContexts(projectDir, endOfUnit.slice(0, -1), [contextUnit], true)
       .filter(({ context }) => context.incompleteReview === true || context.findings.some(findingIsOpen));
-  return { contextUnit, endOfUnit, earlier };
+  return { contextUnit, endOfUnit, earlier, atCheckpoint: endOfUnit !== null && endOfUnit === checkpoint };
 }
 
 // The #2099 line for the gate the brief with the same `unit` opens: a stage's
@@ -1740,9 +1745,10 @@ export function gateApproveAcceptsLine(
   stage: ReviewFingerprintStage,
   unit?: string,
 ): string | null {
-  const { contextUnit, endOfUnit, earlier } = gateReviewScope(projectDir, stage, unit);
+  const { contextUnit, endOfUnit, earlier, atCheckpoint } = gateReviewScope(projectDir, stage, unit);
   if (contextUnit === undefined) return approveAcceptsLine(projectDir, stage);
-  if (endOfUnit === null) return null;
+  // A checkpoint's own step says no such line; its brief's Approve option says what it records.
+  if (endOfUnit === null || atCheckpoint) return null;
   const ownOpen = readReviewArtifactContexts(projectDir, stage, contextUnit, true)
     .some((context) => context.incompleteReview === true || context.findings.some(findingIsOpen));
   const openStages = new Set([...earlier.map(({ stage: of }) => of.slug), ...(ownOpen ? [stage.slug] : [])]);
@@ -2502,21 +2508,31 @@ export function acceptedReviewChanges(
   return accepted;
 }
 
-// Whether the approval a per-Unit stage's brief comes before is the Unit's own:
-// its team gate, or its Construction checkpoint before the person approves it.
-// The stage's one final gate covers every Unit, so a Unit named there is only
-// the execution cursor. Unreadable state is that final gate.
-function unitOwnApproval(projectDir: string, unit: string): boolean {
+// The approval a per-Unit stage's brief comes before, when it is the Unit's
+// own: its team gate ("team"), or its Construction checkpoint before the person
+// approves it, given as the stages that approval decides (checkpointGateStages,
+// the same snapshot the approval reads, so the brief and the record share one
+// list). The walk asks a Unit at its own checkpoint only as the skeleton or in
+// a Unit-by-Unit walk, as constructionCheckpointGaps reads it; any other Unit's
+// stages are decided at their own gates or its swarm batch's, so it gets no
+// stages (an empty list) and its brief shows its own review alone. The stage's
+// one final gate covers every Unit, so a Unit named there is only the execution
+// cursor (null). Unreadable state is that final gate.
+function unitOwnApproval(projectDir: string, unit: string): "team" | string[] | null {
   try {
     const state = readFileSync(stateFilePath(projectDir), "utf-8");
-    if (isTeamUnitOwnership(state)) return true;
-    if (!constructionCheckpointsApply(state)) return false;
+    if (isTeamUnitOwnership(state)) return "team";
+    if (!constructionCheckpointsApply(state)) return null;
     const dag = resolveBoltDag(projectDir);
-    if (dag.state !== "ok" || !dag.units.includes(unit)) return false;
+    if (dag.state !== "ok" || !dag.units.includes(unit)) return null;
     const kind = constructionCheckpointKind(state, unit, dag.units);
-    return !resolveConstructionCheckpoint(projectDir, unit, kind, state).approved;
+    const checkpoint = resolveConstructionCheckpoint(projectDir, unit, kind, state);
+    if (checkpoint.approved) return null;
+    return kind === "skeleton" || getField(state, "Construction Iteration") === "unit-major"
+      ? checkpointGateStages(checkpoint, state)
+      : [];
   } catch {
-    return false;
+    return null;
   }
 }
 
