@@ -4,16 +4,18 @@
 // its branch made at the push in that repository, its pull request read against
 // the branch the work merges into, AI-DLC's record riding in it, main brought
 // in, and a change to a file of AI-DLC's record put aside for that and put
-// back. The push in code repositories is in t-unit-push, the home in
-// t-unit-push-home.
+// back. AI-DLC's own files (its record, its install) are never said to be the
+// person's uncommitted changes, at the push or at an early start. The push in
+// code repositories is in t-unit-push, the home in t-unit-push-home.
 
-import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
-import { fixtureIntentId8, seededStateFile } from "../harness/fixtures.ts";
+import { fixtureIntentId8, REPO_ROOT, seededStateFile } from "../harness/fixtures.ts";
+import { typedHarnessName } from "../../core/tools/aidlc-runtime-paths.ts";
 import {
   claimPayload,
   cleanupTeamBuild,
@@ -22,8 +24,10 @@ import {
   ENV,
   finishBuild,
   git,
+  hook,
   makeHome,
   next,
+  personsChat,
   run,
   STATE,
   tempDir,
@@ -494,19 +498,71 @@ describe("a Unit on the workspace's own repository", () => {
     expect(git(alice, ["status", "--porcelain", "--", "aidlc/spaces/default"])).toBe("M aidlc/spaces/default/memory/team.md");
     expect(git(alice, ["status", "--porcelain", "--", "aidlc/spaces/payments"])).toBe("");
     expect(String(pushed.json?.notice)).toContain(recordWent("refunds"));
-    // Their change to the lead's record is still theirs, uncommitted, and the line says so.
-    expect(String(pushed.json?.notice)).toContain("; your other changes are still yours, uncommitted.");
+    // Their change to the lead's record stays uncommitted; aidlc/ is AI-DLC's record, so the line names no change of theirs.
+    expect(String(pushed.json?.notice)).not.toContain("your other changes are still yours");
   });
 
-  // An early start here: AI-DLC's new space and the build's record are not the
-  // person's, so a clone with nothing of theirs uncommitted is switched.
-  function earlyTake(ownChange: boolean): { dana: string; home: ReturnType<typeof makeHome>; notice: string } {
+  const OTHER_CHANGES = "; your other changes are still yours, uncommitted.";
+  // AI-DLC's install as each teammate's `aidlc config` leaves it in their clone: uncommitted.
+  function configured(dir: string, harness: string): string {
+    const result = spawnSync(process.execPath, [
+      join(REPO_ROOT, "core", "tools", "aidlc-init.ts"), "config", "--project-dir", dir,
+      "--from", join(REPO_ROOT, "dist-release", harness), "--harness", typedHarnessName(harness), "--mcp", "none",
+    ], { cwd: dir, encoding: "utf-8", env: ENV, timeout: NATIVE_STARTUP_TIMEOUT_MS });
+    expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+    return git(dir, ["status", "--porcelain"]);
+  }
+
+  for (const harness of ["claude", "codex"]) {
+    test(`${harness}: AI-DLC's install left uncommitted is not said to be the person's at the push, and a file of theirs beside it is`, () => {
+      const home = oneRepoTeams();
+      const alice = cloneOf(home.remote, "alice");
+      const install = configured(alice, harness);
+      expect(install).toContain(harness === "codex" ? "?? .codex/" : "?? .claude/");
+      builtHere(alice, "refunds", "refunds.ts");
+      const pushed = run(UNIT, ["push"], alice);
+      expect(pushed.status, pushed.out).toBe(0);
+      expect(String(pushed.json?.notice)).toContain("You're on refunds now in the repo. Switch back to main any time.");
+      expect(String(pushed.json?.notice)).not.toContain("your other changes are still yours");
+      expect(git(alice, ["status", "--porcelain"])).toBe(install);
+      if (harness !== "codex") return;
+      builtHere(alice, "checkout-ui", "cart.ts");
+      writeFileSync(join(alice, "NOTES.md"), "my note\n");
+      const again = run(UNIT, ["push"], alice);
+      expect(again.status, again.out).toBe(0);
+      expect(String(again.json?.notice)).toContain(OTHER_CHANGES);
+    });
+  }
+
+  test("an earlier Unit's record, written to after its push, is not said to be the person's at the next Unit's push", () => {
+    const home = oneRepoTeams();
+    const alice = cloneOf(home.remote, "alice");
+    builtHere(alice, "refunds", "refunds.ts");
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    // Their next message in the chat goes into refunds' record, the work still selected.
+    const said = hook(alice, personsChat("chat-1"), { hook_event_name: "UserPromptSubmit", session_id: "chat-1", prompt: "I will take checkout-ui." });
+    expect(said.status, said.out).toBe(0);
+    const earlier = git(alice, ["status", "--porcelain"]);
+    expect(earlier).toMatch(/^M aidlc\/spaces\/payments\/intents\/[^/]+-refunds\/audit\/[^/]+\.md$/);
+    builtHere(alice, "checkout-ui", "cart.ts");
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(String(pushed.json?.notice)).not.toContain("your other changes are still yours");
+    expect(git(alice, ["status", "--porcelain"])).toBe(earlier);
+  });
+
+  // An early start here: AI-DLC's own files (its new space, the build's record,
+  // its install) are not the person's, so a clone with nothing of theirs
+  // uncommitted is switched.
+  function earlyTake(ownChange: boolean, harness?: string, recordChange = false): { dana: string; home: ReturnType<typeof makeHome>; notice: string } {
     const home = oneRepoTeams();
     const alice = cloneOf(home.remote, "alice");
     builtHere(alice, "refunds", "refunds.ts");
     expect(run(UNIT, ["push"], alice).status).toBe(0);
     const dana = cloneOf(home.remote, "dana");
-    if (ownChange) {
+    if (harness !== undefined) configured(dana, harness);
+    if (ownChange) writeFileSync(join(dana, "NOTES.md"), "my note\n");
+    if (recordChange) {
       const leads = join(dana, "aidlc", "spaces", "default", "memory", "team.md");
       writeFileSync(leads, `${readFileSync(leads, "utf-8")}\nmy note\n`);
     }
@@ -522,6 +578,22 @@ describe("a Unit on the workspace's own repository", () => {
     );
     expect(git(dana, ["branch", "--show-current"])).toBe("reporting");
     expect(git(dana, ["rev-parse", "HEAD"])).toBe(git(home.remote, ["rev-parse", "refunds"]));
+  });
+
+  test("an early start in a clone with AI-DLC's install left uncommitted puts them on the Unit's branch all the same", () => {
+    const { dana, notice } = earlyTake(false, "claude");
+    expect(notice).toContain("You are on branch reporting in the repo now.");
+    expect(notice).not.toContain("your uncommitted changes kept you");
+    expect(git(dana, ["branch", "--show-current"])).toBe("reporting");
+    expect(git(dana, ["status", "--porcelain"])).toContain("?? .claude/");
+  });
+
+  test("an early start with a change of theirs under aidlc/ only puts them on the Unit's branch, the change still there", () => {
+    const { dana, notice } = earlyTake(false, undefined, true);
+    expect(notice).toContain("You are on branch reporting in the repo now.");
+    expect(git(dana, ["branch", "--show-current"])).toBe("reporting");
+    expect(git(dana, ["status", "--porcelain", "--", "aidlc/spaces/default"])).toBe("M aidlc/spaces/default/memory/team.md");
+    expect(readFileSync(join(dana, "aidlc", "spaces", "default", "memory", "team.md"), "utf-8")).toEndWith("\nmy note\n");
   });
 
   test("an early start with a change of theirs uncommitted keeps them on their branch, and says so", () => {

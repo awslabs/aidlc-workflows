@@ -1082,9 +1082,9 @@ your checkout is on another, so you can ask for the change there.
 A Unit opens once the Units it waits on are done. When a Unit it waits on has
 pushed its branches, the offer also has **Start reporting early**: the build
 starts on that pushed branch in each repo it changed (checked out where you
-have no uncommitted work there; otherwise the branch is made and the line says
-to switch when you are ready), and the line says it may still change before it
-merges. Once that Unit is merged, AI-DLC asks once whether to move your build
+have no uncommitted work there, AI-DLC's own files aside; otherwise the branch
+is made and the line says to switch when you are ready), and the line says it
+may still change before it merges. Once that Unit is merged, AI-DLC asks once whether to move your build
 onto the branch it merged into (only your build's own commits move, with your
 own git; for a build you already pushed, its next push asks you whether to replace
 the branch it went on or to push a new one). The line says where you are afterwards and the way back to

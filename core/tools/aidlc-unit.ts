@@ -40,6 +40,7 @@ import {
   activeIntentUuid,
   activeSpace,
   addPendingPersonLines,
+  aidlcOwnedSourceKey,
   artifactFilename,
   assertNoSymlinkInChainOrThrow,
   auditBlockField,
@@ -12858,13 +12859,21 @@ function untrackedIgnored(dir: string, paths: readonly string[]): string[] {
   return checked.status === 0 ? checked.stdout.split("\0").filter(Boolean) : [];
 }
 
-// Whether a repo holds changes of the person's, beyond the Unit's and, on the
-// workspace's own repository, beyond AI-DLC's record of the build: the push
-// commits it next (sendBuildRecord), and an early take has just written it.
+// Whether a repo holds an uncommitted change of the person's, beyond the
+// Unit's. On the workspace's own repository (".") a file of AI-DLC's own is
+// none (aidlcOwnedSourceKey): its record in aidlc/ (the build's, which the
+// push commits next and an early take has just written, and an earlier Unit's,
+// whose audit file is written to after its push), the install config leaves
+// uncommitted, and a root file an installed harness writes into. Git's list is
+// read untrimmed (its first entry can start with a space) and untracked files
+// one by one, so a file of theirs is told from AI-DLC's beside it. Any other
+// repo of the push is read whole.
 function ownChanges(pd: string, planned: ReadonlyArray<{ repo: string; dir: string }>): boolean {
+  const aidlcOwn = aidlcOwnedSourceKey(pd);
   return planned.some(({ repo, dir }) => {
-    const record = repo === "." ? ["--", ...buildRecordPaths(pd).map((path) => `:(exclude)${path}`)] : [];
-    return git(dir, ["status", "--porcelain", ...record]).stdout.trim() !== "";
+    if (repo !== ".") return git(dir, ["status", "--porcelain"]).stdout.trim() !== "";
+    return git(dir, ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames"]).stdout.split("\0")
+      .some((entry) => entry.length > 3 && !aidlcOwn(sourcePathKey("", entry.slice(3))));
   });
 }
 
