@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-unit:take, function:lookAt, function:planAt, function:gitTargetFor, function:homeCopyOf
+// covers: subcommand:aidlc-unit:take, function:lookAt, function:planAt, function:gitTargetFor, function:homeCopyOf, function:planSharedAtHome
 //
 // A team takes a Unit from the plan where the lead shared it: one fetch of the
 // plan's own ref, by the address of the code repository it is in, with the
@@ -11,7 +11,7 @@
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { repoCopyKey } from "../../dist/claude/.claude/tools/aidlc-unit-teams.ts";
@@ -26,6 +26,7 @@ import {
   codeHost,
   ENV,
   git,
+  type Home,
   HOME_RECORD,
   hook,
   inSpace,
@@ -33,11 +34,13 @@ import {
   makePlanHome,
   makePlanHomeWithRemote,
   next,
+  offerText,
   ORCH,
   type PlanHome,
   planRefOf,
   recordAt,
   run,
+  sharePlan,
   STATE,
   teamWorkspace,
   tempDir,
@@ -1115,6 +1118,189 @@ describe("a teammate's clone of work teams build with no plan known", () => {
       expect(String(bare.question)).toContain("Carry on with");
     });
   }
+});
+
+describe("a teammate's clone of the planner's record from before the plan was shared", () => {
+  const chat = (name: string): NodeJS.ProcessEnv => ({ ...ENV, AIDLC_SESSION_OVERRIDE: name });
+  // What a clone of solo work is asked, word for word.
+  const CARRY_ON = `This project has one piece of work in progress: \`fixture\` (record: \`${HOME_RECORD}\`) (in Construction). ` +
+    "Carry on with `fixture`, or not now?";
+  const SHAPES = [
+    ["one repository, the workspace's own", () => ({})],
+    ["several repositories", () => ({ "checkout-api": codeHost("checkout-api"), billing: codeHost("billing"), "checkout-web": codeHost("checkout-web") })],
+  ] as const;
+
+  // The planner's workspace with Inception approved in the planner's own checkout and pushed; main then takes no
+  // direct push. `later` is what the planner does next (teams chosen and the plan shared, unless it says else), whose
+  // record stays out of main; a teammate's clone is made after it. `before` edits the workspace before its push.
+  function planAhead(repos: Record<string, string>, later?: (home: Home) => void, before?: (dir: string) => void): { home: Home; bea: string } {
+    const home = makeHome({ repos });
+    before?.(home.dir);
+    mkdirSync(join(home.dir, "aidlc", "spaces", "default", "intents", HOME_RECORD, "audit"), { recursive: true });
+    asLeadsOwnCheckout(home.dir);
+    git(home.dir, ["add", "-A"]);
+    git(home.dir, ["commit", "-q", "-m", "inception"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const refuse = join(home.remote, "hooks", "pre-receive");
+    writeFileSync(refuse, "#!/bin/sh\nwhile read old new ref; do [ \"$ref\" = refs/heads/main ] && { echo 'main takes pull requests only' >&2; exit 1; }; done\nexit 0\n");
+    chmodSync(refuse, 0o755);
+    (later ?? ((it: Home) => {
+      expect(run(STATE, ["set-unit-ownership", "team"], it.dir).status).toBe(0);
+      sharePlan(it);
+    }))(home);
+    git(home.dir, ["add", "-A"]);
+    git(home.dir, ["commit", "-q", "--allow-empty", "-m", "teams"]);
+    expect(() => git(home.dir, ["push", "-q", "origin", "main"])).toThrow();
+    const bea = cloneOf(home.remote, "bea");
+    git(bea, ["config", "user.name", "Bea Teammate"]);
+    return { home, bea };
+  }
+
+  // The step, and the git calls it made that read a remote.
+  function remoteReads(dir: string, env: NodeJS.ProcessEnv): { step: Record<string, unknown>; reads: string[] } {
+    const trace = join(tempDir("trace"), "trace.txt");
+    const step = next(dir, { ...env, GIT_TRACE: trace });
+    const calls = existsSync(trace) ? readFileSync(trace, "utf-8").split(/\r?\n/) : [];
+    return { step, reads: calls.filter((line) => /trace: (built-in|run_command): git (fetch|ls-remote)/.test(line)) };
+  }
+
+  const expectCarryOn = (step: Record<string, unknown>): void => {
+    expect(step.ask_type, JSON.stringify(step).slice(0, 600)).toBe("intent-pick");
+    expect(step.question).toBe(CARRY_ON);
+  };
+
+  // The planner's repos.json with checkout-api at `url`, as only the planner's computer may reach it.
+  const checkoutApiAt = (url: string) => (dir: string): void => {
+    const listed = JSON.parse(readFileSync(join(dir, "repos.json"), "utf-8")) as { repos: Array<{ name: string; url: string }> };
+    const repos = listed.repos.map((repo) => (repo.name === "checkout-api" ? { ...repo, url } : repo));
+    writeFileSync(join(dir, "repos.json"), `${JSON.stringify({ repos }, null, 2)}\n`);
+  };
+
+  for (const [shape, repos] of SHAPES) {
+    test(`a bare next offers the plan's Units as next --units does, never the planner's work to carry on (${shape})`, () => {
+      const { bea } = planAhead(repos());
+      const bare = next(bea, chat("bea-chat"));
+      const units = next(bea, chat("bea-chat-2"), ["--units"]);
+      expect(bare.ask_type, JSON.stringify(bare).slice(0, 600)).toBe("unit-take");
+      expect(JSON.stringify(bare)).not.toContain("Carry on with");
+      expect(offerText(bare.question)).toBe(offerText(units.question));
+      expect((bare.choices as Array<{ label: string }>).map((choice) => choice.label))
+        .toEqual((units.choices as Array<{ label: string }>).map((choice) => choice.label));
+    });
+  }
+
+  test("one repository whose Way of Working is in words this clone has not read: a bare next offers the plan's Units", () => {
+    const { bea } = planAhead(SHAPES[0][1](), (home) => {
+      expect(run(STATE, ["practices-branch", "--file", "team.md", "--none"], home.dir).status).toBe(0);
+      expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+      sharePlan(home);
+    }, (dir) => {
+      const team = join(dir, "aidlc", "spaces", "default", "memory", "team.md");
+      writeFileSync(team, readFileSync(team, "utf-8").replace(/## Way of Working\n[\s\S]*?(?=\n## )/, "## Way of Working\n\nWe review every change in a pull request.\n"));
+    });
+    const bare = next(bea, chat("bea-chat"));
+    expect(bare.ask_type, JSON.stringify(bare).slice(0, 600)).toBe("unit-take");
+    expect(offerText(bare.question)).toBe(offerText(next(bea, chat("bea-chat-2"), ["--units"]).question));
+  });
+
+  test("after the Units offer, words naming the planner's work still pick it", () => {
+    const { bea } = planAhead(SHAPES[0][1]());
+    expect(next(bea, chat("bea-chat")).ask_type).toBe("unit-take");
+    const said = next(bea, chat("bea-chat"), ["carry", "on", "fixture"]);
+    expect(String(said.message), JSON.stringify(said).slice(0, 600)).toContain(`Work is in progress here (${HOME_RECORD})`);
+    const picked = next(bea, chat("bea-chat"), ["--pick", HOME_RECORD]);
+    expect(JSON.stringify(picked)).toContain(`intent switch ${HOME_RECORD}`);
+  });
+
+  test("work one person builds: one look, of that work's plan only, finds none; once they carry on no step looks for a plan", () => {
+    const { bea } = planAhead(SHAPES[0][1](), () => {});
+    const bare = remoteReads(bea, chat("bea-chat"));
+    expectCarryOn(bare.step);
+    expect(bare.reads, bare.reads.join("\n")).toHaveLength(1);
+    expect(bare.reads[0]).toMatch(/'\+refs\/aidlc\/plans\/[0-9a-f]{8}\*:/);
+    expect(run(UTILITY, ["intent", "switch", HOME_RECORD], bea, chat("bea-chat")).status).toBe(0);
+    expect(remoteReads(bea, chat("bea-chat")).reads.filter((read) => read.includes("refs/aidlc/plans/"))).toEqual([]);
+  });
+
+  test("teams chosen and the plan shared, then one builder again, that record in main: a clone is asked to carry the work on", () => {
+    const home = makeHome({ repos: {} });
+    mkdirSync(join(home.dir, "aidlc", "spaces", "default", "intents", HOME_RECORD, "audit"), { recursive: true });
+    asLeadsOwnCheckout(home.dir);
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    sharePlan(home);
+    expect(run(STATE, ["set-unit-ownership", "solo"], home.dir).status).toBe(0);
+    git(home.dir, ["add", "-A"]);
+    git(home.dir, ["commit", "-q", "-m", "one builder"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    expectCarryOn(next(cloneOf(home.remote, "bea"), chat("bea-chat")));
+  });
+
+  test("the plan's repository does not answer: the step is the one a clone of solo work meets", () => {
+    const { home, bea } = planAhead(SHAPES[0][1]());
+    renameSync(home.remote, `${home.remote}-away`);
+    try {
+      expectCarryOn(next(bea, chat("bea-chat")));
+    } finally {
+      renameSync(`${home.remote}-away`, home.remote);
+    }
+  });
+
+  test("the plan's repository is silent: the look ends at its time limit and the step is the one a clone of solo work meets", () => {
+    const { bea } = planAhead(SHAPES[1][1](), undefined, checkoutApiAt("ssh://silent.example/checkout-api.git"));
+    const sleeper = join(tempDir("ssh"), "never-answers.sh");
+    writeFileSync(sleeper, "#!/bin/sh\nsleep 60\n");
+    chmodSync(sleeper, 0o755);
+    const started = Date.now();
+    const step = next(bea, { ...chat("bea-chat"), GIT_SSH_COMMAND: sleeper });
+    expect(Date.now() - started).toBeLessThan(30_000);
+    expectCarryOn(step);
+  });
+
+  test("the workspace's remote is silent and names no default branch here: the look ends at its time limit and the step is the one a clone of solo work meets", () => {
+    const { bea } = planAhead(SHAPES[0][1]());
+    git(bea, ["remote", "set-head", "origin", "-d"]);
+    git(bea, ["remote", "set-url", "origin", "ssh://silent.example/workspace.git"]);
+    const sleeper = join(tempDir("ssh"), "never-answers.sh");
+    writeFileSync(sleeper, "#!/bin/sh\nsleep 60\n");
+    chmodSync(sleeper, 0o755);
+    const started = Date.now();
+    const step = next(bea, { ...chat("bea-chat"), GIT_SSH_COMMAND: sleeper });
+    expect(Date.now() - started).toBeLessThan(30_000);
+    expectCarryOn(step);
+  });
+
+  test("the plan's repository spelled as only the planner's computer reaches it: the step is the one a clone of solo work meets", () => {
+    const { bea } = planAhead(SHAPES[1][1](), undefined, checkoutApiAt(join(tempDir("planner-only"), "checkout-api.git")));
+    expectCarryOn(next(bea, chat("bea-chat")));
+  });
+
+  test("a closed plan, or one of a format this AI-DLC does not read: the step is the one a clone of solo work meets", () => {
+    const closed = (json: Record<string, unknown>) => ({ ...json, closed: { at: "2026-11-19T00:00:00Z" } });
+    const newer = (json: Record<string, unknown>) => ({ ...json, format: 99 });
+    for (const edit of [closed, newer]) {
+      const { bea } = planAhead(SHAPES[0][1](), (home) => {
+        expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+        pushEditedPlan(sharePlan(home), edit);
+      });
+      expectCarryOn(next(bea, chat("bea-chat")));
+    }
+  });
+
+  test("the plan shared by name in another of the work's repositories: the step is the one a clone of solo work meets", () => {
+    const { bea } = planAhead(SHAPES[1][1](), (home) => {
+      expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+      expect(run(UNIT, ["share", "--plan", "--repo", "billing"], home.dir).status).toBe(0);
+    });
+    expectCarryOn(next(bea, chat("bea-chat")));
+  });
+
+  test("the planner's own checkout, nothing selected, before the answer: no look for a plan, and asked to carry it on", () => {
+    const { home } = planAhead(SHAPES[0][1](), () => {});
+    rmSync(join(home.dir, "aidlc", "spaces", "default", "intents", "active-intent"), { force: true });
+    const bare = remoteReads(home.dir, chat("planner-later"));
+    expectCarryOn(bare.step);
+    expect(bare.reads.filter((read) => read.includes("refs/aidlc/plans/"))).toEqual([]);
+  });
 });
 
 describe("a build reads the plan at an address its builder says, after the repository moved hosts", () => {

@@ -703,6 +703,7 @@ import {
   planAt,
   planAtCopy,
   planMovedLine,
+  planSharedAtHome,
   followBuildsTo,
   planAgainst,
   mergesSeenHere,
@@ -16348,11 +16349,14 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       return;
     }
     // Only the lead's work built by teams that this clone did not plan, with
-    // no plan known for it: the step is the one next --units gives (its
-    // Units, or the ask for the address of the plan's repository), never that
-    // work to carry on.
+    // no plan known for it, and work it did not plan whose record here is from
+    // before teams were chosen, once its plan is shared where the share puts
+    // it: the step is the one next --units gives (its Units, or the ask for the
+    // address of the plan's repository), never that work to carry on.
     const unpicked = unselectedRecords(pd);
-    if (unpicked !== null && unpicked.selectable.length > 0 && pickableHere(pd, unpicked).length === 0) {
+    if (unpicked !== null && unpicked.selectable.length > 0 && pickableHere(pd, unpicked).every(({ intent, state, selector }) =>
+      !isTeamUnitOwnership(state) && homeLocation(state) === null && unitBuildOf(state) === null && !!intent.uuid &&
+      !isReadOnlyEngineProbe() && !planMadeHere(pd, selector, unpicked.space) && planSharedAtHome(pd, selector, unpicked.space, intent.uuid))) {
       const units = unitsAskedStep(pd);
       if (units !== null) {
         emit(units);

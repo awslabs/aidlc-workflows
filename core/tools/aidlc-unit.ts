@@ -9312,9 +9312,32 @@ function workspaceRepoEntry(pd: string, space?: string): PlanJson["repos"][numbe
 }
 
 // Where the plan goes when the lead names nowhere else: the first repository
-// of the work's own list, else the workspace's own; null with no address.
+// of the work's own list, else the workspace's own (the Home Location teams
+// record there); null with no address. Only the address: an entry's branch may
+// need the team's words read, or the remote asked.
 export function planHomeAddress(projectDir: string, dirName: string, space: string): string | null {
-  return planRepos(projectDir, dirName, space)[0]?.address ?? null;
+  const first = intentRepos(projectDir, dirName, space)[0];
+  if (first !== undefined) return planRepoEntry(projectDir, first).address;
+  const own = workspaceHomeLocation(projectDir);
+  return own === "local" ? null : own;
+}
+
+// Whether this work's plan is shared where the share puts it: one quiet look
+// there, at that work's plan only, finding an open plan of this very work that
+// this AI-DLC reads. Any look that fails or finds none is false.
+export function planSharedAtHome(projectDir: string, dirName: string, space: string, uuid: string): boolean {
+  try {
+    const address = planHomeAddress(projectDir, dirName, space);
+    if (address === null) return false;
+    const ref = planRecordRef(idSuffix(uuid));
+    const looked = lookAt(projectDir, address, [ref]);
+    if (!looked.ok || !looked.refs[ref]?.now) return false;
+    const read = planAtCopy(projectDir, copyOf(address, ref), { found: true });
+    return read.kind === "read" && read.plan.work.id === uuid && read.plan.closed === undefined;
+  } catch {
+    // An address git would read as an option.
+    return false;
+  }
 }
 
 // This workspace's copy of its own work's plan, as last written or read: the

@@ -824,6 +824,16 @@ identity; a teammate is offered nothing. The home's work that git copied into a 
 own workspace (its `Home Location` is not this workspace's `origin`) is never
 offered to carry on, and `workToPickUp` leaves it out.
 
+A clone holding the lead's record from before teams were chosen (no `Unit
+Ownership: team` and no `Home Location` there yet) and that did not make its
+plan (`planMadeHere` false) looks where the share puts that work's plan when
+the lead names no other repository (`planSharedAtHome`: the address
+`planHomeAddress` gives, that work's ref only, one `lookAt` that nobody typed,
+so quiet and under its time limit). With an open plan of that work there that
+this AI-DLC reads, and no other work here to pick up, a plain `next` with
+nothing selected returns what `next --units` returns; a look that fails or
+finds none leaves the step as it was, the question to carry the work on.
+
 A team's own workspace that holds nothing of the lead's reaches the plan by
 the address of the code repository it is shared in, said once: `next
 --lead-address <address>` (the agent's exact argument) returns the same
