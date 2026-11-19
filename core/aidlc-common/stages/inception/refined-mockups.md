@@ -93,7 +93,7 @@ Also write `<record>/inception/refined-mockups/mockups-preview.html` with your f
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:">
 ```
 
-For user-facing UI it shows each decided screen in each state its decisions cover, drawn with the components and tokens of `design-system-mapping.md`; for an API it shows example requests and responses in each state its decisions cover, success and each error shape. The person judges the experience by looking at it; it is approved with the other outputs, and Build and Test's final gate compares the build with it.
+For user-facing UI it shows each decided screen in each state its decisions cover, drawn with the components and tokens of `design-system-mapping.md`, and lets the person click through them without a script: each screen and state is a `<section id="sign-in-error">`, each control that leads somewhere is an `<a href="#sign-in-error">` to its target, and CSS `:target` shows the selected section, with the first screen shown when none is selected; for an API it shows example requests and responses in each state its decisions cover, success and each error shape. The person judges the experience by looking at it; it is approved with the other outputs, and Build and Test's final gate compares the build with it.
 
 For non-UI: create API developer experience specification.
 
@@ -107,7 +107,7 @@ That `report` call owns every lifecycle transition and advancement; never perfor
 
 Completion emoji: :art:
 Review path: `<record>/inception/refined-mockups/`
-Tell the person to open `mockups-preview.html` in a browser to see the experience in its states before they decide.
+Tell the person to open `mockups-preview.html` in a browser and click through the experience in its states before they decide.
 Standard approval gate (Approve / Request Changes).
 
 ## Sensors

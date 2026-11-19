@@ -830,9 +830,10 @@ designs the refined mockups from the stories and requirements.
    gate that each ID names a story `stories.md` has. Design-system rows
    separate where a component is observed in the code from the standard it
    follows. Also write `mockups-preview.html`: one self-contained HTML file
-   (inline CSS and SVG) showing each decided screen in each state, or for an
-   API example requests and responses in each state, labelled with its `UX`
-   IDs. Its head opens with a fixed Content-Security-Policy line
+   (inline CSS and SVG) showing each decided screen in each state, linked so
+   the person can click through them with in-page anchors and CSS `:target`
+   (no script), or for an API example requests and responses in each state,
+   labelled with its `UX` IDs. Its head opens with a fixed Content-Security-Policy line
    (`default-src 'none'; style-src 'unsafe-inline'; img-src data:`), so the
    browser runs no script and loads nothing from elsewhere; the review
    request and the gate refuse a preview without it.
