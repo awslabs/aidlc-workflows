@@ -641,6 +641,8 @@ import {
   homeResultsPastUnitStages,
   pastUnitStages,
   landedNotOnRemote,
+  landedNotPushedLine,
+  landingPushRefusedHere,
   namesInProse,
   localUnitClaimOverviewForIntent,
   publishedAtHead,
@@ -6636,7 +6638,7 @@ function teamReviewOrJoinOffer(
 function teamPushOffer(projectDir: string): AskDirective | PrintDirective | null {
   const landed = landedNotOnRemote(projectDir);
   const fresh = landed.filter((row) => !handoverOffered(projectDir, teamHandoverMarkName("push", row.commit.slice(0, 12))));
-  if (fresh.length === 0 || shareBlocker(projectDir) !== null) return null;
+  if (fresh.length === 0 || shareBlocker(projectDir) !== null || landingPushRefusedHere(projectDir)) return null;
   const target = shareOfferTarget(projectDir);
   if (target === null) return null;
   const units = landed.map((row) => row.unit);
@@ -6931,7 +6933,7 @@ export interface TeamConstructionBoard {
   /** Claimed Units a team published that wait for review here (not pinned at that commit, nothing left to land first). */
   ready: Array<{ unit: string; owner: string; key: string }>;
   /** Units landed here that the remote's integration branch does not have yet, and where a share pushes. */
-  unpushed: { units: string[]; remote: string; branch: string } | null;
+  unpushed: { units: string[]; remote: string; branch: string; refused: boolean } | null;
   warning?: string;
 }
 
@@ -7184,7 +7186,7 @@ function assembleTeamConstructionBoard(
     walked: [...(overview.walked ?? [])].sort(compareBoardKeys),
     blocked,
     ready,
-    unpushed: target === null ? null : { units: landedHere.map((row) => row.unit), ...target },
+    unpushed: target === null ? null : { units: landedHere.map((row) => row.unit), ...target, refused: landingPushRefusedHere(projectDir) },
     ...(overview.warning ? { warning: overview.warning } : {}),
   };
 }
@@ -7264,10 +7266,7 @@ export function renderTeamConstructionBoard(
     );
   }
   if (board.unpushed !== null) {
-    nextActions.push(
-      `- ${board.unpushed.branch} has ${board.unpushed.units.join(" and ")} landed here and not on ` +
-        `${board.unpushed.remote} yet: \`${aidlcInvocation()} unit share\`.`,
-    );
+    nextActions.push(`- ${landedNotPushedLine(board.unpushed, board.unpushed.units, board.unpushed.refused)}`);
   }
   const claimedUnits = board.claims.filter((claim) => claim.status === "claimed");
   if (nextActions.length === 0) {

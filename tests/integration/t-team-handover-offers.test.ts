@@ -11,7 +11,7 @@
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readActiveDirectiveMarker, readUnitScopeStamp } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -891,26 +891,116 @@ describe("step 5: main is pushed after a land", () => {
     expect(board.stdout).toContain("the team's branch has alpha landed here and not on origin yet");
   });
 
-  // A main that takes no direct push, as a host's ruleset refuses it: the share
-  // after a land keeps its commit on main and today's line, and makes no branch.
-  test("the push after a land that a host's rule on main refuses keeps today's line and the commit on main, and makes no branch", () => {
+  // A main that takes no direct push, as a host's ruleset refuses it: the share after a land keeps its commit on
+  // main, makes no branch, and says the landing's way on, which the board says too; the push question is not put
+  // again at that head.
+  const WAY_ON = "main has alpha landed here and not on origin yet: push it on a branch and get it merged your usual way.";
+  const refusedMarks = (dir: string): string[] =>
+    readdirSync(join(seededRecordDir(dir), ".aidlc-engine")).filter((name) => name.startsWith("team-handover-push-refused-"));
+  function landedAndRefused(): { lead: string; remote: string; hook: string } {
     const { seed: lead, remote } = makeSeed();
     prepareCandidate(remote, "alpha", "team-a");
     approveMerge(lead, "alpha");
     const landed = runMergeTool(UNIT, ["land", "alpha"], lead);
     expect(landed.status, landed.out).toBe(0);
-    const head = git(lead, ["rev-parse", "HEAD"]);
+    expect(isHandover(nextDirective(lead), "push")).toBe(true);
     const hook = join(remote, "hooks", "pre-receive");
     writeFileSync(hook, "#!/bin/sh\nwhile read old new ref; do\n  if [ \"$ref\" = refs/heads/main ]; then\n" +
       "    echo 'error: GH013: Repository rule violations found for refs/heads/main.' >&2\n    exit 1\n  fi\ndone\nexit 0\n");
     chmodSync(hook, 0o755);
+    return { lead, remote, hook };
+  }
+
+  test("the push after a land that a host's rule on main refuses says the landing's way on, keeps the commit on main, and is not asked again", () => {
+    const { lead } = landedAndRefused();
+    const head = git(lead, ["rev-parse", "HEAD"]);
+    expect(runMergeTool(ORCH, ["team-board", "--snapshot"], lead).stdout)
+      .toMatch(/- main has alpha landed here and not on origin yet: `[^`]* unit share`\./);
     const shared = runMergeTool(UNIT, ["share"], lead);
     expect(shared.status, shared.out).not.toBe(0);
-    expect(shared.out).toContain("origin takes no direct push to main (");
-    expect(shared.out).toContain("The plan is committed here: push it on a branch and get it merged your usual way; the teams can take Units once it is in main.");
+    expect(JSON.parse(shared.out.trim().split("\n").at(-1) ?? "{}").error).toBe(
+      "origin takes no direct push to main (error: GH013: Repository rule violations found for refs/heads/main. " +
+        `(pre-receive hook declined)). ${WAY_ON}`,
+    );
     expect(git(lead, ["symbolic-ref", "HEAD"])).toBe("refs/heads/main");
     expect(git(lead, ["merge-base", "--is-ancestor", head, "HEAD"])).toBe("");
     expect(git(lead, ["for-each-ref", "refs/heads/aidlc-plan*"])).toBe("");
+    const look = nextDirective(lead);
+    expect(isHandover(look, "push"), JSON.stringify(look).slice(0, 400)).toBe(false);
+    const board = runMergeTool(ORCH, ["team-board", "--snapshot"], lead);
+    expect(board.stdout).toContain(`- ${WAY_ON}`);
+    expect(board.stdout).not.toContain("unit share");
+    expect(refusedMarks(lead)).toHaveLength(1);
+    // Another share that did not go through (here --branch, which takes the plan's own commits only) leaves it so.
+    expect(runMergeTool(UNIT, ["share", "--branch"], lead).status).not.toBe(0);
+    expect(isHandover(nextDirective(lead), "push")).toBe(false);
+    expect(runMergeTool(ORCH, ["team-board", "--snapshot"], lead).stdout).toContain(`- ${WAY_ON}`);
+    expect(refusedMarks(lead)).toHaveLength(1);
+  });
+
+  // Due again on a new head of main (the rule may be gone by then); once a push goes, nothing is due and the
+  // refusal's mark goes with it.
+  test("after that refusal, a new head of main puts the push question again, and a push that goes leaves nothing due", () => {
+    const { lead, hook } = landedAndRefused();
+    expect(runMergeTool(UNIT, ["share"], lead).status).not.toBe(0);
+    writeFileSync(join(lead, "notes.md"), "The lead's own note.\n");
+    git(lead, ["add", "notes.md"]);
+    git(lead, ["commit", "-m", "notes"]);
+    const again = nextDirective(lead);
+    expect(isHandover(again, "push"), JSON.stringify(again).slice(0, 400)).toBe(true);
+    // The refusal's mark stays until a push goes; a new head no longer reads it.
+    expect(refusedMarks(lead)).toHaveLength(1);
+    expect(String(again.question)).toBe("Push main to origin now so the other teams see alpha landed?");
+    const board = runMergeTool(ORCH, ["team-board", "--snapshot"], lead);
+    expect(board.stdout).toContain("- main has alpha landed here and not on origin yet: `");
+    writeFileSync(hook, "#!/bin/sh\nexit 0\n");
+    const pushed = runMergeTool(UNIT, ["share"], lead);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(isHandover(nextDirective(lead), "push")).toBe(false);
+    expect(runMergeTool(ORCH, ["team-board", "--snapshot"], lead).stdout).not.toContain("landed here and not on origin yet");
+    expect(refusedMarks(lead)).toEqual([]);
+  });
+
+  // The host merges the lead's branch of the landing its own way, after a teammate's commit moved main: origin's
+  // main has the landing's changes under commits of its own, never the landing's. Read by content, it is in once
+  // this clone has fetched; until then nothing has told it.
+  function mergedByHost(how: "squash" | "rebase"): string {
+    const { seed: lead, remote } = makeSeed();
+    prepareCandidate(remote, "alpha", "team-a");
+    approveMerge(lead, "alpha");
+    expect(runMergeTool(UNIT, ["land", "alpha"], lead).status).toBe(0);
+    git(lead, ["push", "origin", "HEAD:refs/heads/land-alpha"]);
+    const host = clone(remote, `host-${how}`);
+    writeFileSync(join(host, "teammate.md"), "A teammate's change.\n");
+    git(host, ["add", "teammate.md"]);
+    git(host, ["commit", "-m", "teammate"]);
+    git(host, ["fetch", "origin", "land-alpha"]);
+    if (how === "squash") {
+      git(host, ["merge", "--squash", "FETCH_HEAD"]);
+      git(host, ["commit", "-m", "Land alpha (#12)"]);
+    } else {
+      // Each of the branch's commits again on top of main, as new commits, the way a host's rebase merge lands them.
+      let onto = git(host, ["rev-parse", "main"]);
+      for (const commit of git(host, ["rev-list", "--reverse", "--first-parent", "main..FETCH_HEAD"]).split("\n")) {
+        const tree = git(host, ["merge-tree", "--write-tree", "--merge-base", `${commit}^1`, onto, commit]).split("\n")[0];
+        onto = git(host, ["commit-tree", tree, "-p", onto, "-m", git(host, ["log", "-1", "--format=%s", commit])]);
+      }
+      git(host, ["reset", "-q", "--hard", onto]);
+    }
+    git(host, ["push", "origin", "main"]);
+    return lead;
+  }
+
+  test.each(["squash", "rebase"] as const)("a landing the host %s-merged into main from a branch: said until a fetch, quiet after it", (how) => {
+    const lead = mergedByHost(how);
+    const before = runMergeTool(ORCH, ["team-board", "--snapshot"], lead);
+    expect(before.stdout).toContain("- main has alpha landed here and not on origin yet: `");
+    git(lead, ["fetch", "origin"]);
+    const look = nextDirective(lead);
+    expect(isHandover(look, "push"), JSON.stringify(look).slice(0, 400)).toBe(false);
+    const board = runMergeTool(ORCH, ["team-board", "--snapshot"], lead);
+    expect(board.status, board.out).toBe(0);
+    expect(board.stdout).not.toContain("landed here and not on origin yet");
   });
 
   test("a land already on origin is not offered", () => {

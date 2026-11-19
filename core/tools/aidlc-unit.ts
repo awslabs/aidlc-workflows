@@ -6006,7 +6006,10 @@ function teammatesNeedLine(projectDir: string): string | null {
     : null;
 }
 
-// A hand-over that did not happen (a commit or a push refused) is due again.
+// A hand-over that did not happen (a commit or a push refused) is due again,
+// but for a landing's push the host's own rule refused at this head, which
+// only a new head or a push that goes ends (landingPushRefusedHere).
+const PUSH_REFUSED = "push-refused";
 function clearTeamHandoverMarks(projectDir: string, kinds: readonly string[]): void {
   const root = recordDir(projectDir);
   if (root === null) return;
@@ -6017,7 +6020,8 @@ function clearTeamHandoverMarks(projectDir: string, kinds: readonly string[]): v
     return;
   }
   for (const name of names) {
-    if (kinds.some((kind) => name.startsWith(`team-handover-${kind}-`))) clearEngineAskMark(projectDir, name);
+    const kept = !kinds.includes(PUSH_REFUSED) && name.startsWith(`team-handover-${PUSH_REFUSED}-`);
+    if (!kept && kinds.some((kind) => name.startsWith(`team-handover-${kind}-`))) clearEngineAskMark(projectDir, name);
   }
 }
 
@@ -6395,10 +6399,31 @@ export function shareBlocker(projectDir: string): string | null {
   return shareRefusal(projectDir)?.reason ?? null;
 }
 
+// The way on where the integration branch takes no direct push, said for the
+// plan and for a landing alike: by the person's own branch and merge.
+const BRANCH_AND_MERGE = "push it on a branch and get it merged your usual way";
+
 // How the plan reaches the teams when the share committed it here and cannot
-// push it: by the person's own branch and merge.
+// push it.
 export function planWayOn(branch: string): string {
-  return `The plan is committed here: push it on a branch and get it merged your usual way; the teams can take Units once it is in ${branch}.`;
+  return `The plan is committed here: ${BRANCH_AND_MERGE}; the teams can take Units once it is in ${branch}.`;
+}
+
+// Units landed here that the remote does not have yet, for the board and for
+// the push after a land that the host's own rule refused: the push, or, once
+// refused at this head (landingPushRefusedHere), the branch and merge.
+export function landedNotPushedLine(target: { remote: string; branch: string }, units: readonly string[], refused: boolean): string {
+  return `${target.branch} has ${units.join(" and ")} landed here and not on ${target.remote} yet: ` +
+    `${refused ? BRANCH_AND_MERGE : `\`${aidlcInvocation()} unit share\``}.`;
+}
+
+// The push after a land that the host's own rule refused, by the head it was
+// refused at: not offered again while main's head is that one; a new head, or a
+// push that goes, ends it.
+const landingPushRefusedMark = (head: string): string => teamHandoverMarkName(PUSH_REFUSED, head.slice(0, 12));
+export function landingPushRefusedHere(projectDir: string): boolean {
+  const head = git(projectDir, ["rev-parse", "--verify", "--quiet", "HEAD"]).stdout.trim();
+  return head !== "" && engineAskMark(projectDir, landingPushRefusedMark(head)) !== null;
 }
 
 // The plan's own branch when the integration branch takes no direct push:
@@ -8196,13 +8221,21 @@ function shareMain(args: string[], projectDir?: string): void {
   // A host's rule on the branch (a protected branch, a ruleset, a hook), not
   // a push behind it or a lost race for its lock. The plan's offer keeps its
   // mark, so it is not put again; main's share comes before a Unit starts here,
-  // so its offers are due again, never a build here. The plan's share, on a
+  // so its offers are due again, never a build here, but a landing's push is
+  // not put again at this head (landingPushRefusedHere). The plan's share, on a
   // branch that had nothing else the remote lacked, is noted with its commit
   // and counts as done here: the next step offers once to put it on a branch
   // of its own (planWait); otherwise the person's own way on.
   if (!pushed.ok && refusedByHostRule(pushed.stderr)) {
     if (!planOnly) clearTeamHandoverMarks(pd, ["share", "push"]);
-    if (earlier === null || (madeNow === null && earlier.length === 0)) fail(`${remote} takes no direct push to ${branch} (${pushRefusal(pushed.stderr)}). ${planWayOn(branch)}`);
+    if (earlier === null || (madeNow === null && earlier.length === 0)) {
+      if (landed.length > 0) {
+        clearTeamHandoverMarks(pd, [PUSH_REFUSED]);
+        noteEngineAskMark(pd, landingPushRefusedMark(head));
+      }
+      fail(`${remote} takes no direct push to ${branch} (${pushRefusal(pushed.stderr)}). ` +
+        (landed.length > 0 ? landedNotPushedLine({ remote, branch }, landed, true) : planWayOn(branch)));
+    }
     if (madeNow !== null) noteEngineAskMark(pd, shareCommitMark(madeNow));
     noteTeamShared(pd);
     given?.spend();
@@ -8224,6 +8257,7 @@ function shareMain(args: string[], projectDir?: string): void {
     );
   }
   noteTeamShared(pd);
+  clearTeamHandoverMarks(pd, [PUSH_REFUSED]);
   given?.spend();
   const claims = claimsAskedHereWithShare(pd);
   const notShared = planOnly ? null : planNotSharedByThis(pd);
@@ -8258,6 +8292,7 @@ export function landedNotOnRemote(projectDir: string): Array<{ unit: string; com
   }
   if (!remote) return [];
   const landed: Array<{ unit: string; commit: string }> = [];
+  const inByContent = new Map<string, boolean>();
   for (const transaction of unitMergeTransactions(pd)) {
     const commit = transaction.git_commit_oid;
     if (transaction.status !== "complete" || !commit) continue;
@@ -8265,6 +8300,9 @@ export function landedNotOnRemote(projectDir: string): Array<{ unit: string; com
     if (!localGit(pd, ["rev-parse", "--verify", "--quiet", ref]).ok) continue;
     if (localGit(pd, ["merge-base", "--is-ancestor", commit, ref]).ok) continue;
     if (!localGit(pd, ["merge-base", "--is-ancestor", commit, "HEAD"]).ok) continue;
+    // A host's squash or rebase merge of HEAD, pushed on a branch of the lead's, has the landing by content.
+    if (!inByContent.has(ref)) inByContent.set(ref, headInByContent(pd, ref) === true);
+    if (inByContent.get(ref) === true) continue;
     landed.push({ unit: transaction.unit, commit });
   }
   return landed;
