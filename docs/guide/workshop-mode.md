@@ -777,8 +777,12 @@ no folder of the lead's and no remote are added.
   cloned and added to your workspace's own list.
 - Following the lead's rules too reads the lead's practices and project
   rules where they are, in the lead's project, before your team's own; nothing
-  is copied, and a change the lead pushes applies once AI-DLC next looks at the
-  lead's project (in a new chat, or at your build's next stage). When they
+  is copied into your space's `memory/`, and a change the lead pushes applies
+  once AI-DLC next looks at the lead's project (in a new chat, or at your
+  build's next stage). On Kiro CLI (V2), whose specialists get rules only from
+  what they preload and their brief, AI-DLC writes them as read into a
+  git-ignored file of your build's record for the specialists' briefs to name,
+  and says so once when it cannot. When they
   cannot be read (the lead's project cannot be reached on a first look), the
   step goes on under your team's own rules and says so once.
 - In a clone of the lead's own workspace, saying the address changes nothing:

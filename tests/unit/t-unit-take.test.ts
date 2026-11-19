@@ -18,7 +18,7 @@ import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts
 import { asLeadsOwnCheckout } from "../harness/team-unit-merge.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -27,7 +27,7 @@ import { auditBlockField, readAuditShardEvents, readIntentRegistry } from "../..
 import { shellSingleQuote } from "../../dist/claude/.claude/tools/aidlc-runtime-paths.ts";
 import { leadsPlanNotHere } from "../../dist/claude/.claude/tools/aidlc-unit-holders.ts";
 import { loadGraph } from "../../dist/claude/.claude/tools/aidlc-graph.ts";
-import { resolvedRuleBundle } from "../../dist/claude/.claude/tools/aidlc-steering.ts";
+import { kiroLeadRulesBrief, LEAD_RULES_UNSAVED_LINE, leadRulesBrief, leadRulesBriefLine, resolvedRuleBundle } from "../../dist/claude/.claude/tools/aidlc-steering.ts";
 import { learningsCorrectionChoices, offersLearningsCorrectionChoices } from "../../dist/claude/.claude/tools/aidlc-unit-teams.ts";
 import { AIDLC_SRC, fixtureIntentId8, REPO_ROOT, seedAidlcMemory } from "../harness/fixtures.ts";
 import { hostFor } from "../harness/scope-hosts.ts";
@@ -2122,7 +2122,34 @@ describe("a likely repo this workspace has no copy of", () => {
       "Codex writes only inside this folder unless you start it with the others: to let it write in ../checkout-api-mine " +
         "and ../billing-mine, start Codex here with `codex --add-dir ../checkout-api-mine --add-dir ../billing-mine`.",
     );
+    expect(String(onCodex.json?.notice)).not.toContain("Kiro may ask");
     expect(existsSync(join(alice, ".codex", "config.toml"))).toBe(false);
+  });
+
+  test("on either Kiro row, a take whose repos sit beside the workspace says Kiro may ask before it changes them", () => {
+    for (const harness of ["kiro", "kiro-ide"]) {
+      const hosts = { "checkout-api": codeHost("checkout-api"), billing: codeHost("billing") };
+      const home = makeHome({ repos: hosts });
+      expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+      git(home.dir, ["add", "-A"]);
+      git(home.dir, ["commit", "-q", "-m", "teams"]);
+      git(home.dir, ["push", "-q", "origin", "main"]);
+      const plan = planShared(home);
+      const alice = cloneOf(home.remote, `alice-${harness}`);
+      // One copy beside the workspace, one inside it under a name that starts with two dots.
+      cloneCode(hosts["checkout-api"], join(alice, ".."), `checkout-api-${harness}`, "alice");
+      cloneCode(hosts.billing, alice, "..billing", "alice");
+      writeFileSync(join(alice, "aidlc", "repos.local.json"), `${JSON.stringify({ repos: [
+        { name: "checkout-api", path: `../checkout-api-${harness}` },
+        { name: "billing", path: "..billing" },
+      ] })}\n`);
+      const took = takeIn("payments", ["refunds", "--plan", plan.id8, "--from", Object.values(plan.hosts)[0]], alice, { ...ENV, AIDLC_HARNESS_NAME: harness });
+      expect(took.status, took.out).toBe(0);
+      const notice = String(took.json?.notice);
+      expect(notice, harness).toContain(` ../checkout-api-${harness} is outside this folder, so Kiro may ask you to approve its changes there.`);
+      expect(notice, harness).not.toContain("..billing is outside");
+      expect(notice, harness).not.toContain("--add-dir");
+    }
   });
 
   test("on another host, or with every repo inside the workspace, nothing is said about Codex", () => {
@@ -2668,6 +2695,43 @@ describe("a team's own workspace that reads the lead's plan where it is shared",
     expect(bundle.error).toBeNull();
     const lead = bundle.content.find((entry) => entry.path === "the lead's rules/team.md");
     expect(lead?.text, bundle.content.map((entry) => entry.path).join(", ")).toContain("Test first for the refund amount.");
+  });
+
+  // Kiro CLI (V2) cannot rewrite a brief, so its steps hand every brief a line
+  // naming a file of the work's record that holds the lead's rules.
+  test("on Kiro CLI (V2), the team's build names a file of its record holding the lead's rules, read from the plan, in every brief", () => {
+    const home = planWithRules((dir) => addRule(dir, "team.md", "Refund Amount", "Test first for the refund amount."));
+    const pay = ownWorkspace(home.hosts, "pay", ["checkout-api", "billing"]);
+    expect(run(UNIT, ["take", "refunds", "--plan", home.id8, "--from", planHost(home), "--lead-rules"], pay).status).toBe(0);
+    const brief = leadRulesBrief(pay);
+    const file = brief !== null && "file" in brief ? brief.file : null;
+    expect(file).toMatch(/^aidlc\/spaces\/default\/intents\/[^/]+\/\.aidlc-engine\/lead-rules\.md$/);
+    expect(readFileSync(join(pay, file!), "utf-8")).toContain("Test first for the refund amount.");
+    // A dispatched step's brief note and the reviewer's request carry its
+    // line on Kiro CLI (V2) only: every other harness's hook hands the rules over.
+    const harness = process.env.AIDLC_HARNESS_NAME;
+    try {
+      process.env.AIDLC_HARNESS_NAME = "kiro";
+      expect(kiroLeadRulesBrief(pay)).toEqual({ file: file! });
+      // A file that cannot be written (a folder where it goes) is said once, not left silent.
+      rmSync(join(pay, file!));
+      mkdirSync(join(pay, file!, "taken"), { recursive: true });
+      expect(kiroLeadRulesBrief(pay)).toEqual({ unsaved: true });
+      expect(LEAD_RULES_UNSAVED_LINE).toContain("follows your team's own rules");
+      rmSync(join(pay, file!), { recursive: true, force: true });
+      expect(kiroLeadRulesBrief(pay)).toEqual({ file: file! });
+      // A step of a build that stops following them removes the file.
+      const state = join(pay, dirname(dirname(file!)), "aidlc-state.md");
+      writeFileSync(state, readFileSync(state, "utf-8").replace(/^- \*\*Lead Project Rules\*\*:.*$/m, "- **Lead Project Rules**:"));
+      expect(kiroLeadRulesBrief(pay)).toBeNull();
+      expect(existsSync(join(pay, file!))).toBe(false);
+      process.env.AIDLC_HARNESS_NAME = "claude";
+      expect(kiroLeadRulesBrief(pay)).toBeNull();
+    } finally {
+      if (harness === undefined) delete process.env.AIDLC_HARNESS_NAME;
+      else process.env.AIDLC_HARNESS_NAME = harness;
+    }
+    expect(leadRulesBriefLine(file!)).toStartWith(`Before you start, read ${file} with your file tool`);
   });
 
   test("the plan's repository with nothing shared yet says so, and takes nothing", () => {

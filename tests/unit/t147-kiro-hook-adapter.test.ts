@@ -1930,6 +1930,155 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
     }
   });
 
+  // Kiro keeps the agent files it upgraded through a refresh, so some or all
+  // of them can still name the copy folder an earlier release kept.
+  const earlierGlob = (file: string): void => {
+    writeFileSync(file, readFileSync(file, "utf-8").replaceAll("aidlc/.aidlc-engine/active-memory/", "aidlc/active-memory/"));
+  };
+  const crew = (dir: string, roles: string[]) => ({
+    cwd: dir,
+    tool_name: "subagent",
+    tool_input: { stages: roles.map((role) => ({ role, prompt_template: "Inspect the project." })) },
+  });
+
+  test("native preload writes the copy where the workers' own files point when every agent file names the earlier folder", () => {
+    const dir = scratchProject(false);
+    try {
+      const agents = join(dir, ".kiro", "agents");
+      for (const name of readdirSync(agents).filter((entry) => entry.endsWith(".json"))) earlierGlob(join(agents, name));
+      writeFileSync(join(dir, "aidlc", "spaces", "default", "memory", "org.md"), "# Organization\n\nKeep the sentinel rule.\n");
+      const result = runAdapter(dir, "deliver-stage-rules", crew(dir, ["aidlc-product-agent"]));
+      expect(result.code, result.stderr).toBe(0);
+      expect(result.stderr).toBe("");
+      expect(readFileSync(join(dir, "aidlc", "active-memory", "org.md"), "utf-8")).toContain("Keep the sentinel rule.");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("native preload keeps a worker's earlier folder current when only the conductor's file names the new one", () => {
+    const dir = scratchProject(false);
+    try {
+      earlierGlob(join(dir, ".kiro", "agents", "aidlc-product-agent.json"));
+      writeFileSync(join(dir, "aidlc", "spaces", "default", "memory", "org.md"), "# Organization\n\nKeep the sentinel rule.\n");
+      // A person's own files in the earlier folder stay as they are, one under a rule's name too.
+      mkdirSync(join(dir, "aidlc", "active-memory"), { recursive: true });
+      writeFileSync(join(dir, "aidlc", "active-memory", "mine.md"), "# My notes\n");
+      writeFileSync(join(dir, "aidlc", "active-memory", "team.md"), "# My team notes\n");
+      const result = runAdapter(dir, "deliver-stage-rules", crew(dir, ["aidlc-product-agent"]));
+      expect(result.code, result.stderr).toBe(0);
+      expect(readFileSync(join(dir, "aidlc", "active-memory", "mine.md"), "utf-8")).toBe("# My notes\n");
+      expect(readFileSync(join(dir, "aidlc", "active-memory", "team.md"), "utf-8")).toBe("# My team notes\n");
+      for (const copy of ["active-memory", join(".aidlc-engine", "active-memory")]) {
+        expect(readFileSync(join(dir, "aidlc", copy, "org.md"), "utf-8"), copy).toContain("Keep the sentinel rule.");
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("native preload leaves a person's own file in the earlier folder alone when their own agent reads that folder", () => {
+    const dir = scratchProject(false);
+    try {
+      const mine = join(dir, "aidlc", "active-memory", "mine.md");
+      mkdirSync(dirname(mine), { recursive: true });
+      writeFileSync(mine, "# My notes\n");
+      writeFileSync(join(dir, ".kiro", "agents", "my-notes.json"), JSON.stringify({ name: "my-notes", resources: ["file://aidlc/active-memory/**/*.md"] }));
+      // Nor a JSON-only helper under AI-DLC's prefix, nor a person's own agent with a persona file of its own.
+      writeFileSync(join(dir, ".kiro", "agents", "notes.md"), "---\nname: notes\nexamples: []\n---\n\nMy notes.\n");
+      writeFileSync(join(dir, ".kiro", "agents", "notes.json"), JSON.stringify({ name: "notes", resources: ["file://aidlc/active-memory/**/*.md"] }));
+      writeFileSync(join(dir, ".kiro", "agents", "aidlc-my-helper-agent.json"), JSON.stringify({ name: "aidlc-my-helper-agent", resources: ["file://aidlc/active-memory/**/*.md"] }));
+      const result = runAdapter(dir, "deliver-stage-rules", crew(dir, ["aidlc-product-agent"]));
+      expect(result.code, result.stderr).toBe(0);
+      expect(readFileSync(mine, "utf-8")).toBe("# My notes\n");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("native preload holds a crew whose second worker's own folder has no rules, and names that worker", () => {
+    const dir = scratchProject(false);
+    try {
+      const design = join(dir, ".kiro", "agents", "aidlc-design-agent.json");
+      earlierGlob(design);
+      // The earlier folder cannot be written: a file stands where it would go.
+      writeFileSync(join(dir, "aidlc", "active-memory"), "not a folder\n");
+      const result = runAdapter(dir, "deliver-stage-rules", crew(dir, ["aidlc-product-agent", "aidlc-design-agent"]));
+      expect(result.code, result.stderr).toBe(2);
+      expect(result.stderr).toContain(design);
+      expect(result.stderr).toContain("file://aidlc/active-memory/**/*.md");
+      expect(result.stderr).not.toContain(join(dir, ".kiro", "agents", "aidlc-product-agent.json"));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a team's build that follows the lead's rules holds a brief that does not name them, and the line it names delivers them", () => {
+    const dir = scratchProject(true);
+    try {
+      const lead = join(dir, "aidlc", "spaces", "lead", "memory");
+      mkdirSync(lead, { recursive: true });
+      writeFileSync(join(lead, "team.md"), "# Team\n\n<!-- A note for the person who edits this file. -->\n\n## Reviews\n\nEvery change gets two reviewers.\n");
+      const state = seededStateFile(dir);
+      const original = readFileSync(state, "utf-8");
+      writeFileSync(state, original.replace(/^(- \*\*Scope\*\*: .*)$/m, "$1\n- **Lead Project Rules**: aidlc/spaces/lead/memory/team.md"));
+      const brief = (dir: string, prompt: string) => ({
+        cwd: dir,
+        tool_name: "subagent",
+        tool_input: { stages: [{ role: "aidlc-product-agent", prompt_template: prompt }] },
+      });
+      const held = runAdapter(dir, "deliver-stage-rules", brief(dir, "Inspect the project."));
+      expect(held.code, held.stderr).toBe(2);
+      expect(held.stderr).toContain(
+        "Add this line word for word to the brief of aidlc-product-agent (in a crew, each stage's own prompt_template, which is all that stage's worker gets; in a direct dispatch, its prompt), then start the dispatch again: ",
+      );
+      const line = held.stderr.split("then start the dispatch again: ")[1].trim();
+      const file = /^Before you start, read (\S+) with your file tool, to its last line: the lead's rules this Unit's build follows; /.exec(line)?.[1];
+      expect(file, line).toMatch(/^aidlc\/spaces\/default\/intents\/[^/]+\/\.aidlc-engine\/lead-rules\.md$/);
+      const text = readFileSync(join(dir, file!), "utf-8");
+      expect(text).toContain("<!-- The lead's team.md (aidlc/spaces/lead/memory/team.md). -->");
+      expect(text).toContain("Every change gets two reviewers.");
+      expect(text).not.toContain("A note for the person who edits this file.");
+      // No worker preloads it: it is outside every glob the agent files name.
+      expect(readFileSync(join(dir, ".kiro", "agents", "aidlc-product-agent.json"), "utf-8")).not.toContain(".aidlc-engine/lead-rules");
+      const delivered = runAdapter(dir, "deliver-stage-rules", brief(dir, `Inspect the project. ${line}`));
+      expect(delivered.code, delivered.stderr).toBe(0);
+      // Two briefs for one specialist are each checked.
+      const twice = runAdapter(dir, "deliver-stage-rules", {
+        cwd: dir,
+        tool_name: "subagent",
+        tool_input: { stages: [
+          { role: "aidlc-product-agent", prompt_template: `Inspect the project. ${line}` },
+          { role: "aidlc-product-agent", prompt_template: "Inspect the other part." },
+        ] },
+      });
+      expect(twice.code, twice.stderr).toBe(2);
+      // A crew stage's worker gets its own prompt only: the shared task does not count.
+      const shared = runAdapter(dir, "deliver-stage-rules", {
+        cwd: dir,
+        tool_name: "subagent",
+        tool_input: { task: line, stages: [
+          { role: "aidlc-product-agent", prompt_template: "Inspect the project." },
+          { role: "aidlc-product-agent", prompt_template: "Inspect the other part." },
+        ] },
+      });
+      expect(shared.code, shared.stderr).toBe(2);
+      // A lead's file that is this space's own is preloaded already: no line is asked for.
+      writeFileSync(join(dir, "aidlc", "spaces", "default", "memory", "team.md"), "# Team\n\n## Reviews\n\nOne reviewer.\n");
+      writeFileSync(state, original.replace(/^(- \*\*Scope\*\*: .*)$/m, "$1\n- **Lead Project Rules**: aidlc/spaces/default/memory/team.md"));
+      const ownSpace = runAdapter(dir, "deliver-stage-rules", brief(dir, "Inspect the project."));
+      expect(ownSpace.code, ownSpace.stderr).toBe(0);
+      // A build that does not follow them asks for no line.
+      writeFileSync(state, original);
+      const own = runAdapter(dir, "deliver-stage-rules", brief(dir, "Inspect the project."));
+      expect(own.code, own.stderr).toBe(0);
+      // The hook never removes it: a brief handed out before may still name it.
+      expect(existsSync(join(dir, file!))).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("native preload leaves non-roster helpers untouched, including mixed crews", () => {
     const dir = scratchProject(false);
     try {

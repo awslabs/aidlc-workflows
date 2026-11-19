@@ -44,8 +44,8 @@ import {
   rootIntegrationTarget,
   unionBlocks,
 } from "./aidlc-distribution.ts";
-import { activeSpace, sessionsDir, writeFileAtomic } from "./aidlc-lib.ts";
-import { discoverProjectHarnesses, ensureWorkspaceEngineFolder, runtimeHarnessName } from "./aidlc-runtime-paths.ts";
+import { activeSpace, isAidlcAgentFile, sessionsDir, writeFileAtomic } from "./aidlc-lib.ts";
+import { discoverProjectHarnesses, ensureWorkspaceEngineFolder, kiroTreeLayout, runtimeHarnessName } from "./aidlc-runtime-paths.ts";
 
 /** Workspace-relative POSIX memory path for a space: `aidlc/spaces/<space>/memory`.
  *  POSIX separators — these strings live in include files read identically on
@@ -259,9 +259,48 @@ const INCLUDE_FILES = [".claude/rules/aidlc.md", ".kiro/agents/aidlc.json", "AGE
 export function activeMemoryCopyDirs(projectDir: string): string[] {
   const texts = [...INCLUDE_FILES, rootIntegrationTarget(projectDir, "opencode.json")]
     .map((rel) => readSafe(join(projectDir, rel)) ?? "");
+  const workers = kiroWorkerResources(projectDir);
   const named = [ACTIVE_MEMORY_DIR, EARLIER_ACTIVE_MEMORY_DIR]
-    .filter((dir) => texts.some((text) => text.includes(`${dir}/`)));
+    .filter((dir) => texts.some((text) => text.includes(`${dir}/`)) || workers.includes(`file://${dir}/**/*.md`));
   return named.length > 0 ? named : [ACTIVE_MEMORY_DIR];
+}
+
+/** Whether `name` is a Kiro CLI roster worker in `agentsDir`: the shared
+ *  delivery hook's installed Markdown roster, plugin personas included, with
+ *  the composer exempt. JSON-only helpers are not, even under the aidlc-
+ *  prefix. The one test for both the dispatch check and the copy folders. */
+export function isKiroRosterWorker(agentsDir: string, name: string): boolean {
+  const persona = join(agentsDir, `${name}.md`);
+  return /^[a-z0-9][a-z0-9-]*-agent$/.test(name) && name !== "aidlc-composer-agent" &&
+    existsSync(persona) && isAidlcAgentFile(persona);
+}
+
+// On Kiro CLI's agent-JSON layout every worker preloads the copy through the
+// resources of its own agents/<name>.json, and a refresh keeps the files Kiro
+// upgraded, so a worker can name another folder than aidlc.json does. Only
+// roster workers count (isKiroRosterWorker): a person's own agent reading a
+// copy folder does not make AI-DLC manage it. Kiro's `.json.bak` backups, and JSON a move to the Markdown layout left,
+// are not read.
+function kiroWorkerResources(projectDir: string): string[] {
+  if (kiroTreeLayout(join(projectDir, ".kiro")) !== "agent-v1") return [];
+  let names: string[];
+  try {
+    names = readdirSync(join(projectDir, ".kiro", "agents"), { withFileTypes: true })
+      // A linked agent file is read where it points, as Kiro reads it.
+      .filter((entry) => (entry.isFile() || entry.isSymbolicLink()) && entry.name.endsWith(".json"))
+      .map((entry) => entry.name)
+      .filter((name) => isKiroRosterWorker(join(projectDir, ".kiro", "agents"), name.slice(0, -".json".length)));
+  } catch {
+    return [];
+  }
+  return names.flatMap((name) => {
+    try {
+      const resources: unknown = (JSON.parse(readSafe(join(projectDir, ".kiro", "agents", name)) ?? "{}") as { resources?: unknown }).resources;
+      return Array.isArray(resources) ? resources.filter((entry): entry is string => typeof entry === "string") : [];
+    } catch {
+      return [];
+    }
+  });
 }
 
 /** The copy folder this harness's own include names (its chat reads that one). */
@@ -281,11 +320,18 @@ function spaceMemoryDir(projectDir: string, space: string): string {
   return join(projectDir, ...spaceMemoryRel(space).split("/"));
 }
 
+const COPY_HEADER_START = "<!-- AI-DLC keeps this copy in step with ";
+
+// A file AI-DLC copied: its first line is the copy header.
+function isCopiedFile(path: string): boolean {
+  return (utf8Text(path) ?? "").startsWith(COPY_HEADER_START);
+}
+
 /** The first line of every copied file: the file to edit, so an edit made in
  *  the copy (by a person, or an agent that found it through an include path) is
  *  never lost without notice; the next refresh replaces the copy. */
 export function activeMemoryCopyHeader(space: string, rel: string): string {
-  return `<!-- AI-DLC keeps this copy in step with ${spaceMemoryRel(space)}/${rel}. Edit that file; this copy is replaced. -->\n`;
+  return `${COPY_HEADER_START}${spaceMemoryRel(space)}/${rel}. Edit that file; this copy is replaced. -->\n`;
 }
 
 // A file's text, or null when it is not UTF-8 (then it is not copied).
@@ -304,14 +350,19 @@ function copiedText(projectDir: string, space: string, rel: string): string | nu
 
 /** The copy's files that are not the memory files of `space` now, by their path
  *  under memory/: missing or different ones (the header line included), and ones
- *  the space no longer has. Empty when the copy is current. */
+ *  the space no longer has, except, in the earlier folder, a person's own file
+ *  AI-DLC did not copy there. Empty when the copy is current. */
 export function activeMemoryCopyDrift(projectDir: string, space: string, dir: string = ACTIVE_MEMORY_DIR): string[] {
   const source = spaceMemoryDir(projectDir, space);
   const copy = activeMemoryCopyDir(projectDir, dir);
   const wanted = memoryLayerFiles(source).filter((rel) => utf8Text(join(source, rel)) !== null);
   return [
     ...wanted.filter((rel) => utf8Text(join(copy, rel)) !== copiedText(projectDir, space, rel)),
-    ...memoryLayerFiles(copy).filter((rel) => !wanted.includes(rel)),
+    // The earlier folder can hold a person's own files beside the copy: one
+    // the space does not have and AI-DLC did not copy is theirs, left as it is.
+    ...memoryLayerFiles(copy).filter((rel) =>
+      !wanted.includes(rel) && (dir !== EARLIER_ACTIVE_MEMORY_DIR || isCopiedFile(join(copy, rel)))
+    ),
   ];
 }
 
@@ -336,8 +387,7 @@ function removeEarlierActiveMemoryCopy(projectDir: string): boolean {
   if (!lstatSync(copy, { throwIfNoEntry: false })?.isDirectory()) return false;
   let removed = false;
   for (const rel of memoryLayerFiles(copy)) {
-    const text = utf8Text(join(copy, rel));
-    if (text === null || !text.startsWith("<!-- AI-DLC keeps this copy in step with ")) continue;
+    if (!isCopiedFile(join(copy, rel))) continue;
     try {
       rmSync(join(copy, rel));
       removed = true;
@@ -363,6 +413,9 @@ function writeActiveMemoryCopy(projectDir: string, space: string, dir: string): 
   let changed = false;
   for (const rel of drift) {
     const target = join(copy, rel);
+    // A person's own file in the earlier folder under a rule's name is theirs:
+    // never replaced (the chat reads it until they move it).
+    if (dir === EARLIER_ACTIVE_MEMORY_DIR && existsSync(target) && !isCopiedFile(target)) continue;
     try {
       assertProjectionPathHasNoSymlinks(projectDir, `${dir}/${rel}`);
       const text = copiedText(projectDir, space, rel);
