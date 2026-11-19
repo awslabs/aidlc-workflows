@@ -289,9 +289,13 @@ Session identity follows one order:
    Claude Code's `CLAUDE_CODE_SESSION_ID` while the process its `CLAUDE_PID`
    names is alive, or Kiro CLI's `KIRO_SESSION_ID`. A shell kept open after its
    chat ended still carries the variable, which is why Claude Code's id is read
-   only while that chat's process is alive; a dead or absent pid leaves it
-   unread. Kiro CLI puts no pid in the shell, so its id stands on its own, as
-   Codex's does. Other harnesses name no chat there.
+   only while that chat's process is alive, and a dead or absent pid leaves it
+   unread. The one exception is Claude Code's sandbox on Linux, which hides
+   that process from the commands it runs: a command it marks as sandboxed
+   (`SANDBOX_RUNTIME=1`) reads the id when the process cannot be found but
+   Claude Code's own record of that chat (`sessions/<pid>.json` in its config
+   folder) is still there. Kiro CLI puts no pid in the shell, so its id stands
+   on its own, as Codex's does. Other harnesses name no chat there.
 4. The nearest live PID ancestry entry.
 5. No session identity.
 

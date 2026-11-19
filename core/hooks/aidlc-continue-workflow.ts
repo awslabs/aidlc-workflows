@@ -176,7 +176,10 @@
 //      speaking while it waited), so the turn ends: the question stays on
 //      screen, and the person's next message carries the work on. Only where
 //      the work carries on by itself, autonomous Construction or a run nobody
-//      attends, does the cap-bounded block still hand the work back.
+//      attends, does the cap-bounded block still hand the work back. One stop
+//      is not let go here or by point 7: a Codex turn that handed a helper work
+//      and neither waited for it nor got its answer back (TurnReading). Codex
+//      starts no turn when the helper finishes, so the block carries it on.
 //
 // No-op outside AIDLC. With no active workflow (no aidlc-state.md under the
 // project dir) we exit 0 immediately. A non-AIDLC session is NEVER blocked. Any
@@ -281,7 +284,8 @@ function hasPendingPlanApprovalChallenge(projectDir: string, session: string): b
 //     it, so the loop must run far before letting go; only a genuine hang should
 //     ever hit the cap there.
 //   - everything else -> 2: a gated run nobody attends (an attended one ends
-//     its turn before the cap, carve-out 12). Issue #365 itself recommends
+//     its turn before the cap, carve-out 12, except a Codex turn that left a
+//     helper running). Issue #365 itself recommends
 //     CLAUDE_CODE_STOP_HOOK_BLOCK_CAP=2 as the workaround. A healthy loop is
 //     still never throttled because real progress (a `report`) changes the
 //     signature and resets the counter to 1 well before 2.
@@ -1039,17 +1043,18 @@ function isPendingSubagentStop(
 // marker mtimes there instead (turnMarkersShowConversational), and on Copilot
 // the session's active-directive marker (consumeCopilotConversation).
 //
-// Two strict gates make this safe (it can still only ever ALLOW, never block
-// more), mirroring isPendingQuestionStop:
+// Two strict gates make this safe (its `conversational` can still only ever
+// ALLOW, never block more), mirroring isPendingQuestionStop:
 //   1. POSITIVE-CONFIRMATION: allow only on evidence we could read that shows a
 //      genuine human prompt answered with zero engine calls. Missing or
 //      unreadable evidence, no human prompt found, or any engine call in the
 //      responding turn (one a validated terminal result settles excepted)
-//      returns false (fall through to the cap-bounded block).
+//      reads as not conversational (fall through to the cap-bounded block).
 //   2. AUTONOMY GUARD: never fires under autonomous Construction with an
 //      unattended driver (AIDLC_UNATTENDED=1). There the loop must keep running
 //      unattended; there is no human chatting to release.
-// Fail-closed throughout: any error returns false and the cap-bounded block stands.
+// Fail-closed throughout: any error reads as not conversational and the
+// cap-bounded block stands.
 
 // The line continuationReason() writes ("AI-DLC is carrying on with <stage>."
 // or "AI-DLC is carrying on.").
@@ -1062,16 +1067,37 @@ const STAGE_SLUG = /^[a-z0-9][a-z0-9-]*$/;
 // it is read. Any other user message is the person's, whatever its words.
 const CODEX_STOP_HOOK_PROMPT = /^<hook_prompt hook_run_id="stop:[^"\n]*">(?:(?!<\/?hook_prompt\b)[\s\S])*<\/hook_prompt>$/;
 
-// Read the transcript and classify the ending turn as conversational. Supports
-// both delivered formats; returns true ONLY with positive evidence. `format`
+// What the ending turn shows, from one reading of its evidence.
+interface TurnReading {
+  // The person's last prompt was answered with no workflow-engine call.
+  conversational: boolean;
+  // Codex only: since the person's last prompt the turn handed a helper work
+  // (spawn_agent, followup_task) and, after the last such call, neither waited
+  // for it (wait_agent) nor heard back from it (an agent_message item). Codex
+  // starts no turn when a helper finishes, so nothing would pick the work up:
+  // neither the conversational nor the attended-run carve-out lets that stop
+  // end (#3977).
+  helperLeftRunning: boolean;
+}
+const NOTHING_READ: TurnReading = { conversational: false, helperLeftRunning: false };
+
+// Codex's collaboration calls, by name: the two that hand a helper work, and
+// the wait (`wait` before Codex named it `wait_agent`). A same-named tool from
+// another namespace (a person's own MCP server) is not one of them.
+const CODEX_HELPER_HANDOFF = new Set(["spawn_agent", "followup_task"]);
+const CODEX_HELPER_WAIT = new Set(["wait_agent", "wait"]);
+const CODEX_COLLABORATION_NAMESPACE = "collaboration";
+
+// Read the transcript and classify the ending turn. Supports both delivered
+// formats; `conversational` is true ONLY with positive evidence. `format`
 // distinguishes Claude's message-shaped JSONL from Codex's {type,payload}
 // rollout. Fail-closed on every miss.
-function transcriptIsConversational(transcriptPath: string, format: "claude" | "codex", projectDir: string): boolean {
+function transcriptIsConversational(transcriptPath: string, format: "claude" | "codex", projectDir: string): TurnReading {
   let raw: string;
   try {
     raw = readFileSync(transcriptPath, "utf-8");
   } catch {
-    return false; // unreadable transcript: fall through to the cap
+    return NOTHING_READ; // unreadable transcript: fall through to the cap
   }
   const lines = raw.split("\n");
   // Keep tool calls separate, including calls in the same assistant message.
@@ -1086,6 +1112,8 @@ function transcriptIsConversational(transcriptPath: string, format: "claude" | "
     stageWorkLog?: boolean;
     call?: { id: string | null; name: string; input: unknown };
     result?: { id: string | null; output: unknown; failed: boolean };
+    // Codex: work handed to a helper, a wait for one, or a helper's message.
+    helper?: "handoff" | "wait" | "answer";
   };
   const turns: Turn[] = [];
   const engineCallIds = new Set<string>();
@@ -1245,8 +1273,14 @@ function transcriptIsConversational(transcriptPath: string, format: "claude" | "
           };
         }
         recordCall(payload.call_id, isShellToolName(name) ? "Bash" : name, parsedArgs);
+        if (payload.namespace === undefined || payload.namespace === CODEX_COLLABORATION_NAMESPACE) {
+          if (CODEX_HELPER_HANDOFF.has(name)) turns[turns.length - 1].helper = "handoff";
+          else if (CODEX_HELPER_WAIT.has(name)) turns[turns.length - 1].helper = "wait";
+        }
       } else if (ptype === "function_call_output") {
         recordResult(payload.call_id, payload.output, payload.is_error);
+      } else if (ptype === "agent_message") {
+        turns.push({ role: "assistant", engineCall: false, humanPrompt: false, helper: "answer" });
       }
     }
   }
@@ -1258,7 +1292,14 @@ function transcriptIsConversational(transcriptPath: string, format: "claude" | "
       break;
     }
   }
-  if (lastHumanIdx === -1) return false; // no human prompt found: cannot confirm chat
+  if (lastHumanIdx === -1) return NOTHING_READ; // no human prompt found: cannot confirm chat
+
+  let helperLeftRunning = false;
+  for (let i = lastHumanIdx + 1; i < turns.length; i++) {
+    const helper = turns[i].helper;
+    if (helper === "handoff") helperLeftRunning = true;
+    else if (helper !== undefined) helperLeftRunning = false;
+  }
 
   // Correlate across the entire transcript so reused IDs are never accepted as
   // proof. The matching result must follow its call in the current human turn.
@@ -1292,7 +1333,7 @@ function transcriptIsConversational(transcriptPath: string, format: "claude" | "
       const results = resultsById.get(call.id);
       if (results?.length === 1 && results[0] > i) {
         const result = turns[results[0]].result;
-        if (result && !result.failed && stageWorkLogged(result.output, projectDir)) return false;
+        if (result && !result.failed && stageWorkLogged(result.output, projectDir)) return { conversational: false, helperLeftRunning };
       }
     }
     if (!turn.engineCall) continue;
@@ -1308,9 +1349,9 @@ function transcriptIsConversational(transcriptPath: string, format: "claude" | "
         }
       }
     }
-    return false;
+    return { conversational: false, helperLeftRunning };
   }
-  return true;
+  return { conversational: true, helperLeftRunning };
 }
 
 // The tier-3 carve-out decision: not an unattended autonomous Construction run,
@@ -1349,31 +1390,33 @@ function transcriptIsConversational(transcriptPath: string, format: "claude" | "
 // human-turn marker), and every turn of an unattended run touches the engine, so
 // the predicate never releases one. An unattended driver (AIDLC_UNATTENDED=1)
 // has nobody present and its prompts read as a person's, so under autonomy it
-// keeps the guard. This function can only ever ALLOW a stop; it can never cause
-// one to block.
+// keeps the guard. Its `conversational` can only ever ALLOW a stop; its
+// `helperLeftRunning` (Codex) only withholds this allow and the attended-run one.
 function isConversationalStop(
   projectDir: string,
   stateContent: string,
   transcriptPath: string | null,
   format: "claude" | "codex",
   copilotSession = "",
-): boolean {
+): TurnReading {
   try {
     // An unattended driver (AIDLC_UNATTENDED=1) has nobody present, and a prompt
     // it submits reads as a person's: under autonomous Construction the loop
     // stays alive there.
     if (!humanTurnMintAllowed() && getField(stateContent, "Construction Autonomy Mode")?.trim() === "autonomous") {
-      return false;
+      return NOTHING_READ;
     }
-    if (copilotSession) return consumeCopilotConversation(projectDir, stateContent, copilotSession);
+    if (copilotSession) {
+      return { conversational: consumeCopilotConversation(projectDir, stateContent, copilotSession), helperLeftRunning: false };
+    }
     if (transcriptPath === null || transcriptPath.length === 0) {
       // No transcript delivered — fall back to the marker mtimes.
-      return turnMarkersShowConversational(projectDir);
+      return { conversational: turnMarkersShowConversational(projectDir), helperLeftRunning: false };
     }
     return transcriptIsConversational(transcriptPath, format, projectDir);
   } catch {
     // Unparseable / odd content: fall through to decideBlock (never trap).
-    return false;
+    return NOTHING_READ;
   }
 }
 
@@ -2166,8 +2209,11 @@ if (isPendingSubagentStop(projectDir, stateContent, rawSessionId)) {
 // falls through to the cap-bounded block below, so a conductor that engaged the
 // workflow and then quit mid-loop is still nudged, under autonomous Construction
 // too (every turn of an unattended run touches the engine; a person who writes
-// mid-run is present and is let go).
-if (isConversationalStop(projectDir, stateContent, transcriptPath, transcriptFormat, copilotSession)) {
+// mid-run is present and is let go). A Codex turn that left a helper running
+// (TurnReading) is let go by neither this nor the attended-run carve-out: the
+// cap-bounded block below carries it on.
+const endingTurn = isConversationalStop(projectDir, stateContent, transcriptPath, transcriptFormat, copilotSession);
+if (endingTurn.conversational && !endingTurn.helperLeftRunning) {
   recordHookTrace(
     projectDir,
     HOOK_NAME,
@@ -2178,7 +2224,11 @@ if (isConversationalStop(projectDir, stateContent, transcriptPath, transcriptFor
 
 // Attended, gated run (carve-out 12): nothing above says the agent waits, and
 // the person's next message carries the work on, so the turn ends here.
-if (humanTurnMintAllowed() && getField(stateContent, "Construction Autonomy Mode")?.trim() !== "autonomous") {
+if (
+  !endingTurn.helperLeftRunning &&
+  humanTurnMintAllowed() &&
+  getField(stateContent, "Construction Autonomy Mode")?.trim() !== "autonomous"
+) {
   recordHookTrace(
     projectDir,
     HOOK_NAME,

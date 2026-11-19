@@ -55,8 +55,9 @@ as one question.
 For eligible checkpoint work with skeleton-on, the first DAG Unit is the
 smallest working integrated slice. It completes its applicable stages, including
 Code Generation, before later Units even with stage-major selected. Its real
-end-to-end project check must pass, and a human must approve that verified
-skeleton. A legacy first Construction-stage approval is only a stage review;
+end-to-end project check must pass, unless the person says to approve the
+skeleton as it is over that check (`verify --over-failed-check`), and a human
+must approve it. A legacy first Construction-stage approval is only a stage review;
 it does not establish that an integrated skeleton has been built.
 
 All Unit/batch checkpoints reuse the intent's recorded, human-authorized
@@ -1534,7 +1535,9 @@ with the aidlc-devsecops-agent providing security testing expertise.
     that nothing builds is settled when the latest stage that traced it (User
     Stories, NFR Requirements, then Code Generation) marked it `N/A` with its
     reason in every table there that lists it; an `N/A` with no reason is not
-    settled. Write
+    settled. A story Units Generation kept out of every Unit, `Deferred` with
+    its reason, settles its criteria the same way (a requirement, in work
+    without stories), unless a later stage's table lists them. Write
     `cross-unit-traceability.md` from that output with the verdict, per-ID
     coverage and every uncovered ID; an uncovered ID is a finding shown at the
     approval gate.

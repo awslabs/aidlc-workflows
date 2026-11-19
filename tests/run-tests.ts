@@ -486,9 +486,13 @@ mkdirSync(resultsDir, { recursive: true });
 // one of those chats would hand every fixture project that live chat's identity
 // and the cases that mean "no chat the engine can name" would stop meaning it.
 // Production keeps reading them; every test that needs one sets it on its own
-// spawn. CLAUDECODE and the rest of the host's variables are left alone: they
-// say which host is running, not which chat.
-for (const hostChat of ["CLAUDE_CODE_SESSION_ID", "CLAUDE_PID", "KIRO_SESSION_ID", "CODEX_THREAD_ID"]) {
+// spawn. CLAUDE_CODE_ENTRYPOINT goes too: it says whether the chat draws
+// Claude Code's question box (gateNoticesInBox), which changes what a gate
+// step carries. SANDBOX_RUNTIME goes too: in Claude Code's Linux sandbox it
+// lets a pid that cannot be found still name the chat. CLAUDECODE and the rest
+// of the host's variables are left alone: they say which host is running, not
+// which chat.
+for (const hostChat of ["CLAUDE_CODE_SESSION_ID", "CLAUDE_PID", "KIRO_SESSION_ID", "CODEX_THREAD_ID", "CLAUDE_CODE_ENTRYPOINT", "SANDBOX_RUNTIME"]) {
   delete process.env[hostChat];
 }
 

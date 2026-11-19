@@ -897,7 +897,9 @@ aidlc/                                    # neutral, harness-independent, commit
 **Resolution.** Workflow identity is resolved at one library chokepoint with
 precedence `in-process sessionId > AIDLC_SESSION_OVERRIDE > the chat the host
 names in the agent's shell (CODEX_THREAD_ID; CLAUDE_CODE_SESSION_ID while its
-CLAUDE_PID process is alive; KIRO_SESSION_ID) > PID ancestry > none`. Hook payload identity uses the in-process option and is authoritative.
+CLAUDE_PID process is alive, or, in a command Claude Code's Linux sandbox marks
+with SANDBOX_RUNTIME=1, while that process cannot be found but Claude Code's
+sessions/<pid>.json record of that chat is there; KIRO_SESSION_ID) > PID ancestry > none`. Hook payload identity uses the in-process option and is authoritative.
 When the host or a hook payload names the chat, the process ancestry is not walked at all: its answer could not
 change the result.
 Whatever id that yields passes through `resolveChat` before a binding is read: a

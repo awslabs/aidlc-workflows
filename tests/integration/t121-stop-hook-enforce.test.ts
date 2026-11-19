@@ -723,6 +723,14 @@ function seedTranscript(
  *                                 turn: an attachment entry, never a user row,
  *                                 tagged with Claude Code's origin kind (null:
  *                                 no origin field, as older builds write it).
+ *   - {kind:"helper", name, id?}  a helper call: on Codex a collaboration
+ *                                 function_call (`spawn_agent`, `followup_task`,
+ *                                 `wait_agent`, or the older `wait`), as a live
+ *                                 0.169 rollout records it; on Claude a `Task`
+ *                                 tool_use.
+ *   - {kind:"helperAnswer"}       (Codex only) the helper's answer, which Codex
+ *                                 records in the parent rollout as an
+ *                                 `agent_message` item.
  *
  * Mirrors seedTranscript's file-naming contract: the codex variant is written as
  * `rollout-*.jsonl` (so the hook picks the codex reader, aidlc-continue-workflow.ts); the
@@ -738,7 +746,9 @@ type TranscriptEntry =
   | { kind: "result"; id: string; output: unknown; failed?: boolean }
   | { kind: "meta"; text: string }
   | { kind: "userText"; text: string }
-  | { kind: "queued"; text: string; origin: string | null };
+  | { kind: "queued"; text: string; origin: string | null }
+  | { kind: "helper"; name: "spawn_agent" | "followup_task" | "wait_agent" | "wait"; id?: string }
+  | { kind: "helperAnswer" };
 
 function seedTranscriptEntries(
   proj: string,
@@ -838,6 +848,15 @@ function seedTranscriptEntries(
             },
           }));
           break;
+        case "helper":
+          lines.push(JSON.stringify({
+            type: "assistant",
+            message: {
+              role: "assistant",
+              content: [{ type: "tool_use", ...(e.id ? { id: e.id } : {}), name: "Task", input: { description: "scan", prompt: "scan", subagent_type: "aidlc-developer-agent" } }],
+            },
+          }));
+          break;
       }
     } else {
       switch (e.kind) {
@@ -933,6 +952,31 @@ function seedTranscriptEntries(
           lines.push(JSON.stringify({
             type: "response_item",
             payload: { type: "function_call_output", call_id: e.id, output: e.output, is_error: e.failed ?? false },
+          }));
+          break;
+        case "helper":
+          // Codex 0.169's collaboration calls, as a live rollout records them.
+          lines.push(JSON.stringify({
+            type: "response_item",
+            payload: {
+              type: "function_call",
+              status: "completed",
+              name: e.name,
+              namespace: "collaboration",
+              arguments: JSON.stringify(e.name === "wait_agent" || e.name === "wait" ? { timeout_ms: 60000 } : { task_name: "scan", message: "scan the code" }),
+              ...(e.id ? { call_id: e.id } : {}),
+            },
+          }));
+          break;
+        case "helperAnswer":
+          lines.push(JSON.stringify({
+            type: "response_item",
+            payload: {
+              type: "agent_message",
+              author: "/root/scan",
+              recipient: "/root",
+              content: [{ type: "input_text", text: "Message Type: FINAL_ANSWER" }],
+            },
           }));
           break;
       }
@@ -4828,6 +4872,129 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     ]);
     expect(r.rc).toBe(0);
     expect((JSON.parse(r.out || "{}") as { decision?: string }).decision).toBe("block");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // A helper the turn handed work and left running (#3977). Codex starts no
+  // turn when a helper finishes, so a turn that ends after spawn_agent or
+  // followup_task, with no wait_agent and no answer back, leaves the work
+  // stuck where the screen says it is running. In a run the person drives it
+  // is carried on, bounded by the same cap; every other attended stop ends.
+  const attendedCodexStop = (proj: string, entries: TranscriptEntry[], active = false) => runHook(
+    proj,
+    JSON.stringify({ stop_hook_active: active, transcript_path: seedTranscriptEntries(proj, "codex", entries) }),
+    "run-stage", "", "", "requirements-analysis", "", false, { AIDLC_UNATTENDED: "0" },
+  );
+  const carriedOn = (out: string) => (JSON.parse(out || "{}") as { decision?: string; reason?: string });
+
+  test("(h) Codex, attended: a continue turn that only started a helper and did not wait is carried on", () => {
+    const proj = makeProject();
+    seedActive(proj, "requirements-analysis");
+    const r = attendedCodexStop(proj, [
+      { kind: "human", text: "continue" },
+      { kind: "helper", name: "spawn_agent", id: "call_spawn" },
+      { kind: "result", id: "call_spawn", output: "{\"task_name\":\"/root/scan\"}" },
+      { kind: "text" },
+    ]);
+    expect(r.rc, r.diagnostic).toBe(0);
+    expect(carriedOn(r.out)).toEqual({ decision: "block", reason: "AI-DLC is carrying on with Requirements Analysis." });
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("(h) Codex, attended: an engine call, then a helper started and not waited for, is carried on", () => {
+    const proj = makeProject();
+    seedActive(proj, "requirements-analysis");
+    const r = attendedCodexStop(proj, [
+      { kind: "human", text: "1" },
+      { kind: "exec", id: "call_next", cmd: "bun .codex/tools/aidlc.ts engine orchestrate next" },
+      { kind: "result", id: "call_next", output: "Process exited with code 0\nOutput:\n{\"kind\":\"run-stage\"}" },
+      { kind: "helper", name: "spawn_agent" },
+      { kind: "text" },
+    ]);
+    expect(carriedOn(r.out).decision, r.diagnostic).toBe("block");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("(h) Codex, attended: work handed to a helper after an earlier wait is carried on", () => {
+    const proj = makeProject();
+    seedActive(proj, "requirements-analysis");
+    const r = attendedCodexStop(proj, [
+      { kind: "human", text: "continue" },
+      { kind: "helper", name: "spawn_agent" },
+      { kind: "helper", name: "wait_agent" },
+      { kind: "helper", name: "followup_task" },
+      { kind: "text" },
+    ]);
+    expect(carriedOn(r.out).decision, r.diagnostic).toBe("block");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("(h) Codex, attended: a helper waited for, or whose answer came back, ends the turn as before", () => {
+    for (const after of [{ kind: "helper", name: "wait_agent" }, { kind: "helper", name: "wait" }, { kind: "helperAnswer" }] as TranscriptEntry[]) {
+      const proj = makeProject();
+      seedActive(proj, "requirements-analysis");
+      const r = attendedCodexStop(proj, [
+        { kind: "human", text: "continue" },
+        { kind: "helper", name: "spawn_agent" },
+        after,
+        { kind: "text" },
+      ]);
+      expect(r.out, `${after.kind} ${r.diagnostic}`).toBe("");
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("(h) Codex, attended: a spawn_agent outside Codex's collaboration tools is no hand-off", () => {
+    const proj = makeProject();
+    seedActive(proj, "requirements-analysis");
+    const path = seedTranscriptEntries(proj, "codex", [{ kind: "human", text: "continue" }, { kind: "text" }]);
+    writeFileSync(path, `${readFileSync(path, "utf-8")}${JSON.stringify({
+      type: "response_item",
+      payload: { type: "function_call", name: "spawn_agent", namespace: "mcp__their_tools", arguments: "{}", call_id: "call_mcp" },
+    })}\n`);
+    const r = runHook(
+      proj, JSON.stringify({ stop_hook_active: false, transcript_path: path }),
+      "run-stage", "", "", "requirements-analysis", "", false, { AIDLC_UNATTENDED: "0" },
+    );
+    expect(r.out, r.diagnostic).toBe("");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("(h) Codex, attended: a helper started before the person last wrote does not carry their turn on", () => {
+    const proj = makeProject();
+    seedActive(proj, "requirements-analysis");
+    const r = attendedCodexStop(proj, [
+      { kind: "human", text: "continue" },
+      { kind: "helper", name: "spawn_agent" },
+      { kind: "text" },
+      { kind: "human", text: "what does the scan look at?" },
+      { kind: "text" },
+    ]);
+    expect(r.out, r.diagnostic).toBe("");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("(h) Codex, attended: the carry-on is bounded by the cap when the agent ends again without waiting", () => {
+    const proj = makeProject();
+    seedActive(proj, "requirements-analysis");
+    const entries: TranscriptEntry[] = [
+      { kind: "human", text: "continue" },
+      { kind: "helper", name: "spawn_agent" },
+      { kind: "text" },
+    ];
+    expect(carriedOn(attendedCodexStop(proj, entries).out).decision).toBe("block");
+    const again = attendedCodexStop(proj, [...entries, { kind: "userText", text: '<hook_prompt hook_run_id="stop:1">AI-DLC is carrying on with Requirements Analysis.</hook_prompt>' }, { kind: "text" }], true);
+    expect(again.out, again.diagnostic).toBe("");
+    const trace = readFileSync(join(seededRecordDir(proj), ".aidlc-engine/hooks-health", "continue-workflow.trace"), "utf-8");
+    expect(trace).toContain("recursion guard released the stop (no-progress block cap 2 reached; stop_hook_active=true)");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("(h) Claude, attended: a Task started with no answer back ends the turn as before", () => {
+    const proj = makeProject();
+    seedActive(proj, "requirements-analysis");
+    const r = runHook(
+      proj,
+      JSON.stringify({ stop_hook_active: false, transcript_path: seedTranscriptEntries(proj, "claude", [
+        { kind: "human", text: "continue" },
+        { kind: "helper", name: "spawn_agent", id: "toolu_task" },
+        { kind: "text" },
+      ]) }),
+      "run-stage", "", "", "requirements-analysis", "", false, { AIDLC_UNATTENDED: "0" },
+    );
+    expect(r.out, r.diagnostic).toBe("");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // =========================================================================
