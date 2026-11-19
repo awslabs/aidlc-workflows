@@ -1088,8 +1088,11 @@ describe("t299 (4b) repair telemetry", () => {
   test("repair telemetry: raw LF, CR, and tab repair preserves escaped quotes and backslashes", () => {
     const root = mkdtempSync(join(tmpdir(), "t299-repair-"));
     try {
-      const note = 'line\rreturn\ttab\nnewline "quoted" \\path';
-      const contract = repairContract(note);
+      // Older contracts retained CR in project notes before line-ending normalization.
+      const contract = JSON.parse(readFileSync(
+        new URL("../fixtures/testing-posture/legacy-control-characters.json", import.meta.url),
+        "utf8",
+      ));
       const rendered = renderTestingContract(contract);
       const { block } = fencedJson(rendered);
       expect(block).toContain("\\r");
