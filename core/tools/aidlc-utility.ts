@@ -12486,12 +12486,31 @@ function handleSpaceCreate(projectDir: string, positional: string[], _flags: Rec
   if (raw === "-h" || raw === "help") {
     die(`Did you mean ${entrySkillInvocation()} --help? To create a space, pass a name: ${entrySkillInvocation()} space-create <name>.`);
   }
+  // A name slugify keeps nothing of ("   ", "..", a name written in a script
+  // with no a-z or 0-9) would be stored under slugify's fallback word, and the
+  // person would get a space called "intent" they never asked for; the next
+  // such name would then be refused as "already exists". Asked of slugify
+  // itself, so the two can never disagree about what is kept.
+  if (slugify(`x${raw}`) === "x") {
+    die(
+      `"${raw}" has no letter or digit a space name can keep: a space name is made of a-z, 0-9 and "-". Pick a name such as "payments".`
+    );
+  }
   const name = slugify(raw);
   // "help" is grammar (`space help` prints help), so a space with that slug
   // would be unswitchable by name - refuse it here, the creation chokepoint.
   if (RESERVED_RECORD_NAMES.has(name)) {
     die(
       `"${name}" is a reserved name and cannot be a space name. Pick a name that describes the team.`
+    );
+  }
+  // A space is a folder that travels by git, and Windows keeps these names for
+  // devices: git there cannot add a file under such a folder, and cannot check
+  // out one committed on macOS or Linux. Refused on every platform, since the
+  // teammate who cannot clone may be on another one.
+  if (/^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])$/.test(name)) {
+    die(
+      `"${name}" is a device name on Windows, where git cannot add or check out a folder with that name. Pick another name, such as "${name}-team".`
     );
   }
   const dest = join(spacesRoot(projectDir), name);
