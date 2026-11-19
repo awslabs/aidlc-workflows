@@ -10328,6 +10328,11 @@ export function planFilesNow(projectDir: string, tip: PlanJson | null, place: Pl
       (tip?.plan_repo.name === unit.record ? { name: tip.plan_repo.name, address: tip.plan_repo.address, branch: null } : undefined);
     if (listed !== undefined) repos.push(listed);
   }
+  // The lead's sign-off is their own word: a state that never heard it (a
+  // worktree or another computer of theirs, behind) keeps the plan's, last as
+  // PLAN_SETTINGS puts it, so a share with nothing new writes nothing.
+  const settings = planSettings(state);
+  if (settings[LEAD_SIGNOFF_FIELD] === undefined && tip?.settings[LEAD_SIGNOFF_FIELD] !== undefined) settings[LEAD_SIGNOFF_FIELD] = tip.settings[LEAD_SIGNOFF_FIELD];
   const plan: PlanJson = {
     format: PLAN_FORMAT,
     version: (tip?.version ?? 0) + 1,
@@ -10344,7 +10349,7 @@ export function planFilesNow(projectDir: string, tip: PlanJson | null, place: Pl
       return { name: edge.name, waits_on: [...edge.depends_on], repos: named, record, word };
     }),
     skeleton,
-    settings: planSettings(state),
+    settings,
     stages: Object.fromEntries(parseCheckboxes(state).map((box) => [box.slug, box.state])),
     unit_stages: unitStages,
     inputs,
@@ -14524,6 +14529,7 @@ function checkTeamResultsQuietly(
   const state = readStateFile(pd);
   const claims = cachedClaims(pd);
   const plan = keptPlan(pd, identity.intentId8)?.plan ?? null;
+  const signOffOn = leadSignOffOn(state, pd, plan);
   const notRead = (unit: string): boolean => unread.size > 0 && plan !== null && unread.has(recordPlaceIn(plan, unit).repo);
   // The merges seen this look, written on the plan in one write.
   const seen = new Map<string, { view: UnitClaimView; verdicts: NonNullable<UnitClaimPayload["verdicts"]>; done: boolean; told: ToldMerge }>();
@@ -14538,7 +14544,7 @@ function checkTeamResultsQuietly(
     }
     // The record as the look before this read it: its builder's, with the lead's word from the plan.
     const verdicts = resultVerdicts(pd, claim.payload, unreached, { unit, maybe });
-    const done = countsDone(allMerged(verdicts), leadSignOffOn(state), claim.payload);
+    const done = countsDone(allMerged(verdicts), signOffOn, claim.payload);
     // The one thing written unasked is a merge the lead's project has seen: a
     // look that sees no new merge writes nothing.
     const newlyMerged = verdicts.filter((verdict) => verdict.merged &&
@@ -14582,7 +14588,7 @@ function checkTeamResultsQuietly(
       }
       return read.kind === "merged" ? { repo: pr.repo, merged: true, commit: read.commit, how: read.how } : { repo: pr.repo, merged: false };
     });
-    const done = verdicts.every((verdict) => verdict.merged) && (!leadSignOffOn(state) || word.signoff !== undefined);
+    const done = verdicts.every((verdict) => verdict.merged) && (!signOffOn || word.signoff !== undefined);
     const newly = verdicts.filter((verdict) => verdict.merged && !(word.verdicts ?? []).some((before) => before.repo === verdict.repo && before.merged))
       .map((verdict) => verdict.repo);
     if (!readOnly && (newly.length > 0 || done)) {
@@ -16437,7 +16443,7 @@ function saidMerged(args: string[], projectDir?: string): void {
   // done go on the plan in one write.
   const counted: UnitClaimView = { ...live, payload: { ...live.payload, said_merged } };
   const verdicts = quietly(() => resultVerdicts(pd, counted.payload, [], { unit }));
-  const done = countsDone(allMerged(verdicts), leadSignOffOn(readStateFile(pd)), live.payload);
+  const done = countsDone(allMerged(verdicts), leadSignOffOn(readStateFile(pd), pd), live.payload);
   const entry = said_merged.at(-1)!;
   // On the word as the tip has it, so a word another computer of the lead's wrote since stays.
   const sent = writeUnitWord(pd, live, `${flags.repo} counted merged for ${unit}`, (word) => ({
@@ -16520,7 +16526,7 @@ function saidPullRequest(pd: string, unit: string, repo: string, number: number,
     return;
   }
   const read = namedPullRequestVerdict(pd, repo, number);
-  const signOffOn = leadSignOffOn(readStateFile(pd));
+  const signOffOn = leadSignOffOn(readStateFile(pd), pd);
   let waiting: NamedPullRequest[] = [];
   let done = false;
   let verdicts: NonNullable<UnitWord["verdicts"]> = [];
@@ -16627,7 +16633,7 @@ function saidMergedWithNoRecord(pd: string, unit: string, repo: string, words: s
   const repos = plan?.units.find((entry) => entry.name === unit)?.repos ?? [];
   if (repos.length === 0) fail(`${unit} has no result from its team to count merged.`);
   if (!repos.includes(repo)) fail(`${unit} changed ${joinNames(repos)}, not ${repo}.`);
-  const signOffOn = leadSignOffOn(readStateFile(pd));
+  const signOffOn = leadSignOffOn(readStateFile(pd), pd, plan);
   let counted: string[] = [];
   let done = false;
   const sent = leadsPlanWrite(pd, {
@@ -16912,7 +16918,7 @@ export function switchSoloToTeams(projectDir: string, sessionId?: string): strin
   }
   // The lead's sign-off is theirs to ask for; the line says so once, and the
   // step that carries the line carries its setter (SIGN_OFF_CLAUSE), never only the board.
-  const signOff = leadSignOffOn(readStateFile(projectDir)) ? "" : `, ${SIGN_OFF_CLAUSE}`;
+  const signOff = leadSignOffOn(readStateFile(projectDir), projectDir) ? "" : `, ${SIGN_OFF_CLAUSE}`;
   return `Your teammate ${who} took ${units}; this session carries on with the rest, one Unit at a time${signOff}.`;
 }
 
@@ -16922,8 +16928,17 @@ export function switchSoloToTeams(projectDir: string, sessionId?: string): strin
 // then waits for the lead's own word before the Unit counts as done.
 export const LEAD_SIGNOFF_FIELD = "Lead Sign-off";
 
-export function leadSignOffOn(stateContent: string | null): boolean {
-  return getField(stateContent ?? "", LEAD_SIGNOFF_FIELD)?.trim() === "on";
+// The word this checkout's state has, else the plan's as this checkout keeps
+// it (`plan`, or read here): a worktree or another computer of the lead's
+// whose state is behind never heard the word the plan has.
+export function leadSignOffOn(stateContent: string | null, projectDir: string, plan?: PlanJson | null): boolean {
+  const said = getField(stateContent ?? "", LEAD_SIGNOFF_FIELD)?.trim();
+  if (said) return said === "on";
+  try {
+    return (plan === undefined ? keptPlan(projectDir, activeIdentity(projectDir).intentId8)?.plan : plan)?.settings[LEAD_SIGNOFF_FIELD] === "on";
+  } catch {
+    return false;
+  }
 }
 
 // `aidlc unit lead-here`: the person's own word that they lead this work, in

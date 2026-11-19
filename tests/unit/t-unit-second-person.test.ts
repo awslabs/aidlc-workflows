@@ -16,9 +16,11 @@ import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { AIDLC_SRC, fixtureIntentId8, seededStateFile } from "../harness/fixtures.ts";
+import { asLeadsOwnCheckout } from "../harness/team-unit-merge.ts";
 import {
   claimPayload,
   cleanupTeamBuild,
+  cloneCode,
   cloneOf,
   codeGenerated,
   ENV,
@@ -30,12 +32,17 @@ import {
   mergeOnHost,
   next,
   personsChat,
+  planFrom,
+  planRefOf,
   planWordAt,
+  recordHost,
   refundsTaken,
   run,
   STATE,
   UTILITY,
   stateOf,
+  takeIn,
+  teamWorkspace,
   tempDir,
   UNIT,
 } from "../harness/team-build.ts";
@@ -583,5 +590,107 @@ describe("the lead's sign-off", () => {
     expect(String(signed.json?.notice)).toBe("Signed off refunds; every repo it changed has merged, so it is done.");
     next(home.dir);
     expect(planWordAt(home, "refunds")).toMatchObject({ done: true });
+  });
+});
+
+// Right after the lead turns the sign-off on, it is in the main checkout's
+// state and not committed: a worktree of that checkout, or another computer of
+// the lead's, has no word on it. The plan's word stands there, never taken off
+// by one of their writes.
+describe("the lead's sign-off, from another checkout of the lead's", () => {
+  // The lead's own checkout (its approval in its own shard), committed and
+  // pushed; the sign-off then turned on there and not committed; refunds
+  // pushed by alice and merged in both repos.
+  function signOffOnHereOnly() {
+    const taken = refundsTaken();
+    const { home, hosts, alice, record } = taken;
+    asLeadsOwnCheckout(home.dir);
+    git(home.dir, ["add", "-A"]);
+    git(home.dir, ["commit", "-q", "-m", "the lead's checkout"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    expect(run(UNIT, ["lead-sign-off", "on"], home.dir).status).toBe(0);
+    codeGenerated(alice, record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    mergeOnHost(hosts["checkout-api"], "refunds", "squash");
+    mergeOnHost(hosts.billing, "refunds", "squash");
+    return taken;
+  }
+  const settingAt = (home: ReturnType<typeof refundsTaken>["home"]): string | undefined =>
+    (JSON.parse(git(recordHost(home), ["show", `${planRefOf(home.id8)}:plan.json`])) as { settings: Record<string, string> }).settings["Lead Sign-off"];
+  // Where the lead carries the work on, with both repos cloned there and their word that they lead it.
+  function asLead(dir: string): string {
+    for (const name of ["checkout-api", "billing"]) expect(run(UTILITY, ["intent", "add-repo", name], dir).status).toBe(0);
+    expect(run(UTILITY, ["intent", "switch", HOME_RECORD], dir).status).toBe(0);
+    expect(run(UNIT, ["lead-here", "--person-words", "I lead this work, carry it on here"], dir).status).toBe(0);
+    return dir;
+  }
+  const worktreeOf = (home: ReturnType<typeof refundsTaken>["home"]): string => {
+    const tree = join(tempDir("lead-worktree"), "lead-worktree");
+    git(home.dir, ["worktree", "add", "-q", "-b", "lead-worktree", tree, "main"]);
+    return asLead(tree);
+  };
+  const laptopOf = (home: ReturnType<typeof refundsTaken>["home"]): string => asLead(cloneOf(home.remote, "lead"));
+
+  for (const [where, other] of [["a worktree of the lead's checkout", worktreeOf], ["another computer of the lead's", laptopOf]] as const) {
+    test(`${where}: the plan keeps it on, the sign-off is asked there, and refunds is done only after it`, () => {
+      const { home, hosts } = signOffOnHereOnly();
+      const dir = other(home);
+      const ask = next(dir);
+      expect(ask.ask_type, JSON.stringify(ask).slice(0, 600)).toBe("unit-signoff");
+      expect(ask.question).toBe("refunds came back from alice: checkout-api merged, billing merged (2 of 2 merged). Sign it off?");
+      expect(settingAt(home)).toBe("on");
+      expect(planWordAt(home, "refunds")?.done).toBeUndefined();
+      const signed = run(UNIT, ["sign-off", "refunds", "--person-words", "looks right, sign it off"], dir);
+      expect(signed.status, signed.out).toBe(0);
+      next(dir);
+      expect(planWordAt(home, "refunds")).toMatchObject({ done: true });
+      expect(settingAt(home)).toBe("on");
+      // reporting waited on refunds: a team takes it now.
+      const carol = teamWorkspace(hosts, "carol", ["billing"]);
+      const took = takeIn("reports", ["reporting", ...planFrom(home)], carol);
+      expect(took.status, took.out).toBe(0);
+      // The main checkout meets the change another checkout wrote, as for any lead write from there.
+      expect(next(home.dir).ask_type).toBe("lead-plan-change");
+    });
+  }
+
+  test("the main checkout's share again, the sign-off on and nothing new to share, writes nothing", () => {
+    const { home } = refundsTaken();
+    expect(run(UNIT, ["lead-sign-off", "on"], home.dir).status).toBe(0);
+    const tip = git(recordHost(home), ["rev-parse", planRefOf(home.id8)]);
+    const shared = run(UNIT, ["share", "--plan"], home.dir);
+    expect(shared.status, shared.out).toBe(0);
+    expect(shared.out).toContain("The plan in checkout-api already has everything here.");
+    expect(git(recordHost(home), ["rev-parse", planRefOf(home.id8)])).toBe(tip);
+  });
+
+  test("the plan shared again from a worktree of the lead's checkout keeps it on", () => {
+    const { home } = signOffOnHereOnly();
+    const shared = run(UNIT, ["share", "--plan"], worktreeOf(home));
+    expect(shared.status, shared.out).toBe(0);
+    expect(settingAt(home)).toBe("on");
+  });
+
+  test("a teammate's clone of the lead's workspace, the lead's work selected: no sign-off asked, nothing counted or written", () => {
+    const { home, hosts } = signOffOnHereOnly();
+    const tip = git(recordHost(home), ["rev-parse", planRefOf(home.id8)]);
+    const carl = cloneOf(home.remote, "carl");
+    for (const name of ["checkout-api", "billing"]) cloneCode(hosts[name as keyof typeof hosts], carl, name, "carl");
+    expect(run(UTILITY, ["intent", "switch", HOME_RECORD], carl).status).toBe(0);
+    const step = next(carl);
+    expect(step.ask_type, JSON.stringify(step).slice(0, 600)).not.toBe("unit-signoff");
+    expect(planWordAt(home, "refunds")?.done).toBeUndefined();
+    expect(git(recordHost(home), ["rev-parse", planRefOf(home.id8)])).toBe(tip);
+  });
+
+  test("the lead's own off takes it off the plan, from the main checkout and from another computer of theirs", () => {
+    const { home } = signOffOnHereOnly();
+    expect(run(UNIT, ["lead-sign-off", "off"], home.dir).status).toBe(0);
+    expect(settingAt(home)).toBe("off");
+    expect(run(UNIT, ["lead-sign-off", "on"], home.dir).status).toBe(0);
+    expect(settingAt(home)).toBe("on");
+    const laptop = laptopOf(home);
+    expect(run(UNIT, ["lead-sign-off", "off"], laptop).status).toBe(0);
+    expect(settingAt(home)).toBe("off");
   });
 });

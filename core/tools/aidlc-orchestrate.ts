@@ -19869,6 +19869,7 @@ function unitBoardRows(
   const notRead: string[] = [];
   const dependencies = unitDependencies(projectDir);
   const standing = unitProgressStanding(progress);
+  const signOffOn = leadSignOffOn(stateContent, projectDir);
   const home = homeLocation(stateContent) === null ? null : leftForTakesAtHome(projectDir, overview);
   const left = home?.units ?? new Set<string>();
   // The lead's own build-here claims are built here, done ones too (leadsOwnClaims).
@@ -19913,7 +19914,7 @@ function unitBoardRows(
     if (payload.result) {
       const verdicts = results.get(unit)?.verdicts ?? payload.verdicts ??
         payload.result.repos.map((repo) => ({ repo: repo.repo, merged: false }));
-      const waiting = leadSignOffOn(stateContent) && !payload.signoff ? ", waiting for your sign-off" : "";
+      const waiting = signOffOn && !payload.signoff ? ", waiting for your sign-off" : "";
       // Every repo seen merged by a look that records nothing (`team-board`):
       // the step records it, and the Units waiting only on it open then; past
       // the Unit stages, only once the work is back on them.
@@ -20265,7 +20266,8 @@ function emitTeamUnitMajorRunStage(
     sayWithStepOnce(projectDir, `The change ${builderOf(proposal.claim)} proposed to the ${name} waits for your answer: approve it or turn it down when you are ready.`);
   }
   // The lead's sign-off, when it is on: asked once as a team's result arrives.
-  const toSignOff = leadSignOffOn(stateContent)
+  const signOffOn = leadSignOffOn(stateContent, projectDir);
+  const toSignOff = signOffOn
     ? [...(overview?.claims.values() ?? [])].find((claim) => claim.status === "claimed" && claim.payload.result && !claim.payload.signoff)
     : undefined;
   if (toSignOff && !isReadOnlyEngineProbe()) {
@@ -20312,7 +20314,7 @@ function emitTeamUnitMajorRunStage(
           ],
         };
       }),
-      ...(leadSignOffOn(stateContent) && claim.payload.result && !claim.payload.signoff
+      ...(signOffOn && claim.payload.result && !claim.payload.signoff
         ? [{
           question: `${claim.unit} came back from ${builderOf(claim)}. Sign it off?`,
           choices: [
@@ -20339,7 +20341,7 @@ function emitTeamUnitMajorRunStage(
     // A Unit whose build is a named pull request, merged and waiting for the lead's sign-off; and the clone of a
     // repository not here that a named pull request or a team's pushed build is in, as a build is offered its own.
     const namedOffers: StepOffer[] = [];
-    if (leadSignOffOn(stateContent)) {
+    if (signOffOn) {
       for (const [unit, pulls] of namedPullRequests(projectDir)) {
         const seen = results.get(unit);
         if (seen === undefined || seen.done || seen.verdicts.length === 0 || !seen.verdicts.every((verdict) => verdict.merged)) continue;
