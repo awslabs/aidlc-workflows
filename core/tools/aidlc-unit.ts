@@ -7193,7 +7193,7 @@ function planOffBranchNow(pd: string, tipAsked?: string): void {
   if (tipAsked !== undefined && tip !== tipAsked) {
     fail(`The plan in ${place.repo} has changed since you were asked, so its branch is not taken down. Say if you still want it off the branch.`);
   }
-  // A change this computer did not write: the lead's question first, then the same step again.
+  // A change this checkout did not write: the lead's question first, then the same step again.
   const read = planAtCopy(pd, place.copy, { commit: tip });
   const change = read.kind === "read" ? planChangeAt(pd, tip, read.plan).change : null;
   if (change !== null) {
@@ -7500,7 +7500,7 @@ function writeSharedPlan(pd: string, message?: string, named?: string, carry?: C
   const written = writePlan(pd, place, {
     what, ...(message === undefined ? {} : { message }), overUnreadable: true, ...(named === undefined ? {} : { onNote: true as const }),
     ...(under === null ? {} : { regainFrom: under }),
-    // A change this computer did not write is asked about before the share lands on it.
+    // A change this checkout did not write is asked about before the share lands on it.
     stopIf: (tip) => tip === null ? undefined : planChangeAt(pd, tip.commit, tip.plan).change ?? undefined,
     ...(carry === undefined ? {} : {
       edit: (built: { plan: PlanJson; files: Record<string, string | null> }, tip: PlanTip) => {
@@ -9874,7 +9874,7 @@ export function followMoved(pd: string, id8: string, from: string, typed: boolea
   // The lead's side only where this checkout leads the work by the one rule (planMadeElsewhere, lifted by
   // `unit lead-here`): a teammate's clone of the team's workspace has the lead's record on disk and is not the lead.
   const leads = lead !== null && isTeamUnitOwnership(leadState) && unitBuildOf(leadState) === null &&
-    sameGitAddress(homeLocation(leadState) ?? "", from) && !planMadeElsewhere(pd, readAuditShardEvents(pd, lead.dirName, lead.space));
+    sameGitAddress(homeLocation(leadState) ?? "", from) && !planMadeElsewhere(pd, { intent: lead.dirName, space: lead.space });
   const leadLine = leads ? leadFollowsPlan(pd, lead, follow) : null;
   if (leadLine !== null && options.say !== false) saidWithNextStep(pd, leadLine);
   return { follow, built: buildsFollow(pd, id8, from, follow), leadLine };
@@ -9960,7 +9960,7 @@ function onlyMovedThePlan(projectDir: string, commit: string): boolean {
   return JSON.stringify(before.plan_repo) !== JSON.stringify(after.plan_repo) && rest(before) === rest(after);
 }
 
-// A change on the plan this computer did not write, waiting for the lead's
+// A change on the plan this checkout did not write, waiting for the lead's
 // answer: the tip asked about and each commit's name, day and words, oldest first.
 export type PlanChange = { tip: string; work: string; repo: string; changes: Array<{ name: string; day: string; what: string }> };
 
@@ -10024,7 +10024,7 @@ export function leadPlanChange(projectDir: string): { change: PlanChange | null;
   }
 }
 
-// The lead's question about a change on the plan this computer did not write,
+// The lead's question about a change on the plan this checkout did not write,
 // with its two answers (`unit plan-change`); several changes are listed, oldest
 // first, the ten newest past ten.
 export function planChangeQuestion(change: PlanChange): { question: string; choices: Array<{ label: string; detail: string; command: string }> } {
@@ -10035,14 +10035,14 @@ export function planChangeQuestion(change: PlanChange): { question: string; choi
   const line = (entry: { name: string; day: string; what: string }): string => `${entry.name}, ${entry.day}. Its commit says "${entry.what}".`;
   if (change.changes.length === 1) {
     return {
-      question: `The plan of ${change.work} in ${change.repo} has a change this computer did not write, by ${line(change.changes[0])} Keep it on the plan?`,
+      question: `The plan of ${change.work} in ${change.repo} has a change this checkout did not write, by ${line(change.changes[0])} Keep it on the plan?`,
       choices: [{ label: "Keep it", ...keep }, { label: "Take it out", detail: put("it", "stays"), command: answer("take-out") }],
     };
   }
   const shown = change.changes.slice(-10);
   const earlier = change.changes.length - shown.length;
   return {
-    question: `The plan of ${change.work} in ${change.repo} has ${change.changes.length} changes this computer did not write:\n` +
+    question: `The plan of ${change.work} in ${change.repo} has ${change.changes.length} changes this checkout did not write:\n` +
       `${shown.map(line).join("\n")}${earlier > 0 ? `\nand ${earlier} earlier` : ""}\nKeep them on the plan?`,
     choices: [{ label: "Keep them", ...keep }, { label: "Take them out", detail: put("they", "stay"), command: answer("take-out") }],
   };
@@ -10760,7 +10760,7 @@ export function leadsPlanWrite(projectDir: string, change: {
     const written = writePlan(pd, place, {
       what: change.what,
       ...(change.unasked ? { unasked: true as const } : {}),
-      // A change this computer did not write, unanswered: the lead's question
+      // A change this checkout did not write, unanswered: the lead's question
       // first, and nothing is written.
       stopIf: (tip) => {
         if (tip === null) return undefined;
@@ -10872,7 +10872,7 @@ export function planClosedHeardMark(at: string): string {
 // open-again on the plan is this computer's own or there is none, so another
 // computer's is never undone by a state this one has not caught up with. For
 // team work led from this checkout whose plan is shared, only. `line`: what was
-// written; `change`: a change this computer did not write waits for the
+// written; `change`: a change this checkout did not write waits for the
 // lead's answer; `unsent`: the write did not go (git's words).
 export type PlanEnd = { line: string } | { change: PlanChange } | { unsent: string | null };
 
@@ -10949,7 +10949,7 @@ export function archiveEndLines(projectDir: string, work: { space: string; dirNa
     const own = leadsOwnClaims(pd, state, new Map(underWay.map((claim) => [claim.unit, claim])));
     for (const claim of underWay) if (claimIsMine(pd, claim) && findUnitBuild(pd, work.uuid, claim.unit) !== null) own.add(claim.unit);
     if (unread === null && underWay.every((claim) => own.has(claim.unit))) return lines;
-    const why = end !== null && "change" in end ? " (it has a change this computer did not write, which the next step asks you about)"
+    const why = end !== null && "change" in end ? " (it has a change this checkout did not write, which the next step asks you about)"
       : end !== null && "unsent" in end && end.unsent !== null ? ` (${end.unsent.trim().replace(/[.!?]+$/, "")})` : "";
     const after = keptPlan(pd, identity.intentId8)?.plan.closed !== undefined ? "AI-DLC sends no notice of the close."
       : `The plan does not say closed yet${why}: the next step in this workspace tries again.`;
@@ -14649,7 +14649,7 @@ function checkTeamResultsQuietly(
       unsent?.push({ line: said.line, ...(said.repo === undefined ? {} : { shareAgain: true as const, repo: said.repo }) });
       if (chat !== null) markPersonLinesHeard(pd, chat, [held]);
     }
-    // A change on the plan this computer did not write: the step's question comes first, and the merge waits for it.
+    // A change on the plan this checkout did not write: the step's question comes first, and the merge waits for it.
     else if (sent.kind !== "unshared" && sent.kind !== "stopped") {
       const merge = `The merge of ${joinNames(named)} could not be written on the plan in ${to}`;
       const words = (said: string): string => said.trim().replace(/[.!?]+$/, "");
@@ -15909,7 +15909,7 @@ export function sendLeadsApprovedChanges(projectDir: string): string[] {
       sent = { kind: "refused", words: errorMessage(error), byRule: false };
     }
     if (sent.kind !== "written") {
-      // The step's question comes first when a change this computer did not write stopped it.
+      // The step's question comes first when a change this checkout did not write stopped it.
       if (sent.kind === "unchanged" || sent.kind === "unshared" || sent.kind === "stopped") return lines;
       // A moved plan not followed: said when its place could not be read; the
       // offer to share it again, which needs its command, is the merge write's.
@@ -16190,7 +16190,7 @@ function failUnlessWritten(pd: string, written: LeadWrite, what: string, message
     if (again === null) fail(said);
     throw new LeadWordUnwritten(said, again);
   };
-  // A change on the plan this computer did not write: the lead's question again, never silence.
+  // A change on the plan this checkout did not write: the lead's question again, never silence.
   if (written.kind === "stopped") {
     const ask = planChangeQuestion(written.detail as PlanChange);
     throw new LeadWordUnwritten(`Before I write ${what}: ${ask.question}`, again ?? same.join(" "), ask);
@@ -16296,7 +16296,7 @@ function shareThenWord(word: string, repo?: string, whose = "the word's"): strin
 // A lead write that carries no word of theirs (the learnings choice) and did
 // not go: its line, once, and the command that writes it when tried again (the
 // share carries the rules); the lead's question first when a change this
-// computer did not write stopped it. Null when it went, or there is no plan.
+// checkout did not write stopped it. Null when it went, or there is no plan.
 export function planWriteNote(
   projectDir: string,
   written: LeadWrite,

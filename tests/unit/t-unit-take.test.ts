@@ -18,7 +18,8 @@ import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts
 import { asLeadsOwnCheckout } from "../harness/team-unit-merge.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -26,6 +27,7 @@ import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts
 import { auditBlockField, readAuditShardEvents, readIntentRegistry } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { shellSingleQuote } from "../../dist/claude/.claude/tools/aidlc-runtime-paths.ts";
 import { leadsPlanNotHere } from "../../dist/claude/.claude/tools/aidlc-unit-holders.ts";
+import { planMadeElsewhere } from "../../dist/claude/.claude/tools/aidlc-record-core.ts";
 import { loadGraph } from "../../dist/claude/.claude/tools/aidlc-graph.ts";
 import { kiroLeadRulesBrief, LEAD_RULES_UNSAVED_LINE, leadRulesBrief, leadRulesBriefLine, resolvedRuleBundle } from "../../dist/claude/.claude/tools/aidlc-steering.ts";
 import { learningsCorrectionChoices, offersLearningsCorrectionChoices } from "../../dist/claude/.claude/tools/aidlc-unit-teams.ts";
@@ -771,6 +773,160 @@ describe("the lead who says so in a clone that did not make the plan", () => {
     git(bare, ["init", "-q"]);
     const none = run(ORCH, ["team-board", "--space", "web"], bare);
     expect(String(none.json?.error ?? none.out)).toBe("This project has no space named \"web\". No active AI-DLC workflow found.");
+  });
+});
+
+describe("a person's own worktree of the checkout that leads the work", () => {
+  // The lead approved the plan in their main checkout (its own shard holds the
+  // plan's rows), teams chosen, the plan shared in checkout-api; `signOff`: the
+  // lead's sign-off on there, committed with the rest unless "uncommitted";
+  // alice took refunds in a workspace of her own and pushed it, merged on both
+  // hosts unless `merged` is false.
+  function leadsCheckout(signOff: "committed" | "uncommitted" | null, merged = true) {
+    const hosts = { "checkout-api": codeHost("checkout-api"), billing: codeHost("billing") };
+    const home = makeHome({ repos: hosts });
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    asLeadsOwnCheckout(home.dir);
+    commitAll(home.dir, "teams");
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const plan = planShared(home);
+    if (signOff !== null) {
+      const on = run(UNIT, ["lead-sign-off", "on", "--person-words", "I want to sign off every team's result"], home.dir);
+      expect(on.status, on.out).toBe(0);
+      if (signOff === "committed") commitAll(home.dir, "sign-off on");
+    }
+    const alice = ownWorkspace(hosts, "alice");
+    expect(takeFrom("payments", alice, "refunds").status).toBe(0);
+    codeGenerated(alice, buildDir(alice, "payments", "refunds"));
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    if (merged) {
+      mergeOnHost(hosts["checkout-api"], "refunds", "squash");
+      mergeOnHost(hosts.billing, "refunds", "squash");
+    }
+    return { hosts, home, plan };
+  }
+  // `git worktree add` from a checkout, as a host's per-session worktree is made, with the code repos cloned in it.
+  function worktreeOf(dir: string, hosts: Record<string, string>, branch: string, base = "main"): string {
+    const tree = join(tempDir(branch), "worktree");
+    git(dir, ["worktree", "add", "-q", "-b", branch, tree, base]);
+    for (const [name, host] of Object.entries(hosts)) cloneCode(host, tree, name);
+    return tree;
+  }
+  const SIGN_OFF = "refunds came back from alice: checkout-api merged, billing merged (2 of 2 merged). Sign it off?";
+  const TEAMMATE_NOTE = "This checkout did not make this work's plan, so the lead's own questions are not put here.";
+  const OFF = "If they say they do not lead this work here, run `";
+  const settingsAt = (plan: PlanHome): Record<string, string> =>
+    (JSON.parse(git(Object.values(plan.hosts)[0], ["show", `${planRefOf(plan.id8)}:plan.json`])) as { settings: Record<string, string> }).settings;
+
+  test("a fresh worktree of the lead's checkout gets the lead's view with nothing said, and so does one made from it", () => {
+    const { hosts, home } = leadsCheckout("committed");
+    const first = worktreeOf(home.dir, hosts, "lead-session-1");
+    const step = next(first);
+    expect(step.question, JSON.stringify(step).slice(0, 600)).toBe(SIGN_OFF);
+    expect(JSON.stringify(step)).not.toContain("Taking a Unit starts it as your team's own piece of work here");
+    expect(JSON.stringify(step)).not.toContain(TEAMMATE_NOTE);
+    commitAll(first, "session 1");
+    const second = worktreeOf(home.dir, hosts, "lead-session-2", "lead-session-1");
+    expect(next(second).question).toBe(SIGN_OFF);
+  });
+
+  // A look in a person's worktree reads its main checkout's clone id and writes nothing there.
+  test("a look in a fresh worktree changes nothing under the main checkout's aidlc folder, a clone id at its earlier name included", () => {
+    const { hosts, home } = leadsCheckout("committed");
+    const listed = (): Record<string, string> => {
+      const out: Record<string, string> = {};
+      const walk = (dir: string): void => {
+        for (const name of readdirSync(dir)) {
+          const path = join(dir, name);
+          out[path.slice(home.dir.length)] = statSync(path).isDirectory() ? "folder" : createHash("sha256").update(readFileSync(path)).digest("hex");
+          if (statSync(path).isDirectory()) walk(path);
+        }
+      };
+      walk(join(home.dir, "aidlc"));
+      return out;
+    };
+    const before = listed();
+    expect(next(worktreeOf(home.dir, hosts, "lead-session")).question).toBe(SIGN_OFF);
+    expect(listed()).toEqual(before);
+    renameSync(join(home.dir, "aidlc", ".aidlc-engine", "clone-id"), join(home.dir, "aidlc", ".aidlc-clone-id"));
+    const earlier = listed();
+    // With the main checkout's clone id where an earlier release kept it, the worktree's view is a teammate's, as today.
+    expect(String(next(worktreeOf(home.dir, hosts, "lead-session-2")).board_note)).toStartWith(TEAMMATE_NOTE);
+    expect(listed()).toEqual(earlier);
+    expect(existsSync(join(home.dir, "aidlc", ".aidlc-clone-id"))).toBe(true);
+  });
+
+  test("the sign-off turned on and not committed: a fresh worktree's first look keeps it on the plan and asks it", () => {
+    const { hosts, home, plan } = leadsCheckout("uncommitted");
+    const step = next(worktreeOf(home.dir, hosts, "lead-session"));
+    expect(step.question, JSON.stringify(step).slice(0, 600)).toBe(SIGN_OFF);
+    expect(settingsAt(plan)["Lead Sign-off"]).toBe("on");
+    expect(planWordAt(plan, "refunds")?.done).toBeUndefined();
+  });
+
+  test("a worktree of the lead's second computer leads once that computer said so; its own way back is its own", () => {
+    const { hosts, home } = leadsCheckout("committed");
+    const laptop = cloneOf(home.remote, "lead");
+    for (const [name, host] of Object.entries(hosts)) cloneCode(host, laptop, name);
+    expect(run(UTILITY, ["intent", "switch", HOME], laptop).status).toBe(0);
+    expect(run(UNIT, ["lead-here", "--person-words", "I lead this work, carry it on here on my laptop"], laptop).status).toBe(0);
+    commitAll(laptop, "the laptop leads");
+    const tree = worktreeOf(laptop, hosts, "laptop-session");
+    const step = next(tree);
+    expect(step.question, JSON.stringify(step).slice(0, 600)).toBe(SIGN_OFF);
+    expect(String(step.board_note)).toContain(OFF);
+    const off = run(UNIT, ["lead-here", "--off", "--person-words", "not from this one"], tree);
+    expect(off.status, off.out).toBe(0);
+    expect(String(next(tree).board_note)).toStartWith(TEAMMATE_NOTE);
+    expect(next(laptop).question).toBe(SIGN_OFF);
+  });
+
+  // git does not record who made a worktree: a teammate seated in one beside
+  // the lead's checkout reads as the lead's, with the way back in front of the agent.
+  test("a teammate in a sibling worktree of the lead's checkout who says they do not lead it gets a teammate's view", () => {
+    const { hosts, home } = leadsCheckout(null, false);
+    const seat = worktreeOf(home.dir, hosts, "team-bea");
+    const before = next(seat);
+    expect(String(before.board_note), JSON.stringify(before).slice(0, 600)).toContain(OFF);
+    expect(String(before.board_note)).toContain(" lead-here --off`, and follow what it returns.");
+    const off = run(UNIT, ["lead-here", "--off", "--person-words", "I am not the lead, I am on bea's team"], seat);
+    expect(String(off.json?.notice), off.out).toBe("This checkout no longer carries the work on as the lead's; anything it wrote to the plan stays.");
+    const mate = cloneOf(home.remote, "mate");
+    for (const [name, host] of Object.entries(hosts)) cloneCode(host, mate, name, "mate");
+    expect(run(UTILITY, ["intent", "switch", HOME], mate).status).toBe(0);
+    const [after, theirs] = [next(seat), next(mate)];
+    expect(after.narration).toBe(theirs.narration);
+    expect(after.offers).toEqual(theirs.offers);
+    expect(after.board_note).toBe(theirs.board_note);
+    expect(String(after.board_note)).toStartWith(TEAMMATE_NOTE);
+  });
+
+  test("a worktree of a teammate's clone of the lead's workspace stays a teammate's", () => {
+    const { hosts, home } = leadsCheckout(null, false);
+    const mate = cloneOf(home.remote, "mate");
+    expect(run(UTILITY, ["intent", "switch", HOME], mate).status).toBe(0);
+    const step = next(worktreeOf(mate, hosts, "mate-session"));
+    expect(String(step.board_note), JSON.stringify(step).slice(0, 600)).toStartWith(TEAMMATE_NOTE);
+    expect(JSON.stringify(step.offers)).toContain("Taking a Unit starts it as your team's own piece of work here");
+  });
+
+  test("a worktree AI-DLC made of the lead's checkout keeps to its own record, a restored attempt and a marked one too", () => {
+    const { home } = leadsCheckout(null, false);
+    const made = (tree: string, meta: boolean): string => {
+      git(home.dir, ["worktree", "add", "-q", "-b", basename(tree), tree, "main"]);
+      if (meta) {
+        mkdirSync(join(tree, ".aidlc"), { recursive: true });
+        writeFileSync(join(tree, ".aidlc", "worktree-meta.json"), "{}\n");
+      }
+      return tree;
+    };
+    expect(planMadeElsewhere(made(join(home.dir, ".aidlc", "worktrees", "bolt-00000001_refunds"), true))).toBe(true);
+    expect(planMadeElsewhere(made(join(home.dir, ".aidlc", "restored", "bolt-refunds-1"), false))).toBe(true);
+    expect(planMadeElsewhere(made(join(tempDir("marked"), "bolt-checkout-ui"), true))).toBe(true);
+    const session = made(join(tempDir("beside"), "lead-session"), false);
+    expect(planMadeElsewhere(session)).toBe(false);
+    // A restored attempt made from that worktree sits in its own .aidlc/.
+    expect(planMadeElsewhere(made(join(session, ".aidlc", "restored", "bolt-reporting-1"), false))).toBe(true);
   });
 });
 

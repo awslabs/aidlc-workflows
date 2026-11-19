@@ -816,7 +816,8 @@ team can take now, **Carry on <unit>** for a build already here (any space),
 and **Carry on <work> here, as the lead** when the home's record is in the
 selected space, this workspace is the home's own, and this checkout made the
 plan (`planMadeElsewhere` over that record's audit is false: its plan rows are
-in this checkout's own shard); each runs one command (`unit take`, or `next
+in this checkout's own shard, or, in a person's own worktree of work with a Home
+Location, its main checkout's); each runs one command (`unit take`, or `next
 --pick`). When nothing is ready to take, the step is the line that says where
 each Unit stands, with the offer to carry the work on here as its home, once in
 a chat (`offersOnce`), on the same recorded fact, never a match on git

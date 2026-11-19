@@ -680,9 +680,9 @@ reads **Yes, for this project, and offered to whoever takes a Unit**.
 
 - **A clone of the lead's own workspace**: the lead's work is here too, and its
   Units are offered to take. **Carry on <work> here, as the lead** is offered
-  only in the checkout that made the plan (or a copy of that folder), once in a
-  chat when nothing is ready to take; a teammate's clone never offers it,
-  whatever its git name, and hears where things stand. A clone whose copy of
+  only in the checkout that made the plan (or a copy of that folder, or a
+  worktree of it), once in a chat when nothing is ready to take; a teammate's
+  clone never offers it, whatever its git name, and hears where things stand. A clone whose copy of
   the lead's record is from before the lead chose teams (that answer not yet in
   the branch it pulled) looks once, quietly, where the lead's share puts the
   plan when the lead names no other repository for it, and offers its Units

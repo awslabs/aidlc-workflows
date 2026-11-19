@@ -55,7 +55,7 @@ diagnostic and lifecycle routes.
 | `/aidlc unit rebase` | In a Unit's build started early, move it onto the branch the Unit it waited on merged into |
 | `/aidlc unit amend <unit> --input <file> --answer <approve\|reject>` | At the lead's project, answer a builder's proposed change, in your own words |
 | `/aidlc unit lead-sign-off on\|off` | At the lead's project, make each taken Unit's result wait for your sign-off, or not (off by default) |
-| `/aidlc unit plan-change keep\|take-out --tip <commit>` | At the lead's project, answer the question about a change on the shared plan that this computer did not write: keep it, or put the plan back as you last had it at your next write to it |
+| `/aidlc unit plan-change keep\|take-out --tip <commit>` | At the lead's project, answer the question about a change on the shared plan that this checkout did not write: keep it, or put the plan back as you last had it at your next write to it |
 | `/aidlc unit lead-here [--off]` | In a checkout that did not make the plan (the lead on another machine), record the lead's own word that they lead the work there, so the lead's questions are put there; `--off` takes that word back |
 | `/aidlc unit sign-off <unit>` | At the lead's project, sign a Unit's result off, in your own words |
 | `/aidlc unit turned-down <unit> --repo <repo>` | At the lead's project, send one repo of a team's Unit back to the team, with your words |
@@ -1047,9 +1047,12 @@ changes kept git from making it.
 
 In a checkout that did not make the work's plan (a fresh clone on another machine), the lead's own questions (a sign-off,
 an answer to a builder's proposed change) are not put: the step shows the board and the Units to take, as a
-teammate's clone does. When you say you lead this work, whether or not you ask to carry it on there, the agent runs `unit
-lead-here` with your words and shows the lead's view in the same turn; it records `LEAD_HERE_SET` in that checkout's own audit,
-and from then on the lead's questions are put there. When you say you do not lead this work there, the agent runs
+teammate's clone does. A worktree you make of the checkout that made the plan, on the same computer (`git worktree
+add`, or a tool's own per-session worktree), counts as that checkout: it gets the lead's view with nothing said, and
+`unit lead-here --off` there takes that back for that worktree only. When you say you lead this work, whether or not
+you ask to carry it on there, the agent runs `unit lead-here` with your words and shows the lead's view in the same
+turn; it records `LEAD_HERE_SET` in that checkout's own audit, and from then on the lead's questions are put there.
+When you say you do not lead this work there, the agent runs
 `unit lead-here --off` with your words: it records the same row with `Lead Here: off`, and from then on that checkout
 gets a teammate's view again, whatever the lead's work did there in between. Nothing is written on the plan either way:
 anything the checkout wrote to the plan while it was the lead's stays, for the lead's own look to ask about.

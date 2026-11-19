@@ -316,7 +316,7 @@ describe("the plan's end, written at the lead's own steps", () => {
     const chat = anotherWork(home.dir, "lead-on-another");
     const ask = personsNext(home.dir, chat, "lead-on-another");
     expect(ask.ask_type, JSON.stringify(ask).slice(0, 800)).toBe("lead-plan-change");
-    expect(String(ask.question)).toStartWith("The plan of fixture in checkout-api has a change this computer did not write, by lead, ");
+    expect(String(ask.question)).toStartWith("The plan of fixture in checkout-api has a change this checkout did not write, by lead, ");
     expect(String(ask.question)).toEndWith(`Its commit says "refunds signed off". Keep it on the plan?`);
     const keep = ((ask.choices ?? []) as Array<{ label: string; command: string }>).find((choice) => choice.label === "Keep it")!;
     const tip = /--tip ([0-9a-f]+)/.exec(keep.command)![1];
@@ -520,7 +520,7 @@ describe("the archive while teams have Units under way", () => {
       plan.settings = { ...(plan.settings as Record<string, unknown>), note: "theirs" };
     });
     const waits = ARCHIVE(asked.home.dir);
-    expect(lines(waits.out).at(-1)).toEndWith("The plan does not say closed yet (it has a change this computer did not write, which the next step " +
+    expect(lines(waits.out).at(-1)).toEndWith("The plan does not say closed yet (it has a change this checkout did not write, which the next step " +
       "asks you about): the next step in this workspace tries again.");
   });
 

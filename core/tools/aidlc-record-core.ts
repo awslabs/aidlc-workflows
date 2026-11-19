@@ -14,7 +14,7 @@ import { accessSync, constants as fsConstants, existsSync, lstatSync, mkdirSync,
 import { homedir, hostname } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve as resolvePath, sep } from "node:path";
 import { dlopen, FFIType, type Pointer } from "bun:ffi";
-import { ensureWorkspaceEngineFolder, runtimeHarnessDir, runtimeHarnessName, SPACE_NAME_REGEX, workspaceEngineFile, workspaceEnginePath } from "./aidlc-runtime-paths.ts";
+import { ensureWorkspaceEngineFolder, runtimeHarnessDir, runtimeHarnessName, SPACE_NAME_REGEX, WORKSPACE_ENGINE_DIR, workspaceEngineFile, workspaceEnginePath } from "./aidlc-runtime-paths.ts";
 import { validateUnitName } from "./aidlc-review-records.ts";
 import { activeSpace, assertNoSymlinkInChainOrThrow, ENGINE_DIR, engineDirFor, intentsDir, isPlainObject, listIntentDirs, mainCheckoutOfWorktree, pinnedWork, readAppendOnlyFileNoFollowOrThrow, readRegularFileNoFollowOrThrow, refuseEngineObserverWrite, spaceRecordRoot, withWorkPinned, workspaceRoot, writeFileAtomic } from "./aidlc-locks.ts";
 import { escapeRegex } from "./aidlc-markdown.ts";
@@ -2007,31 +2007,60 @@ export function auditShardName(projectDir: string): string {
 // The field of a lead-here row that takes the person's word back (`unit lead-here --off`); a row without it reads as on.
 export const LEAD_HERE_FIELD = "Lead Here";
 
-// This clone's own newest lead-here row: true where the person said they lead
-// the work here, false where they took it back; null where it has none.
-export function leadHereByWord(projectDir: string, rows: readonly AuditShardEvent[] = readAuditShardEvents(projectDir)): boolean | null {
-  const ownShard = knownAuditShardName(projectDir);
-  const last = ownShard === null ? undefined : rows.findLast((row) => row.event === "LEAD_HERE_SET" && basename(row.shard) === ownShard);
-  return last === undefined ? null : auditBlockField(last.block, LEAD_HERE_FIELD) !== "off";
+// In a person's own git worktree (`git worktree add`, a host's per-session one), its main checkout's shard, from
+// that checkout's clone-id file alone; null for a main checkout, a clone, and a worktree AI-DLC made (inside a
+// .aidlc/ folder, a Bolt's or a restored attempt of the main checkout or of a worktree, or holding
+// .aidlc/worktree-meta.json). Real paths, so a symlinked folder or a Windows junction reads as where it is. Not
+// cloneIdPath, which makes the engine folder and moves an earlier release's entries: a look in a worktree writes
+// nothing in its main checkout.
+function mainCheckoutShard(projectDir: string): string | null {
+  const main = mainCheckoutOfWorktree(projectDir);
+  const below = main === null ? [] : relative(dirname(canonicalPathKey(main)), canonicalPathKey(projectDir)).split(/[\\/]/);
+  if (main === null || below.includes(".aidlc") || existsSync(join(projectDir, ".aidlc", "worktree-meta.json"))) return null;
+  return shardNamedIn(main, join(main, "aidlc", WORKSPACE_ENGINE_DIR, CLONE_ID_FILE));
 }
 
-// The work's plan was made in another checkout: every stage or gate row of the
-// work's own (one that names no Unit, as Inception's do) is in another clone's
-// shard, or this clone has written none. A team's clone stays one after it
-// builds a Unit, whose rows name the Unit; the lead's own checkout, and a copy
-// of it, keep the plan's rows in their own shard. Team routing shows such a
-// clone the board or the Units it can take, never the walk the lead keeps.
-export function planMadeElsewhere(projectDir: string, rows: readonly AuditShardEvent[] = readAuditShardEvents(projectDir)): boolean {
-  const ownShard = knownAuditShardName(projectDir);
-  // The person's own word in this checkout, its newest, decides whatever else
-  // its part of the record holds: they lead this work here (`unit lead-here`,
-  // the lead on another machine), or they took that back (`--off`).
+// This clone's own newest lead-here row, else its main checkout's as this checkout's files have it: true where the
+// person said they lead the work there, false where they took it back; null for none.
+export function leadHereByWord(projectDir: string, rows: readonly AuditShardEvent[] = readAuditShardEvents(projectDir)): boolean | null {
+  for (const shard of [knownAuditShardName(projectDir), mainCheckoutShard(projectDir)]) {
+    const last = shard === null ? undefined : rows.findLast((row) => row.event === "LEAD_HERE_SET" && basename(row.shard) === shard);
+    if (last !== undefined) return auditBlockField(last.block, LEAD_HERE_FIELD) !== "off";
+  }
+  return null;
+}
+
+// Where the plan of a piece of work (`record`, else the selected one) was made, as this checkout reads it: the
+// person's own word first (`unit lead-here`, or `--off`); else "here" when its own shard holds the stage or gate
+// rows naming no Unit (Inception's), or there are none; "main" in a person's own worktree of the checkout holding
+// them, for work with a Home Location (main's own team flow seats its teams in sibling worktrees); else "elsewhere".
+// A team's clone stays one after it builds a Unit, whose rows name it; a copy of the lead's checkout keeps its rows.
+function planMadeIn(projectDir: string, record?: { intent: string; space: string }): "here" | "main" | "elsewhere" {
+  const rows = readAuditShardEvents(projectDir, record?.intent, record?.space);
   const word = leadHereByWord(projectDir, rows);
-  if (word !== null) return !word;
+  if (word !== null) return word ? "here" : "elsewhere";
   const plan = rows.filter((row) =>
     (row.event.startsWith("STAGE_") || row.event.startsWith("GATE_")) && /^\*\*Unit\*\*:/m.test(row.block) === false
-  );
-  return plan.length > 0 && plan.every((row) => basename(row.shard) !== ownShard);
+  ).map((row) => basename(row.shard));
+  if (plan.length === 0 || plan.includes(knownAuditShardName(projectDir) ?? "")) return "here";
+  let state = "";
+  try {
+    state = readStateFile(projectDir, record?.intent, record?.space);
+  } catch {
+    // No state, so no Home Location.
+  }
+  const main = getField(state, "Home Location") ? mainCheckoutShard(projectDir) : null;
+  return main !== null && plan.includes(main) ? "main" : "elsewhere";
+}
+
+// Team routing shows a checkout where the plan was made elsewhere the board or the Units to take, never the lead's walk.
+export function planMadeElsewhere(projectDir: string, record?: { intent: string; space: string }): boolean {
+  return planMadeIn(projectDir, record) === "elsewhere";
+}
+
+// The selected work is led here through the main checkout's record (planMadeIn).
+export function leadsThroughMainCheckout(projectDir: string): boolean {
+  return planMadeIn(projectDir) === "main";
 }
 
 // A change git status lists under aidlc/ that is only this clone's own audit
@@ -2072,8 +2101,13 @@ export function knownAuditShardName(projectDir: string): string | null {
   if (scoped) return scoped;
   const cached = AUDIT_SHARD_NAMES.get(canonicalPathKey(projectDir));
   if (cached) return cached;
+  return shardNamedIn(projectDir, cloneIdPath(projectDir));
+}
+
+// The shard name a checkout's clone-id file names, read only; null when it names no token.
+function shardNamedIn(projectDir: string, cloneIdFile: string): string | null {
   try {
-    const recorded = parseCloneIdFile(readFileSync(cloneIdPath(projectDir), "utf-8"));
+    const recorded = parseCloneIdFile(readFileSync(cloneIdFile, "utf-8"));
     if (recorded.token) {
       const host = recorded.host ?? existingShardHost(projectDir, recorded.token) ?? auditShardHostSegment();
       return `${host}-${recorded.token}.md`;

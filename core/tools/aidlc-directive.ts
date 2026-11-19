@@ -779,7 +779,7 @@ export interface UnitPlanChangeAskDirective extends AskDirectiveBase {
   choices: AskChoice[];
 }
 
-// A change on the shared plan that the lead's computer did not write: keep it,
+// A change on the shared plan that the lead's checkout did not write: keep it,
 // or take it out at the lead's next write. Each choice is one complete command.
 export interface LeadPlanChangeAskDirective extends AskDirectiveBase {
   ask_type: "lead-plan-change";

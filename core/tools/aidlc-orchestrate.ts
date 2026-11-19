@@ -602,7 +602,7 @@ import {
   enterHookWorkflow,
   type TerminalCommand,
 } from "./aidlc-lib.ts";
-import { canonicalPathKey, chatTookStep, hostNamesThisChat, leadHereByWord, planMadeElsewhere } from "./aidlc-record-core.ts";
+import { canonicalPathKey, chatTookStep, hostNamesThisChat, leadHereByWord, leadsThroughMainCheckout, planMadeElsewhere } from "./aidlc-record-core.ts";
 import { maskUserinfo } from "./aidlc-workspace-sync.ts";
 import { unrecordedFinishSince } from "./aidlc-subagent-inflight.ts";
 import { readRequestFileResult, REQUEST_FILE_USAGE, reviewRecoverySpentMessage, reviewVerdictStep } from "./aidlc-log.ts";
@@ -5863,8 +5863,9 @@ function teamCommandsNote(projectDir?: string): string {
     `left open here, run \`${unitTool} assign --here <unit> ${unitWordsArg("assign")}\`. ` +
     `${UNIT_WORDS_NOTE} Say the notice line each prints.${moved}` +
     (done.length === 0 ? "" : ` ${doneUnitRoute(done.length === 1 ? done[0] : null)}`) +
-    // A checkout the person's own word made the lead's: its way back is in front of the agent at every step.
-    (projectDir !== undefined && leadHereByWord(projectDir) === true ? ` ${leadHereOffSentence()}` : "");
+    // A checkout the person's own word made the lead's, or one that leads through its main checkout's record:
+    // its way back is in front of the agent at every step.
+    (projectDir !== undefined && (leadHereByWord(projectDir) === true || leadsThroughMainCheckout(projectDir)) ? ` ${leadHereOffSentence()}` : "");
 }
 
 // The offers a step has not put to the person in this chat yet; each is put
@@ -10029,11 +10030,12 @@ function pickableHere(pd: string, here: NonNullable<ReturnType<typeof unselected
 }
 
 // Whether this checkout made the plan of a piece of work here: its plan's rows
-// are in this checkout's own audit shard (planMadeElsewhere). The lead's own
-// checkout, or a copy of it, is the one place the lead's work built by teams
-// is offered to carry on, or picked by words.
+// are in this checkout's own audit shard, or, in a person's own worktree, its
+// main checkout's (planMadeElsewhere). The lead's own checkout, a copy of it, or
+// a person's own worktree of it is where the lead's work built by teams is
+// offered to carry on, or picked by words.
 function planMadeHere(projectDir: string, dirName: string, space: string): boolean {
-  return !planMadeElsewhere(projectDir, readAuditShardEvents(projectDir, dirName, space));
+  return !planMadeElsewhere(projectDir, { intent: dirName, space });
 }
 
 // A Unit build's last hand on it, for the take menu: the Git Name its newest
@@ -10151,7 +10153,7 @@ export function workOfAnother(projectDir: string, run: { space: string; dirName:
   try {
     const state = readStateFile(projectDir, run.dirName, run.space);
     if (unitBuildOf(state) !== null) return buildIsMine(projectDir, run, buildClaimHere(projectDir, run)) === false;
-    return isTeamUnitOwnership(state) && planMadeElsewhere(projectDir, readAuditShardEvents(projectDir, run.dirName, run.space));
+    return isTeamUnitOwnership(state) && planMadeElsewhere(projectDir, { intent: run.dirName, space: run.space });
   } catch {
     return false;
   }
@@ -10209,7 +10211,7 @@ function homesOnDisk(projectDir: string): Array<{ intent: IntentInfo; space: str
 
 // The plan's end each lead work here is owed (planEndNow), at a step of any
 // chat: what was written, said once with the step; a change on that plan this
-// computer did not write, asked about once per tip, before the step, in the
+// checkout did not write, asked about once per tip, before the step, in the
 // question's own words, which name the work.
 function planEndsOwed(pd: string): AskDirective | null {
   if (isReadOnlyEngineProbe()) return null;
@@ -20019,7 +20021,7 @@ function emitTeamUnitMajorRunStage(
   }
   const { overview, results, heldElsewhere, keepsWalk } = teamHomeClaims(projectDir, teamHome);
   // The plan as the look read it: a computer with no baseline carries on from
-  // it, said once; a change on it this computer did not write is asked about
+  // it, said once; a change on it this checkout did not write is asked about
   // once per tip, before anything of the lead's is written on it.
   if (teamHome && !isReadOnlyEngineProbe()) {
     const read = leadPlanChange(projectDir);

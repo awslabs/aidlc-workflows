@@ -330,7 +330,7 @@ describe("a change on the plan this computer did not write", () => {
     const ask = next(home.dir);
     expect(ask.ask_type, JSON.stringify(ask)).toBe("lead-plan-change");
     expect(String(ask.question)).toMatch(
-      /^The plan of \S+ in checkout-api has a change this computer did not write, by lead-laptop, \d{1,2} [A-Z][a-z]{2}\. Its commit says "refunds turned down in billing"\. Keep it on the plan\?$/,
+      /^The plan of \S+ in checkout-api has a change this checkout did not write, by lead-laptop, \d{1,2} [A-Z][a-z]{2}\. Its commit says "refunds turned down in billing"\. Keep it on the plan\?$/,
     );
     const choices = ask.choices as Array<{ label: string; detail: string; command: string }>;
     expect(choices.map((choice) => choice.label)).toEqual(["Keep it", "Take it out"]);
@@ -369,7 +369,7 @@ describe("a change on the plan this computer did not write", () => {
     notAPlanAt(hosts["checkout-api"], home.id8, true);
     const shared = run(UNIT, ["share", "--plan"], home.dir);
     expect(shared.status).not.toBe(0);
-    expect(String(shared.json?.error)).toMatch(/^The plan of \S+ in checkout-api has a change this computer did not write, by lead-laptop, /);
+    expect(String(shared.json?.error)).toMatch(/^The plan of \S+ in checkout-api has a change this checkout did not write, by lead-laptop, /);
     expect(shared.json?.ask_type).toBe("lead-plan-change");
     expect(String(shared.json?.after_answer)).toContain("share --plan");
     const keep = (shared.json?.choices as Array<{ label: string; command: string }>)[0];
@@ -384,7 +384,7 @@ describe("a change on the plan this computer did not write", () => {
     expect(run(UNIT, ["merged", "refunds", "--repo", "checkout-api", "--person-words", "merged by hand"], laptop).status).toBe(0);
     const ask = next(home.dir);
     const lines = String(ask.question).split("\n");
-    expect(lines[0]).toMatch(/^The plan of \S+ in checkout-api has 2 changes this computer did not write:$/);
+    expect(lines[0]).toMatch(/^The plan of \S+ in checkout-api has 2 changes this checkout did not write:$/);
     expect(lines[1]).toMatch(/^lead-laptop, \d{1,2} [A-Z][a-z]{2}\. Its commit says "refunds turned down in billing"\.$/);
     expect(lines[2]).toMatch(/^lead-laptop, \d{1,2} [A-Z][a-z]{2}\. Its commit says "checkout-api counted merged for refunds"\.$/);
     expect(lines.at(-1)).toBe("Keep them on the plan?");
@@ -399,7 +399,7 @@ describe("a change on the plan this computer did not write", () => {
     const ask = next(home.dir);
     expect(ask.ask_type, JSON.stringify(ask)).toBe("lead-plan-change");
     expect(String(ask.question)).toMatch(
-      /^The plan of \S+ in checkout-api has a change this computer did not write, by someone, \d{1,2} [A-Z][a-z]{2}\. Its commit says "refunds signed off"\. Keep it on the plan\?$/,
+      /^The plan of \S+ in checkout-api has a change this checkout did not write, by someone, \d{1,2} [A-Z][a-z]{2}\. Its commit says "refunds signed off"\. Keep it on the plan\?$/,
     );
     expect(JSON.stringify(ask)).not.toContain("This computer carries on from it.");
   });
@@ -657,7 +657,7 @@ describe("a plan moved to another repository, at the lead's other computers", ()
   test("a change the moving computer made before the move is asked about alone", () => {
     const { ask } = changedThenMoved();
     expect(ask.ask_type, JSON.stringify(ask)).toBe("lead-plan-change");
-    expect(String(ask.question)).toMatch(/has a change this computer did not write, by lead, .*Its commit says "refunds turned down in billing"\. Keep it on the plan\?$/);
+    expect(String(ask.question)).toMatch(/has a change this checkout did not write, by lead, .*Its commit says "refunds turned down in billing"\. Keep it on the plan\?$/);
   });
 
   test("Take it out of a change made before the move puts the plan back where it is now, never where it was", () => {

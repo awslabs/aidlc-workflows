@@ -409,7 +409,7 @@ describe("the plan off its branch, on the lead's ask", () => {
     }, tip)]);
     const off = run(UNIT, OFF, home.dir);
     expect(off.status).not.toBe(0);
-    expect(String(off.json?.error)).toStartWith("Before I take the plan off its branch: The plan of fixture in checkout-api has a change this computer did not write, by dan, ");
+    expect(String(off.json?.error)).toStartWith("Before I take the plan off its branch: The plan of fixture in checkout-api has a change this checkout did not write, by dan, ");
     expect(off.json?.ask_type).toBe("lead-plan-change");
     expect(has(host, planRefOf(home.id8))).toBe(false);
   });

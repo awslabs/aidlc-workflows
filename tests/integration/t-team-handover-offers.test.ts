@@ -494,6 +494,19 @@ describe("step 2: another clone takes a Unit", () => {
     expect(boardText(nextDirective(mate))).toContain("# Team Construction Board");
   });
 
+  // This flow seats a team in a worktree beside the lead's main checkout as
+  // well as in a clone: the plan made in the main checkout is not that seat's.
+  test("a plain worktree beside the lead's main checkout is offered the Units it can take, as a teammate's clone is", () => {
+    const { seed } = makeSeed(parallelDependencyBody());
+    const base = mkdtempSync(join(tmpdir(), "aidlc-team-seat-"));
+    tempDirs.push(base);
+    const seat = join(base, "seat");
+    git(seed, ["worktree", "add", "-q", "-b", "team-seat", seat, "main"]);
+    const offer = nextDirective(seat);
+    expect(isHandover(offer, "join"), JSON.stringify(offer)).toBe(true);
+    expect(labels(offer)).toEqual(["Take alpha", "Take beta", "Not now"]);
+  });
+
   // The live run: a team built its first Unit in its own clone (that Unit's
   // rows are in the clone's own shard), the lead merged and pushed it, and the
   // team pulled main: its next Unit is offered, never a typed claim.
