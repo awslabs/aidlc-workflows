@@ -169,6 +169,12 @@ describe("a team member's clone of the home's workspace", () => {
     expect(choices[2].command).toEndWith(`next --pick ${HOME}`);
   });
 
+  test("a Unit that names no repository is offered as open, with no likely repositories said", () => {
+    const home = homeWithTeams(DEPENDENCIES.replace("repos: [checkout-web]", "repos: []"));
+    const ask = next(cloneOf(home.remote, "alice"));
+    expect(offerText(ask.question)).toContain("Ready to take: refunds (open; likely checkout-api, billing), checkout-ui (open). Waiting:");
+  });
+
   // A live run: every teammate's first screen offered to carry the lead's whole work on.
   test("only the checkout that made the plan is offered to carry the work on as its home, never a clone under the lead's git name", () => {
     const home = makeHome();

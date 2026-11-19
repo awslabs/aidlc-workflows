@@ -10550,7 +10550,7 @@ function unitTakeLook(
         }
         continue;
       }
-      const notes = ["open", ...(likely.has(unit) ? [`likely ${likely.get(unit)!.join(", ")}`] : [])];
+      const notes = ["open", ...((likely.get(unit) ?? []).length > 0 ? [`likely ${likely.get(unit)!.join(", ")}`] : [])];
       ready.push(`${unit} (${notes.join("; ")})`);
       choices.push(...withRules(start(unit, `Start ${unit}`, "Open.")));
     }
