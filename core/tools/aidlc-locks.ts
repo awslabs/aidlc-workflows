@@ -14,7 +14,14 @@ import { closeSync, constants as fsConstants, existsSync, fstatSync, lstatSync, 
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve as resolvePath, sep, win32 } from "node:path";
 import { dlopen, FFIType, type Pointer } from "bun:ffi";
-import { knownActiveSpace } from "./aidlc-runtime-paths.ts";
+import {
+  acceptsSyncUploadLinks,
+  hardLinkRefusal,
+  knownActiveSpace,
+  linksSteadyWhileReading,
+  type SyncUploadLinks,
+  warnSyncUploadOnce,
+} from "./aidlc-runtime-paths.ts";
 
 export const ENGINE_DIR = ".aidlc-engine";
 // Debris the pre-lock (#749-era) marker writer could leave at the record root.
@@ -2067,10 +2074,8 @@ export function sameFileIdentity(
   return left.dev === right.dev && left.ino === right.ino;
 }
 
-/** The way past the read boundary's hardlink refusal, shared with the
- *  knowledge tool's stat mirror. Said in words: a chained shell command does
- *  not parse in Windows PowerShell 5.1, and cmd has no cp or mv. */
-export const HARDLINK_REMEDY = "Copy the file, delete the original, give the copy the original's name, then re-run.";
+// Defined beside hardLinkRefusal, which ends every hardlink refusal with it.
+export { HARDLINK_REMEDY } from "./aidlc-runtime-paths.ts";
 
 // THE read boundary for any path that came from OUTSIDE the workspace — a CLI
 // flag, a value-transport file, a committed ledger row. Returns the contents of a
@@ -2176,12 +2181,13 @@ export function readRegularFileNoFollowOrThrow(
     if (st.nlink === 0) {
       throw changedDuringReadError(`${what} was replaced while it was being read: ${path}`);
     }
+    // A second link is refused unless every other link is a sync client's
+    // upload link (Google Drive Folder backup holds one while it uploads).
+    let syncUpload: SyncUploadLinks | null = null;
     if (st.nlink !== 1) {
-      throw new Error(
-        `${what} is multiply linked (a hardlink) and is not trusted: ${path}. ` +
-          `A hardlink can alias content from elsewhere on the filesystem into this ` +
-          `directory. ${HARDLINK_REMEDY}`,
-      );
+      const { accepted, result } = acceptsSyncUploadLinks(path, st);
+      if (!accepted) throw new Error(hardLinkRefusal(what, path, st.nlink, result));
+      syncUpload = result;
     }
     if (maxBytes !== undefined && st.size > maxBytes) {
       throw new Error(
@@ -2248,11 +2254,12 @@ export function readRegularFileNoFollowOrThrow(
     }
     const afterFd = fstatSync(fd);
     if (!sameFileIdentity(fileIdentity(afterRealPath), identity) ||
-        afterFd.nlink !== 1 || afterFd.size !== st.size ||
-        afterFd.mtimeMs !== st.mtimeMs || afterFd.ctimeMs !== st.ctimeMs ||
+        !linksSteadyWhileReading(st, afterFd, syncUpload !== null) ||
+        afterFd.size !== st.size || afterFd.mtimeMs !== st.mtimeMs ||
         bytes.length !== st.size) {
       throw changedDuringReadError(`${what} changed while reading: ${path}`);
     }
+    if (syncUpload !== null) warnSyncUploadOnce(path, st, syncUpload);
     return withSnapshot ? { bytes, mtimeMs: st.mtimeMs } : bytes;
   } finally {
     closeSync(fd);

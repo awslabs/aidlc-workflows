@@ -1295,3 +1295,206 @@ export function syncFolderClause(projectDir: string): string {
   if (service === null) return "";
   return `${syncFolderLabel(service)}. ${SYNC_FOLDER_STEP[0]!.toUpperCase()}${SYNC_FOLDER_STEP.slice(1)}. `;
 }
+
+// A path anyone can name may carry a line break or a control character. In a
+// line the person or the conductor reads it stays one inert line.
+export function inertPath(path: string): string {
+  return path.replace(
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: escaping them is the point
+    /[\u0000-\u001f\u007f-\u009f\u{200e}\u{200f}\u{2028}\u{2029}\u{202a}-\u{202e}\u{2066}-\u{2069}]/gu,
+    (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`,
+  );
+}
+
+// Google Drive's Folder backup hard-links each file it is uploading into a
+// hidden upload folder at the top of the backed-up folder, and drops the link
+// when the upload ends. A record file read during that window has a second
+// link that is Drive's, not an alias someone planted. Only this folder name is
+// known; a link anywhere else stays a refusal.
+export const SYNC_UPLOAD_FOLDERS: ReadonlyMap<string, string> = new Map([
+  [".tmp.driveupload", "Google Drive Folder backup"],
+]);
+export const SYNC_UPLOAD_STEP =
+  "exclude this folder from Google Drive's Folder backup, or move the project out of it";
+// Drive's layout inside the folder is not documented, so the search is
+// recursive; the cap keeps a huge upload folder from stalling every read.
+const SYNC_UPLOAD_MAX_ENTRIES = 10_000;
+
+export interface LinkStat {
+  dev: number;
+  ino: number;
+  nlink: number;
+  ctimeMs: number;
+}
+export interface SyncUploadLinks {
+  /** The service whose upload folder holds a link, or null when none does. */
+  service: string | null;
+  /** The other links found, as real paths. */
+  paths: string[];
+  /** False when a folder could not be searched to the end. */
+  complete: boolean;
+}
+export interface SyncUploadOptions {
+  platform?: NodeJS.Platform;
+  home?: string;
+  uid?: number;
+  maxEntries?: number;
+}
+
+let syncUploadWalks = 0;
+const syncUploadDecisions = new Map<string, { accepted: boolean; result: SyncUploadLinks }>();
+const syncUploadWarned = new Set<string>();
+
+/** How many upload-folder searches this process has run (tests spy on it). */
+export function syncUploadWalkCount(): number {
+  return syncUploadWalks;
+}
+
+export function resetSyncUploadCacheForTests(): void {
+  syncUploadWalks = 0;
+  syncUploadDecisions.clear();
+  syncUploadWarned.clear();
+}
+
+// A folder someone else could have made, or a link to one, could hold any
+// file's second link; only a real folder the current user owns is Drive's.
+// Windows has no uid, so there the real-folder check alone applies.
+function ownUploadFolder(path: string, platform: NodeJS.Platform, uid: number | undefined): boolean {
+  const st = lstatSync(path, { throwIfNoEntry: false });
+  if (st === undefined || st.isSymbolicLink() || !st.isDirectory()) return false;
+  if (platform === "win32") return true;
+  return uid !== undefined && st.uid === uid;
+}
+
+// Every regular file under `folder` with this identity, never through a link.
+// Incomplete when the cap is reached or a folder cannot be listed: a link
+// could be in the part not seen.
+function linksInFolder(folder: string, stat: LinkStat, self: string, maxEntries: number): SyncUploadLinks {
+  const found: SyncUploadLinks = { service: null, paths: [], complete: true };
+  const pending = [folder];
+  let seen = 0;
+  while (pending.length > 0) {
+    const dir = pending.pop()!;
+    let entries: Dirent[];
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return { ...found, complete: false };
+    }
+    for (const entry of entries) {
+      seen++;
+      if (seen > maxEntries) return { ...found, complete: false };
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) pending.push(path);
+      if (!entry.isFile() || path === self) continue;
+      const st = lstatSync(path, { throwIfNoEntry: false });
+      if (st?.isFile() && st.dev === stat.dev && st.ino === stat.ino) found.paths.push(path);
+    }
+  }
+  return found;
+}
+
+/**
+ * The other links of a multiply linked file that sit in a sync service's
+ * upload folder. Looks in each ancestor of the file's real folder, up to the
+ * home folder when the file is inside it and to the filesystem root otherwise.
+ */
+export function syncUploadLinks(path: string, stat: LinkStat, options: SyncUploadOptions = {}): SyncUploadLinks {
+  syncUploadWalks++;
+  const platform = options.platform ?? process.platform;
+  const uid = options.uid ?? process.getuid?.();
+  const maxEntries = options.maxEntries ?? SYNC_UPLOAD_MAX_ENTRIES;
+  const home = realDirectory(options.home ?? homedir());
+  const start = realDirectory(resolve(dirname(path)));
+  if (start === null) return { service: null, paths: [], complete: false };
+  const self = join(start, basename(path));
+  const stop = home !== null && pathWithin(home, start) ? home : null;
+  const result: SyncUploadLinks = { service: null, paths: [], complete: true };
+  for (let dir = start; ; dir = dirname(dir)) {
+    for (const [name, service] of SYNC_UPLOAD_FOLDERS) {
+      const folder = join(dir, name);
+      if (!ownUploadFolder(folder, platform, uid)) continue;
+      const found = linksInFolder(folder, stat, self, maxEntries);
+      if (!found.complete) result.complete = false;
+      if (found.paths.length > 0) result.service ??= service;
+      result.paths.push(...found.paths);
+    }
+    if (dir === stop || dirname(dir) === dir) return result;
+  }
+}
+
+/**
+ * Whether a multiply linked file's every other link is in a sync upload
+ * folder. Cached per process by identity, link count and ctime: a new link
+ * changes both the count and ctime, so a cached accept never covers it.
+ */
+export function acceptsSyncUploadLinks(
+  path: string,
+  stat: LinkStat,
+  options: SyncUploadOptions = {},
+): { accepted: boolean; result: SyncUploadLinks } {
+  const key = `${stat.dev}:${stat.ino}:${stat.nlink}:${stat.ctimeMs}`;
+  const cached = syncUploadDecisions.get(key);
+  if (cached !== undefined) return cached;
+  const result = syncUploadLinks(path, stat, options);
+  const accepted = stat.nlink > 1 && result.complete && result.paths.length === stat.nlink - 1;
+  const decision = { accepted, result };
+  syncUploadDecisions.set(key, decision);
+  return decision;
+}
+
+/** One link, or extra links that are all a sync service's upload links. */
+export function singleOrSyncUploadLinked(path: string, stat: LinkStat): boolean {
+  if (stat.nlink === 1) return true;
+  return stat.nlink > 1 && acceptsSyncUploadLinks(path, stat).accepted;
+}
+
+/**
+ * Whether a file's links held still while it was read. The count may not rise,
+ * and ctime may change only when the open was accepted as a sync upload link
+ * and the count went down: that is the service dropping its link mid-read.
+ */
+export function linksSteadyWhileReading(
+  opened: { nlink: number; ctimeMs: number },
+  after: { nlink: number; ctimeMs: number },
+  syncUploadAccepted: boolean,
+): boolean {
+  if (after.nlink < 1 || after.nlink > opened.nlink) return false;
+  if (after.ctimeMs === opened.ctimeMs) return true;
+  return syncUploadAccepted && after.nlink < opened.nlink;
+}
+
+export function syncUploadWarning(file: string, result: SyncUploadLinks): string {
+  return `AI-DLC read ${inertPath(file)}, which ${result.service ?? "a sync service"} also links while it ` +
+    `uploads (${result.paths.map(inertPath).join(", ")}). To stop this warning, ${SYNC_UPLOAD_STEP}.`;
+}
+
+/** The way past a hardlink refusal. Said in words: a chained shell command does
+ *  not parse in Windows PowerShell 5.1, and cmd has no cp or mv. */
+export const HARDLINK_REMEDY = "Copy the file, delete the original, give the copy the original's name, then re-run.";
+
+/** The refusal of a multiply linked file, naming what AI-DLC found of its other links. */
+export function hardLinkRefusal(what: string, path: string, nlink: number, result: SyncUploadLinks): string {
+  const others = nlink - 1;
+  const found = result.paths.length;
+  const missing = Math.max(0, others - found);
+  const where = found === 0
+    ? `${others === 1 ? "Another link exists" : `${others} other links exist`} outside the folders AI-DLC ` +
+      "checks, and AI-DLC cannot see where. "
+    : `${found === 1 ? "One other link is" : `${found} other links are`} in ${result.service}'s upload folder ` +
+      `(${result.paths.map(inertPath).join(", ")}); ${missing} ${missing === 1 ? "link" : "links"} unaccounted for. `;
+  const cut = result.complete ? "" : "AI-DLC could not search an upload folder to the end. ";
+  // The leading words are the refusal callers and scripts already match on.
+  return `${what} is multiply linked (a hardlink) and is not trusted: ${inertPath(path)}. ` +
+    `It has ${nlink} links. ${where}${cut}` +
+    "A hardlink can alias content from elsewhere on the filesystem into this directory; backup and sync " +
+    `clients commonly make them. ${HARDLINK_REMEDY}`;
+}
+
+/** Prints the accepted-link warning at most once per file per process. */
+export function warnSyncUploadOnce(file: string, stat: LinkStat, result: SyncUploadLinks): void {
+  const key = `${stat.dev}:${stat.ino}`;
+  if (syncUploadWarned.has(key)) return;
+  syncUploadWarned.add(key);
+  process.stderr.write(`${syncUploadWarning(file, result)}\n`);
+}
