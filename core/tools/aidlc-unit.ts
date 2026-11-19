@@ -72,6 +72,7 @@ import {
   isTeamUnitOwnership,
   isoTimestamp,
   isRequestTurn,
+  pathContainedBy,
   loadStageGraphAll,
   engineAskMark,
   noteEngineAskMark,
@@ -16645,6 +16646,22 @@ function codexWritableLine(pd: string, repos: string[]): string {
     `start Codex here with \`codex ${outside.map((path) => `--add-dir ${shellArg(path)}`).join(" ")}\`.`;
 }
 
+// On Kiro, whose agents write without asking only inside the folder it was
+// opened in (t252-kiro-allowlist-semantics): a line saying why it may ask in
+// the Unit's repos that sit outside the workspace. AI-DLC changes no setting.
+function kiroWritableLine(pd: string, repos: string[]): string {
+  if (!["kiro", "kiro-ide"].includes(runtimeHarnessName(pd))) return "";
+  const local = readWorkspaceRepos(pd);
+  const outside = repos.filter((repo) => !pathContainedBy(resolve(pd), resolve(repoDir(pd, repo))))
+    .map((repo) => displayRepoPath(local.entries.get(repo)?.path ?? repo));
+  if (outside.length === 0) return "";
+  return ` ${joinNames(outside)} ${outside.length === 1 ? "is" : "are"} outside this folder, so Kiro may ask you to approve its changes there.`;
+}
+
+function writableLines(pd: string, repos: string[]): string {
+  return codexWritableLine(pd, repos) + kiroWritableLine(pd, repos);
+}
+
 // The offer to clone a Unit build's likely repos that this workspace has no
 // checkout of and repos.json gives an address for: put by the build's own next
 // step, once, so it reaches the person whatever the agent did with the take's
@@ -16702,7 +16719,7 @@ function likelyReposNotHere(
     `${maskUserinfo(leadAddresses.get(repo)!)}`))}. Do you want me to clone ${fromLead.length === 1 ? "it" : "them"} here?`;
   return {
     lines: missing.filter((repo) => !cloneable.includes(repo) && !fromLead.includes(repo)).map((repo) => ` ${repoNotThereLine(pd, repo)}`).join("") +
-      codexWritableLine(pd, likely.length > 0 ? [...new Set(likely.map((repo) => repo.split("/")[0]))].filter((repo) => recorded.includes(repo)) : recorded),
+      writableLines(pd, likely.length > 0 ? [...new Set(likely.map((repo) => repo.split("/")[0]))].filter((repo) => recorded.includes(repo)) : recorded),
     question: (cloneable.length > 0 ? ` ${repoCloneOfferLine(pd, cloneable)}` : "") + leadLine,
     offer: cloneable.length === 0 && fromLead.length === 0 ? {} : {
       offer: {

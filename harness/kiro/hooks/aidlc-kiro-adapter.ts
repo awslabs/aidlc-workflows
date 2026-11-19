@@ -63,7 +63,6 @@ import {
   hostEnvelopeTurnText,
   KIRO_CLI_HOST_TEMPLATES,
   kiroTurnOrigin,
-  isAidlcAgentFile,
   leadingOrchestratorVerb,
   noteKiroCliSteerRecorded,
   pendingPersonLines,
@@ -78,8 +77,9 @@ import {
 } from "../tools/aidlc-lib.ts";
 import { terminalDispatcherArgv } from "../tools/aidlc.ts";
 import { SAY_ONCE_BEFORE_THEY_REPLY } from "../tools/aidlc-directive.ts";
-import { ACTIVE_MEMORY_DIR, EARLIER_ACTIVE_MEMORY_DIR, refreshActiveMemory } from "../tools/aidlc-includes.ts";
+import { ACTIVE_MEMORY_DIR, EARLIER_ACTIVE_MEMORY_DIR, isKiroRosterWorker, refreshActiveMemory } from "../tools/aidlc-includes.ts";
 import { HOOK_PRE_DISPATCH_ENV } from "../tools/aidlc-locks.ts";
+import { leadRulesBrief, leadRulesBriefLine } from "../tools/aidlc-steering.ts";
 import { aidlcInvocation, typedHarnessName } from "../tools/aidlc-runtime-paths.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
@@ -205,17 +205,48 @@ function kiroDispatch(input: KiroHookInput): KiroDispatch | null {
 
 type PreloadFailure = { message: string };
 
-function nativePreloadError(projectDir: string, agents: string[]): PreloadFailure | null {
-  // Match the shared delivery hook's installed Markdown roster, including
-  // plugin personas, and its composer exemption. JSON-only helpers are outside
-  // that contract even when their names use the aidlc- prefix.
+// The dispatch's roster workers (isKiroRosterWorker).
+function rosterWorkers(agents: string[]): string[] {
   const rosterDir = agentsDir();
-  const workers = agents.filter((agent) =>
-    /^[a-z0-9][a-z0-9-]*-agent$/.test(agent) &&
-    agent !== "aidlc-composer-agent" &&
-    existsSync(join(rosterDir, `${agent}.md`)) &&
-    isAidlcAgentFile(join(rosterDir, `${agent}.md`))
-  );
+  return agents.filter((agent) => isKiroRosterWorker(rosterDir, agent));
+}
+
+// Each roster worker's brief in a dispatch: a crew stage's own prompt, which is
+// all Kiro hands that stage's worker (the captured 2.29 crew payload's helper
+// prompt is its prompt_template, not the dispatch's task), or the direct
+// dispatch's task and prompt.
+function workerBriefs(input: KiroHookInput, dispatch: KiroDispatch): Array<{ agent: string; brief: string }> {
+  const toolInput = input.tool_input ?? {};
+  const shared = [firstNonBlank([toolInput.task]), firstNonBlank([toolInput.prompt])].join("\n");
+  const stages = (Array.isArray(toolInput.stages) ? toolInput.stages : [])
+    .filter((stage): stage is { role?: unknown; prompt_template?: unknown } => stage !== null && typeof stage === "object")
+    .filter((stage) => typeof stage.role === "string" && stage.role.trim().length > 0)
+    .map((stage) => ({ agent: String(stage.role).trim(), brief: firstNonBlank([stage.prompt_template]) }));
+  // A direct dispatch's worker gets the prompt kiroDispatch picked.
+  const direct = dispatch.agents.filter((agent) => !stages.some((stage) => stage.agent === agent))
+    .map((agent) => ({ agent, brief: stages.length > 0 ? shared : dispatch.prompt }));
+  const workers = new Set(rosterWorkers(dispatch.agents));
+  return [...stages, ...direct].filter((entry) => workers.has(entry.agent));
+}
+
+// A team's build that follows the lead's rules: on Kiro CLI the brief is the
+// only way they reach a worker, so a dispatch with a brief that does not name
+// them is held, with the line to add and every worker whose brief lacks it.
+function leadRulesBriefError(projectDir: string, input: KiroHookInput, dispatch: KiroDispatch): string | null {
+  const briefs = workerBriefs(input, dispatch);
+  if (briefs.length === 0) return null;
+  const brief = leadRulesBrief(projectDir);
+  if (brief === null || !("file" in brief)) return null;
+  const missing = [...new Set(briefs.filter((entry) => !entry.brief.includes(brief.file)).map((entry) => entry.agent))];
+  if (missing.length === 0) return null;
+  return `[aidlc] Worker dispatch blocked: this Unit's build follows the lead's rules, which reach a Kiro CLI specialist ` +
+    `only through its brief. Add this line word for word to the brief of ${missing.join(", ")} (in a crew, each stage's own ` +
+    `prompt_template, which is all that stage's worker gets; in a direct dispatch, its prompt), then start the dispatch again: ` +
+    `${leadRulesBriefLine(brief.file)}\n`;
+}
+
+function nativePreloadError(projectDir: string, agents: string[]): PreloadFailure | null {
+  const workers = rosterWorkers(agents);
   if (workers.length === 0) return null;
   // The workers read the engine's copy of the active space's memory
   // (aidlc-includes.ts), made current right before this check. A worker file
@@ -224,8 +255,7 @@ function nativePreloadError(projectDir: string, agents: string[]): PreloadFailur
   // here: Kiro may already have read the config, and a skipped or failed
   // write must not silently admit work.
   const space = activeSpace(projectDir);
-  const pattern = `${ACTIVE_MEMORY_DIR}/**/*.md`;
-  const expected = `file://${pattern}`;
+  const expected = `file://${ACTIVE_MEMORY_DIR}/**/*.md`;
   // An earlier release's agent files read the copy where it kept it, which
   // the refresh keeps writing while they name it (aidlc-includes.ts).
   const accepted = [expected, `file://${EARLIER_ACTIVE_MEMORY_DIR}/**/*.md`, `file://aidlc/spaces/${space}/memory/**/*.md`];
@@ -240,6 +270,9 @@ function nativePreloadError(projectDir: string, agents: string[]): PreloadFailur
   });
   const reinstall = `Run \`${aidlcInvocation()} config --harness ${typedHarnessName("kiro")}\` in a terminal to put AI-DLC's Kiro files back, ` +
     `then start the specialist again; /aidlc --doctor names anything still wrong.`;
+  // Each worker reads the folder its own resources name, which can differ
+  // from another worker's when Kiro upgraded some agent files.
+  const declared = new Map<string, string[]>();
   for (const agent of new Set(workers)) {
     const file = join(projectDir, ".kiro", "agents", `${agent}.json`);
     try {
@@ -260,6 +293,7 @@ function nativePreloadError(projectDir: string, agents: string[]): PreloadFailur
         );
         return failure(agent, `the active-space memory preload is ${otherSpace ? "stale" : "absent"}`, reinstall);
       }
+      declared.set(agent, accepted.filter((glob) => resources.includes(glob)));
     } catch (error) {
       return failure(
         agent,
@@ -273,16 +307,22 @@ function nativePreloadError(projectDir: string, agents: string[]): PreloadFailur
   const restore = `Put this space's method files back under aidlc/spaces/${space}/memory/ ` +
     `(for example \`git checkout -- aidlc/spaces/${space}/memory/org.md\` for a tracked file that is missing), ` +
     `then start the specialist again.`;
-  try {
-    for (const _file of new Bun.Glob(pattern).scanSync({
-      cwd: projectDir,
-      onlyFiles: true,
-      followSymlinks: false,
-    })) return null;
-    return failure(workers[0], "the active-space memory glob resolves to no Markdown files", restore);
-  } catch (error) {
-    return failure(workers[0], `cannot resolve the active-space memory glob: ${String(error).replace(/[\r\n]+/g, " ")}`, restore);
+  for (const [agent, globs] of declared) {
+    try {
+      const resolves = globs.some((glob) => {
+        for (const _file of new Bun.Glob(glob.slice("file://".length)).scanSync({
+          cwd: projectDir,
+          onlyFiles: true,
+          followSymlinks: false,
+        })) return true;
+        return false;
+      });
+      if (!resolves) return failure(agent, `the active-space memory glob resolves to no Markdown files (${globs.join(", ")})`, restore);
+    } catch (error) {
+      return failure(agent, `cannot resolve the active-space memory glob: ${String(error).replace(/[\r\n]+/g, " ")}`, restore);
+    }
   }
+  return null;
 }
 
 export async function run(
@@ -1335,8 +1375,11 @@ if (target === "deliver-stage-rules") {
   // The shared hook's self-gate, first: a conversation that has not joined the
   // selected workflow gets none of its rules, so its preload is not held either.
   const dispatchWorkflow = enterHookWorkflow(projectDir, kiro.session_id);
+  let leadError: string | null = null;
   try {
     if (hookStandsOutside(dispatchWorkflow)) return 0;
+    // Read for this conversation's workflow; said after the preload check.
+    leadError = leadRulesBriefError(projectDir, kiro, dispatch);
   } finally {
     dispatchWorkflow.restore();
   }
@@ -1351,6 +1394,10 @@ if (target === "deliver-stage-rules") {
     hookDebug(projectDir, "kiro-adapter", "Native active-space memory preload failed", {
       target, transport: "native-preload", error: preloadError.message.trim(),
     });
+    return 2;
+  }
+  if (leadError !== null) {
+    process.stderr.write(leadError);
     return 2;
   }
   const executable = process.env.AIDLC_COMPILED_EXECUTABLE;

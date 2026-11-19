@@ -1010,6 +1010,9 @@ import {
 } from "./aidlc-knowledge.ts";
 import { deepFolder } from "./aidlc-folder-depth.ts";
 import {
+  kiroLeadRulesBrief,
+  LEAD_RULES_UNSAVED_LINE,
+  leadRulesBriefLine,
   readRuleBundle,
   restoreSpacePhaseRules,
   rulesContentEntries,
@@ -1240,9 +1243,31 @@ function switchOffNoticesOnce(projectDir: string): string[] {
 // so every one passes where a team's build has its repositories.
 function withStepNotes(directive: Directive): Directive {
   const here = directive.kind === "run-stage" && engineProjectDir ? reposHereSentence(engineProjectDir) : null;
+  const brief = directive.kind === "run-stage" && engineProjectDir ? kiroLeadBrief(engineProjectDir) : null;
+  const lead = brief !== null && "file" in brief ? leadRulesBriefLine(brief.file) : null;
   return withAgentNotes(
-    directive, aidlcToolInvocation("orchestrate"), aidlcToolInvocation("log"), undefined, switchBackOnFollowUps(directive), here,
+    directive, aidlcToolInvocation("orchestrate"), aidlcToolInvocation("log"), undefined, switchBackOnFollowUps(directive),
+    [here, lead].filter((note) => note !== null).join(" ") || null,
   );
+}
+
+// The lead's rules a team's build follows, for Kiro CLI (V2) briefs: read and
+// written once per piece of work in a command, so the step's line and its
+// notice agree; a file that could not be written is said once, on whichever
+// step reads it first.
+let kiroLeadBriefRead: { record: string; brief: ReturnType<typeof kiroLeadRulesBrief> } | null = null;
+function kiroLeadBrief(projectDir: string): ReturnType<typeof kiroLeadRulesBrief> {
+  let record: string;
+  try {
+    record = stateFilePath(projectDir);
+  } catch {
+    return null;
+  }
+  if (kiroLeadBriefRead?.record !== record) {
+    kiroLeadBriefRead = { record, brief: kiroLeadRulesBrief(projectDir) };
+    if (kiroLeadBriefRead.brief !== null && "unsaved" in kiroLeadBriefRead.brief) sayWithStepOnce(projectDir, LEAD_RULES_UNSAVED_LINE);
+  }
+  return kiroLeadBriefRead.brief;
 }
 
 // Where each repository of a team's build is on this computer, for the agent
@@ -15236,6 +15261,8 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   // Read again: the look above may have moved the build to where its plan went.
   const leadUnread = stateContent !== null ? leadRulesUnreadLine(pd, loadStateFileIfPresent(pd) ?? stateContent) : null;
   if (leadUnread !== null) sayWithStepOnce(pd, leadUnread);
+  // On Kiro CLI (V2), the lead's rules read but not saved for the specialists' briefs.
+  if (stateContent !== null) kiroLeadBrief(pd);
   // The plan by the address the person said, or every plan this workspace's
   // repositories hold when they asked with none: its Units to take.
   const leadAddress = flags.leadAddress !== undefined ? leadAddressStep(pd, flags.leadAddress)
