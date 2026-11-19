@@ -2436,6 +2436,26 @@ describe("the way back from a take, and the lead's release", () => {
     const took = takeFrom("web", cloneOf(home.remote, "wes"), "checkout-ui");
     expect(took.status, took.out).toBe(0);
   });
+
+  // A worktree of the lead's checkout reads as another computer of the lead's:
+  // the plan at its host is what the release writes, so it frees the Unit
+  // there too; pin and land are main's own team flow and stay in the main checkout.
+  test("the lead's release from a worktree of their checkout reopens a teammate's Unit; pin and land there still refuse", () => {
+    const home = homeWithTeams();
+    expect(takeFrom("payments", cloneOf(home.remote, "sam"), "refunds").status).toBe(0);
+    const tree = join(tempDir("lead-worktree"), "lead-worktree");
+    git(home.dir, ["worktree", "add", "-q", "-b", "lead-worktree", tree, "main"]);
+    expect(run(UTILITY, ["intent", "switch", HOME], tree).status).toBe(0);
+    const released = run(UNIT, ["release", "refunds"], tree);
+    expect(released.status, released.out).toBe(0);
+    expect(String(released.json?.notice)).toContain("Written on the plan: refunds is open again.");
+    expect(takeFrom("web", cloneOf(home.remote, "dora"), "refunds").status).toBe(0);
+    for (const verb of ["pin", "land"]) {
+      const refused = run(UNIT, [verb, "refunds"], tree);
+      expect(refused.status, verb).not.toBe(0);
+      expect(refused.out, verb).toContain("This command must run from the unscoped main checkout, not sibling worktree");
+    }
+  });
 });
 
 // A take builds in the space the person works in, never one named after a

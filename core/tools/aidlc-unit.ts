@@ -5878,15 +5878,17 @@ function releaseUnit(args: string[], projectDir?: string): void {
   if (readApplicableTeamUnitScopeStamp(pd)) {
     fail("release must run from an unscoped checkout.");
   }
-  assertMainCheckout(pd);
   const state = readStateFile(pd);
-  if (!isTeamUnitOwnership(state)) fail("Unit release requires Unit Ownership: team.");
   // Work teams build: the lead opens the take again on the plan, and the next
-  // take writes over it; the record stays its builder's.
-  if (homeLocation(state) !== null) {
+  // take writes over it; the record stays its builder's. The plan at its host
+  // is the record, so any checkout of the lead's writes it, a worktree too;
+  // main's own team flow keeps its claims in the main checkout.
+  if (isTeamUnitOwnership(state) && homeLocation(state) !== null) {
     openAgain(pd, unit);
     return;
   }
+  assertMainCheckout(pd);
+  if (!isTeamUnitOwnership(state)) fail("Unit release requires Unit Ownership: team.");
   const identity = activeIdentity(pd);
   const integration = fetchIntegration(pd);
   const ref = claimRefFor(state, identity.intentId8, unit);
