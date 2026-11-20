@@ -14,6 +14,7 @@ import {
   resolveBoltDag,
   resolveProjectDir,
   usesStageLevelPerUnitArtifacts,
+  visibleMarkdownLines,
 } from "./aidlc-lib.ts";
 import { aidlcDispatcherInvocation, sensorFireUsage } from "./aidlc-runtime-paths.ts";
 
@@ -87,6 +88,7 @@ const ID_PATTERNS = {
   US: /\bUS\d+\.\d+\b/g,
   AC: /\bAC\d+\.\d+\.\d+\b/g,
   BR: /\bBR\d+\.\d+\b/g,
+  UX: /\bUX\d+\.\d+\.\d+\b/g,
 };
 
 function parseFlags(argv: string[]): Flags {
@@ -284,6 +286,85 @@ function criteriaOfStories(storiesContent: string, stories: Set<string>): Set<st
     if (stories.has(`US${group}.${story}`)) criteria.add(ac);
   }
   return criteria;
+}
+
+// An experience decision `UX{g}.{s}.{n}` belongs to the story `US{g}.{s}`, the
+// way an acceptance criterion does; `null` stories means the run owes them all.
+// An app-wide decision (`UX0.0.{n}`, such as the breakpoints or the
+// accessibility level) belongs to no story, so every such Unit owes it.
+function decisionsOfStories(specContent: string, stories: Set<string> | null): Set<string> {
+  const decisions = new Set<string>();
+  for (const ux of experienceDecisions(specContent)) {
+    if (stories === null || isAppWide(ux) || stories.has(storyOfDecision(ux))) decisions.add(ux);
+  }
+  return decisions;
+}
+
+const APP_WIDE_STORY = "US0.0";
+
+function isAppWide(ux: string): boolean {
+  return storyOfDecision(ux) === APP_WIDE_STORY;
+}
+
+// Every UX ID a reader of interaction-spec.md sees, as AC IDs are read from
+// stories.md. The shared parser says what renders: code, comments, link
+// reference definitions, and script-like HTML do not; an HTML block's text does.
+function experienceDecisions(specContent: string): Set<string> {
+  const shown = visibleMarkdownLines(specContent, { omitDefinitions: true, keepHtmlBlockText: true });
+  return extractIds(shown.join("\n"), [ID_PATTERNS.UX]);
+}
+
+// Functional Design designs a decision in frontend-components.md, so a Unit
+// owes it there exactly when it writes that file; otherwise it may mark it N/A.
+function designsExperience(context: UnitContext): boolean {
+  return designWrites(context.kind, "frontend-components");
+}
+
+function storyOfDecision(ux: string): string {
+  const [group, story] = ux.slice(2).split(".");
+  return `US${group}.${story}`;
+}
+
+// A decision whose story stories.md lacks belongs to no Unit. Refined Mockups'
+// own check says it before the person approves; after that only Build and
+// Test's cross-Unit check says it again, once, not every Unit's table.
+function experienceProblems(specContent: string, storiesContent: string | null): string[] {
+  if (storiesContent === null) return [];
+  const stories = extractIds(storiesContent, [ID_PATTERNS.US]);
+  return [...experienceDecisions(specContent)]
+    .filter((id) => !isAppWide(id) && !stories.has(storyOfDecision(id)))
+    .map((id) => `interaction-spec.md's ${id} names story ${storyOfDecision(id)}, which stories.md does not have ` +
+      `(an app-wide decision is UX0.0.<n>); fix it at Refined Mockups`);
+}
+
+// Refined Mockups' own check, fired on interaction-spec.md before its gate:
+// every story-keyed decision names a story stories.md has.
+function interactionSpecResult(specPath: string, projectDir: string): Result {
+  const read = readText(specPath);
+  if (read.content === null) return failedResult(read.reason ?? `cannot read ${specPath}`);
+  const docsDir = recordDir(projectDir);
+  const storiesFile = docsDir ? join(docsDir, "inception", "user-stories", "stories.md") : null;
+  const storiesContent = storiesFile && existsSync(storiesFile) ? readText(storiesFile).content : null;
+  const problems = experienceProblems(read.content, storiesContent);
+  return {
+    pass: problems.length === 0,
+    gaps: [],
+    orphans: [],
+    missing_from_table: [],
+    missing_from_upstream_ids: [],
+    invalid_entries: [],
+    invalid_targets: problems,
+    findings_count: problems.length,
+    ...(problems.length > 0 ? { reason: problems.join("; ") } : {}),
+  };
+}
+
+function addExperienceDecisions(result: UpstreamResolution, docsDir: string, stories: Set<string> | null): void {
+  const interactionSpec = join(docsDir, "inception", "refined-mockups", "interaction-spec.md");
+  if (!existsSync(interactionSpec)) return;
+  const read = readText(interactionSpec);
+  if (read.content === null) return;
+  for (const id of decisionsOfStories(read.content, stories)) result.ids.add(id);
 }
 
 function idsFromFile(path: string, patterns: RegExp[], label: string): { ids: Set<string>; reason?: string } {
@@ -625,10 +706,12 @@ function resolveUpstream(stage: string, projectDir: string, outputPath: string, 
       }
       for (const ac of criteriaOfStories(storyRead.content, unitStories)) result.ids.add(ac);
       if (result.ids.size === 0) result.reasons.push(`stories mapped to unit "${unit}" contain no acceptance-criterion IDs`);
+      if (designsExperience(resolvedUnit.context)) addExperienceDecisions(result, docsDir, unitStories);
     } else if (unit && existsSync(storyMap)) {
       addUnitRows(result, storyMap, resolvedUnit.context, [ID_PATTERNS.FR]);
     } else {
       addRequirements(result, ["functional"], declared);
+      if (existsSync(stories) && designsExperience(resolvedUnit.context)) addExperienceDecisions(result, docsDir, null);
     }
     return result;
   }
@@ -651,6 +734,12 @@ function resolveUpstream(stage: string, projectDir: string, outputPath: string, 
     return result;
   }
   if (stage === "code-generation") {
+    // The experience decisions this run owes follow its stories: a Unit's own
+    // stories through the story map, every story otherwise. Without stories a
+    // Unit has no story to own a decision through, so it owes none. A Unit
+    // that does not build one of them, such as a schema Unit sharing a story,
+    // marks it N/A with its reason.
+    let decisionStories: Set<string> | null | undefined;
     if (existsSync(stories)) {
       if (unit && existsSync(storyMap)) {
         const mapped = storyAssignments(storyMap, resolvedUnit.context.units, resolvedUnit.context.unitIds, [ID_PATTERNS.US]);
@@ -665,14 +754,18 @@ function resolveUpstream(stage: string, projectDir: string, outputPath: string, 
         if (storyRead.content !== null) {
           for (const ac of criteriaOfStories(storyRead.content, unitStories)) result.ids.add(ac);
         }
+        decisionStories = unitStories;
       } else {
         addSource(result, idsFromFile(stories, [ID_PATTERNS.AC], "stories.md"));
+        decisionStories = null;
       }
     } else if (unit && existsSync(storyMap)) {
       addUnitRows(result, storyMap, resolvedUnit.context, [ID_PATTERNS.FR, ID_PATTERNS.NFR]);
     } else {
       addRequirements(result, ["functional", "non-functional"], declared);
+      decisionStories = null;
     }
+    if (decisionStories !== undefined) addExperienceDecisions(result, docsDir, decisionStories);
     for (const id of detailedNfrIds(constructionDir(docsDir, unit, "nfr-requirements"), NFR_REQUIREMENT_FILES) ?? []) {
       result.ids.add(id);
     }
@@ -751,7 +844,15 @@ function verifyTargets(
           .filter((artifact) => designWrites(upstream.unitContext?.kind, artifact))
           .map((artifact) => `${artifact}.md`);
       const targeted = new Set<string>();
+      const components = join(designDir, "frontend-components.md");
       for (const entry of okEntries) {
+        // An experience decision is designed in a component, not a rule: its
+        // target is this Unit's frontend-components.md, which must cite it.
+        if (extractIds(entry.id, [ID_PATTERNS.UX]).size > 0) {
+          const problem = experienceTargetProblem(components, [projectDir, docsDir], entry.id, entry.target);
+          if (problem) invalidTargets.push(`${entry.id}: ${problem}`);
+          continue;
+        }
         // A rules.md kept from earlier work still takes rows that name its rules.
         if (!writesRules && (rules.ids.size === 0 || extractIds(entry.target ?? "", [ID_PATTERNS.BR]).size === 0)) {
           const file = designFiles.find((name) => name === normalizePath(entry.target?.trim() ?? ""));
@@ -785,6 +886,21 @@ function verifyTargets(
   }
 
   return { invalidTargets, derivedOrphans, reasons };
+}
+
+// Why a Functional Design `OK` row for an experience decision does not point at
+// a frontend-components.md that cites it.
+// The target names the file beside the table, or resolves to it from the
+// project or the record.
+function experienceTargetProblem(components: string, roots: string[], id: string, rawTarget: string | undefined): string | null {
+  const target = normalizePath(rawTarget?.trim() ?? "");
+  const own = resolve(components);
+  if (target !== "frontend-components.md" && !roots.some((root) => resolve(root, target) === own)) {
+    return "target must be this Unit's frontend-components.md";
+  }
+  const read = readText(components);
+  if (read.content === null) return read.reason ?? `cannot read ${components}`;
+  return extractIds(read.content, Object.values(ID_PATTERNS)).has(id) ? null : `frontend-components.md does not cite ${id}`;
 }
 
 // Why a Code Generation `OK` target is not one existing workspace-relative file.
@@ -845,7 +961,8 @@ function keptOutOfEveryUnit(unassigned: readonly string[], coverage: readonly Co
 // recorded (without a record, every one the FR and NFR patterns find in
 // requirements.md and every one User Stories traced, or when it did not run
 // every one a Code Generation table lists) and, when User Stories ran,
-// every criterion in stories.md, each built by an `OK`
+// every criterion in stories.md, plus every experience decision in
+// interaction-spec.md that Construction owes, each built by an `OK`
 // row whose file exists in some Code Generation table. A requirement with
 // sub-requirements (NFR1 over a Unit's NFR1.1) is built when each Unit has built
 // its own, and a row for the parent alone does not cover them; else it is built
@@ -866,6 +983,7 @@ function finalCoverage(projectDir: string): FinalCoverage {
   const reasons: string[] = [];
   const recorded = recordedRequirements(docsDir);
   const criteria: string[] = [];
+  const experience: string[] = [];
   const tracedByStories: string[] = [];
   const tracedByCode: string[] = [];
 
@@ -980,12 +1098,24 @@ function finalCoverage(projectDir: string): FinalCoverage {
     }
   }
   if (tables === 0) reasons.push(`no Code Generation traceability.json under ${construction}`);
+  const interactionSpec = join(docsDir, "inception", "refined-mockups", "interaction-spec.md");
+  // With stories, every story-keyed decision should reach one of their Units.
+  // A zero-Unit run owes every decision too. A Unit plan keyed directly by
+  // requirement rows has no story ownership, so it owes none.
+  if (existsSync(interactionSpec) && (storyContent !== null || existsSync(join(construction, "code-generation", "traceability.json")))) {
+    const read = readText(interactionSpec);
+    if (read.reason) reasons.push(read.reason);
+    if (read.content !== null) {
+      experience.push(...experienceDecisions(read.content));
+      reasons.push(...experienceProblems(read.content, storyContent));
+    }
+  }
   // Without a record requirements.md's reasons are not said, as in addRequirements.
   const requirementIds = recorded !== null ? [...recorded.keys()] : [
     ...idsFromFile(join(docsDir, "inception", "requirements-analysis", "requirements.md"), [ID_PATTERNS.FR, ID_PATTERNS.NFR], "requirements.md").ids,
     ...(storyContent !== null ? tracedByStories : tracedByCode),
   ];
-  const reported = [...new Set([...withoutTracedParents(new Set(requirementIds), recorded), ...criteria])];
+  const reported = [...new Set([...withoutTracedParents(new Set(requirementIds), recorded), ...criteria, ...experience])];
 
   const coverage: FinalRow[] = [];
   for (const id of reported) {
@@ -1155,6 +1285,10 @@ export function main(argv: string[]): void {
   if (!flags.outputPath) fail("--output-path is required");
   const outputPath = normalizePath(flags.outputPath);
   if (!existsSync(outputPath)) fail(`--output-path not found: ${flags.outputPath}`);
+  if (basename(outputPath) === "interaction-spec.md") {
+    emit(interactionSpecResult(outputPath, resolveProjectDir()));
+    return;
+  }
 
   let body: string;
   try {

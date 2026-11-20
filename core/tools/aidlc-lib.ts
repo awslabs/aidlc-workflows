@@ -29712,18 +29712,37 @@ export function shownLastWrittenAt(projectDir: string, shown: ShownWriting): str
 // A stage gate shows the outputs of every stage it approves (its own, and the
 // ones its latest showing approves together), as their review reads them
 // (reviewedArtifactUnit: produces and optional_produces, the questions file
-// aside: the answers written back there after a reply are the person's).
+// aside: the answers written back there after a reply are the person's). It
+// shows the files written by the time it was last opened: a file written only
+// after that (an output an update made required while the gate waited, such as
+// Refined Mockups' preview) is none of what the person saw, so writing it
+// leaves their reply standing; its review still covers it.
 export function gateOutputWriting(projectDir: string, slug: string): ShownWriting | undefined {
   const stages = [...new Set([slug, ...openGateApprovesTogether(projectDir, slug)])]
     .flatMap((each) => findStageBySlug(each) ?? []);
   if (stages.length === 0) return undefined;
   const repos = new Set(intentRepos(projectDir));
+  const outputFile = (row: AuditShardEvent): string | null => {
+    if (row.event !== "ARTIFACT_CREATED" && row.event !== "ARTIFACT_UPDATED") return null;
+    const file = auditBlockField(row.block, "File");
+    return file !== null && stages.some((stage) => reviewedArtifactUnit(stage, file, repos) !== undefined) ? file : null;
+  };
+  let shownFiles: Set<string> | null = null;
+  try {
+    const { mine } = ownShardRows(projectDir);
+    const opened = mine.findLastIndex((row) =>
+      row.event === "STAGE_AWAITING_APPROVAL" && auditBlockField(row.block, "Stage") === slug);
+    if (opened >= 0) {
+      shownFiles = new Set(mine.slice(0, opened).flatMap((row) => outputFile(row) ?? []));
+    }
+  } catch {
+    shownFiles = null;
+  }
   return {
     what: "the gate's output",
     writes: (row) => {
-      if (row.event !== "ARTIFACT_CREATED" && row.event !== "ARTIFACT_UPDATED") return false;
-      const file = auditBlockField(row.block, "File");
-      return file !== null && stages.some((stage) => reviewedArtifactUnit(stage, file, repos) !== undefined);
+      const file = outputFile(row);
+      return file !== null && (shownFiles === null || shownFiles.has(file));
     },
   };
 }

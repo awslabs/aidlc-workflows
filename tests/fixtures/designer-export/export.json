@@ -1155,7 +1155,7 @@
           "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-traceability",
-          "matches": "**/traceability.json"
+          "matches": "**/{traceability.json,interaction-spec.md}"
         }
       ]
     },
@@ -1176,6 +1176,7 @@
         "interaction-spec",
         "design-system-mapping",
         "accessibility-checklist",
+        "mockups-preview",
         "refined-mockups-questions"
       ],
       "consumes": [
@@ -1198,6 +1199,11 @@
         {
           "artifact": "team-practices",
           "required": false
+        },
+        {
+          "artifact": "component-inventory",
+          "required": false,
+          "conditional_on": "brownfield"
         }
       ],
       "requires_stage": [
@@ -1205,7 +1211,8 @@
       ],
       "sensors": [
         "required-sections",
-        "upstream-coverage"
+        "upstream-coverage",
+        "traceability"
       ],
       "scopes": [
         "enterprise",
@@ -1219,8 +1226,8 @@
       "reviewer_max_iterations": 2,
       "review_class": "advisory",
       "summary_confirmation": "required",
-      "inputs": "Rough mockups from rough-mockups stage, user stories from user-stories stage, requirements from requirements-analysis stage",
-      "outputs": "mockups.md, interaction-spec.md, design-system-mapping.md, accessibility-checklist.md, refined-mockups-questions.md (under this stage's record dir, engine-resolved)",
+      "inputs": "Rough mockups from rough-mockups stage, user stories from user-stories stage, requirements from requirements-analysis stage, RE component-inventory.md (if brownfield), the team's documents (the documents card)",
+      "outputs": "mockups.md, interaction-spec.md, design-system-mapping.md, accessibility-checklist.md, mockups-preview.html, refined-mockups-questions.md (under this stage's record dir, engine-resolved)",
       "rules_in_context": [
         {
           "path": "aidlc/spaces/default/memory/org.md",
@@ -1255,6 +1262,14 @@
           "default_severity": "advisory",
           "category": "document-shape",
           "matches": "**/{aidlc-docs,intents,codekb}/**"
+        },
+        {
+          "id": "traceability",
+          "path": ".claude/sensors/aidlc-traceability.md",
+          "fire_on": "gate",
+          "default_severity": "advisory",
+          "category": "document-traceability",
+          "matches": "**/{traceability.json,interaction-spec.md}"
         }
       ]
     },
@@ -1364,7 +1379,7 @@
           "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-traceability",
-          "matches": "**/traceability.json"
+          "matches": "**/{traceability.json,interaction-spec.md}"
         }
       ]
     },
@@ -1467,7 +1482,7 @@
           "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-traceability",
-          "matches": "**/traceability.json"
+          "matches": "**/{traceability.json,interaction-spec.md}"
         }
       ]
     },
@@ -1746,6 +1761,26 @@
         {
           "artifact": "contract-summary",
           "required": false
+        },
+        {
+          "artifact": "mockups",
+          "required": false
+        },
+        {
+          "artifact": "mockups-preview",
+          "required": false
+        },
+        {
+          "artifact": "interaction-spec",
+          "required": false
+        },
+        {
+          "artifact": "design-system-mapping",
+          "required": false
+        },
+        {
+          "artifact": "accessibility-checklist",
+          "required": false
         }
       ],
       "requires_stage": [
@@ -1772,7 +1807,7 @@
       "reviewer_max_iterations": 2,
       "review_class": "adversarial",
       "summary_confirmation": "required",
-      "inputs": "unit-of-work.md, unit-of-work-story-map.md, user-stories stories.md (if produced), requirements.md, domain-design components.md, contract-design contract-summary.md (if produced)",
+      "inputs": "unit-of-work.md, unit-of-work-story-map.md, user-stories stories.md (if produced), requirements.md, domain-design components.md, contract-design contract-summary.md (if produced), refined-mockups mockups.md, mockups-preview.html, interaction-spec.md, design-system-mapping.md and accessibility-checklist.md (if produced)",
       "outputs": "entities.md, rules.md, functional-spec.md, traceability.json, CONDITIONAL: frontend-components.md (under this stage's per-unit record dir, engine-resolved); per-kind applicability via produces_kinds (untagged unit: all). entities.md and rules.md each carry a fenced ```yaml source-of-truth block; functional-spec.md is the source of truth for workflows and state machines and carries derived ER-diagram and rules-summary views.",
       "rules_in_context": [
         {
@@ -1831,7 +1866,7 @@
           "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-traceability",
-          "matches": "**/traceability.json"
+          "matches": "**/{traceability.json,interaction-spec.md}"
         }
       ]
     },
@@ -1981,7 +2016,7 @@
           "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-traceability",
-          "matches": "**/traceability.json"
+          "matches": "**/{traceability.json,interaction-spec.md}"
         }
       ]
     },
@@ -2144,7 +2179,7 @@
           "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-traceability",
-          "matches": "**/traceability.json"
+          "matches": "**/{traceability.json,interaction-spec.md}"
         }
       ]
     },
@@ -2313,7 +2348,7 @@
           "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-traceability",
-          "matches": "**/traceability.json"
+          "matches": "**/{traceability.json,interaction-spec.md}"
         }
       ]
     },
@@ -2349,6 +2384,10 @@
           "required": false
         },
         {
+          "artifact": "frontend-components",
+          "required": false
+        },
+        {
           "artifact": "contract-summary",
           "required": false
         },
@@ -2371,6 +2410,22 @@
         {
           "artifact": "requirements",
           "required": true
+        },
+        {
+          "artifact": "mockups",
+          "required": false
+        },
+        {
+          "artifact": "interaction-spec",
+          "required": false
+        },
+        {
+          "artifact": "design-system-mapping",
+          "required": false
+        },
+        {
+          "artifact": "accessibility-checklist",
+          "required": false
         }
       ],
       "requires_stage": [
@@ -2436,7 +2491,7 @@
           "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-traceability",
-          "matches": "**/traceability.json"
+          "matches": "**/{traceability.json,interaction-spec.md}"
         }
       ]
     },
@@ -2475,6 +2530,22 @@
         {
           "artifact": "code-summary",
           "required": true
+        },
+        {
+          "artifact": "mockups",
+          "required": false
+        },
+        {
+          "artifact": "interaction-spec",
+          "required": false
+        },
+        {
+          "artifact": "design-system-mapping",
+          "required": false
+        },
+        {
+          "artifact": "accessibility-checklist",
+          "required": false
         }
       ],
       "requires_stage": [
@@ -3947,6 +4018,7 @@
     "market-trends",
     "mob-composition",
     "mockups",
+    "mockups-preview",
     "monitoring-design",
     "nfr-validation-matrix",
     "observability-design",

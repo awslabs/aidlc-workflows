@@ -15,6 +15,7 @@ import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSy
 import { dirname, isAbsolute, join, posix, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
+import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
 import { prepareReviewCopy, removeReviewCopy, sweepReviewCopies } from "./aidlc-kiro-review-copy.ts";
 import {
   askedQuestionFields,
@@ -3575,6 +3576,28 @@ class ReviewRefusal extends Error {
   }
 }
 
+// A review request whose outputs cannot all be read names each one it misses
+// and why (an output an update made required, such as Refined Mockups'
+// preview, is written first), so the agent writes it and asks again.
+function missingOutputRefusal(
+  pd: string,
+  node: Parameters<typeof inspectRequiredArtifactInstances>[1],
+  stage: string,
+  unit: string | undefined,
+): string {
+  let named = "";
+  if (unit === undefined) {
+    try {
+      const failures = inspectRequiredArtifactInstances(pd, node).failures;
+      if (failures.length > 0) named = ` (${failures.map((failure) => `${failure.path}: ${failure.reason}`).join("; ")})`;
+    } catch {
+      named = "";
+    }
+  }
+  return `Cannot start review for "${stage}": a required output document is missing or unreadable${named}. ` +
+    "Create every required output document for this stage, then retry the review.";
+}
+
 function refuseReview(message: string, changeNotices: readonly string[] = []): never {
   throw new ReviewRefusal(message, changeNotices);
 }
@@ -4862,11 +4885,7 @@ function handleReview(args: string[]): void {
             mergedBoltUnits,
           });
           if (snapshot === null) {
-            refuseReview(
-              `Cannot start review for "${flags.stage}": a required output document ` +
-                "is missing or unreadable. Create every required output document " +
-                "for this stage, then retry the review.",
-            );
+            refuseReview(missingOutputRefusal(pd, node, flags.stage, flags.unit));
           }
           const replaced = attempt.pendingRequests.get(replaceIteration)?.binding ?? null;
           replaces = replaced?.requestId ?? "none";
@@ -5008,11 +5027,7 @@ function handleReview(args: string[]): void {
           mergedBoltUnits,
         });
         if (snapshot === null) {
-          refuseReview(
-            `Cannot start review for "${flags.stage}": a required output document ` +
-              "is missing or unreadable. Create every required output document " +
-              "for this stage, then retry the review.",
-          );
+          refuseReview(missingOutputRefusal(pd, node, flags.stage, flags.unit));
         }
         fields["Artifact Fingerprint"] = snapshot.fingerprint;
         requestId = mintReviewRequestId();
