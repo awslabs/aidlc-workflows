@@ -2734,7 +2734,8 @@ too: a batch already approved keeps its approval when the person approves a new
 command, a batch not yet approved needs fresh verification with it, and older
 native receipts without the digest require fresh verification. A batch not yet
 approved that was checked with an earlier approved command reports
-`checked_with_earlier_command: true`; `ask` then offers the person Request
+`checked_with_earlier_command: true`; when that, or a change after the check,
+is its only error (`send_back_only: true`), `ask` offers the person Request
 Changes only, and sending it back rebuilds it from its landed source, so it is
 checked with the current command even after its worktrees were removed.
 `finalize` refuses a claimed Unit whose source already landed in the batch and

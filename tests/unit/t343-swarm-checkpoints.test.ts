@@ -468,7 +468,7 @@ describe("t343 completed swarm batch checkpoints", () => {
     recordCommand(pd, "git diff --exit-code -- src");
     const status = resolveSwarmCheckpoint(pd, 1, BATCH);
     expect(status).toMatchObject({
-      ready: false, approved: false, changed_after_check: false, checked_with_earlier_command: true,
+      ready: false, approved: false, changed_after_check: false, checked_with_earlier_command: true, send_back_only: true,
       errors: BATCH.map((unit) => `${unit}: batch was not checked with the authorized Construction Verification Command.`),
     });
     expect(() => approveSwarmCheckpoint(pd, 1, BATCH, "Approve", "t343-checkpoint")).toThrow("not ready");
@@ -485,7 +485,7 @@ describe("t343 completed swarm batch checkpoints", () => {
   test("a batch never checked with any approved command still cannot be asked", () => {
     const pd = fixture();
     converge(pd, 1, BATCH, "unchecked");
-    expect(resolveSwarmCheckpoint(pd, 1, BATCH).checked_with_earlier_command).toBe(false);
+    expect(resolveSwarmCheckpoint(pd, 1, BATCH)).toMatchObject({ checked_with_earlier_command: false, send_back_only: false });
     const asked = tool(pd, "bolt", ["swarm-checkpoint", "--action", "ask", "--batch", "1", "--units", BATCH.join(","), "--session", "t343-checkpoint"]);
     expect(asked.code, asked.out).not.toBe(0);
     expect(asked.out).toContain("not ready");
@@ -1059,6 +1059,7 @@ if (invalid.ok) throw new Error("invalid manifest unexpectedly accepted");
     const status = resolveSwarmCheckpoint(pd, 1, BATCH);
     expect(status.errors.join(" ")).toContain("claimed source differs");
     expect(status.changed_after_check).toBe(true);
+    expect(status.send_back_only).toBe(true);
     expect(() => approveSwarmCheckpoint(pd, 1, BATCH)).toThrow("not ready");
     expect(() => rejectSwarmCheckpoint(pd, 1, BATCH, "Request Changes", "Please rework the changed source", "t343-checkpoint")).toThrow("--action ask");
     // Under strict the person is still asked, with Request Changes as the way on.
