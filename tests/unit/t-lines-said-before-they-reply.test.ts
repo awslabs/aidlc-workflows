@@ -11,11 +11,16 @@
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { AIDLC_SRC, cleanupTestProject, createOrchestrationTestProject, REPO_ROOT, runOrchestrateNext } from "../harness/fixtures.ts";
 import { addPendingPersonLines, pendingPersonLines } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { inputsNote, planNote } from "../../dist/claude/.claude/tools/aidlc-directive.ts";
-import { finishedAtCodeGeneration, reply as replyAfterFinish } from "../harness/code-generation-states.ts";
+import { sessionRecordPath } from "../../dist/claude/.claude/tools/aidlc-record-core.ts";
+import {
+  finishedAtCodeGeneration, openCodeGenerationGate, openRecoveryQuestion, reply as replyAfterFinish, runNamed, STATES,
+  type StateBuilder,
+} from "../harness/code-generation-states.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -234,7 +239,7 @@ describe("t-lines-said-before-they-reply: the lines the person must hear ride ch
     for (const [harness, dir] of TREES) {
       const tree = await import(join(REPO_ROOT, "dist", harness, dir, "tools", "aidlc-directive.ts"));
       expect(tree.CHANGE_NOTICES_NOTE, harness).toBe(
-        `Say each change_notices line to the person ${tree.SAY_ONCE_BEFORE_THEY_REPLY}, and add nothing about why.`,
+        `Say each notice listed beside this note to the person ${tree.SAY_ONCE_BEFORE_THEY_REPLY}, and add nothing about why.`,
       );
       expect(tree.SAY_ONCE_BEFORE_THEY_REPLY, harness).toBe(
         "once, as written (only a verb's tense may change to fit when you say it), as your own sentence with " +
@@ -248,5 +253,267 @@ describe("t-lines-said-before-they-reply: the lines the person must hear ride ch
     expect(planNote({ status: "approved", skipped: true, notice: "Plan approval is off." }, "bun x"))
       .toStartWith("Say to the person first: Plan approval is off.");
     expect(inputsNote(["a.md"])).toStartWith('Say to the person once: "Some inputs this stage usually reads are not here');
+  });
+});
+
+// The line the prompt hook queues for a message that holds a key, when that same message asks about the work: the
+// reading the agent answers it from, or the print it stops on, says it, in the reply that answers. Measured on main
+// ac4b02b63: the finished-work reading, a gate's reading and a typed --status ended the turn with the line still
+// waiting, said late with a later step or dropped 15 minutes after it was queued, and a second key on finished work
+// queued no line.
+describe("t-lines-said-before-they-reply: a line waiting at the person's message is said with the reading that answers it", () => {
+  const KEY_LINE = "Your message looked like it held a key or password. AI-DLC keeps it out of its committed record, " +
+    "but this chat still received it, so if it is real, change it where it was issued.";
+  const OTHER = "01995000-7a11-7000-8000-00000000f00d";
+  // Fake keys, put together at run time: no line of this file is shaped like one.
+  const run = (n: number): string => "aB3dE5gH7jK9mN1pQ3sT5vW7yZ9bC2eF4hJ6kL8nP0rS2uV4xY6zA8cD0fG2iL4oR6tU8wX0".repeat(4).slice(0, n);
+  const TOKEN = `ghp_${run(36)}`;
+  const SECOND = `ghp_${run(36).split("").reverse().join("")}`;
+
+  function chatOn(proj: string, session = SESSION): Record<string, string | undefined> {
+    return {
+      ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0",
+      AIDLC_SESSION_OVERRIDE: session, AIDLC_SESSION_OVERRIDE_SOURCE: "payload",
+    };
+  }
+  function step(proj: string, args: string[] = [], session = SESSION): Record<string, unknown> {
+    const result = runOrchestrateNext(ORCH, proj, args, { env: chatOn(proj, session) });
+    expect(result.directive, result.out).not.toBeNull();
+    return result.directive ?? {};
+  }
+  function carriesKeyLine(said: Record<string, unknown>): void {
+    expect(notices(said).filter((line) => line === KEY_LINE), JSON.stringify(said)).toHaveLength(1);
+    expect(String(said.change_notices_note)).toContain(WHEN);
+  }
+  // The status command a reading names, run as the agent runs it.
+  function statusFrom(proj: string, reading: Record<string, unknown>): string {
+    const command = /`(bun [^`]* status[^`]*)`/.exec(String(reading.message ?? ""))?.[1];
+    expect(command, String(reading.message)).toBeDefined();
+    const out = runNamed(proj, command ?? "", { AIDLC_SESSION_OVERRIDE: SESSION, AIDLC_SESSION_OVERRIDE_SOURCE: "payload" });
+    expect(out.status, `${out.stdout}${out.stderr}`).toBe(0);
+    return `${out.stdout}${out.stderr}`;
+  }
+  // The person waited `minutes` before their next message.
+  function aged(proj: string, minutes: number): void {
+    const path = `${sessionRecordPath(proj, SESSION)}.person-lines`;
+    if (!existsSync(path)) return;
+    const saved = JSON.parse(readFileSync(path, "utf-8")) as { lines: Array<{ at: number }> };
+    for (const line of saved.lines) line.at -= minutes * 60 * 1000;
+    writeFileSync(path, `${JSON.stringify(saved)}\n`, "utf-8");
+  }
+  function finished(): string {
+    const proj = finishedAtCodeGeneration("relaxed", "on");
+    tempDirs.push(proj);
+    return proj;
+  }
+  function built(id: string): string {
+    const proj = (STATES.find((state) => state.id === id) as StateBuilder).build().proj;
+    tempDirs.push(proj);
+    return proj;
+  }
+  // The gate open and shown in this chat, as the person sees it before they write.
+  function atGate(): string {
+    const proj = openCodeGenerationGate("relaxed", "on");
+    tempDirs.push(proj);
+    const shown = step(proj);
+    expect(shown.gate_only, JSON.stringify(shown)).toBe(true);
+    return proj;
+  }
+
+  test("a question about finished work with a key in it: the finished-work reading says the line, once", () => {
+    const proj = finished();
+    const words = `what did this build? the deploy log printed ${TOKEN}`;
+    expect(replyAfterFinish(proj, `/aidlc ${words}`).status).toBe(0);
+    expect(pendingPersonLines(proj, SESSION).lines).toContain(KEY_LINE);
+    const reading = step(proj, [words]);
+    expect(reading.kind).toBe("print");
+    expect(String(reading.message)).toContain("end your turn: run no other command");
+    carriesKeyLine(reading);
+    // Status stays a reader: it says nothing of its own about the line.
+    expect(statusFrom(proj, reading)).not.toContain(KEY_LINE);
+    expect(pendingPersonLines(proj, SESSION).lines).not.toContain(KEY_LINE);
+    // Said once: a second question, and a bare look ten minutes on, do not say it again.
+    const again = "and is anything left to do?";
+    replyAfterFinish(proj, `/aidlc ${again}`);
+    expect(JSON.stringify(step(proj, [again]))).not.toContain(KEY_LINE);
+    aged(proj, 10);
+    replyAfterFinish(proj, "/aidlc");
+    const done = step(proj);
+    expect(done.kind).toBe("done");
+    expect(JSON.stringify(done)).not.toContain(KEY_LINE);
+  });
+
+  test("a typed /aidlc --status on finished work: the print the agent stops on says a waiting line", () => {
+    const proj = finished();
+    replyAfterFinish(proj, `/aidlc the log printed ${TOKEN}`);
+    replyAfterFinish(proj, "/aidlc --status");
+    const shown = step(proj, ["--status"]);
+    expect(shown.kind).toBe("print");
+    expect(String(shown.message)).toContain("then stop");
+    carriesKeyLine(shown);
+    expect(pendingPersonLines(proj, SESSION).lines).not.toContain(KEY_LINE);
+  });
+
+  test("a second key in a later message on the same finished work gets its own line", () => {
+    const proj = finished();
+    replyAfterFinish(proj, `/aidlc the log printed ${TOKEN}`);
+    carriesKeyLine(step(proj));
+    replyAfterFinish(proj, `/aidlc and the other log printed ${SECOND}`);
+    expect(pendingPersonLines(proj, SESSION).lines).toContain(KEY_LINE);
+    carriesKeyLine(step(proj));
+    // A message with no key queues nothing.
+    replyAfterFinish(proj, "/aidlc thanks");
+    expect(pendingPersonLines(proj, SESSION).lines).not.toContain(KEY_LINE);
+  });
+
+  test("a question at the Code Generation gate with a key in it: the gate's reading says the line, and the gate shown again does not", () => {
+    const proj = atGate();
+    const words = `how much is left after this? the build printed ${TOKEN}`;
+    expect(replyAfterFinish(proj, `/aidlc ${words}`).status).toBe(0);
+    const reading = step(proj, [words]);
+    expect(reading.kind).toBe("print");
+    expect(String(reading.message)).toContain("run no other command");
+    carriesKeyLine(reading);
+    expect(statusFrom(proj, reading)).not.toContain(KEY_LINE);
+    aged(proj, 10);
+    replyAfterFinish(proj, "/aidlc --resume");
+    expect(JSON.stringify(step(proj, ["--resume"]))).not.toContain(KEY_LINE);
+    expect(pendingPersonLines(proj, SESSION).lines).not.toContain(KEY_LINE);
+  });
+
+  // The cost: when the words approve, the line is handed with the reading, before the stage that comes next, with the
+  // order to say it in the last message before the person replies; the steps after it do not hand it again.
+  test("an approval at the gate with a key in it: the reading hands the line once, and the next stage's step does not", () => {
+    const proj = atGate();
+    const words = `approve, and the build printed ${TOKEN}`;
+    replyAfterFinish(proj, `/aidlc ${words}`);
+    const reading = step(proj, [words]);
+    carriesKeyLine(reading);
+    // The approval the reading names, run as the agent runs it.
+    const approval = /`(bun [^`]* report --stage [^`]* --result approved [^`]*)`/.exec(String(reading.message))?.[1];
+    expect(approval, String(reading.message)).toBeDefined();
+    const report = runNamed(proj, approval ?? "", { AIDLC_SESSION_OVERRIDE: SESSION, AIDLC_SESSION_OVERRIDE_SOURCE: "payload" });
+    expect(report.status, `${report.stdout}${report.stderr}`).toBe(0);
+    expect(report.stdout).not.toContain(KEY_LINE);
+    const following = step(proj);
+    expect(following.kind).not.toBe("done");
+    expect(JSON.stringify(following)).not.toContain(KEY_LINE);
+    expect(pendingPersonLines(proj, SESSION).lines).not.toContain(KEY_LINE);
+  });
+
+  // Each reading the agent may answer from: the open decisions and work in progress.
+  const READINGS: Array<[string, () => string, string]> = [
+    ["work in progress", () => built("S1"), "Work is in progress"],
+    ["the code plan question", () => built("S3"), "The code plan question is open"],
+    ["the recovery question", () => {
+      const proj = openRecoveryQuestion();
+      tempDirs.push(proj);
+      return proj;
+    }, "The recovery question for"],
+  ];
+  for (const [at, make, opens] of READINGS) {
+    test(`a question about the work with a key in it, at ${at}: its reading says the line`, () => {
+      const proj = make();
+      const words = `how far along are we? the log printed ${TOKEN}`;
+      expect(replyAfterFinish(proj, `/aidlc ${words}`).status).toBe(0);
+      const reading = step(proj, [words]);
+      expect(String(reading.message)).toContain(opens);
+      carriesKeyLine(reading);
+      expect(pendingPersonLines(proj, SESSION).lines).not.toContain(KEY_LINE);
+    });
+  }
+
+  // The same cost for "carry on": the reading hands the line, and the stage's step after it does not.
+  test("carry on with a key in it, while the work is in progress: the reading hands the line once, the stage's step does not", () => {
+    const proj = built("S1");
+    const words = `carry on, the log printed ${TOKEN}`;
+    replyAfterFinish(proj, `/aidlc ${words}`);
+    const reading = step(proj, [words]);
+    expect(String(reading.message)).toContain("Work is in progress");
+    carriesKeyLine(reading);
+    const following = step(proj);
+    expect(following.kind).toBe("run-stage");
+    expect(JSON.stringify(following)).not.toContain(KEY_LINE);
+    expect(pendingPersonLines(proj, SESSION).lines).not.toContain(KEY_LINE);
+  });
+
+  test("a line kept for the reply rides the finished-work reading, and the key line with it", () => {
+    const proj = finished();
+    const replyLine = "Landed Unit beta with src/shared.ts settled by hand against what was already on main.";
+    const words = `what did this build? the deploy log printed ${TOKEN}`;
+    replyAfterFinish(proj, `/aidlc ${words}`);
+    expect(addPendingPersonLines(proj, SESSION, [replyLine], { forReply: true })).toBe(true);
+    const reading = step(proj, [words]);
+    expect(notices(reading)).toEqual(expect.arrayContaining([KEY_LINE, replyLine]));
+    carriesKeyLine(reading);
+  });
+
+  test("a bare look at finished work says a waiting line, as before", () => {
+    const proj = finished();
+    replyAfterFinish(proj, `/aidlc the log printed ${TOKEN}`);
+    const done = step(proj);
+    expect(done.kind).toBe("done");
+    carriesKeyLine(done);
+  });
+
+  test("a new chat on the same finished work never hears the first chat's line", () => {
+    const proj = finished();
+    replyAfterFinish(proj, `/aidlc the log printed ${TOKEN}`);
+    replyAfterFinish(proj, "/aidlc", OTHER);
+    expect(JSON.stringify(step(proj, [], OTHER))).not.toContain(KEY_LINE);
+    expect(pendingPersonLines(proj, OTHER).lines).not.toContain(KEY_LINE);
+    expect(pendingPersonLines(proj, SESSION).lines).toContain(KEY_LINE);
+  });
+});
+
+// A hook that relays a command's output reads the waiting lines before the
+// command runs and counts them said after it, so said() keeps what was written
+// to the record in between: a line the command queued, a carry, a heard mark.
+describe("t-lines-said-before-they-reply: said() keeps what was written after the read", () => {
+  const record = (proj: string): string => `${sessionRecordPath(proj, SESSION)}.person-lines`;
+  const raw = (proj: string): { work: string; lines: Array<Record<string, unknown>>; said: string[] } =>
+    JSON.parse(readFileSync(record(proj), "utf-8"));
+  const edit = (proj: string, change: (saved: ReturnType<typeof raw>) => void): void => {
+    const saved = raw(proj);
+    change(saved);
+    writeFileSync(record(proj), `${JSON.stringify(saved)}\n`, "utf-8");
+  };
+
+  test("with nothing written since the read, the handed lines go and nothing else changes", () => {
+    const proj = project();
+    expect(addPendingPersonLines(proj, SESSION, ["First line."])).toBe(true);
+    expect(addPendingPersonLines(proj, SESSION, ["Reply line."], { forReply: true })).toBe(true);
+    const read = pendingPersonLines(proj, SESSION);
+    expect(read.lines).toEqual(["First line.", "Reply line."]);
+    read.said();
+    expect(raw(proj).lines.map((entry) => [entry.line, entry.handed])).toEqual([["Reply line.", true]]);
+  });
+
+  test("a line queued after the read, even in the same words as one it handed, stays with its time and flags", () => {
+    const proj = project();
+    expect(addPendingPersonLines(proj, SESSION, ["Same words."])).toBe(true);
+    const read = pendingPersonLines(proj, SESSION);
+    edit(proj, (saved) => {
+      saved.lines.push({ ...saved.lines[0], at: Number(saved.lines[0].at) + 1 });
+      saved.lines.push({ line: "Kept for the reply.", at: 1234, turn: saved.lines[0].turn, reply: true });
+    });
+    read.said();
+    const after = raw(proj).lines;
+    expect(after.map((entry) => entry.line)).toEqual(["Same words.", "Kept for the reply."]);
+    expect(after[1]).toEqual({ line: "Kept for the reply.", at: 1234, turn: after[1].turn, reply: true });
+  });
+
+  test("a carry and a heard mark written after the read stay as written", () => {
+    const proj = project();
+    expect(addPendingPersonLines(proj, SESSION, ["Handed line.", "Carried line."])).toBe(true);
+    const read = pendingPersonLines(proj, SESSION);
+    edit(proj, (saved) => {
+      saved.lines[1] = { ...saved.lines[1], turn: "another-turn" };
+      saved.said = ["Heard elsewhere."];
+    });
+    read.said();
+    const after = raw(proj);
+    expect(after.lines).toEqual([{ line: "Carried line.", at: after.lines[0].at, turn: "another-turn" }]);
+    expect(after.said).toEqual(["Heard elsewhere."]);
   });
 });

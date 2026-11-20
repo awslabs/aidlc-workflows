@@ -39,6 +39,8 @@ import {
   type WindowsUninstallPlan,
 } from "../../core/tools/aidlc-windows-uninstall.ts";
 import { windowsUninstallRetryFix } from "../../core/tools/aidlc-doctor.ts";
+import { noteSlowReply, recordKiroTerminalAnswer } from "../../core/tools/aidlc-kiro-ide-terminal.ts";
+import { INSTALL_ROOT_ANSWERS } from "../../core/tools/aidlc-uninstall-plan.ts";
 
 const DISPATCHER = join(dirname(dirname(import.meta.dir)), "core", "tools", "aidlc.ts");
 const SID = "S-1-5-21-111-222-333-1001";
@@ -105,7 +107,7 @@ function fixturePlan(
     ...[
       "active-version", "active-executable", "rollback-version", "aidlc-shim.ps1", "windows-path.json",
       ...["aidlc.bash", "_aidlc", "aidlc.fish", "aidlc.ps1"].map((name) => join("completions", name)),
-      ...(purge ? ["aidlc.settings.json", "update-check.json", "pins.json", "default-harness", "channel", "kiro-ide-workflows", "kiro-cli-workflows", "kiro-ide-settings-error-told", "kiro-ide-terminal"] : []),
+      ...(purge ? INSTALL_ROOT_ANSWERS : []),
     ].map((name) => join(root, name)),
     ...additionalFiles,
   ];
@@ -467,9 +469,12 @@ describe("Windows uninstall PATH receipts and recovery journals", () => {
         expect(readFileSync(outside, "utf-8")).toBe("outside sentinel");
         expect(readFileSync(gitFile, "utf-8")).toBe("gitdir: outside");
       }
-      const nonpurge = fixturePlan(false);
-      nonpurge.files.push({ path: join(root, "aidlc.settings.json"), expected });
-      expect(() => scheduleWindowsUninstall(false, [], nonpurge)).toThrow("invalid Windows uninstall file plan");
+      // A plain uninstall keeps every answer and mark of the machine.
+      for (const name of INSTALL_ROOT_ANSWERS) {
+        const nonpurge = fixturePlan(false);
+        nonpurge.files.push({ path: join(root, name), expected });
+        expect(() => scheduleWindowsUninstall(false, [], nonpurge), name).toThrow("invalid Windows uninstall file plan");
+      }
     });
   });
 
@@ -835,9 +840,7 @@ describe.skipIf(process.platform !== "win32")("native Windows uninstall PATH cle
             ...["aidlc.bash", "_aidlc", "aidlc.fish", "aidlc.ps1"].map((name) => join("completions", name)),
           ].map((name) => join(root, name));
           for (const path of owned) writeFileSync(path, "owned");
-          const settings = [
-            "aidlc.settings.json", "update-check.json", "pins.json", "default-harness", "channel", "kiro-ide-workflows", "kiro-cli-workflows", "kiro-ide-settings-error-told", "kiro-ide-terminal",
-          ].map((name) => join(root, name));
+          const settings = INSTALL_ROOT_ANSWERS.map((name) => join(root, name));
           for (const path of settings) writeFileSync(path, `setting: ${path}`);
           const receipt = registration(dirname(commandPath()));
           writeFileSync(join(root, "windows-path.json"), JSON.stringify(receipt));
@@ -888,6 +891,31 @@ describe.skipIf(process.platform !== "win32")("native Windows uninstall PATH cle
       });
     }, 35_000);
   }
+
+  // In Kiro IDE's Command Prompt terminal the uninstall run is itself a slow
+  // reply, and its exit notes one after the cleanup was scheduled with the
+  // dropped note's contents planned. The cleanup still finishes: it removes
+  // Kiro IDE's terminal records and the emptied install folder.
+  test("--purge removes Kiro IDE's terminal records, also when the uninstall run's own exit notes a slow reply", () => {
+    withInstall((root) => {
+      recordKiroTerminalAnswer("kept");
+      writeFileSync(join(root, "kiro-ide-terminal-shell"), "cmd\n");
+      writeFileSync(join(root, "kiro-ide-terminal-dropped"), "2026-11-01T00:00:00.000Z\n");
+      const pending = schedule();
+      expect(existsSync(windowsUninstallFencePath())).toBe(true);
+      const term = process.env.TERM_PROGRAM;
+      process.env.TERM_PROGRAM = "kiro";
+      try {
+        noteSlowReply(1500, process.env, "win32");
+      } finally {
+        if (term === undefined) delete process.env.TERM_PROGRAM;
+        else process.env.TERM_PROGRAM = term;
+      }
+      const result = nativeCleanup(pending, { current: OTHER });
+      expect(result).toMatchObject({ errors: [], journalExists: false, fenceExists: false, commandExists: false });
+      expect(existsSync(root)).toBe(false);
+    });
+  }, 35_000);
 
   test("non-purge preserves selected runtime files, subtrees and completion files in place", () => {
     withInstall((root) => {

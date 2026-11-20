@@ -1,12 +1,16 @@
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { lockFolderHeldGiveUpMs, lockFolderHeldLine } from "./aidlc-lock-line.ts";
-import { reviewManifestForms } from "./aidlc-review-manifest.ts";
+import { committedTextBytes, committedTextParts, reviewManifestForms } from "./aidlc-review-manifest.ts";
+export { committedTextBytes } from "./aidlc-review-manifest.ts";
 import { withoutLearnedDate } from "./aidlc-learned-date.ts";
 import { claimedCheckoutReopens } from "./aidlc-unit-landing.ts";
 import {
   cachedClaimFanoutActive,
+  claimBlobAt,
+  claimPrefixOf,
   claimRegistryCachePath,
   claimRegistryGit,
+  readClaimAt,
   readUnitClaimRegistryCache,
   type UnitClaimRegistryCache,
   unitsHeldHere,
@@ -55,7 +59,7 @@ import {
 export { entrySkillInvocation, repoNameProblem, repoNameRefusal, SPACE_NAME_REGEX } from "./aidlc-runtime-paths.ts";
 import { humanTurnMintAllowed, personGitNameField } from "./aidlc-git-name.ts";
 export { humanTurnMintAllowed } from "./aidlc-git-name.ts";
-import { hasRealGitEntry, submoduleLeavesProjectRepo } from "./aidlc-git.ts";
+import { gitCommonDirOf, hasRealGitEntry, submoduleLeavesProjectRepo } from "./aidlc-git.ts";
 export { hasRealGitEntry } from "./aidlc-git.ts";
 import { NEXT_VALUELESS_FLAGS, nextFlagTakesFollowing, unitCommandArgv } from "./aidlc-command.ts";
 import { pluginCommandOnLine, projectPluginCommands } from "./aidlc-plugin-commands.ts";
@@ -70,6 +74,7 @@ import {
   type GuardRemedyWording,
   type GuardRemedyWordingContext,
   isGuardRecoveryOperation,
+  constructionPolicyRecovery,
   renderEngineInvocation,
   renderGuardOperation,
 } from "./aidlc-guard-operation.ts";
@@ -162,6 +167,7 @@ import {
   canonicalPathKey,
   chatAwaitsFirstStep,
   type CheckboxState,
+  claudeChatRecord,
   claudeNamedChat,
   clearSessionProcessTable,
   cloneIdentity,
@@ -171,8 +177,8 @@ import {
   copiedAuditBlocks,
   delegatedWorktreeIntent,
   displaySlugFromDirName,
+  gcSessionPidEntries,
   getField,
-  gitRevParseSingle,
   helperSessionPath,
   helperSessionRoot,
   idSuffix,
@@ -201,7 +207,6 @@ import {
   readAuditShardTexts,
   readIntentRegistry,
   readSessionBinding,
-  readSessionPidEntry,
   readStateFile,
   readStateWrites,
   recordDirMatches,
@@ -466,6 +471,7 @@ export {
   FILE_CHANGED_DURING_READ,
   fileIdentity,
   type FileIdentity,
+  HARDLINK_REMEDY,
   holdsAuditLock,
   installWithoutReplacing,
   intentsDir,
@@ -504,6 +510,7 @@ import {
   readSubagentInflightLedger,
   subagentInflightMarkerPath,
   subagentSessionIdentity,
+  unrecordedFinishSince,
 } from "./aidlc-subagent-inflight.ts";
 export {
   type AuthorityCover,
@@ -1796,7 +1803,7 @@ function missingWorkspaceName(
     noun,
     code: "missing-name",
     verb,
-    message: `Usage: aidlc ${usage}`,
+    message: `Usage: ${entrySkillInvocation()} ${usage}`,
   };
 }
 
@@ -1812,7 +1819,7 @@ function unexpectedWorkspaceArguments(
     noun,
     code: "unexpected-arguments",
     verb,
-    message: `Usage: aidlc ${usage}`,
+    message: `Usage: ${entrySkillInvocation()} ${usage}`,
   };
 }
 
@@ -2188,7 +2195,7 @@ export type PluginCommand =
 export function parsePluginCommand(args: readonly string[]): PluginCommand {
   if (args[0] !== "plugin") return { kind: "not-plugin" };
   const verb = args[1];
-  if (verb === "help" || verb === "-h" || verb === "--help") {
+  if (verb === undefined || verb === "help" || verb === "-h" || verb === "--help") {
     return { kind: "help" };
   }
   const target = verb === "select"
@@ -2205,10 +2212,9 @@ export function parsePluginCommand(args: readonly string[]): PluginCommand {
   if (target !== undefined) {
     return { kind: "run", argv: [target, ...args.slice(2)] };
   }
-  const detail = verb ? `unknown verb '${verb}'` : "missing verb";
   return {
     kind: "error",
-    message: `aidlc: ${detail} for noun 'plugin'; try 'aidlc help --all'`,
+    message: `\`${entrySkillInvocation()} plugin ${verb}\` is not a plugin command; the plugin commands are select, list, sync, validate and build`,
   };
 }
 
@@ -2296,13 +2302,16 @@ export function parseKnowledgeCommand(args: readonly string[]): KnowledgeCommand
   if (verb === "help" || verb === "-h" || verb === "--help") {
     return { kind: "help" };
   }
-  if (verb !== undefined && KNOWLEDGE_VERBS.includes(verb)) {
+  if (verb === undefined) {
+    return { kind: "error", message: "aidlc: missing verb for noun 'knowledge'; try 'aidlc help --all'" };
+  }
+  if (KNOWLEDGE_VERBS.includes(verb)) {
     return { kind: "run", argv: [verb, ...args.slice(2)] };
   }
-  const detail = verb ? `unknown verb '${verb}'` : "missing verb";
   return {
     kind: "error",
-    message: `aidlc: ${detail} for noun 'knowledge'; try 'aidlc help --all'`,
+    message: `\`${entrySkillInvocation()} knowledge ${verb}\` is not a knowledge command; the knowledge commands are ` +
+      `${KNOWLEDGE_VERBS.slice(0, -1).join(", ")} and ${KNOWLEDGE_VERBS.at(-1)}`,
   };
 }
 
@@ -4139,17 +4148,31 @@ export function relativeCodekbDir(projectDir: string, repo: string, space?: stri
   return `aidlc/spaces/${sp}/codekb/${repo}`;
 }
 
+// The repository NAME for a checkout whose project root is a LINKED GIT
+// WORKTREE, else null so the caller keeps `basename(projectDir)`.
+//
+// `git worktree add` names its directory after a branch, so in a linked worktree
+// basename(projectDir) is a branch name rather than a repository name. The shared
+// git dir lives inside the MAIN checkout, so its parent's basename is the
+// repository name. Both git dirs are resolved against projectDir, where git
+// measured them (gitCommonDirOf), and a linked worktree is the only topology
+// where they differ (`--git-dir` is `<common>/worktrees/<name>`): a main
+// checkout, a subdirectory of one and a repository nested inside another all
+// return null and keep basename(projectDir).
+//
+// Deliberately NOT the `origin` remote: that would also cover a clone whose
+// directory name differs from the repository, but remote names are mutable (a
+// rename or a re-point would move a workspace's store) and it would change
+// resolution for every checkout whose remote and directory names differ. A
+// location is stable; widening identity to the remote is a separate decision.
 function mainCheckoutRepoName(projectDir: string): string | null {
-  const gitDirRaw = gitRevParseSingle(projectDir, "--git-dir");
-  if (gitDirRaw === null) return null; // not a git repository
-  const commonRaw = gitRevParseSingle(projectDir, "--git-common-dir");
-  if (commonRaw === null) return null;
+  const dirs = gitCommonDirOf(projectDir);
+  if (!dirs.ok) return null; // not a git repository
   let gitDirAbs: string;
   let commonAbs: string;
   try {
-    // Resolved against projectDir — the directory both were measured in.
-    gitDirAbs = realpathSync(resolvePath(projectDir, gitDirRaw));
-    commonAbs = realpathSync(resolvePath(projectDir, commonRaw));
+    gitDirAbs = realpathSync(dirs.own);
+    commonAbs = realpathSync(dirs.common);
   } catch {
     return null;
   }
@@ -4769,7 +4792,11 @@ function sourceKeysChangedOutsideAidlc(
 // The paths outside AI-DLC's own files that moved since a kept listing (a
 // review's `Source Listing`, kept at the row `from`), as `<repo>\0<path>` keys;
 // a repo that joined the work since counts from what it held when it joined
-// (withRepoBaselineAdditions). Null when no listing was kept or it does not
+// (withRepoBaselineAdditions). A path Git ignores and HEAD does not track (a
+// tool's cache) is left out, as no Unit can claim it; a path in a checkout
+// nested in the project, a link's target or a recorded checkout is that
+// checkout's own source (sourceClaimCheckout judges it there), so the project's
+// .gitignore never leaves it out. Null when no listing was kept or it does not
 // read back exactly: the caller then compares fingerprints.
 export function sourceKeysChangedOutsideAidlcSince(
   projectDir: string,
@@ -4783,7 +4810,18 @@ export function sourceKeysChangedOutsideAidlcSince(
   if (recorded === null) return null;
   const joined = withRepoBaselineAdditions(projectDir, stageSlug, { state: "ready", listing: recorded }, rows, from);
   const start = joined.state === "ready" ? joined.listing : recorded;
-  return sourceKeysChangedOutsideAidlc(projectDir, recordedSourceListingForCompare(projectDir, start, current), current.listing);
+  const changed = sourceKeysChangedOutsideAidlc(projectDir, recordedSourceListingForCompare(projectDir, start, current), current.listing);
+  if (changed.size === 0) return changed;
+  const checkouts = readRecordedSourceCheckouts(projectDir);
+  const rootsOwn = [...changed].filter((key) => {
+    const parsed = splitSourcePathKey(key);
+    if (parsed === null) return false;
+    if (parsed.repo !== "") return true;
+    const claim = sourceClaimCheckout(projectDir, parsed.path, true, checkouts);
+    return claim.reason === undefined && claim.dir === projectDir;
+  });
+  for (const key of unclaimableIgnoredSourceKeys(projectDir, rootsOwn, false)) changed.delete(key);
+  return changed;
 }
 
 // A kept listing as the walk would list it now, to compare with `current`.
@@ -6042,7 +6080,7 @@ export function requireProtectedResponse(
   const question = readProtectedQuestion(projectDir, session);
   const response = readProtectedResponse(projectDir, session);
   const recovery = expected.kind === "verification-command" ? verificationCommandRecovery()
-    : expected.kind === "construction-policy" ? CONSTRUCTION_POLICY_RECOVERY
+    : expected.kind === "construction-policy" ? constructionPolicyRecovery()
     : `Re-ask with ${aidlcToolInvocation("bolt")} checkpoint --action ask --unit "<unit>" --kind <unit|skeleton> or ` +
       `${aidlcToolInvocation("bolt")} swarm-checkpoint --action ask --batch <number> --units "<units>", then wait for Approve or Request Changes.`;
   // The person replied to this exact question (the hook's record); the choice
@@ -7118,9 +7156,9 @@ function personTurnAndWork(projectDir: string): { turn: string; work: string } {
   }
 }
 
-function readPendingPersonLines(path: string, turn: string, work: string): PendingPersonLines {
+function readPendingPersonLines(path: string, turn: string, work: string, text?: string): PendingPersonLines {
   try {
-    const saved = JSON.parse(readFileSync(path, "utf-8")) as { work?: unknown; lines?: unknown; said?: unknown };
+    const saved = JSON.parse(text ?? readFileSync(path, "utf-8")) as { work?: unknown; lines?: unknown; said?: unknown };
     const now = Date.now();
     const lines = (Array.isArray(saved.lines) ? saved.lines : []).filter((entry): entry is PendingPersonLine => {
       if (!entry || typeof entry !== "object") return false;
@@ -7170,31 +7208,89 @@ export function addPendingPersonLines(
 }
 
 // The lines waiting for the next step the agent speaks from; with `replyOnly`
-// (a question the agent logs before asking it) only those kept for the reply.
+// (a question the agent logs before asking it) only those kept for the reply,
+// with `ordinaryOnly` (the question box at a gate) only the others.
 // `said()` clears the ordinary lines handed out once the step carries them and
 // marks the reply lines carried, which keep riding the steps until the person
-// writes; until then every line stays waiting.
+// writes; until then every line stays waiting. What was written to the record
+// after the read (a line a command queued while its output was relayed, a
+// carry, a heard mark) stays as written.
 export function pendingPersonLines(
   projectDir: string,
   sessionId: string,
-  options: { replyOnly?: boolean } = {},
+  options: { replyOnly?: boolean; ordinaryOnly?: boolean } = {},
 ): { lines: string[]; reply: boolean; said(): void } {
   const path = pendingPersonLinesPath(projectDir, sessionId);
   const none = { lines: [], reply: false, said: () => {} };
   if (!path || !existsSync(path)) return none;
   const { turn, work } = personTurnAndWork(projectDir);
-  const saved = readPendingPersonLines(path, turn, work);
-  const handed = saved.lines.filter((entry) => entry.reply === true || options.replyOnly !== true);
+  const record = (): string => {
+    try {
+      return readFileSync(path, "utf-8");
+    } catch {
+      return "";
+    }
+  };
+  const read = record();
+  const saved = readPendingPersonLines(path, turn, work, read);
+  const handed = saved.lines.filter((entry) =>
+    options.ordinaryOnly === true ? entry.reply !== true : entry.reply === true || options.replyOnly !== true);
   return {
     lines: handed.map((entry) => entry.line),
     // Whether a line kept for the reply is among them.
     reply: handed.some((entry) => entry.reply === true),
     said: () => {
+      // A record that could not be read is left as it is.
+      if (read === "") return;
       try {
         const waiting = saved.lines
           .filter((entry) => entry.reply === true || !handed.includes(entry))
           .map((entry) => (entry.reply === true && handed.includes(entry) ? { ...entry, handed: true as const } : entry));
-        writePendingPersonLines(projectDir, path, work, { lines: waiting, said: saved.said });
+        const now = record();
+        if (now === read) {
+          writePendingPersonLines(projectDir, path, work, { lines: waiting, said: saved.said });
+          return;
+        }
+        // Each entry as read becomes what `waiting` made of it (gone when it was
+        // handed, or out of this turn or past its age); an entry the read never
+        // saw, or one changed since, stays as it is now.
+        const raw = (text: string): { work?: unknown; lines?: unknown; said?: unknown } => {
+          try {
+            const parsed = JSON.parse(text) as unknown;
+            return parsed !== null && typeof parsed === "object" ? parsed : {};
+          } catch {
+            return {};
+          }
+        };
+        const entries = (value: unknown): unknown[] => (Array.isArray(value) ? value : []);
+        const becomes = new Map<string, Array<PendingPersonLine | null>>();
+        for (const entry of saved.lines) {
+          const key = JSON.stringify(entry);
+          const next = !handed.includes(entry) ? entry : entry.reply === true ? { ...entry, handed: true as const } : null;
+          becomes.set(key, [...(becomes.get(key) ?? []), next]);
+        }
+        const seen = new Map<string, number>();
+        for (const entry of entries(raw(read).lines)) {
+          const key = JSON.stringify(entry);
+          seen.set(key, (seen.get(key) ?? 0) + 1);
+        }
+        const current = raw(now);
+        const lines: PendingPersonLine[] = [];
+        for (const entry of entries(current.lines)) {
+          const key = JSON.stringify(entry);
+          const left = seen.get(key) ?? 0;
+          if (left === 0) {
+            lines.push(entry as PendingPersonLine);
+            continue;
+          }
+          seen.set(key, left - 1);
+          const next = becomes.get(key)?.shift();
+          if (next) lines.push(next);
+        }
+        writePendingPersonLines(projectDir, path, typeof current.work === "string" ? current.work : work, {
+          lines,
+          said: entries(current.said).filter((line): line is string => typeof line === "string"),
+        });
       } catch {
         /* the next step says them again rather than never */
       }
@@ -7447,43 +7543,6 @@ export function writeSessionPidEntry(
   });
 }
 
-function gcSessionPidEntries(
-  projectDir: string,
-  deadlineMs: number,
-  skip: ReadonlySet<number> = new Set(),
-  readIdentity: (pid: number) => ProcessIdentity | null = processIdentityReader(deadlineMs),
-): void {
-  let names: string[];
-  try {
-    names = readdirSync(sessionPidMapDir(projectDir));
-  } catch {
-    return;
-  }
-  for (const name of names) {
-    if (!/^\d+$/.test(name)) continue;
-    if (Date.now() >= deadlineMs) break;
-    const pid = Number.parseInt(name, 10);
-    if (skip.has(pid)) continue;
-    const entry = readSessionPidEntry(projectDir, pid);
-    let stale: boolean;
-    if (!entry || !processIsAlive(pid)) {
-      stale = true;
-    } else if (entry.startTime !== null) {
-      const identity = readIdentity(pid);
-      if (identity === null) continue;
-      stale = identity.startTime !== entry.startTime;
-    } else {
-      stale = false;
-    }
-    if (!stale) continue;
-    try {
-      unlinkSync(join(sessionPidMapDir(projectDir), name));
-    } catch {
-      /* raced with another hook or cleanup */
-    }
-  }
-}
-
 // Map the harness process and each ancestor to the current session. The hook
 // process itself is intentionally excluded because later tool subprocesses are
 // siblings, not descendants, of that short-lived hook.
@@ -7577,12 +7636,8 @@ function hostChatStartFolder(projectDir: string): string | null {
     switch (runtimeHarnessDir(projectDir)) {
       case ".claude": {
         const chat = claudeNamedChat();
-        if (chat === null) return null;
-        const config = process.env.CLAUDE_CONFIG_DIR?.trim() || join(homedir(), ".claude");
-        const record = JSON.parse(readFileSync(join(config, "sessions", `${chat.pid}.json`), "utf-8")) as
-          | { pid?: unknown; sessionId?: unknown; cwd?: unknown }
-          | null;
-        return record?.pid === chat.pid && record.sessionId === chat.session ? absolute(record.cwd) : null;
+        const record = chat === null ? null : claudeChatRecord(chat.pid, chat.session);
+        return record === null ? null : absolute(record.cwd);
       }
       case ".codex": {
         const thread = validSessionId(process.env.CODEX_THREAD_ID);
@@ -13251,12 +13306,6 @@ export function constructionPolicyChangeAllowed(projectDir: string, field: strin
   }
 }
 
-export const CONSTRUCTION_POLICY_RECOVERY =
-  "When the person asks for this Construction change, run aidlc-state.ts set-construction-checkpoints, " +
-  "set-construction-execution, or set-construction-iteration with the value they asked for and --message <id>, " +
-  "the id of the message they asked in, then say its notice line to them. Do not ask them to confirm it, and " +
-  "never change it on your own.";
-
 // --- Consolidated-summary confirmation evidence ---
 //
 // The summary checkpoint is a human judgement that authorizes artifact
@@ -14566,11 +14615,12 @@ type UnsavedReason = keyof typeof UNSAVED_REASONS;
 function unsavedOutputsMessage(
   slug: string,
   unsaved: ReadonlyArray<{ artifact: string; reason: UnsavedReason }>,
+  saveStep: (save: string) => string,
 ): string {
   if (unsaved.length === 1) {
     return `Refusing to continue "${slug}": this stage's output document ${unsaved[0].artifact} ` +
-      `${UNSAVED_REASONS[unsaved[0].reason].one}. Save the document again, so its write descends from the current ` +
-      "confirmation, then continue.";
+      `${UNSAVED_REASONS[unsaved[0].reason].one}. ` +
+      saveStep("Save the document again, so its write descends from the current confirmation, then continue.");
   }
   const reasons = new Set(unsaved.map((entry) => entry.reason));
   const names = reasons.size === 1
@@ -14580,8 +14630,8 @@ function unsavedOutputsMessage(
   const why = reasons.size === 1
     ? UNSAVED_REASONS[unsaved[0].reason].many
     : "were not saved under the current confirmation";
-  return `Refusing to continue "${slug}": this stage's output documents ${list} ${why}. Save each ` +
-    "of them again, so each write descends from the current confirmation, then continue.";
+  return `Refusing to continue "${slug}": this stage's output documents ${list} ${why}. ` +
+    saveStep("Save each of them again, so each write descends from the current confirmation, then continue.");
 }
 
 export function checkSummaryConfirmationEvidence(
@@ -14600,6 +14650,17 @@ export function checkSummaryConfirmationEvidence(
     confirmationOnly?: boolean;
   } = {},
 ): SummaryConfirmationEvidence {
+  // Where no hook ever ran here, a save makes no write, so saving again would
+  // loop: the step is the hooks-off way back, under the same test the presence
+  // refusal uses (unattendedHumanPresenceHint). Anywhere else, the save.
+  const saveStep = (save: string): string => {
+    try {
+      if (!hooksNeverRanHere(projectDir) || personAtOwnTerminal(projectDir)) return save;
+      return hooksOffAgentStep(projectDir) ?? save;
+    } catch {
+      return save;
+    }
+  };
   const failure = (
     code: string,
     message: string,
@@ -14918,25 +14979,28 @@ export function checkSummaryConfirmationEvidence(
     }
 
     const hashScope = auditBlockField(receipt.block, "Hash Scope");
+    const confirm = summaryConfirmationCommands({
+      stage: stage.slug,
+      unit: workflow === undefined ? question.unit : null,
+      questionsFile: questionRelative,
+      single: workflow !== undefined,
+    });
+    const report = (...args: string[]) => renderEngineInvocation({ route: "orchestrate", args: ["report", ...args] });
     const recovery = workflow === undefined
       ? (
         "First repair the questions file: reset the existing consolidated-summary " +
         "`[Answer]:` tag to blank and remove or repair every invalid or duplicate " +
         "post-summary section named by the validation error. Only then re-present the " +
         "consolidated summary and record a fresh confirmation with " +
-        `\`aidlc-log.ts decision --checkpoint summary-confirmation --stage "${stage.slug}" ` +
-        `${question.unit ? `--unit "${question.unit}" ` : ""}` +
-        "--questions-file \"<path>\" --decision \"Does this all look correct?\"`; " +
+        `\`${confirm.decision}\`; ` +
         "end the turn, wait for the human's response, update the recorded answer, then run " +
-        `\`aidlc-log.ts answer --checkpoint summary-confirmation --stage "${stage.slug}" ` +
-        `${question.unit ? `--unit "${question.unit}" ` : ""}` +
-        "--questions-file \"<path>\" --details \"Looks correct\"`. Re-save each generated " +
+        `\`${confirm.answer}\`. Re-save each generated ` +
         "artifact, rerun the section-12a reviewer when this stage declares one, then retry " +
         "the stage completion command. If a completion gate is already open or a terminal " +
         "section-12a receipt freezes artifact writes, instead present Request Changes and " +
         "end the turn. After a fresh human turn choosing it, run " +
-        `\`aidlc-orchestrate.ts report --stage "${stage.slug}" --result rejected ` +
-        "--user-input \"Request Changes\" --reason '<requested changes>'`; then revise and re-confirm the summary, " +
+        `\`${report("--stage", stage.slug, "--result", "rejected", "--user-input", "Request Changes", "--reason", "<requested changes>")}\`; ` +
+        "then revise and re-confirm the summary, " +
         "re-save the artifacts, rerun the reviewer, and report `--result revised`."
       )
       : (
@@ -14944,14 +15008,11 @@ export function checkSummaryConfirmationEvidence(
         "`[Answer]:` tag to blank and remove or repair every invalid or duplicate " +
         "post-summary section named by the validation error. Only then re-present the " +
         "consolidated summary in the isolated run and record a fresh confirmation with " +
-        `\`aidlc-log.ts decision --checkpoint summary-confirmation --stage "${stage.slug}" ` +
-        "--questions-file \"<path>\" --single --decision \"Does this all look correct?\"`; " +
+        `\`${confirm.decision}\`; ` +
         "end the turn, wait for the human's response, update the recorded answer, then run " +
-        `\`aidlc-log.ts answer --checkpoint summary-confirmation --stage "${stage.slug}" ` +
-        "--questions-file \"<path>\" --single --details \"Looks correct\"`. Regenerate or " +
+        `\`${confirm.answer}\`. Regenerate or ` +
         "re-save each generated artifact, rerun the section-12a reviewer when this stage " +
-        "declares one, then run `aidlc-orchestrate.ts report --single " +
-        `--stage "${stage.slug}" --result completed\`.`
+        `declares one, then run \`${report("--single", "--stage", stage.slug, "--result", "completed")}\`.`
       );
     if (
       hashScope !== null &&
@@ -15165,14 +15226,14 @@ export function checkSummaryConfirmationEvidence(
         return failure(
           "SUMMARY_ARTIFACT_ORDER_INVALID",
           `Refusing to continue "${stage.slug}": this stage's output document ` +
-            `${artifact} was not saved after the confirmed answers. Save the ` +
-            "document after confirmation, then continue.",
+            `${artifact} was not saved after the confirmed answers. ` +
+            saveStep("Save the document after confirmation, then continue."),
           "stale",
         );
       }
     }
     if (unsaved.length > 0) {
-      return failure("SUMMARY_ARTIFACT_UNAUTHORIZED", unsavedOutputsMessage(stage.slug, unsaved), "stale");
+      return failure("SUMMARY_ARTIFACT_UNAUTHORIZED", unsavedOutputsMessage(stage.slug, unsaved, saveStep), "stale");
     }
   }
 
@@ -16610,59 +16671,6 @@ function readStableReviewArtifacts(
       }
     }
   }
-}
-
-// A committed text file's bytes as its identity: CRLF reads as LF, so a
-// checkout that turns line endings (Git for Windows' default) is no change to
-// the work. Only a file Git itself converts is read this way; one it takes as
-// binary (a NUL, a lone CR, or more than one control byte in 128 printable
-// ones, as Git's convert.c counts them) is taken as it is, and a file with LF
-// line endings is the same either way.
-export function committedTextBytes(bytes: Buffer): Buffer {
-  if (!bytes.includes(13) || process.env.AIDLC_TEST_RAW_LINE_ENDINGS === "1") return bytes;
-  const parts: Buffer[] = [];
-  return committedTextParts([bytes], (part) => parts.push(part)) ? Buffer.concat(parts) : bytes;
-}
-
-// Hands `emit` the text of `chunks` with each CRLF read as LF, a chunk at a
-// time, and says whether that reading applies: true only for text with a CRLF.
-// The caller takes the raw bytes when it is false.
-function committedTextParts(chunks: Iterable<Buffer>, emit: (part: Buffer) => void): boolean {
-  let crlf = false;
-  let pendingCr = false;
-  let printable = 0;
-  let nonprintable = 0;
-  let last = -1;
-  for (const chunk of chunks) {
-    if (chunk.length === 0) continue;
-    if (pendingCr) {
-      if (chunk[0] !== 10) return false;
-      pendingCr = false;
-    }
-    let start = 0;
-    for (let at = 0; at < chunk.length; at++) {
-      const byte = chunk[at];
-      if (byte === 13) {
-        if (at + 1 === chunk.length) pendingCr = true;
-        else if (chunk[at + 1] !== 10) return false;
-        crlf = true;
-        emit(chunk.subarray(start, at));
-        start = at + 1;
-        at++;
-      } else if (byte === 0) {
-        return false;
-      } else if (byte === 127 || (byte < 32 && byte !== 10 && byte !== 8 && byte !== 9 && byte !== 27 && byte !== 12)) {
-        nonprintable++;
-      } else if (byte !== 10) {
-        printable++;
-      }
-    }
-    emit(chunk.subarray(start));
-    last = chunk[chunk.length - 1];
-  }
-  // A trailing DOS end-of-file mark is not counted against the text.
-  if (last === 26) nonprintable--;
-  return crlf && !pendingCr && (printable >> 7) >= nonprintable;
 }
 
 // The sha256 hex of a committed file's text, as committedTextBytes reads it.
@@ -18214,28 +18222,9 @@ export function noReviewerFinishedSinceReview(
       }
       const since = rows.filter((row) =>
         row.event === "SUBAGENT_COMPLETED" && !attemptEventDefinitelyBefore(row, request.row));
-      for (const row of since) {
-        const agent = auditBlockField(row.block, "Agent Type");
-        if (agent === null || agent === "" || agent === "unknown") return false;
-        if (agent === request.reviewer && recordedReviewFileDigest(row.block, request.reviewFile) !== null) return false;
-      }
-      const health = hooksHealthReadDir(dir, selection.intent, selection.space);
-      const heartbeat = join(health, "log-subagent.last");
-      if (existsSync(heartbeat)) {
-        const beat = Date.parse(readFileSync(heartbeat, "utf-8").trim());
-        if (!Number.isFinite(beat)) return false;
-        // The hook beats, then appends its row in the same run: a beat since the
-        // request with no completion row at or after it is a run that left none.
-        if (beat >= requested && !since.some((row) => Date.parse(row.timestamp) >= beat)) return false;
-      }
-      const drops = join(health, "log-subagent.drops");
-      if (existsSync(drops)) {
-        for (const line of readFileSync(drops, "utf-8").split("\n")) {
-          if (line.trim() === "") continue;
-          const at = Date.parse(line.split("\t", 1)[0]);
-          if (!Number.isFinite(at) || at >= requested) return false;
-        }
-      }
+      if (since.some((row) => auditBlockField(row.block, "Agent Type") === request.reviewer &&
+        recordedReviewFileDigest(row.block, request.reviewFile) !== null)) return false;
+      if (unrecordedFinishSince(hooksHealthReadDir(dir, selection.intent, selection.space), rows, request.row)) return false;
     }
     return true;
   } catch {
@@ -22745,6 +22734,7 @@ export function shapeSourceSnapshotIndex(
   repoDir: string,
   indexFile: string,
   carriesWorkspaceShell: boolean,
+  recordBase: string | null = null,
 ): SourceSnapshotIndexShape | null {
   const hasWorktreeContext = existsSync(
     join(repoDir, ".aidlc", "worktree-meta.json"),
@@ -22803,6 +22793,22 @@ export function shapeSourceSnapshotIndex(
         "--",
         ...[...AIDLC_ROOT_SETTINGS_FILES].map((name) => `:(top,literal)${name}`),
       ],
+      { env, encoding: "utf-8" },
+    );
+    if (restored.status !== 0) return null;
+  }
+  // AI-DLC's records and worktree metadata ride no Source Commit either. Given
+  // the commit a Bolt shares with the branch it lands on, they keep its bytes,
+  // so a Bolt commit that carried them (a worker's `git add -A`) does not land
+  // them there; finalize brings the Unit's records back on its own. Without it
+  // they keep HEAD's.
+  const recordPaths = effectiveCarriesWorkspaceShell
+    ? AIDLC_SHELL_PATHS.map((path) => `${path}/`)
+    : (worktreeContext?.exactPaths ?? []).map((path) => `:(top)${path}`);
+  if (recordBase !== null && recordPaths.length > 0) {
+    const restored = spawnSync(
+      "git",
+      ["-C", repoDir, "reset", "-q", recordBase, "--", ...recordPaths],
       { env, encoding: "utf-8" },
     );
     if (restored.status !== 0) return null;
@@ -24027,7 +24033,7 @@ function gitHeadOid(worktreeDir: string): string | null {
 // The file names the source walk counts as code by name alone: a symlinked
 // external tree keeps only these, and the snapshot always takes them.
 const SOURCE_FILE_EXTENSION =
-  /\.(?:astro|c|cc|cmake|cpp|cs|css|dart|erl|ex|exs|go|gql|graphql|h|hcl|hpp|hrl|html|java|js|jsx|json|kt|kts|lua|m|mm|php|proto|ps1|psd1|psm1|py|r|rb|rs|scala|sh|sol|sql|svelte|swift|tf|tfvars|toml|ts|tsx|vue|xml|ya?ml|zig)$/i;
+  /\.(?:astro|bat|c|cc|cjs|cmake|cmd|cpp|cs|cshtml|css|cts|dart|erl|ex|exs|fs|go|gql|gradle|graphql|groovy|h|hcl|hpp|hrl|html|java|js|jsx|json|kt|kts|less|lua|m|mjs|mm|mts|php|proto|ps1|psd1|psm1|py|r|razor|rb|rs|scala|scss|sh|sol|sql|svelte|swift|tf|tfvars|toml|ts|tsx|vb|vue|xml|ya?ml|zig)$/i;
 const SOURCE_FILE_BASENAME =
   /^(?:BUILD|CMakeLists\.txt|Dockerfile(?:\..+)?|Gemfile|Justfile|Makefile|Procfile|Tiltfile|WORKSPACE)$/i;
 export function isSourceFileName(name: string): boolean {
@@ -25967,6 +25973,7 @@ function ignoredPathClaimable(
 export function unclaimableIgnoredSourceKeys(
   projectDir: string,
   keys: readonly string[],
+  includeRecordedCheckouts = true,
 ): Set<string> {
   const unclaimable = new Set<string>();
   if (keys.length === 0) return unclaimable;
@@ -25977,7 +25984,7 @@ export function unclaimableIgnoredSourceKeys(
     return unclaimable;
   }
   const carriesWorkspaceShell = recordedRepos.length === 0;
-  const checkouts = readRecordedSourceCheckouts(projectDir);
+  const checkouts = includeRecordedCheckouts ? readRecordedSourceCheckouts(projectDir) : [];
   const sourceClaimValidation: GitSourceClaimValidationCache = new Map();
   const candidates: { key: string; sourceRepoDir: string; path: string }[] = [];
   for (const key of keys) {
@@ -26963,7 +26970,7 @@ export function readCommittedUnitSourceManifest(
         ok: false,
         reason: "immutable reviewed Source Commit is unavailable or has unsafe paths; " +
           "restore the reviewed commit, or rename unsafe paths with `git mv` and commit them, " +
-          `then rerun \`aidlc-swarm check ${unit}\` before native convergence`,
+          `then rerun \`${aidlcDispatcherInvocation(`swarm check ${unit}`)}\` before native convergence`,
       };
     }
     // A private index/HEAD gives ignore, path-mode and symlink validation the
@@ -28292,10 +28299,12 @@ const HOOKS_OFF_AGENT_RULES =
 /**
  * What the agent does, then the one line it shows the person, when this
  * harness's hooks are not running here; null for a harness that declares no
- * such step. `next` stops with it before any work, and a refusal for a reply
- * that was not recorded carries it. `keep` is the stop's: asked only when the
- * step has the person type the entry in a new chat, it keeps the stopped
- * command and returns its id, or null to leave the entry bare.
+ * such step. `next` stops with it before any work, a refusal for a reply that
+ * was not recorded carries it, and a save-again refusal of the summary evidence
+ * (checkSummaryConfirmationEvidence) gives it in place of the save, with no
+ * question waiting. `keep` is the stop's: asked only when the step has the
+ * person type the entry in a new chat, it keeps the stopped command and returns
+ * its id, or null to leave the entry bare.
  */
 export function hooksOffAgentStep(projectDir?: string, next?: string, keep?: () => string | null): string | null {
   const activation = hookActivation();
@@ -30292,22 +30301,14 @@ function claimPayloadAtTip(
 ): ClaimRegistryPayload {
   const remote = claimRegistryRemote(projectDir);
   const localOnly = { localOnly: true };
+  const prefix = claimPrefixOf(projectDir);
   const hasCommit = (): boolean =>
     claimRegistryGit(
       projectDir,
       ["cat-file", "-e", `${tip.oid}^{commit}`],
       localOnly,
     ).ok;
-  const payloadBlob = (): string | null => {
-    const found = claimRegistryGit(
-      projectDir,
-      ["rev-parse", `${tip.oid}:.aidlc-unit-claim.json`],
-      localOnly,
-    );
-    return found.ok && /^[0-9a-f]{40}$/.test(found.stdout.trim())
-      ? found.stdout.trim()
-      : null;
-  };
+  const payloadBlob = (): string | null => claimBlobAt(projectDir, tip.oid, prefix)?.blob ?? null;
   const hasBlob = (blob: string | null): boolean =>
     blob !== null &&
     claimRegistryGit(projectDir, ["cat-file", "-e", blob], localOnly).ok;
@@ -30343,16 +30344,12 @@ function claimPayloadAtTip(
         "the partial clone is missing the claim payload blob.",
     );
   }
-  const shown = claimRegistryGit(
-    projectDir,
-    ["show", `${tip.oid}:.aidlc-unit-claim.json`, "--"],
-    localOnly,
-  );
-  if (!shown.ok) {
+  const shown = readClaimAt(projectDir, tip.oid, prefix);
+  if (!shown) {
     throw new Error(`Unit claim registry payload is unreadable at ${tip.ref}.`);
   }
   try {
-    const payload = JSON.parse(shown.stdout) as Record<string, unknown>;
+    const payload = JSON.parse(shown.text) as Record<string, unknown>;
     if (
       (payload.status !== "claimed" && payload.status !== "released") ||
       payload.intent_uuid !== intentUuid ||
@@ -31812,9 +31809,10 @@ export function memoryStrictHoldsGuardPolicy(
 /**
  * Whether the person's own approval may go over a review that did not finish
  * (asked for, with no verdict yet), at a stage gate and at a Unit checkpoint
- * alike. Off, relaxed and a strict set for this piece of work let it; only a
- * strict the team locks in memory keeps the review required. The one place
- * that says which setting counts.
+ * alike, and over a Unit's check that did not pass. Off, relaxed and a strict
+ * set for this piece of work let it; only a strict the team locks in memory
+ * keeps the review, or the check, required. The one place that says which
+ * setting counts.
  */
 export function personMayApproveOverUnfinishedReview(
   projectDir: string,
@@ -32401,12 +32399,49 @@ export function evaluateGuardRefusal(
   // A revision is open for its own review: reviewing the change is the
   // conductor's step before it reports the revision done.
   const openForReview = openForWork || state === "revising";
+  // A review still waiting for its verdict: recording it, or retrying a request
+  // whose answer never came back, is the conductor's own step wherever the
+  // Unit is built, so a side-by-side Unit is offered them before a restart.
+  const pendingReviewRemedies = (): void => {
+    if (!input.attempt.pendingReview) return;
+    if (
+      input.attempt.pendingReview.verdictRecordable !== false &&
+      input.attempt.summaryCoverage === "current"
+    ) {
+      remedies.push({
+        op: "record-verdict",
+        // Spell the closing call out. Requesting a review and recording its
+        // verdict are the same command with --verdict added, which is not
+        // guessable from the request's own output, so "record the verdict"
+        // alone left operators looking for a command that does not exist.
+        action:
+          `Record the verdict for pending review iteration ` +
+          `${input.attempt.pendingReview.iteration} if the reviewer returned` +
+          (input.attempt.pendingReview.recordVerdict
+            ? `: \`${input.attempt.pendingReview.recordVerdict}\`.`
+            : " using the recordVerdict command returned by the review request."),
+        requiresHuman: false,
+        executableNow: true,
+      });
+    }
+    if (input.attempt.pendingReview.retryable) {
+      remedies.push({
+        op: "retry-pending",
+        action:
+          `Retry pending review iteration ${input.attempt.pendingReview.iteration} ` +
+          "with --retry-pending.",
+        requiresHuman: false,
+        executableNow: input.attempt.summaryCoverage === "current",
+      });
+    }
+  };
 
   if (input.autonomousBolt) {
     const slug = input.autonomousBolt.slug ?? input.autonomousBolt.unit;
     const batch = input.autonomousBolt.batch
       ? ` batch ${input.autonomousBolt.batch}`
       : " the current batch";
+    pendingReviewRemedies();
     remedies.push({
       op: "abort-bolt",
       action:
@@ -32509,38 +32544,7 @@ export function evaluateGuardRefusal(
         executableNow: openForWork || state === "revising",
       });
     }
-    if (input.attempt.pendingReview) {
-      if (
-        input.attempt.pendingReview.verdictRecordable !== false &&
-        input.attempt.summaryCoverage === "current"
-      ) {
-        remedies.push({
-          op: "record-verdict",
-          // Spell the closing call out. Requesting a review and recording its
-          // verdict are the same command with --verdict added, which is not
-          // guessable from the request's own output, so "record the verdict"
-          // alone left operators looking for a command that does not exist.
-          action:
-            `Record the verdict for pending review iteration ` +
-            `${input.attempt.pendingReview.iteration} if the reviewer returned` +
-            (input.attempt.pendingReview.recordVerdict
-              ? `: \`${input.attempt.pendingReview.recordVerdict}\`.`
-              : " using the recordVerdict command returned by the review request."),
-          requiresHuman: false,
-          executableNow: true,
-        });
-      }
-      if (input.attempt.pendingReview.retryable) {
-        remedies.push({
-          op: "retry-pending",
-          action:
-            `Retry pending review iteration ${input.attempt.pendingReview.iteration} ` +
-            "with --retry-pending.",
-          requiresHuman: false,
-          executableNow: input.attempt.summaryCoverage === "current",
-        });
-      }
-    }
+    pendingReviewRemedies();
     if (input.attempt.repairReview) {
       remedies.push({
         op: "apply-repairs-then-request",
@@ -35081,9 +35085,9 @@ export function unitLifecycleRunFloorForProject(
 // a stage before the Target keeps its attempt: a jump back to Code Generation
 // leaves each Unit's Functional Design as it was. A row whose Target, or a
 // stage, the graph does not know, or a graph that cannot be read, reaches
-// every stage. A team-owned jump back before the per-Unit block records `Unit
-// Work: kept` (aidlc-jump.ts): it reaches no per-Unit stage, whose work is
-// each Unit's claim's.
+// every stage. A team-owned jump back before the per-Unit block, or a redo of
+// a stage there, records `Unit Work: kept` (aidlc-jump.ts): it reaches no
+// per-Unit stage, whose work is each Unit's claim's.
 export function stageJumpReaches(block: string, slug: string): boolean {
   const name = auditBlockField(block, "Target");
   if (!name || name === slug) return true;
@@ -38238,10 +38242,13 @@ export function plannedStages(
     goesBackTo ??= new Set(work ? stagesOwedBehindCursor(stateContent, work.projectDir, work.intent, work.space) : []);
     return goesBackTo.has(slug);
   };
-  const passedOver = (slug: string) =>
-    (stateOf(slug) ?? "pending") === "pending" && cursorPastStage(stateContent, slug) && !owed(slug);
+  // Under team ownership the Unit stages behind the cursor stay open for the
+  // Units still to land in them (a move past them keeps them, handleExecute).
+  const passedOver = (stage: StageEntry) =>
+    (stateOf(stage.slug) ?? "pending") === "pending" && cursorPastStage(stateContent, stage.slug) &&
+    !owed(stage.slug) && !(isPerUnitStage(stage) && isTeamUnitOwnership(stateContent));
   return loadStageGraph().filter((stage) =>
-    stage.phase !== "initialization" && runs(stage.slug) && !passedOver(stage.slug));
+    stage.phase !== "initialization" && runs(stage.slug) && !passedOver(stage));
 }
 
 // --- Plans composed for one piece of work ---
@@ -42049,9 +42056,8 @@ export function classifyStateVersion(stateContent: string): StateVersionClassifi
     "Incompatible workflow state: the State Version field is missing, empty, " +
     "or unparseable in aidlc-state.md, so this state cannot be matched to the " +
     `current v${CURRENT_STATE_VERSION} stage graph and cannot be advanced safely. ` +
-    "Archive your workspace ('mv aidlc aidlc.archive') and start a fresh " +
-    "workflow (describe what to build), or finish this workflow on the prior " +
-    `shell. Run \`${entrySkillInvocation()} --doctor\` for the full diagnosis.`;
+    "Put its `- **State Version**:` line back as it was (git has it if the file " +
+    `was committed), then try again. Run \`${entrySkillInvocation()} --doctor\` for the full diagnosis.`;
   // Anchor the tail with `[ \t]*$`: the schema token is a bare integer with
   // no trailing content on the line, so `State Version: 8 garbage` fails to
   // match and falls into the unparseable branch.

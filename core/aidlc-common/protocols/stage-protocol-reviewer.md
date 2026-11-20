@@ -415,6 +415,8 @@ Use only the subsection that matches the active harness.
 
 If `directive.reviewer` is present, invoke the reviewer as a sub-agent (via `Task` targeting the reviewer agent).
 
+**Waiting for a reviewer in the background:** when Claude Code answers that it launched the reviewer in the background, run step 3's `--for review` wait at once. While it answers `waiting`, keep running it in the same turn rather than ending the turn for Claude Code's notice, unless that notice says the reviewer finished or stopped: a chat left idle past its prompt cache's lifetime (five minutes by default with API or cloud billing) loses that cache, and the next step then writes the whole conversation to it again. When the person writes meanwhile, stop waiting and re-run `next` first, as step 1 says.
+
 ---
 
 ### Kiro CLI

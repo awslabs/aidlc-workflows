@@ -398,8 +398,9 @@ describe("classifyTerminalCommand() - plugin utilities", () => {
       display: "plugin help",
       source: "plugin-verb",
     });
-    expect(classifyTerminalCommand(["plugin"])).toMatchObject({
-      subcommand: "error",
+    // With no verb the person gets the plugin commands, as for `plugin help`.
+    expect(classifyTerminalCommand(["plugin"])).toEqual({
+      subcommand: "help",
       display: "plugin",
       source: "plugin-verb",
     });

@@ -555,9 +555,10 @@ describe("intent add-repo clones a repo that is not here yet", () => {
   });
 
   test("a failed clone of an address with a credential prints it masked", () => {
-    const r = utility(["intent", "add-repo", "payments", "--url", "https://user:s3cret-tok@127.0.0.1:9/acme/payments.git"]);
+    const r = utility(["intent", "add-repo", "payments", "--url", "https://user:s3cret-tok@127.0.0.1:9/acme/payments.git"], { GIT_ALLOW_PROTOCOL: "file:https" });
     expect(r.rc).not.toBe(0);
     expect(r.out).toContain("Could not clone payments from https://***@127.0.0.1:9/acme/payments.git: ");
+    expect(r.out).not.toContain("not allowed");
     expect(r.out).toContain(`run git clone -- <the address with its credential> "${join(proj, "payments")}", then add it again.`);
     expect(r.out).not.toContain("s3cret-tok");
   });

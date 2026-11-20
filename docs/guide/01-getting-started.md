@@ -177,6 +177,10 @@ Then it asks one more question, about Claude Code's status line:
 
   Writing project files ... done  (.claude/ and aidlc/, 316 files)
   Recording model preset ... done  (aidlc.settings.json in this project)
+  Note: git does not track AI-DLC's setup for Claude Code in this project yet: .claude/, aidlc/,
+        .gitignore, .mcp.json and aidlc.settings.json. Commit them so teammates who use Claude Code
+        get the same setup.
+
   Setup complete. Start your first workflow:
 
     claude                         open Claude Code in this repo
@@ -286,6 +290,7 @@ servers on (add `--mcp defaults` for that):
 
 ```text
 $ aidlc config --harness claude --mcp defaults --yes
+  Note: git does not track AI-DLC's setup for Claude Code in this project yet: .claude/, aidlc/, .gitignore and .mcp.json. Commit them so teammates who use Claude Code get the same setup.
 configured /home/you/ci-demo for Claude Code X.Y.Z; next: open Claude Code in this project (if it is already open in this folder, exit it and start it again) and run `/aidlc --doctor`
 ```
 
@@ -361,7 +366,8 @@ $ git status --short
 | `aidlc.settings.json` | The model preset | Yes |
 | `aidlc.settings.local.json`, `.claude/settings.local.json` | Your own choices (here, the status line) | No, git-ignored |
 
-Commit the first five so your team gets the same setup:
+Commit the first five so your team gets the same setup (in a git repository, the
+first `aidlc config` for a harness names them in a `Note:` line):
 `git add .claude aidlc .gitignore .mcp.json aidlc.settings.json && git commit -m "Set up AI-DLC"`.
 Run `aidlc config` again at any time to refresh the files from your installed
 release; it keeps what you edited
@@ -383,7 +389,7 @@ Machine
 Project (.claude, Claude Code)
   warn  AIDLC hooks have not run in this project yet
         fix: This is expected before your first Claude Code chat in this folder. ...
-  warn  Workspace records: 8 uncommitted change(s) under aidlc/ (advisory - the shared records travel by git; commit & push so teammates get them: `git add aidlc/ && git commit && git push`)
+  warn  Workspace records: 8 uncommitted change(s) under aidlc/ (advisory - the shared records travel by git; commit & push so teammates get them: `git add aidlc/`, `git commit`, `git push`)
         fix: add --verbose to see the details, correct the named condition, then run doctor again
   ok    49 checks passed
 

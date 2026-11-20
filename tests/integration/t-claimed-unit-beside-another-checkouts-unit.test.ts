@@ -197,7 +197,7 @@ function writeAndReview(checkout: string, unit: string): void {
 function gateApprovedAndOn(checkout: string, unit: string): void {
   const gate = nextDirective(checkout);
   expect(gate.kind === "run-stage" && gate.gate !== true, JSON.stringify(gate)).toBe(false);
-  expect(JSON.stringify(gate)).not.toContain("Team Construction Dispatcher");
+  expect(JSON.stringify(gate)).not.toContain("Team Construction Board");
   for (const args of [
     ["report", "--stage", FD, "--unit", unit, "--result", "awaiting-approval"],
     ["report", "--stage", FD, "--unit", unit, "--result", "approved", "--user-input", "Approve"],
@@ -348,7 +348,7 @@ describe("the lead's own Unit, begun before a team claimed another, stays the le
     for (let chat = 0; chat < 2; chat++) {
       const after = nextDirective(lead);
       expect(after, JSON.stringify(after).slice(0, 400)).toMatchObject({ kind: "notice" });
-      expect(String(after.message)).toContain("Team Construction Dispatcher");
+      expect(String(after.message)).toContain("Team Construction Board");
       expect(String(after.message)).toContain("beta");
     }
   });

@@ -386,6 +386,13 @@ function namesUnit(cell: string, unit: string): boolean {
   return bare === unit || bare.replace(/^u\d+-/i, "") === unit;
 }
 
+// The Unit a target names on its own: its directory as `namesUnit` reads one, or its `U{n}` ID.
+function unitNamedBy(target: string, units: string[], unitIds: Map<string, string>): string | undefined {
+  const raw = target.trim();
+  return units.find((unit) => namesUnit(raw, unit))
+    ?? new Map([...unitIds.entries()].map(([unit, id]) => [id, unit])).get(raw.toUpperCase());
+}
+
 function unitIdMap(unitFile: string, units: string[]): Map<string, string> {
   const map = new Map<string, string>();
   const read = readText(unitFile);
@@ -532,6 +539,36 @@ function builtWork(projectDir: string, assignments?: Map<string, Set<string>>): 
   return result;
 }
 
+// The Units of the plan, with what the story map says of each item: a row of it
+// per story (`USg.s`), or per requirement when there are no stories.
+interface HandoffPlan {
+  units: string[];
+  unitIds: Map<string, string>;
+  assignments: Map<string, Set<string>>;
+  hasStories: boolean;
+}
+
+// The story-map row an `N/A` ID is carried on, with the key the row is under:
+// the story `USg.s` of an `ACg.s.c` when stories.md exists, the `FR` itself when
+// it does not. BR and NFR IDs are on no such row.
+function handoffRow(id: string, plan: Pick<HandoffPlan, "assignments" | "hasStories">): { key: string; units: Set<string> } | undefined {
+  const key = plan.hasStories
+    ? (/^AC(\d+)\.(\d+)\.\d+$/.exec(id) ? id.replace(/^AC(\d+)\.(\d+)\.\d+$/, "US$1.$2") : undefined)
+    : (/^FR\d+(?:\.\d+)?$/.test(id) ? id : undefined);
+  const units = key === undefined ? undefined : plan.assignments.get(key);
+  return key !== undefined && units !== undefined ? { key, units } : undefined;
+}
+
+// The Unit an `N/A` row hands its ID to, for an ID the story map carries: the
+// other Unit its target names on its own, as a Units Generation row names one.
+// A reason's words are never read, since Unit names are often ordinary words.
+// Empty when the row is not a hand-off.
+function handedTo(entry: CoverageEntry, self: string, plan: HandoffPlan): string[] {
+  if (entry.status !== "N/A" || !handoffRow(entry.id, plan)) return [];
+  const unit = unitNamedBy(entry.target ?? "", plan.units, plan.unitIds);
+  return unit !== undefined && unit !== self ? [unit] : [];
+}
+
 function resolveUnitContext(
   projectDir: string,
   outputPath: string,
@@ -595,6 +632,7 @@ function addSource(result: UpstreamResolution, source: { ids: Set<string>; reaso
 function addUnitRows(result: UpstreamResolution, storyMap: string, context: UnitContext, patterns: RegExp[]): void {
   const mapped = storyAssignments(storyMap, context.units, context.unitIds, patterns);
   if (mapped.reason) result.reasons.push(mapped.reason);
+  result.storyAssignments = mapped.assignments;
   for (const [id, units] of mapped.assignments) {
     if (units.has(context.unitName)) result.ids.add(id);
   }
@@ -827,11 +865,9 @@ function verifyTargets(
   }
 
   if (stage === "units-generation" && upstream.unitContext && upstream.storyAssignments) {
-    const reverseUnitIds = new Map([...upstream.unitContext.unitIds.entries()].map(([unit, id]) => [id, unit]));
     for (const entry of okEntries) {
       const rawTarget = entry.target?.trim() ?? "";
-      const unit = upstream.unitContext.units.find((candidate) => namesUnit(rawTarget, candidate))
-        ?? reverseUnitIds.get(rawTarget.toUpperCase());
+      const unit = unitNamedBy(rawTarget, upstream.unitContext.units, upstream.unitContext.unitIds);
       if (!unit) {
         invalidTargets.push(`${entry.id}: target "${rawTarget}" is not a declared unit`);
       } else if (!upstream.storyAssignments.get(entry.id)?.has(unit)) {
@@ -891,6 +927,28 @@ function verifyTargets(
     }
   }
 
+  // A Unit's `N/A` that hands an ID to another Unit only works when that Unit is
+  // on the ID's row: otherwise nobody is asked for it.
+  if ((stage === "functional-design" || stage === "code-generation") && docsDir && upstream.unitContext && upstream.storyAssignments) {
+    const { units, unitIds, unitName } = upstream.unitContext;
+    const plan: HandoffPlan = {
+      units,
+      unitIds,
+      assignments: upstream.storyAssignments,
+      hasStories: existsSync(join(docsDir, "inception", "user-stories", "stories.md")),
+    };
+    for (const entry of data.coverage) {
+      const named = handedTo(entry, unitName, plan);
+      const row = handoffRow(entry.id, plan);
+      if (named.length === 0 || !row || named.some((unit) => row.units.has(unit))) continue;
+      const item = plan.hasStories ? `${row.key}'s row` : `${entry.id}'s row`;
+      invalidTargets.push(
+        `${entry.id}: handed to ${named.join(", ")}, none of which is on ${item} in unit-of-work-story-map.md, so no Unit is asked for ${entry.id}. ` +
+          `Add ${named.length === 1 ? "that Unit" : "one of those Units"} to the row at Units Generation, or cover ${entry.id} in this Unit`,
+      );
+    }
+  }
+
   return { invalidTargets, derivedOrphans, reasons };
 }
 
@@ -918,6 +976,8 @@ interface FinalRow {
   through?: string[];
   not_built?: string[];
   not_applicable?: string[];
+  // `N/A` rows that hand the ID to another Unit nothing built it in.
+  handed_off?: string[];
 }
 
 interface FinalCoverage {
@@ -934,6 +994,20 @@ function readTable(path: string, label: string): { data?: TraceabilityData; reas
   return validated.ok ? { data: validated.data } : { reason: `${label}: ${validated.reason}` };
 }
 
+// The IDs Units Generation keeps out of every Unit on purpose, each with its
+// reason: no Unit's story-map row names it (`unassigned`, the stage's
+// `extraGaps`) and its own row is `Deferred` with the reason as its target.
+// Units Generation's check and Build and Test's coverage both read it here.
+function keptOutOfEveryUnit(unassigned: readonly string[], coverage: readonly CoverageEntry[]): Map<string, string> {
+  const ids = new Set(unassigned);
+  const kept = new Map<string, string>();
+  for (const entry of coverage) {
+    const reason = entry.status === "Deferred" ? entry.target?.trim() : "";
+    if (reason && ids.has(entry.id)) kept.set(entry.id, reason);
+  }
+  return kept;
+}
+
 // Build and Test's cross-Unit coverage: every requirement Requirements Analysis
 // recorded (without a record, every one the FR and NFR patterns find in
 // requirements.md and every one User Stories traced, or when it did not run
@@ -945,10 +1019,11 @@ function readTable(path: string, label: string): { data?: TraceabilityData; reas
 // by its own row; else, with stories, through every criterion of the stories
 // User Stories traced it to, because Code Generation then traces criteria.
 // One nothing builds is settled when the latest stage that traced it (User
-// Stories, then NFR Requirements, then Code Generation) marked it `N/A` with its
-// reason in every table there that lists it; any other row there, or an `N/A`
-// with no reason, leaves it unbuilt. A Unit's own Code Generation `N/A` settles
-// a sub-requirement it owes.
+// Stories, then Units Generation's `Deferred` row for a story it kept out of
+// every Unit, then NFR Requirements, then Code Generation) marked it `N/A` with
+// its reason in every table there that lists it; any other row there, or an
+// `N/A` with no reason, leaves it unbuilt. A Unit's own Code Generation `N/A`
+// settles a sub-requirement it owes.
 // `uncovered` comes before the per-ID rows so a host that cuts long output keeps it.
 function finalCoverage(projectDir: string): FinalCoverage {
   const docsDir = recordDir(projectDir);
@@ -993,6 +1068,25 @@ function finalCoverage(projectDir: string): FinalCoverage {
     }
   }
 
+  // A story with no criteria cannot show it is built, so it stands for itself.
+  const criteriaOrStory = (story: string): string[] => {
+    const criteria = storyContent === null ? [] : [...criteriaOfStories(storyContent, new Set([story]))];
+    return criteria.length > 0 ? criteria : [story];
+  };
+
+  // A story Units Generation kept out of every Unit settles its criteria (the
+  // requirement itself in work without stories) ahead of NFR Requirements and
+  // Code Generation, so a Unit whose table lists one still decides it. A table
+  // that cannot be read settles nothing.
+  const unitsTable = join(docsDir, "inception", "units-generation", "traceability.json");
+  const planned = existsSync(unitsTable) ? readTable(unitsTable, "Units Generation traceability.json").data : undefined;
+  if (planned) {
+    const unassigned = resolveUpstream("units-generation", projectDir, unitsTable, planned.upstream_ids).extraGaps;
+    for (const [id, reason] of keptOutOfEveryUnit(unassigned, planned.coverage)) {
+      for (const part of criteriaOrStory(id)) traced(0.5, "units-generation", { id: part, status: "N/A", target: reason });
+    }
+  }
+
   // The stage-level table (no Units) and every Unit's, named by their folder.
   const construction = join(docsDir, "construction");
   const folders = existsSync(construction)
@@ -1005,6 +1099,23 @@ function finalCoverage(projectDir: string): FinalCoverage {
 
   const projectRoot = resolve(projectDir);
   const add = (map: Map<string, string[]>, key: string, value: string) => map.set(key, [...(map.get(key) ?? []), value]);
+  // The plan's Units and the story map's rows, for the `N/A` rows that hand an
+  // ID to another Unit; with no Unit DAG there are none.
+  let plan: HandoffPlan | null = null;
+  const dag = resolveBoltDag(projectDir);
+  if (dag.state === "ok") {
+    const unitIds = unitIdMap(join(docsDir, "inception", "units-generation", "unit-of-work.md"), dag.units);
+    const hasStories = existsSync(storiesPath);
+    const assignments = storyAssignments(
+      join(docsDir, "inception", "units-generation", "unit-of-work-story-map.md"),
+      dag.units,
+      unitIds,
+      hasStories ? [ID_PATTERNS.US] : [ID_PATTERNS.FR],
+    ).assignments;
+    plan = { units: dag.units, unitIds, assignments, hasStories };
+  }
+  // Per ID, the `N/A` rows that hand it to another Unit.
+  const handedOff = new Map<string, string[]>();
   const builtIn = new Map<string, string[]>();
   const badTargets = new Map<string, string[]>();
   // Each owner's own built IDs and the sub-requirements it owes: the NFRx.y its
@@ -1041,6 +1152,9 @@ function finalCoverage(projectDir: string): FinalCoverage {
     for (const entry of read.data.coverage) {
       traced(2, where("code-generation"), entry);
       if (entry.status === "N/A" && entry.target?.trim()) ownNotApplicable.set(`${owner}: ${entry.id}`, entry.target.trim());
+      if (plan && owner !== "code-generation" && entry.target?.trim() && handedTo(entry, owner, plan).length > 0) {
+        add(handedOff, entry.id, `${where("code-generation")}: ${entry.target.trim()}`);
+      }
       if (entry.status !== "OK") continue;
       const problem = codeTargetProblem(projectRoot, entry.target);
       if (problem) {
@@ -1060,11 +1174,6 @@ function finalCoverage(projectDir: string): FinalCoverage {
   ];
   const reported = [...new Set([...withoutTracedParents(new Set(requirementIds), recorded), ...criteria])];
 
-  // A story with no criteria cannot show it is built, so it stands for itself.
-  const criteriaOrStory = (story: string): string[] => {
-    const criteria = storyContent === null ? [] : [...criteriaOfStories(storyContent, new Set([story]))];
-    return criteria.length > 0 ? criteria : [story];
-  };
   const coverage: FinalRow[] = [];
   for (const id of reported) {
     const parts: string[] = [];
@@ -1095,12 +1204,17 @@ function finalCoverage(projectDir: string): FinalCoverage {
     }
     const through = [...(storyTargets.get(id) ?? [])].flatMap(criteriaOrStory);
     if (through.length > 0) {
-      const notBuilt = through.filter((part) => !builtIn.has(part) && !whyNotApplicable(part));
-      coverage.push(notBuilt.length === 0 ? { id, covered: true, through } : { id, covered: false, through, not_built: notBuilt });
+      // An `N/A` that hands a criterion to another Unit settles it only if some Unit built it.
+      const notBuilt = through.filter((part) => !builtIn.has(part) && (!whyNotApplicable(part) || handedOff.has(part)));
+      const handed = notBuilt.flatMap((part) => handedOff.get(part) ?? []);
+      coverage.push(notBuilt.length === 0
+        ? { id, covered: true, through }
+        : { id, covered: false, through, not_built: notBuilt, ...(handed.length > 0 ? { handed_off: handed } : {}) });
       continue;
     }
     const why = whyNotApplicable(id);
-    coverage.push(why ? { id, covered: true, not_applicable: why } : { id, covered: false });
+    const handed = handedOff.get(id);
+    coverage.push(why && !handed ? { id, covered: true, not_applicable: why } : { id, covered: false, ...(why && handed ? { not_applicable: why, handed_off: handed } : {}) });
   }
 
   const uncovered = coverage.filter((row) => !row.covered);
@@ -1294,7 +1408,11 @@ export function main(argv: string[]): void {
   }
 
   reasons.push(...upstream.reasons);
-  gaps.push(...upstream.extraGaps);
+  // Units Generation: a story the team keeps out of every Unit is settled by its own
+  // `Deferred` row, whose target says where it is handled. `N/A` is not enough: it is
+  // also how a story is handed to another Unit, and that Unit must then be on the row.
+  const keptOut = stage === "units-generation" ? keptOutOfEveryUnit(upstream.extraGaps, data.coverage) : new Map<string, string>();
+  gaps.push(...upstream.extraGaps.filter((id) => !keptOut.has(id)));
   const missingFromUpstreamIds = [...required].filter((id) => !declared.has(id));
   if (upstream.ids.size === 0 && upstream.reasons.length === 0) {
     reasons.push(`upstream ID set is empty for stage "${stage}"`);

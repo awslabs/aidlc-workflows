@@ -18,9 +18,9 @@
 // that agent's knowledge absorbed.
 //
 // Used by scripts/package.ts (the declarative projection: Claude, Kiro,
-// Kiro IDE, and the opencode .aidlc copies) AND by the codex/opencode emit.ts
-// plugins (which read core/agents/*.md directly, bypassing the packager's
-// transform).
+// Kiro IDE, and the opencode .aidlc copies) AND by the codex, opencode and
+// copilot emit.ts plugins (which read core/agents/*.md directly, bypassing the
+// packager's transform).
 
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, sep } from "node:path";

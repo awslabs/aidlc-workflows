@@ -379,8 +379,13 @@ export function quoteCommandArgument(
   // PowerShell reads a bare word that starts with "@" as splatting a variable.
   if (/^[A-Za-z0-9_./:@%+=,-]+$/.test(value) && !(shell !== "posix" && value.startsWith("@"))) return value;
   // The two shells quote an apostrophe differently, so it is double-quoted
-  // when both read that alike.
-  if (shell === "windows" && POWERSHELL_SINGLE_QUOTE.test(value) && readsAlikeInDoubleQuotes(value)) return `"${value}"`;
+  // when both read that alike. Inside double quotes Git Bash reads a backslash
+  // as itself, as PowerShell does, unless another backslash or the closing
+  // quote follows it, so a Windows path's own backslashes pass.
+  if (
+    shell === "windows" && POWERSHELL_SINGLE_QUOTE.test(value) && !/\\(?:\\|$)/.test(value) &&
+    readsAlikeInDoubleQuotes(value.replaceAll("\\", ""))
+  ) return `"${value}"`;
   return shell !== "posix"
     ? `'${value.replaceAll(new RegExp(POWERSHELL_SINGLE_QUOTE.source, "g"), "$&$&")}'`
     : `'${value.replaceAll("'", "'\"'\"'")}'`;
@@ -429,6 +434,14 @@ export function swarmUnitTestCommand(unit: string): string {
 // inputs and records the result, which the script run bare does not.
 export function sensorFireUsage(id = "<id>"): string {
   return aidlcDispatcherInvocation(`sensor fire ${id} --stage <slug> --output-path <path>`);
+}
+
+// A check script's result, written whole before the process exits 0: under Bun
+// an exit straight after a large write to a pipe drops what is not yet written.
+// writeSync is no way round: once stdout is non-blocking it writes part and
+// returns; ending without an exit makes an early-closing reader an EPIPE exit 1.
+export function writeSensorResult(result: unknown): void {
+  process.stdout.write(`${JSON.stringify(result)}\n`, () => process.exit(0));
 }
 
 export function aidlcToolInvocation(

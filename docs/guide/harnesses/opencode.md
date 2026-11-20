@@ -43,8 +43,8 @@ script (top-level dispatch, `process.exit`) crashes the session
   [On OpenCode 2](#on-opencode-2)). Project-local skill and agent discovery
   works on both. Check with `opencode --version`.
 - **bun** only when generating or running the source/development `dist/`
-  projection. Native installs and versioned release runtimes dispatch through
-  the installed `aidlc` executable.
+  projection or the versioned manual-copy runtime. Native installs dispatch
+  through the installed `aidlc` executable.
 - **A model provider** — the shipped project `opencode.json` and agent
   definitions pin no model. Your global opencode config supplies the provider
   and session model; balanced reviewers retain only their medium reasoning
@@ -103,8 +103,8 @@ then set `RUNTIME_ROOT` to the extracted `runtime/` directory.
 1. Copy the distribution into your project:
 
    ```bash
-   cp -r "$RUNTIME_ROOT/opencode/.aidlc/"    your-project/.aidlc/
-   cp -r "$RUNTIME_ROOT/opencode/.opencode/" your-project/.opencode/
+   cp -R "$RUNTIME_ROOT/opencode/.aidlc/."    your-project/.aidlc/
+   cp -R "$RUNTIME_ROOT/opencode/.opencode/." your-project/.opencode/
    cp -r "$RUNTIME_ROOT/opencode/aidlc/"     your-project/aidlc/      # the workspace shell — a sibling of .aidlc/, not inside it
    ```
 
@@ -119,9 +119,10 @@ then set `RUNTIME_ROOT` to the extracted `runtime/` directory.
    instead, step 2 adds those parts to it, comments kept, and creates no
    `opencode.json` beside it.
    The adapter enforces the permission boundary: the target must be an entrypoint
-   embedded from the packaged tree, invoked as one direct command with no
-   chaining, redirection, expansion, or command substitution. Engine-code edits
-   prompt for approval.
+   embedded from the packaged tree, or a plugin tool that plugin sync installed
+   in `.aidlc/tools/` and that has not changed since, invoked as one direct
+   command with no chaining, redirection, expansion, or command substitution.
+   Engine-code edits prompt for approval.
 
 2. Run the copy's own setup once, from the project:
 
@@ -144,7 +145,7 @@ existing workflow carries on where it stopped, as with `/aidlc --resume` (ask
 to redo, jump to a stage, or start fresh to do something else);
 `/aidlc --resume` skips the probe and continues directly.
 
-The versioned runtime uses the native `aidlc` command. Framework developers who
+Framework developers who
 need the Bun-shaped projection can clone the repository, run
 `bun install --frozen-lockfile` and `bun scripts/package.ts`, then use the
 ignored local `dist/opencode/` output.
@@ -199,8 +200,7 @@ the project.
   editor extension), the agent still sees it, and AI-DLC keeps only what you
   typed as your words.
 - **Personas are native subagents** (`mode: subagent`); the conductor adopts
-  them inline for most stages and delegates via the `task` tool for the two
-  subagent stages (2.1 reverse-engineering, 3.5 code-generation). Their native
+  them inline for most stages and delegates via the `task` tool. Their native
   permission map denies `task`, so delegated agents cannot delegate again.
   Plugin composition emits the same `.opencode/agents/` twin for plugin personas.
 - **Space switches preserve JSONC.** `/aidlc space <name>` updates the method

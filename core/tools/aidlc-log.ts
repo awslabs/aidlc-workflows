@@ -6,6 +6,7 @@
 // (the §12a reviewer step). Orchestrator-callable; state tool doesn't own these
 // because they fire per-question / per-review, not per state transition.
 
+import { constructionPolicyRecovery } from "./aidlc-guard-operation.ts";
 import { projectDirFlag, settleClaudeTurnsFirst } from "./aidlc-claude-turn-pending.ts";
 import { CHANGE_NOTICES_NOTE, otherWorkNote, reviewRequestNote, reviewVerdictNote } from "./aidlc-directive.ts";
 import { spawnSync } from "node:child_process";
@@ -99,7 +100,6 @@ import {
   verificationCommandRecovery,
   validConstructionPolicyChange,
   CONSTRUCTION_POLICY_CHECKPOINT,
-  CONSTRUCTION_POLICY_RECOVERY,
   checkSummaryConfirmationEvidence,
   claimAttemptFields,
   clearSummaryAuthorization,
@@ -932,7 +932,7 @@ function handlePlanApprovalBatch(
 // `--session` is only an override, so the agent never hunts for a session id.
 function constructionPolicyFields(pd: string, flags: Record<string, string>): Record<string, string> {
   if (!validConstructionPolicyChange(flags.field, flags.value)) {
-    error("Construction policy requires a valid --field and --value: Construction Checkpoints (enabled|disabled), Construction Execution (serial|swarm), or Construction Iteration (unit-major|stage-major). " + CONSTRUCTION_POLICY_RECOVERY);
+    error("Construction policy requires a valid --field and --value: Construction Checkpoints (enabled|disabled), Construction Execution (serial|swarm), or Construction Iteration (unit-major|stage-major). " + constructionPolicyRecovery());
   }
   if (flags.single !== undefined || flags.unit !== undefined) {
     error("Construction policy applies to the whole intent; omit --single and --unit.");
@@ -948,7 +948,7 @@ function constructionPolicyFields(pd: string, flags: Record<string, string>): Re
   if (!session) {
     error(
       "Could not tell which session this is. Run the command again with --session set to the Runtime Session " +
-        "shown in this session's AI-DLC context. " + CONSTRUCTION_POLICY_RECOVERY,
+        "shown in this session's AI-DLC context. " + constructionPolicyRecovery(),
     );
   }
   return { Checkpoint: CONSTRUCTION_POLICY_CHECKPOINT, Field: flags.field, Value: flags.value, Session: session };
@@ -1403,7 +1403,7 @@ function handleDecision(args: string[]): void {
     Object.assign(fields, policyFields);
     const options = optionsList(flags.options);
     if (options.length !== 2 || options[0] !== "Approve" || options[1] !== "Request Changes") {
-      error('Construction policy decision requires --options "Approve,Request Changes". ' + CONSTRUCTION_POLICY_RECOVERY);
+      error('Construction policy decision requires --options "Approve,Request Changes". ' + constructionPolicyRecovery());
     }
   }
   if (planEvidence) Object.assign(fields, planApprovalFields(planEvidence));
@@ -1575,7 +1575,7 @@ function handleAnswers(args: string[]): void {
   const { positional, flags } = parseFlags(args);
   if (!flags.stage) error("Missing --stage <slug>");
   if (positional.length > 0 || Object.keys(flags).some((key) => !["stage", "unit"].includes(key))) {
-    error("Usage: aidlc-log answers --stage <slug> [--unit <unit>]");
+    error(`Usage: ${aidlcToolInvocation("log")} answers --stage <slug> [--unit <unit>]`);
   }
   const pd = resolveProjectDir(projectDir);
   // An open isolated run with no work keeps its rows in the space's own record.
@@ -2621,7 +2621,7 @@ function handleAnswer(args: string[]): void {
 
     if (policyFields) {
       if (!pendingConstructionPolicyDecision(pd, flags.stage, fields.Field, fields.Value)) {
-        error("No matching pending DECISION_RECORDED with the same Field and Value exists in the current workflow. " + CONSTRUCTION_POLICY_RECOVERY);
+        error("No matching pending DECISION_RECORDED with the same Field and Value exists in the current workflow. " + constructionPolicyRecovery());
       }
       requireProtectedResponse(pd, fields.Session, {
         kind: "construction-policy",
@@ -3013,8 +3013,8 @@ function handleAnswer(args: string[]): void {
       ) {
         error(
           "Cannot record this approval choice because no new human reply has arrived. "
-            + "After the human types their choice, use aidlc-orchestrate.ts report --result "
-            + "approved or rejected; do not use aidlc-log.ts answer for an approval."
+            + `After the human types their choice, use ${aidlcToolInvocation("orchestrate")} report --result `
+            + `approved or rejected; do not use ${aidlcToolInvocation("log")} answer for an approval.`
             + unattendedHumanPresenceHint(pd),
         );
       }
@@ -3472,10 +3472,10 @@ export function reviewRecoverySpentMessage(
       `Do not put autonomous Unit "${autonomousBolt.unit}" in --claimed and do ` +
       "not run finalize or merge it. Halt and ask the human whether to restart " +
       `the Bolt attempt. On an approved retry, return to the main workspace, run ` +
-      `\`aidlc-bolt.ts abort --name "${autonomousBolt.unit}" --slug "${slug}" ` +
+      `\`${aidlcToolInvocation("bolt")} abort --name "${autonomousBolt.unit}" --slug "${slug}" ` +
       `--reason "stale review recovery exhausted" --discard\`. After success, ` +
       "use the retry-discard SAY line in stage-protocol-swarm.md. Then rerun the " +
-      `current \`aidlc-swarm.ts prepare\` step for Unit "${autonomousBolt.unit}" in` +
+      `current \`${aidlcDispatcherInvocation("swarm prepare")}\` step for Unit "${autonomousBolt.unit}" in` +
       `${batch} with the original base/repo arguments. The fresh Bolt attempt ` +
       "restores one review allowance without claiming convergence. Do not " +
       "record a Request Changes decision on the human's behalf.",
@@ -3854,6 +3854,17 @@ function stageBox(state: string, stage: string): string | undefined {
   return parseCheckboxes(state).find((row) => row.slug === stage)?.state;
 }
 
+// Whether the stage's latest review lists a finding as New or still open
+// (Unresolved). A review that finished after the person's reply brings such a
+// finding to them at the gate, so that reply stands for nothing it lists: the
+// recovery pass's note (reviewVerdictStep) and an approval naming the reply
+// (gateShownToNamedReply) read this one rule. An unknown stage counts as one.
+export function reviewHasUnseenFinding(pd: string, slug: string): boolean {
+  const reviewed = loadStageGraphAll().find((stage) => stage.slug === slug);
+  return reviewed === undefined || readReviewArtifactContexts(pd, reviewed).some((context) =>
+    context.findings.some((finding) => finding.status === "New" || finding.status === "Unresolved"));
+}
+
 // The agent's next step after a stage's verdict is recorded (#2400). The
 // verdict used to come back with no step, so an agent that took it as the end
 // of the work ended its turn before the approval gate, and on a host that
@@ -3962,11 +3973,8 @@ export function reviewVerdictStep(
   // another chat is not named: the agent here never saw its words. A pass with
   // a finding they have not seen (a NOT-READY one, or a READY one with a minor
   // point) brings it to them at the gate, with the brief.
-  const reviewed = loadStageGraphAll().find((stage) => stage.slug === flags.stage);
-  const unseen = () => reviewed === undefined || readReviewArtifactContexts(pd, reviewed).some((context) =>
-    context.findings.some((finding) => finding.status === "New" || finding.status === "Unresolved"));
   if (request.recovery && box === "awaiting-approval" && verdict === "READY" &&
-    personRepliedSinceGateShown(pd, { stage: flags.stage }) === true && !unseen()) {
+    personRepliedSinceGateShown(pd, { stage: flags.stage }) === true && !reviewHasUnseenFinding(pd, flags.stage)) {
     const replies = personsGateReply(pd, resolveInvokingSessionId(pd), flags.stage).replies;
     if (replies.length > 0) {
       const report = `orchestrate report --stage ${quoteCommandArgument(flags.stage)}`;
@@ -4112,7 +4120,7 @@ function handleReview(args: string[]): void {
         refuseReview(
           `Cannot record review for "${flags.stage}" unit "${flags.unit}": no authoritative ` +
             "unit DAG exists and no matching active or merged Bolt attempt was found. Run " +
-            `\`aidlc-bolt.ts start --name "${flags.unit}" --batch 1\` before retrying this ` +
+            `\`${aidlcToolInvocation("bolt")} start --name "${flags.unit}" --batch 1\` before retrying this ` +
             "per-unit review, or remove --unit and record a stage-level no-DAG review.",
         );
       }
@@ -4883,6 +4891,21 @@ function handleReview(args: string[]): void {
           attempt.pendingIterations.size === 0 &&
           !recoverySpent;
         if (recoverySpent && changeAccepted() && boundStands()) refuseChangeAccepted(personAskedRetry());
+        // A pending request comes before the budget and the recovery slot: the
+        // stage is waiting on its verdict, not out of passes. Saying "include the
+        // findings" for a review that never returned sent conductors to a gate
+        // that refuses, and calling a recovery request still waiting for its
+        // verdict spent said its documents changed again when they had not.
+        if (attempt.pendingIterations.size > 0) {
+          const pending = [...attempt.pendingIterations].sort((a, b) => a - b);
+          refuseAttemptGuard(
+            "REVIEW_VERDICT_PENDING",
+            "A review request receives its verdict before another request starts.",
+            `Cannot start another review for "${flags.stage}" because iteration ` +
+              `${pending.join(", ")} is still waiting for a verdict. Record that verdict, or ` +
+              "repeat the same iteration with --retry-pending if the reviewer did not run.",
+          );
+        }
         if (scopeStale && recoverySpent && boundStands()) {
           const message = reviewRecoverySpentMessage(
               flags.stage,
@@ -4937,19 +4960,6 @@ function handleReview(args: string[]): void {
             "REVIEW_RECOVERY_ALREADY_REQUESTED",
             "Only one stale-receipt recovery request exists in an attempt.",
             message,
-          );
-        }
-        // A pending request comes before the budget: the stage is waiting on its
-        // verdict, not out of passes, and saying "include the findings" for a
-        // review that never returned sent conductors to a gate that refuses.
-        if (attempt.pendingIterations.size > 0) {
-          const pending = [...attempt.pendingIterations].sort((a, b) => a - b);
-          refuseAttemptGuard(
-            "REVIEW_VERDICT_PENDING",
-            "A review request receives its verdict before another request starts.",
-            `Cannot start another review for "${flags.stage}" because iteration ` +
-              `${pending.join(", ")} is still waiting for a verdict. Record that verdict, or ` +
-              "repeat the same iteration with --retry-pending if the reviewer did not run.",
           );
         }
         // The budget is measured against the attempt's own count ONLY (`expected`,
@@ -5714,7 +5724,7 @@ function handleReview(args: string[]): void {
       // (codeGenerationApprovalArtifacts), which covers a worker checkout whose
       // meta does not validate. A person's own Unit worktree records it.
       const reviewedContract = flags.stage === "code-generation" && swarmWorkerWorktreeMeta(pd) === null
-        ? reviewedTestingContract(pd)
+        ? reviewedTestingContract(pd, flags.unit ?? null)
         : null;
       if (reviewedContract !== null) fields[REVIEW_TESTING_CONTRACT_FIELD] = reviewedContract;
       recordPath = slot.recordRelative;

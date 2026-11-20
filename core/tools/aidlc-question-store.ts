@@ -76,8 +76,9 @@ export interface StoredQuestion {
   answeredBy?: string;
   /**
    * For a new-work request the person replaced with a newer one while its plan
-   * question waited and nothing had started: the newer request. It is no longer
-   * the plan question that waits, and its own commands still answer it.
+   * question waited and nothing had started, or a routing question their words
+   * were passed on as a request beside: the newer request. It is no longer the
+   * question that waits, and its own commands still answer it.
    */
   replacedBy?: string;
   /**

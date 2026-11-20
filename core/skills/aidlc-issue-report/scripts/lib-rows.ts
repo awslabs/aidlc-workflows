@@ -60,7 +60,7 @@ const POLICY: Record<string, Policy> = {
   Status: "enum", Verdict: "enum", Result: "enum", Direction: "enum", Origin: "enum", "Question Kind": "enum",
   Authority: "enum", Actor: "enum", Grant: "enum", Mode: "enum", Kind: "enum", "Review Verdict Dictated": "enum",
   "State Validity": "enum", "Cap layer": "enum", "Fallback driver": "enum", Harness: "enum", Verified: "enum",
-  Reopen: "enum", "Answer Mode": "answer-mode", "Project Type Source": "enum",
+  Reopen: "enum", "Answer Mode": "answer-mode", "Project Type Source": "enum", "Check Not Passed": "enum", Check: "enum",
   Checkpoint: "titled",
   Languages: "tech", Frameworks: "tech", "Build System": "tech", "Project Type": "tech",
   "Exit Code": "count", "Duration ms": "count", Iteration: "count", "Revision count": "count", "Revision Count": "count",

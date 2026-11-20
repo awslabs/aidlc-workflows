@@ -497,7 +497,8 @@ describe("t351 fresh clone with a teammate's lone intent record", () => {
     for (const [tool_name, tool_input] of mutations) {
       const result = hook("plan-approval-guard", { hook_event_name: "PreToolUse", tool_name, tool_input });
       expect({ tool_name, code: result.code }).toEqual({ tool_name, code: 2 });
-      expect(result.stderr).toContain("Plan Approval authority evaluation failed closed");
+      expect(result.stderr).toContain("cannot start: its plan's approval could not be checked: ");
+      expect(result.stderr).not.toMatch(/authority|failed closed|ambiguous or stale/);
     }
   });
 

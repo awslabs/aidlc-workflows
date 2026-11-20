@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readConductorSurface } from "../harness/conductor-skill.ts";
 import { cleanupTestProject, REPO_ROOT } from "../harness/fixtures.ts";
+import { windowsUninstallFencePath } from "../../core/tools/aidlc-install-paths.ts";
 import {
   KIRO_TERMINAL_QUESTION,
   kiroIdeTerminalAsk,
@@ -486,6 +487,24 @@ describe("the warning once, at the first slow reply, for a person who kept Comma
       noteSlowReply(1500, process.env);
       expect(existsSync(dropped(mac))).toBe(false);
     });
+  });
+
+  // The uninstall run is itself a slow reply in that terminal. Once it has
+  // scheduled the Windows cleanup, which plans the dropped note with its
+  // contents, a fresh note at its exit would stop the cleanup as a changed file.
+  test("a slow reply notes nothing while an uninstall is scheduled", () => {
+    for (const before of [null, "2026-11-01T00:00:00.000Z\n"]) {
+      const m = machine(CMD_WITH_COMMENTS);
+      withEnv(inTerminal(m), () => {
+        recordKiroTerminalAnswer("kept");
+        if (before !== null) writeFileSync(dropped(m), before);
+        mkdirSync(join(windowsUninstallFencePath(), ".."), { recursive: true });
+        writeFileSync(windowsUninstallFencePath(), "{}\n");
+        noteSlowReply(1500, process.env);
+        if (before === null) expect(existsSync(dropped(m))).toBe(false);
+        else expect(readFileSync(dropped(m), "utf-8")).toBe(before);
+      });
+    }
   });
 
   test("the chat's hook records which shell the running Kiro has, and the engine's own commands go by that record", () => {

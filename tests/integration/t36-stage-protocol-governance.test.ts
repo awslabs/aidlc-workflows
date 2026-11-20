@@ -5,10 +5,11 @@
 // This test claims no enumerated tool unit (its covers id is an invariant);
 // it is a pure structural meta-test that the shipped governance protocol
 // (dist/claude/.claude/aidlc-common/protocols/stage-protocol-governance.md)
-// carries §13 Phase Boundary Verification, names the three valid phase-
-// transition stage pairs, references the verification knowledge file, and
-// has SHED the dead guardrail-learning model (superseded by the §13 Learnings
-// Ritual in stage-protocol.md). The honest covers id is therefore the
+// carries §13 Phase Boundary Verification and its per-boundary checks but no
+// procedure of its own (the three phase-ending stages run the check and file
+// it as the verification knowledge file names it), and has SHED the dead
+// guardrail-learning model (superseded by the §13 Learnings Ritual in
+// stage-protocol.md). The honest covers id is therefore the
 // structural INVARIANT under test, declared free-form like
 // t12's `invariant:` id (tests/integration/t12-state-fixture-validation.test.ts)
 // and t125's invariant ids — invariant ids are descriptive claims, not joined
@@ -32,14 +33,11 @@
 //   --   the dead §12 guardrail-learning model is GONE: no
 //        "Guardrail Learning Protocol", no "NEVER/ALWAYS" format, no
 //        "GUARDRAIL_LEARNED" emission anywhere in the file
-//   - "### When to verify" subsection
-//   - "### Verification process" subsection
-//   - "### Phase boundary checks" subsection
-//   - the three phase-transition stage pairs co-located on one line each:
-//          approval-handoff → reverse-engineering   (Ideation→Inception)
-//          delivery-planning → functional-design     (Inception→Construction)
-//          ci-pipeline → deployment-pipeline          (Construction→Operation)
-//   - "verification.md" referenced as the methodology file
+//   - "### Phase boundary checks" subsection, and no "### When to verify",
+//     "### Verification process" or report name of its own
+//   - each phase-ending stage (approval-handoff, delivery-planning,
+//     ci-pipeline) writes `<record>/verification/phase-check-<phase>.md`,
+//     the name verification.md gives the check's report
 
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
@@ -57,10 +55,6 @@ const KNOWLEDGE_DIR = join(AIDLC_SRC, "knowledge", "aidlc-shared");
 
 const GOVERNANCE = readFileSync(GOVERNANCE_PATH, "utf-8");
 const GOVERNANCE_LINES = GOVERNANCE.split("\n");
-
-function someLineHasBoth(a: string, b: string): boolean {
-  return GOVERNANCE_LINES.some((l) => l.includes(a) && l.includes(b));
-}
 
 // The six boundary stages. Each must resolve to a file under one of the
 // shipped phase dirs.
@@ -108,22 +102,29 @@ describe("t36 — dead guardrail-learning model is gone", () => {
   });
 });
 
-describe("t36 — §13 subsections + phase-boundary stage pairs", () => {
-  test("carries the three §13 subsections [.sh 6 + 7 + 8]", () => {
-    expect(GOVERNANCE.includes("### When to verify")).toBe(true);
-    expect(GOVERNANCE.includes("### Verification process")).toBe(true);
+describe("t36 — §13 carries the checks, the phase-ending stages run them", () => {
+  test("carries the per-boundary checks and no procedure of its own [.sh 6 + 7 + 8]", () => {
     expect(GOVERNANCE.includes("### Phase boundary checks")).toBe(true);
+    expect(GOVERNANCE.includes("### When to verify")).toBe(false);
+    expect(GOVERNANCE.includes("### Verification process")).toBe(false);
+    expect(GOVERNANCE.includes("[phase-boundary]-verification.md")).toBe(false);
   });
 
-  test("names the three phase-transition stage pairs on one line each [.sh 9 + 10 + 11]", () => {
-    // Both stage names of each transition appear on the SAME line of the
-    // governance file (the Section 13 boundary sentence).
-    // Ideation → Inception
-    expect(someLineHasBoth("approval-handoff", "reverse-engineering")).toBe(true);
-    // Inception → Construction
-    expect(someLineHasBoth("delivery-planning", "functional-design")).toBe(true);
-    // Construction → Operation
-    expect(someLineHasBoth("ci-pipeline", "deployment-pipeline")).toBe(true);
+  test("each phase-ending stage files the check under the name verification.md gives it [.sh 9 + 10 + 11]", () => {
+    const owners: Array<[string, string]> = [
+      ["approval-handoff", "ideation"],
+      ["delivery-planning", "inception"],
+      ["ci-pipeline", "construction"],
+    ];
+    for (const [slug, phase] of owners) {
+      const dir = resolveBoundaryStage(slug);
+      expect(dir, slug).not.toBeNull();
+      const body = readFileSync(join(STAGES_DIR, dir as string, `${slug}.md`), "utf-8");
+      expect(body, slug).toContain(`<record>/verification/phase-check-${phase}.md`);
+    }
+    expect(readFileSync(join(KNOWLEDGE_DIR, "verification.md"), "utf-8")).toContain(
+      "<record>/verification/phase-check-<phase>.md",
+    );
   });
 });
 
@@ -138,10 +139,6 @@ describe("t36 — boundary stages exist as files under STAGES_DIR", () => {
 });
 
 describe("t36 — verification knowledge file", () => {
-  test("references the verification.md knowledge file [.sh 18]", () => {
-    expect(GOVERNANCE.includes("verification.md")).toBe(true);
-  });
-
   test("verification.md exists on disk under aidlc-shared [.sh 19]", () => {
     expect(existsSync(join(KNOWLEDGE_DIR, "verification.md"))).toBe(true);
   });

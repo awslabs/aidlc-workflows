@@ -105,15 +105,12 @@ Write `OUTCOMES.md` at the workspace root (outside `<record>/`):
 - Alternatives considered and why rejected
 - Constraints that shaped the design (from rules and practices)
 
-## 6. What to Commit vs Archive
+## 6. What to Commit
 | Artifact | Action | Destination |
 |----------|--------|-------------|
 | `decisions.md` (per stage) | Commit | `docs/decisions/` |
 | Architecture summary (1 page) | Write + commit | `docs/architecture.md` |
 | NFR summary table | Write + commit | `docs/nfr-summary.md` |
-| `<record>/audit/*.md` shards | Archive — do NOT commit to app repo | Compliance archive |
-| Stage question files | Discard | — |
-| `<record>/aidlc-state.md` | Discard | — |
 | Application / infrastructure code | Already committed | — |
 
 ## 7. Workflow Footprint

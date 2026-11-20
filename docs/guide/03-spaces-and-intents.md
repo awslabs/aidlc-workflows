@@ -288,9 +288,13 @@ Session identity follows one order:
    Claude Code's `CLAUDE_CODE_SESSION_ID` while the process its `CLAUDE_PID`
    names is alive, or Kiro CLI's `KIRO_SESSION_ID`. A shell kept open after its
    chat ended still carries the variable, which is why Claude Code's id is read
-   only while that chat's process is alive; a dead or absent pid leaves it
-   unread. Kiro CLI puts no pid in the shell, so its id stands on its own, as
-   Codex's does. Other harnesses name no chat there.
+   only while that chat's process is alive, and a dead or absent pid leaves it
+   unread. The one exception is Claude Code's sandbox on Linux, which hides
+   that process from the commands it runs: a command it marks as sandboxed
+   (`SANDBOX_RUNTIME=1`) reads the id when the process cannot be found but
+   Claude Code's own record of that chat (`sessions/<pid>.json` in its config
+   folder) is still there. Kiro CLI puts no pid in the shell, so its id stands
+   on its own, as Codex's does. Other harnesses name no chat there.
 4. The nearest live PID ancestry entry.
 5. No session identity.
 
@@ -677,6 +681,7 @@ repo. Two kinds of file are deliberately **gitignored** instead:
 | `aidlc/active-space`, `…/intents/active-intent` | Cursors — "where am I right now." Committing them would turn per-user navigation into shared repository state and have teammates fight over intent creates and cursor switches. |
 | `.../intents/<id>/runtime-graph.json`, `.aidlc-*`, `aidlc/.aidlc-sessions/`, `aidlc/.aidlc-active-space-*.tmp` | Derived, machine-local runtime state, including per-session bindings and PID ancestry entries. |
 | `aidlc/.aidlc-request-text/` | A request the agent wrote to a file for the engine to read. Removed once the command goes ahead; one left there when it did not is your words, not shared work. |
+| `.aidlc/worktree-meta.json`, `.aidlc/base-source-listing.tsv` | The metadata AI-DLC writes inside a Unit's own checkout while it is built side by side. It is this machine's, so a worker's `git add -A` leaves it out; a Unit's landing never carries it to your branch either. |
 | `…/knowledge/documentkb/.journal/` | One directory per in-flight document transaction. Transient and per-clone; a committed journal would be a merge conflict on every concurrent `sync`. |
 | `…/knowledge/.sources.local.json` | Where *this machine* finds documents that live outside the repo. The path is machine-specific by definition, so committing it would break every teammate's checkout. No command creates such a link today (`onboard` copies a file into `documents/`), so you will not normally see this file. |
 
