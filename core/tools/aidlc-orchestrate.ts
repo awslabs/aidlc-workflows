@@ -21705,6 +21705,36 @@ function planApprovalAnswerStep(): string {
     `${PLAN_CHANGE_DETAILS}, then run \`${aidlcToolInvocation("orchestrate")} next\` with no answer arguments. If they have not replied, wait at that question.`;
 }
 
+// The agent's step for a report at the person's gate (a stage's or a team
+// Unit's) that names no choice or passes host cancellation text: with their
+// reply on record, report the choice it makes; with none, show the gate. While
+// the engine's Plan Approval question is open they are answering that, not the
+// gate; a Unit's gate leaves its own plan to codeGenerationCompletionWaits.
+function namesNoChoiceStep(
+  projectDir: string, result: string | undefined, gate: string, userInput: string | undefined, planQuestion: boolean,
+): PrintDirective {
+  const refused = `report --result ${result} for ${gate} ` +
+    (userInput?.trim()
+      ? `received ${formatReceivedReply(userInput)}, which is cancellation boilerplate, not a decision`
+      : "names no choice");
+  const plan = planQuestion ? openPlanApprovalQuestion(projectDir) : null;
+  if (plan !== null && !plan.editing) {
+    return printDirective(
+      `${refused}, and the open question is the Plan Approval question, not the gate for ${gate}. ${planApprovalAnswerStep()}`,
+    );
+  }
+  return humanRepliedSinceGate(projectDir)
+    ? printDirective(
+      `${refused}. The person has replied since the last decision: report the choice their reply makes with ` +
+        '--user-input ("Approve", say), without asking them again.',
+    )
+    : turnEndingPrint(
+      `The question for ${gate} is still open. ${refused}. No reply from the person is on record since the gate ` +
+        'was shown: show the gate with every offered choice, end the turn, then report the choice they make with ' +
+        '--user-input ("Approve", say).',
+    );
+}
+
 // The agent's step for a word after `intent` or `space` that is neither a verb
 // nor a record's exact name: the noun's verbs, the records there, and what the
 // person typed, whole. The agent reads it (a mistyped verb or name, a request
@@ -22672,9 +22702,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
           !humanPresenceGuardDisabled() &&
           !flags.userInput?.trim()
         ) {
-          emit(errorDirective(
-            `report --result approved for unit "${unit}" of "${slug}" requires --user-input with the human's reply.`,
-          ));
+          emit(namesNoChoiceStep(pd, flags.result, `unit "${unit}" of "${slug}"`, flags.userInput, false));
           return;
         }
         if (status !== "awaiting-approval") {
@@ -22851,28 +22879,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
   // Either way it is the agent's next step, never an error for the person.
   if (protectedHumanGate && FORWARD_RESULTS.has(flags.result ?? "") &&
     (!flags.userInput?.trim() || isNonAnswer(flags.userInput))) {
-    const refused = `report --result ${flags.result} for "${slug}" ` +
-      (flags.userInput?.trim()
-        ? `received ${formatReceivedReply(flags.userInput)}, which is cancellation boilerplate, not a decision`
-        : "names no choice");
-    // While the engine's Plan Approval question is the open one, the gate is
-    // not what the person is answering: the way on is that question's answer
-    // command, whether or not they have replied to it yet.
-    const plan = openPlanApprovalQuestion(pd);
-    emit(plan !== null && !plan.editing
-      ? printDirective(
-        `${refused}, and the open question is the Plan Approval question, not the gate for "${slug}". ${planApprovalAnswerStep()}`,
-      )
-      : humanRepliedSinceGate(pd)
-      ? printDirective(
-        `${refused}. The person has replied since the last decision: report the choice their reply makes with ` +
-          '--user-input ("Approve", say), without asking them again.',
-      )
-      : turnEndingPrint(
-        `The question for "${slug}" is still open. ${refused}. No reply from the person is on record since the gate ` +
-          'was shown: show the gate with every offered choice, end the turn, then report the choice they make with ' +
-          '--user-input ("Approve", say).',
-      ));
+    emit(namesNoChoiceStep(pd, flags.result, `"${slug}"`, flags.userInput, true));
     return;
   }
   const stopForNow = isGated && flags.result === "approved" && flags.park === true;
