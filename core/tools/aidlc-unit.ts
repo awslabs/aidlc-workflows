@@ -294,7 +294,7 @@ import {
   resolveTestingPosture,
   testingContractCurrent,
 } from "./aidlc-testing-posture.ts";
-import { beforePerUnitBlock, memoryDirFor } from "./aidlc-graph.ts";
+import { beforePerUnitBlock, frameworkMemorySeedDir, memoryDirFor } from "./aidlc-graph.ts";
 import { LEAD_HERE_FIELD, leadHereByWord, planMadeElsewhere, spacesRoot, stateFilePath } from "./aidlc-record-core.ts";
 import { withWorkPinned } from "./aidlc-locks.ts";
 import { approvalDecidesOpenFindings, approvalOpenFindings } from "./aidlc-review-brief.ts";
@@ -4128,8 +4128,47 @@ function aidlcOwnRootParts(projectDir: string, paths: readonly string[], against
 
 interface YieldedRootPart {
   path: string;
-  part: OwnRootPart;
+  // `seed`: AI-DLC's own memory file as the install laid it (aidlcOwnSeed), set aside whole.
+  part: OwnRootPart | { seed: true };
   bytes: Buffer;
+}
+
+// The engine's seed for `path` (repository-relative) when it is in the default
+// space's memory folder, else null: a path test alone, nothing read.
+function defaultMemorySeed(dir: string, path: string): string | null {
+  const memory = `${relative(dir, memoryDirFor(dir, DEFAULT_SPACE)).split(sep).join("/")}/`;
+  return path.startsWith(memory) ? join(frameworkMemorySeedDir(), ...path.slice(memory.length).split("/")) : null;
+}
+
+// Nothing at `file`, not even a link (existsSync follows one).
+function nothingAt(file: string): boolean {
+  try {
+    lstatSync(file);
+    return false;
+  } catch {
+    return true;
+  }
+}
+
+// The default space's memory file at `path` (repository-relative) is AI-DLC's
+// own copy as the install laid it, which nothing tracks here: the engine's seed
+// for it (frameworkMemorySeedDir, what ensureWorkspaceDirs lays out), line
+// endings aside as a checkout's own, a regular file, nothing staged for it. In
+// a clone made before the lead's record reached main, main then tracks the same
+// path, and git refuses a step over it. A file changed by the person or the
+// learning loop, or laid by another release, is not the seed. Only the set-aside
+// (setOwnRootPartsAside) and the merge's "a file of your own" stop ask it.
+function aidlcOwnSeed(dir: string, path: string): boolean {
+  const seed = defaultMemorySeed(dir, path);
+  if (seed === null) return false;
+  try {
+    if (!lstatSync(join(dir, ...path.split("/"))).isFile() || !lstatSync(seed).isFile()) return false;
+    if (gitPathExistsAt(dir, "HEAD", path) || git(dir, ["ls-files", "--error-unmatch", "--", path]).ok) return false;
+    const lf = (file: string) => readFileSync(file, "utf-8").replace(/\r\n/g, "\n");
+    return lf(join(dir, ...path.split("/"))) === lf(seed);
+  } catch {
+    return false;
+  }
 }
 
 // Git refuses to merge over a local change to a file the merge writes, the
@@ -4162,10 +4201,19 @@ function yieldOwnRootParts(projectDir: string, candidatePaths: readonly string[]
 // entries merged as the hook merges them, around the person's part as the
 // step made it; alone where the step took the file away (a branch without it).
 // When the step stopped and rolled back, each file gets its bytes back as they
-// were.
+// were. A seed goes back whenever nothing is at its path after the step, landed
+// or not (a step that went without touching the checkout, a fetch into another
+// branch), and never over the copy the step put there.
 function returnOwnRootParts(projectDir: string, yielded: readonly YieldedRootPart[], landed: boolean): void {
   for (const { path, part, bytes } of yielded) {
     const file = join(projectDir, path);
+    if ("seed" in part) {
+      if (nothingAt(file)) {
+        mkdirSync(dirname(file), { recursive: true });
+        writeFileSync(file, bytes);
+      }
+      continue;
+    }
     if (!landed) {
       writeFileSync(file, bytes);
       continue;
@@ -4216,12 +4264,24 @@ function setOwnRootPartsAside(dir: string, target: string): YieldedRootPart[] {
   const yielded: YieldedRootPart[] = [];
   const shared = sharedRootPaths(dir);
   // "--": a branch named like a root folder (a Unit beside its own folder) is still read as a revision.
-  const changes = shared.size === 0 ? null : git(dir, ["diff", "-z", "--name-only", "--no-renames", "HEAD", target, "--"]);
-  const paths = changes?.ok ? changes.stdout.split("\0").filter((path) => shared.has(path)) : [];
+  const changes = git(dir, ["diff", "-z", "--name-only", "--no-renames", "HEAD", target, "--"]);
+  const changed = changes.ok ? changes.stdout.split("\0").filter(Boolean) : [];
+  const paths = changed.filter((path) => shared.has(path));
   try {
     if (paths.length > 0) yieldOwnRootParts(dir, paths, yielded);
   } catch {
     // A file git would not put back stays as it is, for git to refuse the step over.
+  }
+  // AI-DLC's own seed where `target` tracks a copy: out of git's way, its bytes kept (in memory only, as the root
+  // parts') to go back where nothing replaces it.
+  for (const path of changed.filter((each) => aidlcOwnSeed(dir, each))) {
+    try {
+      const bytes = readFileSync(join(dir, ...path.split("/")));
+      unlinkSync(join(dir, ...path.split("/")));
+      yielded.push({ path, part: { seed: true }, bytes });
+    } catch {
+      // Left as it is, for git to refuse the step over.
+    }
   }
   return yielded;
 }
@@ -4235,7 +4295,7 @@ function sharedRootPaths(dir: string): Set<string> {
 // part on top of the merge's copy, so that file goes back to the index's copy
 // first; a file still in conflict has no index copy and the abort resets it
 // whole, so only its part is kept. Each goes back onto what the abort leaves.
-function abortMerge(dir: string): GitResult {
+function abortMerge(dir: string, workspace = false): GitResult {
   const yielded: YieldedRootPart[] = [];
   const shared = sharedRootPaths(dir);
   try {
@@ -4253,8 +4313,23 @@ function abortMerge(dir: string): GitResult {
       yielded.push({ path, part: { marker: block.marker, legacy: block.legacy, beside: false }, bytes });
     }
   }
+  // On the workspace's own repository, the default space's memory the waiting merge added: before it began, each
+  // was AI-DLC's seed (set aside), a file of theirs (the merge did not start) or nothing; the abort takes main's copy
+  // away, so the seed is laid again as the install lays it.
+  const added = !workspace ? [] : git(dir, ["diff", "--cached", "-z", "--name-only", "--no-renames", "--diff-filter=A", "HEAD", "--"]).stdout
+    .split("\0").filter(Boolean).flatMap((path) => {
+      const seed = defaultMemorySeed(dir, path);
+      return seed === null ? [] : [{ file: join(dir, ...path.split("/")), seed }];
+    });
   const aborted = git(dir, ["merge", "--abort"]);
   returnOwnRootParts(dir, yielded, aborted.ok);
+  if (aborted.ok) {
+    for (const { file, seed } of added) {
+      if (!nothingAt(file) || !existsSync(seed)) continue;
+      mkdirSync(dirname(file), { recursive: true });
+      copyFileSync(seed, file);
+    }
+  }
   return aborted;
 }
 
@@ -14307,8 +14382,8 @@ function mergeMainIn(pd: string, args: string[], unit: string, branch: string, u
     const each = repos.filter((entry, at) => repos.findIndex((other) => other.dir === entry.dir) === at)
       .map((entry) => repos.find((other) => other.dir === entry.dir && merging(other.dir, other.into)) ?? entry);
     const waiting = each.some((entry) => merging(entry.dir, entry.into)) ? each.filter((entry) => merging(entry.dir, entry.into)) : each;
-    for (const { dir, name, into } of waiting) {
-      const aborted = merging(dir, into) ? abortMerge(dir) : null;
+    for (const { repo, dir, name, into } of waiting) {
+      const aborted = merging(dir, into) ? abortMerge(dir, repo === ".") : null;
       if (aborted?.ok) lines.push(`I undid the merge of ${into} into ${unit} in ${name}; ${unit} is as it was there, and nothing was pushed.`);
       else if (aborted !== null) {
         lines.push(`The merge of ${into} into ${unit} in ${name} could not be undone: git says "${gitSaid(aborted.stderr || aborted.stdout)}". ` +
@@ -14406,7 +14481,7 @@ function mergeMainIn(pd: string, args: string[], unit: string, branch: string, u
     }
     const added = git(dir, ["diff", "-z", "--name-only", "--diff-filter=A", `${tip}...${into}`]).stdout.split("\0").filter(Boolean);
     const replaced = added.find((path) => existsSync(join(dir, ...path.split("/"))) && !git(dir, ["ls-files", "--error-unmatch", "--", path]).ok &&
-      !(entry.repo === "." && aidlcOwnRootParts(dir, [path]).has(path)));
+      !(entry.repo === "." && (aidlcOwnRootParts(dir, [path]).has(path) || aidlcOwnSeed(dir, path))));
     if (replaced !== undefined) {
       stop(`${into} adds ${replaced} in ${name}, where you have a file of your own, so nothing was merged or pushed. Once it is moved ` +
         `or put aside, I can bring ${into} in.`);
@@ -14468,7 +14543,7 @@ function mergeMainIn(pd: string, args: string[], unit: string, branch: string, u
         }
         // A merge this step just began holds nothing of theirs: it is undone.
         if (gitOperationUnderWay(dir)?.what === "a merge") {
-          abortMerge(dir);
+          abortMerge(dir, entry.repo === ".");
           if (byHook) {
             stop(`Your hook in ${name} did not take the merge of ${into} into ${unit} (${said}), so I undid it, and nothing was pushed. ` +
               "If it is the merge's message, tell me the one to use, and I will merge with that.");

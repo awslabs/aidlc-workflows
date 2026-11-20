@@ -14,10 +14,10 @@
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
-import { unitBranchInTheWay, workToCommit } from "../../dist/claude/.claude/tools/aidlc-unit.ts";
+import { bringBranchLevel, unitBranchInTheWay, workToCommit } from "../../dist/claude/.claude/tools/aidlc-unit.ts";
 import { fixtureIntentId8, REPO_ROOT, seededStateFile } from "../harness/fixtures.ts";
 import { typedHarnessName } from "../../core/tools/aidlc-runtime-paths.ts";
 import {
@@ -747,6 +747,164 @@ describe("a Unit on the workspace's own repository", () => {
     const pushed = run(UNIT, ["push"], lee);
     expect(pushed.status, pushed.out).toBe(0);
     ownOnly(record, lee, committed(home.remote, "refunds"));
+  });
+
+  // The install's memory files in a clone made before the lead's record reached
+  // main are AI-DLC's own: an AI-DLC step that brings main in takes each one that
+  // is as the install laid it out of git's way, and main's copy takes its place.
+  const LEADS_RULE = "Gift card codes are compared case-insensitively.";
+  const mainsCopyHere = (dir: string): void => {
+    expect(git(dir, ["ls-files", "--", "aidlc/spaces/default/memory/project.md"])).toBe("aidlc/spaces/default/memory/project.md");
+    expect(readFileSync(join(dir, "aidlc", "spaces", "default", "memory", "project.md"), "utf-8")).toContain(LEADS_RULE);
+  };
+  // A file the lead adds on main, so a merge of main into the Unit's branch clashes there.
+  function leadAddsOnMain(home: ReturnType<typeof makeHome>, file: string, text: string): void {
+    const dir = join(tempDir("lead-adds"), "repo");
+    git(tempDir("lead-adds-parent"), ["clone", "-q", home.remote, dir]);
+    git(dir, ["config", "user.name", "lead"]);
+    git(dir, ["config", "user.email", "lead@example.test"]);
+    mkdirSync(dirname(join(dir, file)), { recursive: true });
+    writeFileSync(join(dir, file), text);
+    git(dir, ["add", "--", file]);
+    git(dir, ["commit", "-q", "-m", `lead: ${file}`]);
+    git(dir, ["push", "-q", "origin", "main"]);
+  }
+  // The person's own words in their chat, which a merge of main is run on (no offer is put for it here).
+  function asks(dir: string, session: string, words: string): NodeJS.ProcessEnv {
+    const chat = personsChat(session);
+    expect(hook(dir, chat, { hook_event_name: "UserPromptSubmit", session_id: session, prompt: words }).status).toBe(0);
+    return chat;
+  }
+  const bringMainIn = (dir: string, session: string) =>
+    run(UNIT, ["push", "--merge-main"], dir, asks(dir, session, "please bring main into my refunds branch"));
+  // refunds pushed from the clone, then the lead's record merged on main.
+  function pushedBeforeLeadsRecord(space?: string) {
+    const made = leadRecordOnItsOwnBranch(UNITS);
+    builtInClone(made.clone, made.home, "refunds", "refunds.ts", space);
+    const pushed = run(UNIT, ["push"], made.clone);
+    expect(pushed.status, pushed.out).toBe(0);
+    made.mergeLeadRecord();
+    return made;
+  }
+
+  test("a teammate's first Unit, the lead's record merged before the push: the cut from main goes over the install's unchanged memory files, and main's copies take their place", () => {
+    const { home, clone, mergeLeadRecord } = leadRecordOnItsOwnBranch(UNITS);
+    builtInClone(clone, home, "refunds", "refunds.ts");
+    mergeLeadRecord();
+    const pushed = run(UNIT, ["push"], clone);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(git(home.remote, ["merge-base", "main", "refunds"])).toBe(git(home.remote, ["rev-parse", "main"]));
+    mainsCopyHere(clone);
+  });
+
+  test("the install's memory file saved with other line endings than the seed: the cut from main goes all the same", () => {
+    const { home, clone, mergeLeadRecord } = leadRecordOnItsOwnBranch(UNITS);
+    const org = join(clone, "aidlc", "spaces", "default", "memory", "org.md");
+    writeFileSync(org, readFileSync(org, "utf-8").replace(/\r?\n/g, "\r\n"));
+    builtInClone(clone, home, "refunds", "refunds.ts");
+    mergeLeadRecord();
+    expect(run(UNIT, ["push"], clone).status).toBe(0);
+    expect(git(home.remote, ["merge-base", "main", "refunds"])).toBe(git(home.remote, ["rev-parse", "main"]));
+    expect(git(clone, ["ls-files", "--", "aidlc/spaces/default/memory/org.md"])).toBe("aidlc/spaces/default/memory/org.md");
+  });
+
+  test("bring main in over the install's unchanged memory files: it goes, and no file of theirs is said to be in the way", () => {
+    const { home, clone } = pushedBeforeLeadsRecord();
+    const merged = bringMainIn(clone, `seeds-merge-${Math.random().toString(36).slice(2)}`);
+    expect(merged.status, merged.out).toBe(0);
+    expect(merged.out).not.toContain("where you have a file of your own");
+    expect(spawnSync("git", ["merge-base", "--is-ancestor", "main", "refunds"], { cwd: home.remote }).status, merged.out).toBe(0);
+    mainsCopyHere(clone);
+  });
+
+  test("a teammate in a space of their own brings main in over the install's memory files: all eight give way", () => {
+    const { home, clone } = pushedBeforeLeadsRecord("payments");
+    const merged = bringMainIn(clone, `seeds-merge-${Math.random().toString(36).slice(2)}`);
+    expect(merged.status, merged.out).toBe(0);
+    expect(spawnSync("git", ["merge-base", "--is-ancestor", "main", "refunds"], { cwd: home.remote }).status, merged.out).toBe(0);
+    for (const rel of SEEDED) expect(git(clone, ["ls-files", "--", `aidlc/spaces/default/memory/${rel}`])).toBe(`aidlc/spaces/default/memory/${rel}`);
+  });
+
+  test("a teammate's clone the lead's plan had not reached: share --back brings main up over the install's unchanged memory files", () => {
+    const { clone, mergeLeadRecord } = leadRecordOnItsOwnBranch(UNITS);
+    mergeLeadRecord();
+    // The look that offers it has fetched main.
+    git(clone, ["fetch", "-q", "origin"]);
+    const back = run(UNIT, ["share", "--back"], clone);
+    expect(back.status, back.out).toBe(0);
+    expect(git(clone, ["rev-parse", "HEAD"])).toBe(git(clone, ["rev-parse", "origin/main"]));
+    mainsCopyHere(clone);
+  });
+
+  test("main brought level from the Unit's branch (fetched into, the checkout untouched): it goes over the install's memory files, and they are as they were", () => {
+    const { clone } = pushedBeforeLeadsRecord();
+    expect(git(clone, ["branch", "--show-current"])).toBe("refunds");
+    // The look that brings main level has fetched it.
+    git(clone, ["fetch", "-q", "origin"]);
+    const level = bringBranchLevel(clone, "origin", "main");
+    expect(level, JSON.stringify(level)).toMatchObject({ ok: true, ran: "fetch" });
+    expect(git(clone, ["rev-parse", "main"])).toBe(git(clone, ["rev-parse", "origin/main"]));
+    seedsAsLaid(clone);
+  });
+
+  test("bring main in, their hook refusing the merge: it is undone, and the install's memory files are laid again as the install lays them", () => {
+    const { clone } = pushedBeforeLeadsRecord();
+    const hooks = join(clone, ".git", "hooks");
+    writeFileSync(join(hooks, "pre-merge-commit"), "#!/bin/sh\necho 'no merges on Fridays' >&2\nexit 1\n");
+    chmodSync(join(hooks, "pre-merge-commit"), 0o755);
+    const refused = bringMainIn(clone, "seeds-merge-hook");
+    expect(String(refused.json?.error), refused.out).toStartWith("Your hook in the repo did not take the merge of origin/main into refunds");
+    seedsAsLaid(clone);
+  });
+
+  test("bring main in, left waiting on a clash in another file, then the undo in a later step: the install's memory files are laid again", () => {
+    const { home, clone } = pushedBeforeLeadsRecord();
+    leadAddsOnMain(home, "src/refunds.ts", 'export const built = "the lead\'s refunds";\n');
+    const waiting = bringMainIn(clone, "seeds-merge-clash");
+    expect(String(waiting.json?.error), waiting.out).toStartWith("origin/main and refunds both change src/refunds.ts in the repo");
+    const undone = run(UNIT, ["push", "--undo-merge"], clone, asks(clone, "seeds-merge-clash", "undo that merge, please"));
+    expect(String(undone.json?.notice), undone.out).toStartWith("I undid the merge of origin/main into refunds in the repo");
+    seedsAsLaid(clone);
+  });
+
+  test("a rule kept in the install's project.md: it stays, and bringing main in says it is a file of theirs", () => {
+    const { clone } = pushedBeforeLeadsRecord();
+    const project = join(clone, "aidlc", "spaces", "default", "memory", "project.md");
+    const kept = `${readFileSync(project, "utf-8")}\n- A rule this build learned.\n`;
+    writeFileSync(project, kept);
+    const stopped = bringMainIn(clone, "seeds-merge-kept");
+    expect(String(stopped.json?.error), stopped.out).toStartWith(
+      "origin/main adds aidlc/spaces/default/memory/project.md in the repo, where you have a file of your own, so nothing was merged or pushed.",
+    );
+    expect(readFileSync(project, "utf-8")).toBe(kept);
+  });
+
+  // A file symlink needs privileges Windows runners do not grant.
+  test.skipIf(process.platform === "win32")("a staged copy of the install's file, and one that is a link: neither is taken, each is as it was, and the others are back as they were", () => {
+    const { home, clone, mergeLeadRecord } = leadRecordOnItsOwnBranch(UNITS);
+    const memory = join(clone, "aidlc", "spaces", "default", "memory");
+    git(clone, ["add", "--", "aidlc/spaces/default/memory/org.md"]);
+    const team = join(memory, "team.md");
+    const seedTeam = join(REPO_ROOT, "dist", "claude", "aidlc", "spaces", "default", "memory", "team.md");
+    rmSync(team);
+    symlinkSync(seedTeam, team);
+    builtInClone(clone, home, "refunds", "refunds.ts");
+    mergeLeadRecord();
+    const pushed = run(UNIT, ["push"], clone);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(git(clone, ["diff", "--cached", "--name-only", "--", "aidlc/spaces/default/memory/org.md"])).toBe("aidlc/spaces/default/memory/org.md");
+    expect(lstatSync(team).isSymbolicLink()).toBe(true);
+    // git refused the cut over the link, so the six set aside are back, untracked and as the install laid them.
+    for (const rel of SEEDED.filter((each) => each !== "org.md" && each !== "team.md")) {
+      const path = `aidlc/spaces/default/memory/${rel}`;
+      expect(git(clone, ["status", "--porcelain", "--untracked-files=all", "--", path]), path).toBe(`?? ${path}`);
+      expect(readFileSync(join(clone, ...path.split("/")))).toEqual(readFileSync(join(REPO_ROOT, "dist", "claude", ...path.split("/"))));
+    }
+  });
+
+  test("the install's unchanged memory files are still listed as work to commit: what a commit takes does not change", () => {
+    const { clone } = leadRecordOnItsOwnBranch(UNITS);
+    expect(workToCommit(clone).untracked).toContain("aidlc/spaces/default/memory/org.md");
   });
 
   const OTHER_CHANGES = "; your other changes are still yours, uncommitted.";
