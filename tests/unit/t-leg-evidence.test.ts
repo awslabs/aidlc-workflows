@@ -283,6 +283,24 @@ describe("what the agent told the person, kept with the leg", () => {
     cleanupTestProject(proj);
   });
 
+  test("the SDK drive starts Claude Code in a workspace the person has trusted, as one who answered the trust question", async () => {
+    const proj = createTestProject();
+    scratch.push(proj);
+    let profile: Record<string, unknown> | undefined;
+    scenario = async function* (input) {
+      // What the scratch config holds when the transport would start Claude Code.
+      profile = JSON.parse(readFileSync(join(String(input.options?.env?.CLAUDE_CONFIG_DIR), ".claude.json"), "utf8"));
+      const prompts = (input.prompt as AsyncIterable<unknown>)[Symbol.asyncIterator]();
+      await prompts.next();
+      yield { type: "result", subtype: "success", is_error: false, num_turns: 1 } as unknown as SDKMessage;
+    };
+    await driveAidlc("/aidlc status", { projectDir: proj });
+    expect(profile?.hasCompletedOnboarding).toBe(true);
+    const projects = (profile?.projects ?? {}) as Record<string, { hasTrustDialogAccepted?: boolean }>;
+    expect(projects[realpathSync(proj).replaceAll("\\", "/")]?.hasTrustDialogAccepted).toBe(true);
+    cleanupTestProject(proj);
+  });
+
   test("a Codex exec keeps the project's audit (its words are in its own exec log)", () => {
     const proj = temp("aidlc-leg-proj-");
     put(proj, "aidlc/spaces/default/intents/i/audit/h.md", "row\n");
