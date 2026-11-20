@@ -4855,6 +4855,13 @@ describe("t243 project initialization", () => {
       expect(out).not.toMatch(/\.github\/[,. ]/);
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+    test("opencode with the team's own opencode.jsonc: the file AI-DLC wrote its entries into is named", () => {
+      const project = repository("aidlc-t243-setup-jsonc-", { "opencode.jsonc": "{\n  // the team's own\n}\n" });
+      const out = configure(project, OPENCODE_RELEASE, "opencode");
+      expect(git(project, "status", "--porcelain")).toContain(" M opencode.jsonc");
+      expect(out).toContain(line("opencode", ".aidlc/, .opencode/, aidlc/, .gitignore, AGENTS.md and opencode.jsonc"));
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
     test("a project in a folder of a bigger repository: the paths named are the project's own", () => {
       const repo = repository("aidlc-t243-setup-monorepo-", { "apps/shop/README.md": "# Shop\n" });
       const out = configure(join(repo, "apps", "shop"), CLAUDE_RELEASE, "claude");

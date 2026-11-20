@@ -1,7 +1,7 @@
 import { lstatSync, readFileSync, realpathSync } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { managedBlockMarkers } from "./aidlc-config-diagnostics.ts";
-import type { ProjectionDescriptor } from "./aidlc-distribution.ts";
+import { type ProjectionDescriptor, rootIntegrationTarget } from "./aidlc-distribution.ts";
 import { git } from "./aidlc-git.ts";
 import { SETTINGS_FILE } from "./aidlc-settings.ts";
 
@@ -144,9 +144,11 @@ export function untrackedSetupLine(
   const tracked = git(projectDir, ["ls-files", "-z", "--", ...descriptor.managedDirectories])?.split("\0") ?? [];
   if (tracked.some((path) => ours.has(path) && !merged.has(path))) return null;
   const own = (path: string) => ours.has(path) || path.startsWith(`${data}/`) || path === SETTINGS_FILE;
-  const roots = [...descriptor.rootIntegrations.map((integration) => integration.path), SETTINGS_FILE];
+  // Each root file where config wrote it, by its record key (opencode.json's part lands in a team's opencode.jsonc).
+  const roots = new Map([...descriptor.rootIntegrations.map((integration) => integration.path), SETTINGS_FILE]
+    .map((key) => [rootIntegrationTarget(projectDir, key), key] as const));
   const listed = git(projectDir, ["ls-files", "-z", "--others", "--exclude-standard", "--modified", "--",
-    ...descriptor.managedDirectories, ...roots])?.split("\0").filter(Boolean) ?? [];
+    ...descriptor.managedDirectories, ...roots.keys()])?.split("\0").filter(Boolean) ?? [];
   const named: string[] = [];
   for (const folder of descriptor.managedDirectories) {
     const under = listed.filter((path) => path.startsWith(`${folder}/`));
@@ -166,7 +168,7 @@ export function untrackedSetupLine(
       if (!named.includes(shown)) named.push(shown);
     }
   }
-  named.push(...roots.filter((path) => listed.includes(path) && own(path)));
+  named.push(...[...roots].filter(([path, key]) => listed.includes(path) && own(key)).map(([path]) => path));
   if (named.length === 0) return null;
   const list = named.length === 1 ? named[0] : `${named.slice(0, -1).join(", ")} and ${named[named.length - 1]}`;
   return `git does not track AI-DLC's setup for ${descriptor.productName} in this project yet: ${list}. ` +
