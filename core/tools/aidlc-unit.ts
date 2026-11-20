@@ -260,6 +260,7 @@ import {
   takenFromPlan,
   textAt,
   headInByContent,
+  diffNames,
   levelByContent,
   type LevelBlock,
   unitDependencies,
@@ -13164,14 +13165,48 @@ function startUnitBranch(
   options.fetch();
   // Their own commits holding the Unit's files start where they are.
   const committedHere = paths.length > 0 && !git(dir, ["diff", "--quiet", integration, "HEAD", "--", ...paths]).ok;
+  // As CHECKOUT_STEPS.switch: an ignored file of theirs where the integration branch tracks one makes git refuse.
   const fromIntegration = options.leavesNothing() && !committedHere
     ? withOwnRootPartsAside(dir, integration, () =>
-      git(dir, ["switch", "-q", ...(options.track === false ? ["--no-track"] : []), make, branch, integration]))
+      git(dir, ["switch", "-q", "--no-overwrite-ignore", ...(options.track === false ? ["--no-track"] : []), make, branch, integration]))
     : null;
   if (fromIntegration?.ok) return { switched: true, said: "", exists, fromHere: false };
   if (!options.fromHere) return { switched: false, said: fromIntegration?.stderr ?? "", exists, fromHere: false };
   const tried = git(dir, ["switch", "-q", make, branch]);
   return { switched: tried.ok, said: tried.stderr, exists, fromHere: tried.ok };
+}
+
+// What HEAD holds apart from `into` (each file it changed since it left there
+// and holds otherwise now) is all an earlier Unit's of this work, taken in and
+// changed since: `into` changed each such file too, and HEAD's copy is the one
+// at a head that Unit's result records on ".", so a merge that took it in with
+// a change of its own (a review commit before a squash or rebase) leaves
+// nothing of theirs behind. Read at the recorded heads, never the result's
+// blobs, which the builder's own look moves to the host's tip after a review
+// commit. A file of theirs no such head holds, or a read that cannot tell,
+// keeps the cut where they are. Local reads only (no lazy fetch).
+function earlierUnitTakenIn(pd: string, build: UnitBuild, dir: string, into: string): boolean {
+  const mine = diffNames(dir, [`${into}...HEAD`], []);
+  const differ = diffNames(dir, [into, "HEAD"], []);
+  const changed = diffNames(dir, [`HEAD...${into}`], []);
+  if (mine === null || differ === null || changed === null) return false;
+  const apart = [...mine].filter((path) => differ.has(path));
+  if (apart.length === 0 || apart.some((path) => !changed.has(path))) return false;
+  const heads = new Set<string>();
+  try {
+    const claims = cachedClaimsForIdentity(pd, { space: buildHomeSpace(pd, build), intentUuid: build.homeWork, intentId8: idSuffix(build.homeWork) }, false);
+    for (const claim of claims.values()) {
+      if (claim.unit === build.unit) continue;
+      for (const repo of claim.payload.result?.repos ?? []) if (repo.repo === ".") for (const head of repo.heads) heads.add(head);
+    }
+  } catch {
+    return false;
+  }
+  const blob = (at: string, path: string): string => localGit(dir, ["rev-parse", "--verify", "--quiet", `${at}:${path}`]).stdout.trim();
+  return apart.every((path) => {
+    const here = blob("HEAD", path);
+    return here !== "" && [...heads].some((head) => blob(head, path) === here);
+  });
 }
 
 // The person's own commits a Unit's branch made from where they were carries:
@@ -13532,9 +13567,10 @@ function pushUnit(args: string[], projectDir?: string,
           if (repo !== ".") git(dir, ["fetch", "-q", start, integration.slice(start.length + 1)]);
         },
         // The workspace itself starts from the branch its take read the plan
-        // from only when nothing of theirs is left behind (every change on
-        // their branch is in it already).
-        leavesNothing: () => repo !== "." || (dotStart !== null && headInByContent(dir, integration) === true),
+        // from only when nothing of theirs is left behind: every change on
+        // their branch is in it already, or is an earlier Unit's it took in.
+        leavesNothing: () => repo !== "." ||
+          (dotStart !== null && (headInByContent(dir, integration) === true || earlierUnitTakenIn(pd, build, dir, integration))),
         fromHere: true,
       });
       if (fromHere) {

@@ -150,6 +150,162 @@ describe("a Unit on the workspace's own repository", () => {
     expect(git(home.remote, ["log", "--format=%s", "main..checkout-ui"])).not.toContain("refunds");
   });
 
+  // The next Unit after the one before was merged by the host with a change of
+  // its own (a review commit on its pull request the builder never pulled), the
+  // builder still on the merged branch, as their push left them.
+  const REVIEWED = { "src/refunds.ts": 'export const built = "refunds, reviewed";\n' };
+  function nextAfterReviewedMerge(how: "squash" | "rebase", options: { dir?: (home: ReturnType<typeof makeHome>) => string;
+    prune?: boolean; look?: boolean } = {}) {
+    const home = oneRepoTeams();
+    const alice = options.dir?.(home) ?? cloneOf(home.remote, "alice");
+    builtHere(alice, "refunds", "refunds.ts");
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    commitOnHost(home.remote, "refunds", REVIEWED, "review: name the refund");
+    // A step of the build after the review: its own look sends the reviewed tip home on its claim.
+    if (options.look) next(alice);
+    if (how === "squash") squashInto(home.remote, "main", "refunds");
+    else rebaseInto(home.remote, "refunds");
+    if (options.prune) git(alice, ["fetch", "-q", "--prune", "origin"]);
+    expect(git(alice, ["branch", "--show-current"])).toBe("refunds");
+    builtHere(alice, "checkout-ui", "cart.ts");
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    return { home, alice, pushed };
+  }
+  // A host's rebase merge after main moved: every commit of the branch replayed with a new id.
+  function rebaseInto(host: string, branch: string): void {
+    const dir = join(tempDir("rebaser"), "repo");
+    git(tempDir("rebaser-parent"), ["clone", "-q", host, dir]);
+    git(dir, ["config", "user.name", "reviewer"]);
+    git(dir, ["config", "user.email", "reviewer@example.test"]);
+    writeFileSync(join(dir, "OTHER.md"), "merged first\n");
+    git(dir, ["add", "--", "OTHER.md"]);
+    git(dir, ["commit", "-q", "-m", "another merge first"]);
+    git(dir, ["fetch", "-q", "origin", branch]);
+    git(dir, ["switch", "-q", "-c", `rebased-${branch}`, `origin/${branch}`]);
+    git(dir, ["rebase", "-q", "main"]);
+    git(dir, ["switch", "-q", "main"]);
+    git(dir, ["merge", "-q", "--ff-only", `rebased-${branch}`]);
+    git(dir, ["push", "-q", "origin", "main"]);
+  }
+  const onlyItsOwn = (home: ReturnType<typeof makeHome>, pushed: ReturnType<typeof run>): void => {
+    expect(git(home.remote, ["log", "--format=%s", "main..checkout-ui"]).split("\n"), pushed.out)
+      .toEqual(["checkout-ui: AI-DLC's record", "checkout-ui: fixture"]);
+    expect(prFiles(home.remote, "main", "checkout-ui")).toEqual(["src/cart.ts"]);
+    expect(spawnSync("git", ["merge-tree", "--write-tree", "main", "checkout-ui"], { cwd: home.remote }).status).toBe(0);
+    expect(String(pushed.json?.notice)).not.toContain("come along");
+  };
+  // The lead changes a file on main again, committing only that file.
+  function leadChanges(home: ReturnType<typeof makeHome>, file: string, text: string): void {
+    writeFileSync(join(home.dir, file), text);
+    git(home.dir, ["add", "--", file]);
+    git(home.dir, ["commit", "-q", "-m", `lead: ${file} again`]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+  }
+
+  test("the next Unit's branch starts from the lead's main after the one before was squashed with a review commit on its pull request", () => {
+    const { home, alice, pushed } = nextAfterReviewedMerge("squash");
+    onlyItsOwn(home, pushed);
+    expect(String(pushed.json?.notice)).toContain("You're on checkout-ui now in the repo. Switch back to refunds any time.");
+    // Their earlier branch is as their push left it.
+    expect(git(alice, ["log", "--format=%s", "-1", "refunds"])).toBe("refunds: AI-DLC's record");
+  });
+
+  test("the next Unit's branch starts from the lead's main after the one before was rebased with a review commit", () => {
+    const { home, pushed } = nextAfterReviewedMerge("rebase");
+    onlyItsOwn(home, pushed);
+  });
+
+  test("the next Unit's branch starts from the lead's main after a reviewed squash with the merged branch pruned from the clone, and nothing is said to come along", () => {
+    const { home, pushed } = nextAfterReviewedMerge("squash", { prune: true });
+    onlyItsOwn(home, pushed);
+  });
+
+  test("the next Unit's branch starts from the lead's main after the builder's own look saw the review commit", () => {
+    const { home, pushed } = nextAfterReviewedMerge("squash", { look: true });
+    onlyItsOwn(home, pushed);
+  });
+
+  test("the planner's own next Unit in the home starts from main after a reviewed squash of the one before", () => {
+    const { home, pushed } = nextAfterReviewedMerge("squash", { dir: (made) => made.dir });
+    onlyItsOwn(home, pushed);
+  });
+
+  test("a next Unit while the one before is still open starts where they are, with it", () => {
+    const home = oneRepoTeams();
+    const alice = cloneOf(home.remote, "alice");
+    builtHere(alice, "refunds", "refunds.ts");
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    commitOnHost(home.remote, "refunds", REVIEWED, "review: name the refund");
+    builtHere(alice, "checkout-ui", "cart.ts");
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(git(home.remote, ["log", "--format=%s", "main..checkout-ui"])).toContain("refunds: fixture");
+  });
+
+  test("a commit of their own in a file the lead's main changed too: the branch starts where they are, and the line names it", () => {
+    const home = oneRepoTeams();
+    leadCommits(home, "main", "NOTES.md");
+    const alice = cloneOf(home.remote, "alice");
+    writeFileSync(join(alice, "NOTES.md"), "NOTES.md\nmy notes\n");
+    git(alice, ["add", "--", "NOTES.md"]);
+    git(alice, ["commit", "-q", "-m", "my notes"]);
+    leadChanges(home, "NOTES.md", "NOTES.md\nlead notes\n");
+    builtHere(alice, "refunds", "refunds.ts");
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(String(pushed.json?.notice)).toContain('so your commit not yet on origin/main comes along: "my notes".');
+    expect(git(home.remote, ["log", "--format=%s", "main..refunds"])).toContain("my notes");
+  });
+
+  test("their own pushed branch whose file main changed too: the branch starts there", () => {
+    const home = oneRepoTeams();
+    leadCommits(home, "main", "app.ts");
+    const alice = cloneOf(home.remote, "alice");
+    git(alice, ["switch", "-q", "-c", "helper"]);
+    writeFileSync(join(alice, "app.ts"), "app.ts\nexport const helper = 1;\n");
+    git(alice, ["add", "--", "app.ts"]);
+    git(alice, ["commit", "-q", "-m", "my helper"]);
+    git(alice, ["push", "-q", "-u", "origin", "helper"]);
+    leadChanges(home, "app.ts", "app.ts\nlead change\n");
+    builtHere(alice, "refunds", "refunds.ts");
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(String(pushed.json?.notice)).toContain("Switch back to helper any time.");
+    expect(git(home.remote, ["log", "--format=%s", "main..refunds"])).toContain("my helper");
+  });
+
+  test("their own fix on the merged Unit's branch after its push: the next Unit's branch starts there, and the line names it", () => {
+    const home = oneRepoTeams();
+    const alice = cloneOf(home.remote, "alice");
+    builtHere(alice, "refunds", "refunds.ts");
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    commitOnHost(home.remote, "refunds", REVIEWED, "review: name the refund");
+    squashInto(home.remote, "main", "refunds");
+    writeFileSync(join(alice, "src", "refunds.ts"), 'export const built = "refunds, my fix";\n');
+    git(alice, ["add", "--", "src/refunds.ts"]);
+    git(alice, ["commit", "-q", "-m", "my fix to refunds"]);
+    builtHere(alice, "checkout-ui", "cart.ts");
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(String(pushed.json?.notice)).toContain('so your commit not yet on origin/main comes along: "my fix to refunds".');
+    expect(git(home.remote, ["log", "--format=%s", "main..checkout-ui"])).toContain("my fix to refunds");
+  });
+
+  test("an ignored file of theirs where the lead's main now tracks one: git refuses the cut from main, the branch starts where they are, and the file is as it was", () => {
+    const home = oneRepoTeams();
+    const alice = cloneOf(home.remote, "alice");
+    writeFileSync(join(alice, ".git", "info", "exclude"), "local.env\n");
+    writeFileSync(join(alice, "local.env"), "MY_SECRET=1\n");
+    const theirs = git(alice, ["rev-parse", "HEAD"]);
+    leadCommits(home, "main", "local.env");
+    builtHere(alice, "refunds", "refunds.ts");
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(readFileSync(join(alice, "local.env"), "utf-8")).toBe("MY_SECRET=1\n");
+    expect(git(home.remote, ["merge-base", "main", "refunds"])).toBe(theirs);
+  });
+
   test("a clone with a commit of its own on main: the branch starts where they are, and the line names the commit that comes along", () => {
     const home = oneRepoTeams();
     const alice = cloneOf(home.remote, "alice");
