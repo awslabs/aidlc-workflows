@@ -14,7 +14,7 @@
 // the one risk said, and no chat writes AI-DLC's root files there: its working
 // files there ignore themselves from inside aidlc/ until its root part is in.
 
-import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { asLeadsOwnCheckout } from "../harness/team-unit-merge.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -32,6 +32,7 @@ import { loadGraph } from "../../dist/claude/.claude/tools/aidlc-graph.ts";
 import { kiroLeadRulesBrief, LEAD_RULES_UNSAVED_LINE, leadRulesBrief, leadRulesBriefLine, resolvedRuleBundle } from "../../dist/claude/.claude/tools/aidlc-steering.ts";
 import { learningsCorrectionChoices, offersLearningsCorrectionChoices } from "../../dist/claude/.claude/tools/aidlc-unit-teams.ts";
 import { AIDLC_SRC, fixtureIntentId8, REPO_ROOT, seedAidlcMemory } from "../harness/fixtures.ts";
+import { typedHarnessName } from "../../core/tools/aidlc-runtime-paths.ts";
 import { hostFor } from "../harness/scope-hosts.ts";
 import { driveCodeGeneration, teammateTakes } from "../harness/early-start.ts";
 import {
@@ -149,6 +150,15 @@ function buildDir(dir: string, space: string, unit: string): string {
 function commitAll(dir: string, message: string): void {
   git(dir, ["add", "-A"]);
   git(dir, ["commit", "-q", "-m", message]);
+}
+
+// AI-DLC's install as a teammate's `aidlc config` leaves it in their clone: uncommitted, its part in .gitignore too.
+function configured(dir: string, harness: string): void {
+  const result = spawnSync(process.execPath, [
+    join(REPO_ROOT, "core", "tools", "aidlc-init.ts"), "config", "--project-dir", dir,
+    "--from", join(REPO_ROOT, "dist-release", harness), "--harness", typedHarnessName(harness), "--mcp", "none",
+  ], { cwd: dir, encoding: "utf-8", env: ENV, timeout: NATIVE_STARTUP_TIMEOUT_MS });
+  expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
 }
 
 describe("a team member's clone of the home's workspace", () => {
@@ -1459,6 +1469,33 @@ describe("a Unit someone holds is not taken again", () => {
   // The GitHub live test: a teammate checked her finished build in on a
   // branch of its own for a pull request, went back to main before it merged,
   // and read her own Unit as someone's being built.
+  test("back on main with config's .gitignore part uncommitted and their build on a branch that changes .gitignore: the take switches there, and no way back git would refuse is offered", () => {
+    const home = makeHome();
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    asLeadsOwnCheckout(home.dir);
+    commitAll(home.dir, "teams");
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    planShared(home);
+    const bea = cloneOf(home.remote, "bea");
+    configured(bea, "kiro");
+    const withPart = readFileSync(join(bea, ".gitignore"), "utf-8");
+    expect(take(bea, "refunds").status).toBe(0);
+    finishBuild(buildDir(bea, "default", "refunds"));
+    git(bea, ["switch", "-q", "-c", "records/refunds"]);
+    // The branch holds an ignore line of the build's own, and none of AI-DLC's part.
+    writeFileSync(join(bea, ".gitignore"), `${git(bea, ["show", "HEAD:.gitignore"])}\ndata/\n`);
+    git(bea, ["add", ".gitignore", "aidlc"]);
+    git(bea, ["commit", "-q", "-m", "refunds record"]);
+    git(bea, ["push", "-q", "-u", "origin", "records/refunds"]);
+    git(bea, ["switch", "-q", "main"]);
+    writeFileSync(join(bea, ".gitignore"), withPart);
+    const again = take(bea, "refunds");
+    expect(again.status, again.out).toBe(0);
+    expect(again.json?.notice, again.out).toBe("You're on records/refunds now, where your build of refunds is. Carrying on refunds, your build here.");
+    expect(git(bea, ["branch", "--show-current"])).toBe("records/refunds");
+    expect(readFileSync(join(bea, ".gitignore"), "utf-8")).toContain("# BEGIN AI-DLC:gitignore");
+  });
+
   test("back on main with their build checked in on a branch of its own: the take question offers to carry it on there, never as taken, and the take switches to it", () => {
     const home = makeHome();
     expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);

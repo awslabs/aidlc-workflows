@@ -5,8 +5,9 @@
 // the branch the work merges into, AI-DLC's record riding in it, main brought
 // in, and a change to a file of AI-DLC's record put aside for that and put
 // back. AI-DLC's own files (its record, its install) are never said to be the
-// person's uncommitted changes, at the push or at an early start. AI-DLC's part
-// of .gitignore, which config leaves uncommitted, is set aside around AI-DLC's
+// person's uncommitted changes, at the push or at an early start. A build's own
+// lines in .gitignore or AGENTS.md go with its Unit while AI-DLC's part there,
+// which config leaves uncommitted, stays out and is set aside around AI-DLC's
 // own git steps. The push in code repositories is in t-unit-push, the home in
 // t-unit-push-home.
 
@@ -16,6 +17,7 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { unitBranchInTheWay, workToCommit } from "../../dist/claude/.claude/tools/aidlc-unit.ts";
 import { fixtureIntentId8, REPO_ROOT, seededStateFile } from "../harness/fixtures.ts";
 import { typedHarnessName } from "../../core/tools/aidlc-runtime-paths.ts";
 import {
@@ -889,7 +891,7 @@ describe("a Unit on the workspace's own repository", () => {
     };
     expect(claim.early_on?.map((dep) => [dep.unit, dep.repos.map((repo) => [repo.repo, repo.branch])])).toEqual([["refunds", [[".", "refunds"]]]]);
   });
-  // AI-DLC's part of .gitignore as each teammate's config leaves it: uncommitted.
+  // AI-DLC's part of .gitignore and AGENTS.md as each teammate's config leaves it: uncommitted.
   const OWN_PART = "# BEGIN AI-DLC:gitignore";
   const IGNORES = "data/\nnode_modules/\n";
   const appended = (lines: string) => (text: string): string => `${text}${lines}`;
@@ -905,6 +907,14 @@ describe("a Unit on the workspace's own repository", () => {
     writeFileSync(manifest, `${JSON.stringify({ ...written, writes: [...written.writes, ...Object.keys(change).map((path) => ({ path }))] })}\n`);
     return record;
   }
+  // The lead's repository with no .gitignore, so each teammate's config writes it new; the lead's own lines in git's exclude.
+  function withoutGitignore(home: ReturnType<typeof makeHome>): void {
+    writeFileSync(join(home.dir, ".git", "info", "exclude"), readFileSync(join(home.dir, ".gitignore"), "utf-8"));
+    git(home.dir, ["rm", "-q", "--cached", ".gitignore"]);
+    rmSync(join(home.dir, ".gitignore"));
+    git(home.dir, ["commit", "-q", "-m", "no .gitignore"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+  }
   // The lead's main moving .gitignore by a line of its own, at the end or at the top.
   function leadsIgnoreLine(home: ReturnType<typeof makeHome>, line: string, atTop = false): string {
     const file = join(home.dir, ".gitignore");
@@ -917,6 +927,124 @@ describe("a Unit on the workspace's own repository", () => {
   // A suggestion committed on the Unit's pull request: a line at the top of its .gitignore.
   const suggestedIgnore = (host: string, branch: string): string =>
     commitOnHost(host, branch, { ".gitignore": `dist/\n${git(host, ["show", `${branch}:.gitignore`])}\n` }, "Apply 1 suggestion(s) to 1 file(s)");
+  const takeTreeKeys = (record: string): string[] => {
+    const file = join(record, ".aidlc-engine", "take-tree.json");
+    return existsSync(file) ? Object.keys((JSON.parse(readFileSync(file, "utf-8")) as Record<string, Record<string, string>>)["."] ?? {}) : [];
+  };
+  // Back on their own main from the Unit's branch, with config's part on main's copy of .gitignore.
+  function backOnMainWithPart(alice: string): string {
+    const text = readFileSync(join(alice, ".gitignore"), "utf-8");
+    const part = text.slice(text.indexOf(OWN_PART), text.indexOf("# END AI-DLC:gitignore") + "# END AI-DLC:gitignore".length);
+    git(alice, ["checkout", "--", ".gitignore"]);
+    git(alice, ["switch", "-q", "main"]);
+    const back = `${readFileSync(join(alice, ".gitignore"), "utf-8")}\n${part}\n`;
+    writeFileSync(join(alice, ".gitignore"), back);
+    return back;
+  }
+  // AI-DLC's part installed and committed in the clone before the take, as a team that keeps it does.
+  function installCommitted(alice: string, harness: string): void {
+    configured(alice, harness);
+    git(alice, ["add", "-A"]);
+    git(alice, ["commit", "-q", "-m", "AI-DLC install"]);
+    git(alice, ["push", "-q", "origin", "main"]);
+  }
+
+  for (const harness of ["kiro", "codex"]) {
+    for (const made of [false, true]) {
+      test(`${harness}, ${made ? "a .gitignore config writes new" : "the repository's .gitignore"} with config's part uncommitted: the build's ignore lines go with the Unit, the part stays uncommitted`, () => {
+        const home = oneRepoTeams();
+        if (made) withoutGitignore(home);
+        const alice = cloneOf(home.remote, "alice");
+        configured(alice, harness);
+        const head = made ? "" : `${git(alice, ["show", "HEAD:.gitignore"])}\n`;
+        const record = builtWithRootFiles(alice, "refunds", "refunds.ts", { ".gitignore": appended(IGNORES) });
+        const here = readFileSync(join(alice, ".gitignore"), "utf-8");
+        const pushed = run(UNIT, ["push"], alice);
+        expect(pushed.status, pushed.out).toBe(0);
+        const said = String(pushed.json?.notice);
+        expect(said).not.toContain("is not in the commit");
+        expect(`${git(home.remote, ["show", "refunds:.gitignore"])}\n`).toBe(`${head}${IGNORES}`);
+        expect(prFiles(home.remote, "main", "refunds")).toEqual([".gitignore", "src/refunds.ts"]);
+        expect(readFileSync(join(alice, ".gitignore"), "utf-8")).toBe(here);
+        expect(git(alice, ["status", "--porcelain", "--", ".gitignore"])).toBe("M .gitignore");
+        expect(takeTreeKeys(record)).not.toContain(".gitignore");
+        // Against the Unit's commit the file still holds AI-DLC's part alone beside it.
+        expect(workToCommit(alice).paths).not.toContain(".gitignore");
+        // git refuses their own switch back over that part, so the way back is not offered.
+        expect(said).toContain("You're on refunds now in the repo. AI-DLC's record of refunds went with it");
+        expect(spawnSync("git", ["switch", "-q", "main"], { cwd: alice, encoding: "utf-8" }).status).not.toBe(0);
+      });
+    }
+  }
+
+  test("a checkout with CRLF line endings: the Unit's ignore lines go as git stores them", () => {
+    const home = oneRepoTeams();
+    const alice = cloneOf(home.remote, "alice");
+    git(alice, ["config", "core.autocrlf", "true"]);
+    rmSync(join(alice, ".gitignore"));
+    git(alice, ["checkout", "--", ".gitignore"]);
+    configured(alice, "kiro");
+    const head = `${git(alice, ["show", "HEAD:.gitignore"])}\n`;
+    builtWithRootFiles(alice, "refunds", "refunds.ts", { ".gitignore": appended(IGNORES.replace(/\n/g, "\r\n")) });
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    expect(spawnSync("git", ["cat-file", "blob", "refunds:.gitignore"], { cwd: home.remote, encoding: "utf-8" }).stdout).toBe(`${head}${IGNORES}`);
+  });
+
+  test("a .gitignore saved with a byte-order mark: the Unit's lines go and the mark stays, AI-DLC's part does not go", () => {
+    const home = oneRepoTeams();
+    const file = join(home.dir, ".gitignore");
+    writeFileSync(file, Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), readFileSync(file)]));
+    git(home.dir, ["commit", "-q", "-am", "lead: .gitignore with a byte-order mark"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const alice = cloneOf(home.remote, "alice");
+    configured(alice, "kiro");
+    builtWithRootFiles(alice, "refunds", "refunds.ts", { ".gitignore": appended(IGNORES) });
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    const blob = (ref: string): Buffer => spawnSync("git", ["cat-file", "blob", ref], { cwd: home.remote }).stdout as Buffer;
+    expect(blob("refunds:.gitignore").equals(Buffer.concat([blob("main:.gitignore"), Buffer.from(IGNORES)]))).toBe(true);
+  });
+
+  for (const [harness, kept] of [["kiro", false], ["codex", true]] as const) {
+    test(`${harness}, ${kept ? "the team's AGENTS.md" : "an AGENTS.md config writes new"}: the build's section goes with the Unit, AI-DLC's part stays uncommitted`, () => {
+      const home = oneRepoTeams();
+      if (kept) leadCommits(home, "main", "AGENTS.md");
+      const alice = cloneOf(home.remote, "alice");
+      configured(alice, harness);
+      builtWithRootFiles(alice, "refunds", "refunds.ts", { "AGENTS.md": appended("\n## Refunds\n\nRun the refund tests before a push.\n") });
+      const pushed = run(UNIT, ["push"], alice);
+      expect(pushed.status, pushed.out).toBe(0);
+      expect(String(pushed.json?.notice)).not.toContain("is not in the commit");
+      expect(git(home.remote, ["show", "refunds:AGENTS.md"])).toBe(`${kept ? "AGENTS.md\n" : ""}## Refunds\n\nRun the refund tests before a push.`);
+      expect(readFileSync(join(alice, "AGENTS.md"), "utf-8")).toContain("<!-- BEGIN AI-DLC:agents -->");
+    });
+  }
+
+  test("a second Unit in the same clone adds its own ignore line: it goes with that Unit, the first Unit's lines are not taken for the person's", () => {
+    const home = oneRepoTeams();
+    const alice = cloneOf(home.remote, "alice");
+    configured(alice, "kiro");
+    builtWithRootFiles(alice, "refunds", "refunds.ts", { ".gitignore": appended(IGNORES) });
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    const record = builtWithRootFiles(alice, "checkout-ui", "cart.ts", { ".gitignore": appended("coverage/\n") });
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(String(pushed.json?.notice)).not.toContain("is not in the commit");
+    expect(git(home.remote, ["show", "checkout-ui:.gitignore"])).toEndWith(`${IGNORES}coverage/`);
+    expect(takeTreeKeys(record)).not.toContain(".gitignore");
+  });
+
+  test("main moves .gitignore after the take: the Unit's own ignore line still goes with it", () => {
+    const home = oneRepoTeams();
+    const alice = cloneOf(home.remote, "alice");
+    configured(alice, "kiro");
+    builtWithRootFiles(alice, "refunds", "refunds.ts", { ".gitignore": appended("coverage/\n") });
+    leadsIgnoreLine(home, "dist/");
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(String(pushed.json?.notice)).not.toContain("is not in the commit");
+    expect(git(home.remote, ["show", "refunds:.gitignore"])).toEndWith("coverage/");
+  });
+
   test("the lead's checkout holds config's part uncommitted and a merged Unit changed .gitignore: the catch-up brings main up to date, the part still there", () => {
     const home = oneRepoTeams(TWO);
     const alice = cloneOf(home.remote, "alice");
@@ -970,4 +1098,214 @@ describe("a Unit on the workspace's own repository", () => {
     expect(now).toContain(OWN_PART);
   });
 
+  // Main moves .gitignore under a Unit that changes it, so the push starts where the clone is and the offer to
+  // bring main in follows; `hooked`: their hook refuses merges.
+  function mainMovesIgnore(atTop: boolean, alsoCode = false, hooked = false) {
+    const home = oneRepoTeams();
+    const alice = cloneOf(home.remote, "alice");
+    configured(alice, "kiro");
+    builtWithRootFiles(alice, "refunds", "refunds.ts", { ".gitignore": appended(IGNORES) });
+    leadsIgnoreLine(home, "dist/", atTop);
+    if (alsoCode) {
+      mkdirSync(join(home.dir, "src"), { recursive: true });
+      leadCommits(home, "main", "src/refunds.ts");
+    }
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(next(alice).ask_type).toBe("unit-main-moved");
+    if (hooked) {
+      writeFileSync(join(alice, ".git", "hooks", "pre-merge-commit"), "#!/bin/sh\necho 'no merges on Fridays' >&2\nexit 1\n");
+      chmodSync(join(alice, ".git", "hooks", "pre-merge-commit"), 0o755);
+    }
+    return { home, alice, merged: run(UNIT, ["push", "--merge-main"], alice) };
+  }
+
+  test("bringing main in over config's part: the part is set aside for the merge and back after it, never in the Unit's commit", () => {
+    const { home, alice, merged } = mainMovesIgnore(true);
+    expect(merged.status, merged.out).toBe(0);
+    expect(String(merged.json?.notice)).toContain("Merged origin/main into refunds in the repo and pushed refunds.");
+    const sent = git(home.remote, ["show", "refunds:.gitignore"]);
+    expect(sent).toStartWith("dist/");
+    expect(sent).toEndWith("node_modules/");
+    expect(sent).not.toContain(OWN_PART);
+    expect(readFileSync(join(alice, ".gitignore"), "utf-8")).toContain(OWN_PART);
+  });
+
+  test("a merge that waits on a clash in another file: the part is back at once, and the finish takes the merge without it", () => {
+    const { home, alice, merged } = mainMovesIgnore(true, true);
+    expect(String(merged.json?.error)).toStartWith("origin/main and refunds both change src/refunds.ts in the repo in ways git cannot put together");
+    expect(readFileSync(join(alice, ".gitignore"), "utf-8")).toContain(OWN_PART);
+    writeFileSync(join(alice, "src", "refunds.ts"), "export const built = \"both\";\n");
+    git(alice, ["add", "src/refunds.ts"]);
+    const finished = run(UNIT, ["push", "--merge-main"], alice);
+    expect(finished.status, finished.out).toBe(0);
+    expect(git(home.remote, ["show", "refunds:.gitignore"])).not.toContain(OWN_PART);
+    expect(git(home.remote, ["show", "refunds:.gitignore"])).toStartWith("dist/");
+    expect(readFileSync(join(alice, ".gitignore"), "utf-8")).toContain(OWN_PART);
+  });
+
+  test("a merge that waits on a clash in .gitignore itself: the part is back after git's marks, and the undo leaves it there", () => {
+    const { alice, merged } = mainMovesIgnore(false);
+    expect(String(merged.json?.error)).toStartWith("origin/main and refunds both change .gitignore in the repo in ways git cannot put together");
+    const waiting = readFileSync(join(alice, ".gitignore"), "utf-8");
+    expect(waiting.indexOf(OWN_PART)).toBeGreaterThan(waiting.lastIndexOf(">>>>>>>"));
+    const undone = run(UNIT, ["push", "--undo-merge"], alice);
+    expect(String(undone.json?.notice)).toBe("I undid the merge of origin/main into refunds in the repo; refunds is as it was there, and nothing was pushed.");
+    const back = readFileSync(join(alice, ".gitignore"), "utf-8");
+    expect(back).not.toContain("<<<<<<<");
+    expect(back).toContain(OWN_PART);
+    expect(workToCommit(alice).paths).not.toContain(".gitignore");
+  });
+
+  test("a merge of a main that adds .gitignore waits, and the undo takes it away again: the .gitignore config wrote is back as it was", () => {
+    const home = oneRepoTeams();
+    withoutGitignore(home);
+    const alice = cloneOf(home.remote, "alice");
+    configured(alice, "kiro");
+    const before = readFileSync(join(alice, ".gitignore"), "utf-8");
+    builtHere(alice, "refunds", "refunds.ts");
+    writeFileSync(join(home.dir, ".gitignore"), "dist/\n");
+    git(home.dir, ["add", ".gitignore"]);
+    git(home.dir, ["commit", "-q", "-m", "lead: a .gitignore"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    mkdirSync(join(home.dir, "src"), { recursive: true });
+    leadCommits(home, "main", "src/refunds.ts");
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    expect(next(alice).ask_type).toBe("unit-main-moved");
+    const waits = run(UNIT, ["push", "--merge-main"], alice);
+    expect(String(waits.json?.error)).toStartWith("origin/main and refunds both change src/refunds.ts in the repo in ways git cannot put together");
+    expect(readFileSync(join(alice, ".gitignore"), "utf-8")).toStartWith("dist/\n");
+    expect(readFileSync(join(alice, ".gitignore"), "utf-8")).toContain(OWN_PART);
+    const undone = run(UNIT, ["push", "--undo-merge"], alice);
+    expect(String(undone.json?.notice)).toBe("I undid the merge of origin/main into refunds in the repo; refunds is as it was there, and nothing was pushed.");
+    expect(readFileSync(join(alice, ".gitignore"), "utf-8")).toBe(before);
+    expect(git(alice, ["status", "--porcelain", "--", ".gitignore"])).toBe("?? .gitignore");
+  });
+
+  test("a merge their hook refuses is undone over config's part, and the part is back", () => {
+    const { alice, merged: refused } = mainMovesIgnore(true, false, true);
+    expect(String(refused.json?.error)).toStartWith("Your hook in the repo did not take the merge of origin/main into refunds");
+    expect(git(alice, ["status", "--porcelain", "--", ".gitignore"])).toBe("M .gitignore");
+    expect(readFileSync(join(alice, ".gitignore"), "utf-8")).toContain(OWN_PART);
+    expect(existsSync(join(alice, ".git", "MERGE_HEAD"))).toBe(false);
+  });
+
+  for (const folder of [false, true]) {
+    test(`bringing main in begun from their main${folder ? ", the Unit named like a folder at the root" : ""}: the Unit's branch is checked out over config's part, and no way back git would refuse is offered`, () => {
+      const home = oneRepoTeams();
+      if (folder) {
+        mkdirSync(join(home.dir, "refunds"), { recursive: true });
+        leadCommits(home, "main", "refunds/README.md");
+      }
+      // Their host refuses AI-DLC's record, so it stays here, uncommitted, the work still theirs on main.
+      const hookFile = join(home.remote, "hooks", "pre-receive");
+      writeFileSync(hookFile, "#!/bin/sh\nwhile read old new ref; do\n  [ \"$ref\" = refs/heads/refunds ] || continue\n" +
+        "  if git diff --name-only \"$old\" \"$new\" 2>/dev/null | grep -q '^aidlc/'; then echo 'GitLab: File name aidlc/ is prohibited' >&2; exit 1; fi\n" +
+        "done\nexit 0\n");
+      chmodSync(hookFile, 0o755);
+      const alice = cloneOf(home.remote, "alice");
+      configured(alice, "kiro");
+      builtWithRootFiles(alice, "refunds", "refunds.ts", { ".gitignore": appended(IGNORES) });
+      leadsIgnoreLine(home, "dist/", true);
+      expect(run(UNIT, ["push"], alice).status).toBe(0);
+      backOnMainWithPart(alice);
+      expect(next(alice).ask_type).toBe("unit-main-moved");
+      const merged = run(UNIT, ["push", "--merge-main"], alice);
+      expect(merged.status, merged.out).toBe(0);
+      const said = String(merged.json?.notice);
+      expect(said).toContain("Merged origin/main into refunds in the repo and pushed refunds.");
+      expect(said).toContain("You're on refunds now in the repo.");
+      expect(said).not.toContain("Switch back to main any time.");
+      expect(git(alice, ["branch", "--show-current"])).toBe("refunds");
+      expect(readFileSync(join(alice, ".gitignore"), "utf-8")).toContain(OWN_PART);
+    });
+  }
+
+  test("the push question's look at the Unit's branch sets config's part aside too: nothing of theirs is said to be in the way, and the file is as it was", () => {
+    const home = oneRepoTeams();
+    const alice = cloneOf(home.remote, "alice");
+    configured(alice, "kiro");
+    builtHere(alice, "refunds", "refunds.ts");
+    leadsIgnoreLine(home, "dist/", true);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    const back = backOnMainWithPart(alice);
+    expect(unitBranchInTheWay(alice, "refunds", new Map([[".", ["src/refunds.ts"]]]))).toEqual([]);
+    expect(readFileSync(join(alice, ".gitignore"), "utf-8")).toBe(back);
+  });
+
+  // Where AI-DLC's part is committed, or the file holds a line of their own, the push does as it did before.
+  test("the install committed before the take: the build's ignore lines go with the Unit, and the way back is said", () => {
+    const home = oneRepoTeams();
+    const alice = cloneOf(home.remote, "alice");
+    installCommitted(alice, "kiro");
+    builtWithRootFiles(alice, "refunds", "refunds.ts", { ".gitignore": appended(IGNORES) });
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(String(pushed.json?.notice)).toContain("You're on refunds now in the repo. Switch back to main any time.");
+    expect(git(home.remote, ["show", "refunds:.gitignore"])).toEndWith(`# END AI-DLC:gitignore\n${IGNORES.trim()}`);
+    expect(git(alice, ["status", "--porcelain"])).toBe("");
+  });
+
+  test("another tool's config over a committed install changes lines inside AI-DLC's part: the Unit's lines go, those stay uncommitted, and the way back git would refuse is not offered", () => {
+    const home = oneRepoTeams();
+    configured(home.dir, "claude");
+    git(home.dir, ["add", "-A"]);
+    git(home.dir, ["commit", "-q", "-m", "AI-DLC install"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const alice = cloneOf(home.remote, "alice");
+    configured(alice, "kiro");
+    const head = `${git(alice, ["show", "HEAD:.gitignore"])}\n`;
+    builtWithRootFiles(alice, "refunds", "refunds.ts", { ".gitignore": appended(IGNORES) });
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(`${git(home.remote, ["show", "refunds:.gitignore"])}\n`).toBe(`${head}${IGNORES}`);
+    expect(git(alice, ["status", "--porcelain", "--", ".gitignore"])).toBe("M .gitignore");
+    expect(String(pushed.json?.notice)).not.toContain("Switch back to main any time.");
+  });
+
+  for (const top of [true, false]) {
+    test(`the install committed and a line of their own uncommitted at the ${top ? "top" : "end"} of .gitignore: ${top ? "the Unit's lines go, theirs stays theirs" : "left out and said, both kept"}`, () => {
+      const home = oneRepoTeams();
+      const alice = cloneOf(home.remote, "alice");
+      installCommitted(alice, "kiro");
+      const file = join(alice, ".gitignore");
+      writeFileSync(file, top ? `*.log\n${readFileSync(file, "utf-8")}` : `${readFileSync(file, "utf-8")}*.log\n`);
+      builtWithRootFiles(alice, "refunds", "refunds.ts", { ".gitignore": appended(IGNORES) });
+      const pushed = run(UNIT, ["push"], alice);
+      expect(pushed.status, pushed.out).toBe(0);
+      const said = String(pushed.json?.notice);
+      expect(said).toContain("Switch back to main any time.");
+      expect(git(home.remote, ["show", "refunds:.gitignore"])).not.toContain("*.log");
+      if (top) {
+        expect(git(home.remote, ["show", "refunds:.gitignore"])).toEndWith(IGNORES.trim());
+        expect(said).not.toContain("is not in the commit");
+      } else {
+        expect(said).toContain(".gitignore in the repo is not in the commit: it already had a change of yours when refunds was taken");
+      }
+      expect(readFileSync(file, "utf-8")).toContain("*.log");
+    });
+  }
+
+  for (const apart of [true, false]) {
+    test(`config's part uncommitted and a file of their own changed ${apart ? "apart from" : "next to"} the Unit's change: ${apart ? "only the Unit's change goes" : "left out and said"}`, () => {
+      const NOTES = "# Notes\n\nline 2\nline 3\nline 4\nline 5\nline 6\n";
+      const home = oneRepoTeams();
+      writeFileSync(join(home.dir, "NOTES.md"), NOTES);
+      git(home.dir, ["add", "NOTES.md"]);
+      git(home.dir, ["commit", "-q", "-m", "notes"]);
+      git(home.dir, ["push", "-q", "origin", "main"]);
+      const alice = cloneOf(home.remote, "alice");
+      configured(alice, "kiro");
+      writeFileSync(join(alice, "NOTES.md"), apart ? NOTES.replace("# Notes", "# Notes (mine)") : `${NOTES}my own last line\n`);
+      builtWithRootFiles(alice, "refunds", "refunds.ts", { "NOTES.md": appended("refunds: a line of the Unit's\n") });
+      const pushed = run(UNIT, ["push"], alice);
+      expect(pushed.status, pushed.out).toBe(0);
+      const said = String(pushed.json?.notice);
+      expect(said).toContain("You're on refunds now in the repo; your other changes are still yours, uncommitted. Switch back to main any time.");
+      const sent = git(home.remote, ["show", "refunds:NOTES.md"]);
+      expect(sent).not.toContain("mine");
+      if (apart) expect(sent).toEndWith("refunds: a line of the Unit's");
+      else expect(said).toContain("NOTES.md in the repo is not in the commit: it already had a change of yours when refunds was taken");
+    });
+  }
 });

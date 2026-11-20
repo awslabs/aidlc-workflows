@@ -31,6 +31,7 @@ import {
   markedPart,
   mergeBlock,
   mergeJsonEntries,
+  newlineOf,
   onlyMarkedPartChanged,
   rootIntegrationTarget,
 } from "./aidlc-distribution.ts";
@@ -4072,8 +4073,9 @@ function worktreeChanges(projectDir: string, untracked: "no" | "all", label: str
 
 // What AI-DLC's own write in a shared root file is: its marked part (.gitignore,
 // AGENTS.md) or its entries in a JSON file (opencode.json), as aidlcRootParts
-// reads them from what the project's harnesses ship.
-type OwnRootPart = { marker: string; legacy: string[] } | { entries: string };
+// reads them from what the project's harnesses ship. `beside`: read by the
+// first test below, so the take leaves the file to the Unit (recordTakeTree).
+type OwnRootPart = { marker: string; legacy: string[]; beside: boolean } | { entries: string };
 
 function partAsShipped(path: string, text: string, block: { shipped: string; marker: string; legacy: string[] }): boolean {
   return mergeBlock(path, text, block.shipped, block.marker, block.legacy).currentBlockShipped === true;
@@ -4114,7 +4116,7 @@ function aidlcOwnRootParts(projectDir: string, paths: readonly string[], against
     const written = block ? mergeBlock(path, committed, block.shipped, block.marker, block.legacy).value : undefined;
     const beside = block !== undefined && onlyMarkedPartChanged(path, text, committed, block.marker) && partAsShipped(path, text, block);
     if (block && (beside || (written !== undefined && lf(written) === lf(text)))) {
-      own.set(path, { marker: block.marker, legacy: block.legacy });
+      own.set(path, { marker: block.marker, legacy: block.legacy, beside });
     } else if (shippedEntries !== undefined) {
       const merged = mergeJsonEntries(committed, shippedEntries, { kind: "none" });
       if (!("conflict" in merged) && lf(merged.text) === lf(text)) own.set(path, { entries: shippedEntries });
@@ -4212,7 +4214,8 @@ function withOwnRootPartsAside<T extends { ok: boolean }>(dir: string, target: s
 function setOwnRootPartsAside(dir: string, target: string): YieldedRootPart[] {
   const yielded: YieldedRootPart[] = [];
   const shared = sharedRootPaths(dir);
-  const changes = shared.size === 0 ? null : git(dir, ["diff", "-z", "--name-only", "--no-renames", "HEAD", target]);
+  // "--": a branch named like a root folder (a Unit beside its own folder) is still read as a revision.
+  const changes = shared.size === 0 ? null : git(dir, ["diff", "-z", "--name-only", "--no-renames", "HEAD", target, "--"]);
   const paths = changes?.ok ? changes.stdout.split("\0").filter((path) => shared.has(path)) : [];
   try {
     if (paths.length > 0) yieldOwnRootParts(dir, paths, yielded);
@@ -4246,7 +4249,7 @@ function abortMerge(dir: string): GitResult {
     if (block === undefined || bytes === null) continue;
     const text = bytes.toString("utf-8");
     if (markedPart(path, text, block.marker)?.block && partAsShipped(path, text, block)) {
-      yielded.push({ path, part: { marker: block.marker, legacy: block.legacy }, bytes });
+      yielded.push({ path, part: { marker: block.marker, legacy: block.legacy, beside: false }, bytes });
     }
   }
   const aborted = git(dir, ["merge", "--abort"]);
@@ -8937,7 +8940,7 @@ function bringOwnBuildHere(pd: string, homeWork: string, claim: UnitClaimView): 
       fail(`Your build of ${unit} is on branch ${place.switchTo}, and you stay on ${here || "the commit you were on"}: git says ` +
         `"${gitSaid(switched.stderr || switched.stdout)}".`);
     }
-    return { before: `You're on ${place.switchTo} now, where your build of ${unit} is. `, after: ` ${CHECKOUT_STEPS.switch.undo(here || "the commit you were on")}` };
+    return { before: `You're on ${place.switchTo} now, where your build of ${unit} is. `, after: wayBack(pd, here || "the commit you were on") };
   }
   const { remote: from, branch } = place.level;
   const moved = levelAndSwitch(pd, from, branch);
@@ -8949,7 +8952,7 @@ function bringOwnBuildHere(pd: string, homeWork: string, claim: UnitClaimView): 
   return {
     before: moved.was !== undefined ? `${levelledLine(from, branch, moved.was)} `
       : `Your ${branch} is up to date with ${from}/${branch} now, with your build of ${unit} in it. `,
-    after: moved.from === null ? "" : ` You're on ${branch} now. ${CHECKOUT_STEPS.switch.undo(moved.from)}`,
+    after: moved.from === null ? "" : ` You're on ${branch} now.${wayBack(pd, moved.from)}`,
   };
 }
 
@@ -11318,7 +11321,8 @@ function createUnitBuild(
   return { space, dirName };
 }
 
-
+// Never records a shared root file whose only change is AI-DLC's part beside
+// HEAD's text (config's .gitignore block), which is none of the person's.
 function recordTakeTree(projectDir: string, record: string, repos: string[]): void {
   const tree: TakeTree = {};
   for (const repo of repos.length > 0 ? repos : ["."]) {
@@ -11326,9 +11330,13 @@ function recordTakeTree(projectDir: string, record: string, repos: string[]): vo
     if (!isGitRepoDir(dir)) continue;
     const status = git(dir, ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames"]);
     if (!status.ok) continue;
+    const entries = status.stdout.split("\0").filter(Boolean);
+    const aidlcOwn = repo === "." ? aidlcOwnRootParts(dir, entries.map((entry) => entry.slice(3))) : new Map<string, OwnRootPart>();
     const own: Record<string, string> = {};
-    for (const entry of status.stdout.split("\0").filter(Boolean)) {
+    for (const entry of entries) {
       const path = entry.slice(3);
+      const part = aidlcOwn.get(path);
+      if (part !== undefined && "beside" in part && part.beside) continue;
       if (entry.startsWith("??")) own[path] = "untracked";
       else if (!existsSync(join(dir, path))) own[path] = "";
       else own[path] = git(dir, ["hash-object", "-w", `--path=${path}`, "--", path]).stdout.trim();
@@ -11489,7 +11497,8 @@ function givenCommitMessage(pd: string, args: string[], verb: "push" | "share" |
 // made and could not push, unless `same` (HEAD was given that message) and
 // there is no newer change of the Unit's. An amend of the message alone that
 // their hook refuses leaves HEAD as it was, with their hook's words in
-// `refused`; any other refused commit stops the push.
+// `refused`; any other refused commit stops the push. `parts`: the workspace's
+// shared root files (withHeadsPart).
 function commitUnitPaths(
   dir: string,
   paths: string[],
@@ -11500,6 +11509,7 @@ function commitUnitPaths(
   listed: { listing: ReadonlyMap<string, string>; listedAs: string } | null,
   share?: { message: string; refused: (said: string, adding: boolean) => never },
   given?: { message: string; amend: boolean; same: boolean; refused?: string },
+  parts?: ReadonlyMap<string, { shipped: string; marker: string; legacy: string[] }>,
 ): string[] {
   const scratch = mkdtempSync(join(tmpdir(), "aidlc-unit-commit-"));
   const env = { GIT_INDEX_FILE: join(scratch, "index") };
@@ -11515,12 +11525,22 @@ function commitUnitPaths(
     // that merged the newer main, say) leaves nothing to add.
     const plain = paths.filter((path) => own[path] === undefined &&
       (existsSync(join(dir, path)) || git(dir, ["ls-files", "--error-unmatch", "--", path], env).ok));
-    if (plain.length > 0) {
-      const added = git(dir, ["--literal-pathspecs", "add", ...fromInput], env, named(plain));
+    const asHead = new Map<string, { mode: string; oid: string } | null>();
+    for (const path of plain) {
+      const block = parts?.get(path);
+      const kept = block === undefined ? undefined : withHeadsPart(dir, path, block, scratch);
+      if (kept !== undefined) asHead.set(path, kept);
+    }
+    const toAdd = plain.filter((path) => !asHead.has(path));
+    if (toAdd.length > 0) {
+      const added = git(dir, ["--literal-pathspecs", "add", ...fromInput], env, named(toAdd));
       if (!added.ok) {
         if (share) share.refused(added.stderr.trim(), true);
         fail(`${unit}'s changes could not be added in ${name}: ${added.stderr.trim()}`);
       }
+    }
+    for (const [path, kept] of asHead) {
+      if (kept !== null) git(dir, ["update-index", "--add", "--cacheinfo", `${kept.mode},${kept.oid},${path}`], env);
     }
     // A folder the manifest names brings what git adds from it. A new file
     // there that the source walk leaves out (a test run's __pycache__, a
@@ -11569,6 +11589,51 @@ function commitUnitPaths(
     rmSync(scratch, { recursive: true, force: true });
   }
   return leftOut;
+}
+
+// The Unit's copy of a shared root file with AI-DLC's part as HEAD has it, as a
+// blob, so config's uncommitted part stays out of the commit. Where HEAD has
+// none, the blank lines beside the part go with it and the two sides join by
+// one line end, so the file still reads as AI-DLC's own against the commit.
+// Null: nothing to commit. Undefined (git adds the file whole): a part that is
+// not a release's own, a line of the Unit's inside it included, so it is never
+// dropped.
+function withHeadsPart(
+  dir: string,
+  path: string,
+  block: { shipped: string; marker: string; legacy: string[] },
+  scratch: string,
+): { mode: string; oid: string } | null | undefined {
+  let bytes: Buffer;
+  try {
+    if (!lstatSync(join(dir, path)).isFile()) return undefined;
+    bytes = readFileSync(join(dir, path));
+  } catch {
+    return undefined;
+  }
+  // Bytes that are not UTF-8 go through byte for byte: the markers are ASCII.
+  const encoding = Buffer.from(bytes.toString("utf-8"), "utf-8").equals(bytes) ? "utf-8" : "latin1";
+  const text = bytes.toString(encoding);
+  const disk = markedPart(path, text, block.marker);
+  if (disk === null || disk.block === null || !partAsShipped(path, text, block)) return undefined;
+  const entry = git(dir, ["ls-tree", "HEAD", "--", path]).stdout.trim().split(/\s+/);
+  const inHead = entry.length >= 3;
+  if (inHead && entry[0] !== "100644" && entry[0] !== "100755") return undefined;
+  const head = markedPart(path, inHead ? gitTextAt(dir, "HEAD", path) : "", block.marker);
+  const lf = (value: string): string => value.replace(/\r\n/g, "\n");
+  if (head === null || (head.block !== null && lf(head.block) === lf(disk.block))) return undefined;
+  const nl = newlineOf(text);
+  const at = text.indexOf(disk.block);
+  const before = text.slice(0, at).replace(/(?:\r?\n[ \t]*)+$/, "");
+  const after = text.slice(at + disk.block.length).replace(/^(?:[ \t]*\r?\n)+/, "");
+  const next = head.block !== null
+    ? `${text.slice(0, at)}${head.block.replace(/\r?\n/g, nl)}${text.slice(at + disk.block.length)}`
+    : [before, after].filter(Boolean).join(nl) + (after === "" && before !== "" ? nl : "");
+  if (!inHead && next === "") return null;
+  writeFileSync(join(scratch, "root-part"), next, encoding);
+  const oid = git(dir, ["hash-object", "-w", `--path=${path}`, "--", join(scratch, "root-part")]).stdout.trim();
+  if (oid === "") return undefined;
+  return inHead && oid === entry[2] ? null : { mode: inHead ? entry[0] : "100644", oid };
 }
 
 // HEAD's file plus the Unit's change from the take-time file to now, as a blob;
@@ -11644,7 +11709,8 @@ export function unitBranchInTheWay(projectDir: string, branch: string, byRepo: M
   return [...byRepo].filter(([repo, paths]) => {
     const dir = repo === "." ? projectDir : repoDir(projectDir, repo);
     return isGitRepoDir(dir) && git(dir, ["branch", "--show-current"]).stdout.trim() !== branch &&
-      git(dir, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]).ok && !switchOntoUnitBranch(dir, branch, paths, true).ok;
+      git(dir, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]).ok &&
+      !withOwnRootPartsAside(dir, `refs/heads/${branch}`, () => switchOntoUnitBranch(dir, branch, paths, true), () => false).ok;
   }).map(([repo]) => repo);
 }
 
@@ -13186,7 +13252,7 @@ function sendBuildRecord(pd: string, remote: string, branch: string, unit: strin
 }
 
 function pushUnit(args: string[], projectDir?: string,
-  carried?: { lines: string[]; moved: Array<{ name: string; from: string }>; commitOnly?: true }): void {
+  carried?: { lines: string[]; moved: Array<{ name: string; from: string; dir?: string }>; commitOnly?: true }): void {
   const { bareFlags, flags } = parseArgs(args);
   const pd = resolveProjectDir(projectDir);
   const state = readStateFile(pd);
@@ -13409,7 +13475,7 @@ function pushUnit(args: string[], projectDir?: string,
   // Then in each, onto the Unit's branch as their own hands would and its
   // commit made with their git (hooks, signing, identity), before anything is
   // pushed: a hook that stops one pushes nothing.
-  const moved: Array<{ name: string; from: string }> = [...(carried?.moved ?? [])];
+  const moved: Array<{ name: string; from: string; dir?: string }> = [...(carried?.moved ?? [])];
   // What the Unit's branch on a remote had on top of this one, brought in first.
   const broughtIn: string[] = [...(carried?.lines ?? [])];
   // The source walk as the Code Generation review binds it, read once when a
@@ -13480,7 +13546,7 @@ function pushUnit(args: string[], projectDir?: string,
         fail(`Branch ${branch} could not be checked out in ${name}, so nothing was pushed.${said.trim() ? ` Git says: "${gitSaid(said)}".` : ""}` +
           `${exists ? ` Your own changes there stay as they are; once they are committed or put aside, I can push ${unit}.` : ""}${whereNow()}`);
       }
-      moved.push({ name, from: from || "the commit you were on" });
+      moved.push({ name, from: from || "the commit you were on", dir });
     }
     // The Unit's branch on its remote ahead of this one (a host's merge of
     // main on its pull request, a suggestion committed there): brought in first
@@ -13510,7 +13576,8 @@ function pushUnit(args: string[], projectDir?: string,
       const where = given !== null && ours ? wentNowhere(dir, remote, branch, headBefore) : null;
       const offer = given === null ? undefined : { message: given.text, amend: where === "nowhere", same: ours && mark[repo]?.message === textHash } as
         { message: string; amend: boolean; same: boolean; refused?: string };
-      for (const path of commitUnitPaths(dir, paths, takeTree[repo] ?? {}, unit, label, name, listed, undefined, offer)) leftOut.push(`${path} in ${name}`);
+      const parts = repo === "." ? aidlcRootParts(dir).blocks : undefined;
+      for (const path of commitUnitPaths(dir, paths, takeTree[repo] ?? {}, unit, label, name, listed, undefined, offer, parts)) leftOut.push(`${path} in ${name}`);
       const headAfter = git(dir, ["rev-parse", "--verify", "--quiet", "HEAD"]).stdout.trim();
       if (headAfter !== headBefore) {
         mark[repo] = { commit: headAfter, message: textHash };
@@ -14177,7 +14244,7 @@ function mergeMainIn(pd: string, args: string[], unit: string, branch: string, u
     if (repos.length > 0) turn!.answered(`Bring ${joinNames([...new Set(repos.map((entry) => entry.into))])} into ${unit}`);
     askedNow = repos.length > 0;
   }
-  const moved: Array<{ name: string; from: string }> = [];
+  const moved: Array<{ name: string; from: string; dir?: string }> = [];
   const lines: string[] = [];
   const has = (dir: string, older: string, newer: string): boolean => git(dir, ["merge-base", "--is-ancestor", older, newer]).ok;
   const merging = (dir: string, into: string): boolean => mainMergeWaiting(dir, branch, into);
@@ -14320,7 +14387,7 @@ function mergeMainIn(pd: string, args: string[], unit: string, branch: string, u
     if (from !== branch) {
       const switched = CHECKOUT_STEPS.switch.run(dir, branch);
       if (!switched.ok) stop(`Branch ${branch} could not be checked out in ${name}: git says "${gitSaid(switched.stderr)}". Nothing was merged or pushed. Say when to try again.`);
-      moved.push({ name, from: from || "the commit you were on" });
+      moved.push({ name, from: from || "the commit you were on", dir });
     }
     // The host's branch is merged with git's own message: the Unit's commit took theirs at the push.
     const message = given === null || entry.hostAhead ? [] : ["-m", given.text];
@@ -15666,12 +15733,31 @@ function moveInTheWay(repo: { dir: string; onto: string; rebase: string[] }): bo
 export const moveRefusedMark = (dep: string): string => `unit-move-refused-${dep}`;
 
 // Where a command that switched the person onto the Unit's branch left them,
-// and the way back, in one wording for the push and the move.
-function whereNowLine(unit: string, moved: Array<{ name: string; from: string }>, also = ""): string {
+// and the way back, in one wording for the push and the move; not said where
+// git would refuse it over AI-DLC's uncommitted part.
+function whereNowLine(unit: string, moved: Array<{ name: string; from: string; dir?: string }>, also = ""): string {
   if (moved.length === 0) return "";
   const back = [...new Set(moved.map((entry) => entry.from))];
-  return ` You're on ${unit} now in ${joinNames(moved.map((entry) => entry.name))}${also}. ` +
-    CHECKOUT_STEPS.switch.undo(back.length === 1 ? back[0] : joinNames(moved.map((entry) => `${entry.from} in ${entry.name}`)));
+  const refused = moved.some((entry) => entry.dir !== undefined && backRefusedOverOwnPart(entry.dir, entry.from));
+  return ` You're on ${unit} now in ${joinNames(moved.map((entry) => entry.name))}${also}.` + (refused ? "" : ` ${
+    CHECKOUT_STEPS.switch.undo(back.length === 1 ? back[0] : joinNames(moved.map((entry) => `${entry.from} in ${entry.name}`)))}`);
+}
+
+// The way back to `from` in the workspace's own repository, as one sentence, or
+// none where git would refuse it over AI-DLC's part.
+function wayBack(dir: string, from: string): string {
+  return backRefusedOverOwnPart(dir, from) ? "" : ` ${CHECKOUT_STEPS.switch.undo(from)}`;
+}
+
+// A change of their own in the way stays git's to refuse, and the way back is said as before.
+function backRefusedOverOwnPart(dir: string, from: string): boolean {
+  if (!git(dir, ["rev-parse", "--verify", "--quiet", `refs/heads/${from}`]).ok) return false;
+  const status = git(dir, ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames"]);
+  if (!status.ok) return false;
+  const changed = new Set(status.stdout.split("\0").filter(Boolean).map((entry) => entry.slice(3)));
+  const differs = git(dir, ["diff", "-z", "--name-only", "--no-renames", "HEAD", `refs/heads/${from}`, "--"]).stdout.split("\0");
+  const inTheWay = differs.filter((path) => changed.has(path));
+  return inTheWay.length > 0 && aidlcOwnRootParts(dir, inTheWay).size > 0;
 }
 
 // The person's yes to moving the build onto the integration branch: in each
