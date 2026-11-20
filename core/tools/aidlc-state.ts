@@ -2950,6 +2950,22 @@ function handleUnit(args: string[]): void {
       // a unit set aside for another can be picked up again (#1411).
       const own = open.find((entry) => entry.unit === unit);
       const active = open.find((entry) => entry.unit !== unit && entry.state === "in-progress");
+      if (active === undefined && own?.state === "in-progress") {
+        let healed = setOrInsertField(content, "## Runtime State", "Active Unit", unit);
+        healed = setOrInsertField(healed, "## Runtime State", "Unit Stage", slug);
+        healed = setOrInsertField(healed, "## Runtime State", "Unit State", "in-progress");
+        healed = removeField(healed, "Unit Pause Reason");
+        healed = removeField(healed, "Unit Next Action");
+        if (healed !== content) writeStateFile(pd, healed);
+        console.log(JSON.stringify({
+          unit,
+          stage: slug,
+          state: "in-progress",
+          already_active: true,
+          warning: `Unit "${unit}" is already in progress on "${slug}"; nothing to resume.`,
+        }));
+        return;
+      }
       if (own?.state !== "paused" || active) {
         const shown = active ?? checkpoint;
         error(
