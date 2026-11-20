@@ -53,6 +53,7 @@ import {
   compiledExecutable,
   discoverProjectHarnesses,
   entrySkillInvocation,
+  isAidlcProjectFolder,
   LinkedFolderError,
   pinNamedHarness,
   quoteCommandArgument,
@@ -3224,6 +3225,10 @@ export async function main(argv: string[]): Promise<void> {
       if (flags["plugin-root"]) process.env.AIDLC_PLUGIN_ROOT = resolve(flags["plugin-root"]);
       // A plugin hook names its harness too.
       if (flags["harness-dir"]) pinNamedHarness(projectDir, flags["harness-dir"]);
+      if (!isAidlcProjectFolder(projectDir)) {
+        if (flags.json === "true") process.stdout.write(jsonEnvelope(0, "not an AI-DLC project; nothing to sync", null));
+        return;
+      }
       const result = await syncPlugins(projectDir, argv);
       sayRulesPlacement(projectDir, result.rules);
       const message = result.nothingToSync ? "no installed plugins; nothing to sync" : `plugin sync complete: ${result.synced.length} plugin(s)` +
