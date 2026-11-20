@@ -22,6 +22,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, utimesSync 
 import { dirname, join, relative } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import { appendAuditEntryUnlocked } from "./aidlc-audit.ts";
+import { earlyStartBrought } from "./aidlc-unit-teams.ts";
 import { personGitNameField } from "./aidlc-git-name.ts";
 import {
   activeIntentUuid,
@@ -65,6 +66,7 @@ import {
   sessionsDir,
   renderChangedPaths,
   sourceChangedOutsideAidlc,
+  sourceListingChangedKeys,
   stalePlanApprovalReceiptsForTarget,
   stateFilePath,
   steeringPayloadAuthenticAt,
@@ -669,7 +671,14 @@ function changedBeforeApprovalLine(projectDir: string): string | null {
     const theirBuild = (path: string): boolean =>
       named.some((entry) =>
         path === entry || path.startsWith(`${entry}/`) || (!entry.includes("/") && path.split("/").at(-1) === entry));
-    const changed = sourceChangedOutsideAidlc(projectDir, joined.listing, current.listing).filter((path) => !theirBuild(path));
+    // A file an early start's branch brought is where the build started: as it was then.
+    const now = new Map(current.listing);
+    for (const key of earlyStartBrought(projectDir, sourceListingChangedKeys(joined.listing, current.listing))) {
+      const was = joined.listing.get(key);
+      if (was === undefined) now.delete(key);
+      else now.set(key, was);
+    }
+    const changed = sourceChangedOutsideAidlc(projectDir, joined.listing, now).filter((path) => !theirBuild(path));
     if (changed.length === 0) return null;
     return changed.length === 1
       ? `Already changed before you approved: ${renderChangedPaths(changed)}.`

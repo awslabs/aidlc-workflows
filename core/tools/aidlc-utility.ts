@@ -8767,6 +8767,15 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
       writeFileSync(auditPath, `# AI-DLC Audit Log\n`, "utf-8");
     }
 
+    // The record is listed last, so its repo set comes from this creation,
+    // not from the registry.
+    const startRecord = sourceBaselineAuditFields(
+      projectDir,
+      workspaceBaselineStageSlugs(),
+      created.dirName,
+      created.space,
+      repos,
+    );
     // WORKFLOW_STARTED — mandatory first event of any new workflow. Captures the
     // creation timestamp so "when did this feature begin?" is answerable from the
     // audit alone. Lands in the created intent's audit (relocated from --init).
@@ -8776,15 +8785,7 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
       // person's words of it, or that the take started it), never a /aidlc
       // line nobody typed.
       Request: flags["take-request"] ?? `/aidlc ${flags.arguments || scope}`,
-      // The record is listed last, so its repo set comes from this creation,
-      // not from the registry.
-      ...sourceBaselineAuditFields(
-        projectDir,
-        workspaceBaselineStageSlugs(),
-        created.dirName,
-        created.space,
-        repos,
-      ),
+      ...startRecord,
       ...(reviewOverride !== undefined
         ? {
             "Review Override":
@@ -8869,6 +8870,7 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
       requestedCeremony,
       ceremonySetByPerson,
       composedPlan ? plannedStages.stages : null,
+      startRecord,
     );
     // The checks the person turned off for this work start off, set by them;
     // one they typed on starts on.
@@ -8948,6 +8950,8 @@ function handleIntentCreateStateBuild(
   requestedCeremony: Partial<CeremonyPolicy>,
   ceremonySetByPerson: Partial<Record<CeremonyKey, true>>,
   composedPlan: Record<string, "EXECUTE" | "SKIP"> | null,
+  // What the work started from (WORKFLOW_STARTED's Source Baseline).
+  startRecord: Record<string, string>,
 ): void {
   const depthOverride = flags.depth;
   const testStrategyOverride = flags["test-strategy"];
@@ -9267,9 +9271,13 @@ ${stageProgress}
       Phase: firstPostInitEntry.phase,
       Scope: scope,
     }, createdDir, createdSpace);
+    // A first stage that reads the source (Code Generation, where a taken
+    // Unit's build can start) starts from the record this creation made: the
+    // same snapshot, as a jump's STAGE_STARTED repeats its STAGE_JUMPED's.
     appendAuditEvent(projectDir, "STAGE_STARTED", {
       Stage: firstPostInit,
       Agent: firstPostInitAgent,
+      ...(firstPostInitEntry.workspace_requires ? startRecord : {}),
     }, createdDir, createdSpace);
   }
   failIntentCreateAt("before-state");

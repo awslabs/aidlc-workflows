@@ -21,7 +21,9 @@ import {
 } from "../harness/fixtures.ts";
 import { createCodeGenerationProject, reply, reviewText, runNamed, stageDir, writePlan } from "../harness/code-generation-states.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
-import { broughtFilesLine, withWayBack } from "../../dist/claude/.claude/tools/aidlc-brought-files.ts";
+import { broughtFilesChanged, broughtFilesLine, withWayBack } from "../../dist/claude/.claude/tools/aidlc-brought-files.ts";
+import { driveCodeGeneration, teammateTakes } from "../harness/early-start.ts";
+import { cleanupTeamBuild } from "../harness/team-build.ts";
 import {
   artifactFilename, committedTextSha256, findStageBySlug, latestMainWorkflowStageRunFloorForProject, reviewArtifactFingerprint, sourceBaselineAuditFields,
   workspaceBaselineStageSlugs,
@@ -33,6 +35,7 @@ import {
 process.env.AIDLC_DISABLE_SENSORS = "1";
 
 setDefaultTimeout(600_000);
+afterEach(cleanupTeamBuild);
 const created: string[] = [];
 afterEach(() => {
   while (created.length > 0) cleanupTestProject(created.pop());
@@ -691,5 +694,21 @@ describe("t-gate-says-replaced-files: a later Unit's approval puts back only tha
     expect(askCheckpoint(p, "beta").changed_files).toBe(
       "The build changed .gitignore, a file you had before this work started. There is no committed copy to put back.",
     );
+  });
+});
+
+// An early start the person switched onto during Code Generation, after its
+// first step: the dependency changed README.md on its branch, and the build
+// changed PERSONAL.md, a file the person had. The gate's line is about the
+// build's own change only.
+describe("the brought files an early start's build changed", () => {
+  test("are the build's own changes, never the dependency's change to a file the person had", () => {
+    const build = teammateTakes({ early: true, uncommitted: true });
+    driveCodeGeneration(build, () => {
+      git(build.code, ["switch", "-q", build.unit]);
+      writeFileSync(join(build.code, "PERSONAL.md"), "changed by the build\n");
+    });
+    const changed = broughtFilesChanged(build.dana, readFileSync(join(build.record, "aidlc-state.md"), "utf-8"), build.unit);
+    expect(changed?.files.map((file) => file.path)).toEqual(["PERSONAL.md"]);
   });
 });

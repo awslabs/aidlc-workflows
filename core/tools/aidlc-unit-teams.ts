@@ -5,7 +5,7 @@
 
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, lstatSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { artifactFilename } from "./aidlc-artifact-vocabulary.ts";
 import { validateUnitName } from "./aidlc-unit-dag.ts";
@@ -24,6 +24,7 @@ import {
   intentRepos,
   teamsAcrossReposLine,
   intentsDir,
+  isGitRepoDir,
   isPerUnitStage,
   isTeamUnitOwnership,
   isValidRepoName,
@@ -41,6 +42,7 @@ import {
   readRecordedSourceCheckouts,
   readStateFile,
   readUnitGateRhythm,
+  recordDir,
   recordedCheckoutOfListingPath,
   removeField,
   removeRecordFileNoFollow,
@@ -58,8 +60,9 @@ import { gitUserName } from "./aidlc-git-name.ts";
 import { projectInRepo } from "./aidlc-git.ts";
 import { applicableTeamUnitScopeStamp, idSuffix, listIntents, onlyOwnLookRows, resolveWorkflowSelection, setCheckbox } from "./aidlc-record-core.ts";
 import { UNIT_PROGRESS_NOTE, unitProgressSectionRange } from "./aidlc-unit-landing.ts";
-import { isReadOnlyEngineProbe } from "./aidlc-locks.ts";
+import { isReadOnlyEngineProbe, writeFileAtomic } from "./aidlc-locks.ts";
 import { gitAddressKey } from "./aidlc-workspace-repos.ts";
+import type { UnitClaimPayload, UnitClaimView } from "./aidlc-unit.ts";
 import { homeCopyName, planRecordRef } from "./aidlc-unit-holders.ts";
 import { UPDATE_COMMIT_MESSAGE, withoutCredentials } from "./aidlc-workspace-manifest.ts";
 import { aidlcInvocation } from "./aidlc-runtime-paths.ts";
@@ -1951,4 +1954,126 @@ export function soloUnitsProgress(
     if (row.event === "UNIT_COMPLETED" && auditBlockField(row.block, "Stage") === finalStage) done.add(unit);
   }
   return { started, done };
+}
+
+// What of the person's own was uncommitted in each of the work's repos when the
+// Unit was taken, so its push never commits it: for each changed file, the
+// blob of its content then (stored in that repo, never pushed), "" for one they
+// had deleted, "untracked" for one git did not track. Object ids only, in the
+// build's engine folder, which is never committed.
+const TAKE_TREE_FILE = "take-tree.json";
+export type TakeTree = Record<string, Record<string, string>>;
+
+export function writeTakeTree(record: string, tree: TakeTree): void {
+  mkdirSync(join(record, ENGINE_DIR), { recursive: true });
+  writeFileAtomic(join(record, ENGINE_DIR, TAKE_TREE_FILE), `${JSON.stringify(tree, null, 2)}\n`);
+}
+
+export function readTakeTree(record: string): TakeTree {
+  try {
+    return JSON.parse(readFileSync(join(record, ENGINE_DIR, TAKE_TREE_FILE), "utf-8")) as TakeTree;
+  } catch {
+    return {};
+  }
+}
+
+// An early take's row field Early On: each Unit it started on, "; " between
+// them, as "<unit>: <repo> <branch> <head>, ..." with each repository it started
+// from there (a head not known is left off); a Unit that changed none of the
+// take's repositories is its name alone. Read back exactly by earlyOnFrom.
+export function earlyOnField(earlyOn: NonNullable<UnitClaimPayload["early_on"]>): string {
+  return earlyOn.map((dep) => dep.repos.length === 0 ? dep.unit
+    : `${dep.unit}: ${dep.repos.map((repo) => [repo.repo, repo.branch, repo.head].filter(Boolean).join(" ")).join(", ")}`).join("; ");
+}
+
+export function earlyOnFrom(field: string | null): UnitClaimPayload["early_on"] {
+  if (!field || field.trim() === "") return undefined;
+  return field.split("; ").map((part) => {
+    const at = part.indexOf(": ");
+    if (at === -1) return { unit: part.trim(), repos: [] };
+    return {
+      unit: part.slice(0, at).trim(),
+      repos: part.slice(at + 2).split(", ").map((entry) => {
+        const [repo = "", branch = "", head = ""] = entry.trim().split(" ");
+        return { repo, branch, head };
+      }),
+    };
+  });
+}
+
+// The Units a build started early on, by its own take row (read in any clone
+// of the workspace it was committed in), else, for a build taken before the
+// row carried them, by its record.
+export function buildEarlyOn(projectDir: string, build: UnitBuild, record?: UnitClaimView | null): NonNullable<UnitClaimPayload["early_on"]> {
+  const here = findUnitBuild(projectDir, build.homeWork, build.unit);
+  const row = here === null ? undefined
+    : readAuditShardEvents(projectDir, here.dirName, here.space).findLast((entry) => entry.event === "UNIT_TAKEN_IN");
+  const field = row === undefined ? null : auditBlockField(row.block, "Early On");
+  return earlyOnFrom(field) ?? record?.payload.early_on ?? [];
+}
+
+// Of `keys` (changed source paths, `<repo>\0<path>`), the ones an early
+// start's branch brought: in a repo this build started early on a Unit's
+// pushed head, while the checkout is on this Unit's branch or holds that head
+// (switched at the take, by the person later, or moved onto what merged
+// since), a path that is as that head holds it by git's own compare (tracked
+// with the same content, or absent from both). They are where the Unit's
+// branch started, so no change of this build's or the person's, whenever the
+// switch came after the stage's start record. The person's own uncommitted
+// work the take recorded (readTakeTree) is never the branch's: a switch carries
+// it unchanged. A file changed after the switch differs from the head and
+// stays a change. Empty when this is no early start or git cannot tell. The
+// outside-the-Units check, the code plan question and the brought-files line
+// all leave these out.
+export function earlyStartBrought(projectDir: string, keys: Iterable<string>): Set<string> {
+  const found = new Set<string>();
+  try {
+    const state = readStateFile(projectDir);
+    const build = unitBuildOf(state);
+    if (build === null) return found;
+    const all = [...keys];
+    if (all.length === 0) return found;
+    const record = recordDir(projectDir);
+    const theirs = record === null ? {} : readTakeTree(record);
+    const branch = unitBranchOf(state, build.unit);
+    for (const dep of buildEarlyOn(projectDir, build)) {
+      for (const { repo, head } of dep.repos) {
+        if (head === "") continue;
+        const prefix = repo === "." ? "" : repo;
+        const own = theirs[repo] ?? {};
+        const paths = all.filter((key) => key.startsWith(`${prefix}\0`)).map((key) => key.slice(prefix.length + 1))
+          .filter((path) => !Object.hasOwn(own, path));
+        if (paths.length === 0) continue;
+        const dir = repo === "." ? projectDir : repoDir(projectDir, repo);
+        if (!isGitRepoDir(dir)) continue;
+        const git = (args: string[]) => {
+          const ran = spawnSync("git", ["-C", dir, ...args], { encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 });
+          return { ok: ran.status === 0 && !ran.error, stdout: ran.stdout ?? "" };
+        };
+        const onBranch = git(["branch", "--show-current"]).stdout.trim() === branch;
+        if (!onBranch && !git(["merge-base", "--is-ancestor", head, "HEAD"]).ok) continue;
+        // Whole listings, no pathspec: a long list of paths never meets a command-line limit.
+        const listed = (args: string[]): Set<string> | null => {
+          const ran = git(args);
+          return ran.ok ? new Set(ran.stdout.split("\0").filter(Boolean)) : null;
+        };
+        const atHead = listed(["ls-tree", "-r", "-z", "--name-only", head]);
+        const tracked = listed(["ls-files", "-z"]);
+        const differs = listed(["diff", "--name-only", "--no-renames", "-z", head]);
+        if (atHead === null || tracked === null || differs === null) continue;
+        for (const path of paths) {
+          let here = true;
+          try {
+            lstatSync(join(dir, ...path.split("/")));
+          } catch {
+            here = false;
+          }
+          if (atHead.has(path) ? here && tracked.has(path) && !differs.has(path) : !here) found.add(`${prefix}\0${path}`);
+        }
+      }
+    }
+  } catch {
+    // Nothing read: nothing is the branch's, and every change is said as before.
+  }
+  return found;
 }

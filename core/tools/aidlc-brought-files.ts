@@ -52,6 +52,7 @@ import {
 } from "./aidlc-lib.ts";
 import { HARNESS_IDENTITY_KEYS, jsoncDocumentValue, jsonEntryHash, refreshedTablesRel, unbaselinedGenerated } from "./aidlc-distribution.ts";
 import { reposMoveToCommit } from "./aidlc-workspace-manifest.ts";
+import { earlyStartBrought } from "./aidlc-unit-teams.ts";
 
 const STAGE = "code-generation";
 // As many as the line, and the note for the build, name before "and N more".
@@ -391,11 +392,13 @@ export function broughtFilesChanged(
   if (current === null) return null;
   const greenfield = declaredProjectType(getField(stateContent, "Project Type") ?? undefined) === "Greenfield";
   const recorded = recordedSourceListingForCompare(projectDir, before, current);
+  // A file an early start's branch brought is not one this build changed.
+  const branch = earlyStartBrought(projectDir, sourceListingChangedKeys(recorded, current.listing));
   const files: BroughtFile[] = [];
   let install: InstallRecord | undefined;
   for (const key of sourceListingChangedKeys(recorded, current.listing)) {
     const entry = recorded.get(key);
-    if (entry === undefined || !brought.listing.has(key)) continue;
+    if (entry === undefined || !brought.listing.has(key) || branch.has(key)) continue;
     const parsed = listedFile(key);
     if (parsed === null) continue;
     const deleted = !current.listing.has(key);

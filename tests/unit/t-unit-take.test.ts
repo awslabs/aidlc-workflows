@@ -33,6 +33,7 @@ import { kiroLeadRulesBrief, LEAD_RULES_UNSAVED_LINE, leadRulesBrief, leadRulesB
 import { learningsCorrectionChoices, offersLearningsCorrectionChoices } from "../../dist/claude/.claude/tools/aidlc-unit-teams.ts";
 import { AIDLC_SRC, fixtureIntentId8, REPO_ROOT, seedAidlcMemory } from "../harness/fixtures.ts";
 import { hostFor } from "../harness/scope-hosts.ts";
+import { driveCodeGeneration, teammateTakes } from "../harness/early-start.ts";
 import {
   cleanupTeamBuild,
   cloneCode,
@@ -3542,5 +3543,26 @@ describe("where the team's records live", () => {
     expect(before).toHaveLength(1);
     git(alice, ["fetch", "-q", "--prune", "origin"]);
     expect(copies()).toEqual(before);
+  });
+});
+
+// A plan whose Units start at Code Generation (a live run's plan): the take
+// creates the build at that stage, so its start is where Code Generation
+// started, and the gate checks what changed outside the Units with approvals
+// after every stage as it does once at the Unit's end.
+describe("a take of a plan whose Units start at Code Generation", () => {
+  test("the gate names the person's own file outside the Units, never that it could not check", () => {
+    const build = teammateTakes({ early: false });
+    const ran = driveCodeGeneration(build, () => writeFileSync(join(build.code, "NOTES.md"), "mine\n"));
+    expect(ran.refusal).toBeNull();
+    expect(ran.notices).toContain("These files changed outside any unit's work in Code Generation: NOTES.md. Kept them.");
+    expect(ran.notices.join(" ")).not.toContain("I could not check");
+  });
+
+  test("under strict, with nothing of theirs outside the Units, Code Generation completes on their approval", () => {
+    const build = teammateTakes({ early: false, policy: "strict" });
+    const ran = driveCodeGeneration(build);
+    expect(ran.refusal).toBeNull();
+    expect(ran.end?.ask_type).toBe("unit-push");
   });
 });

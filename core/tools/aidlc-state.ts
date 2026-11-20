@@ -306,7 +306,7 @@ import {
 import { swarmSourceChangedSince } from "./aidlc-swarm-source.ts";
 import { memoryDirFor, PATH_SET_SENSOR_IDS, STAGE_WIDE_SENSOR_IDS, templateEligibleArtifacts, withStageProgressRow } from "./aidlc-graph.ts";
 import { generateFireId, recordUnfinishedFire, sensorMatchesPath, unfinishedFire } from "./aidlc-sensor-record.ts";
-import { buildOutBlockedLine, buildOutHomeLocation, buildWaitsForPush, HOME_LOCATION_FIELD, homeLocation, workspaceHomeLocation } from "./aidlc-unit-teams.js";
+import { buildOutBlockedLine, buildOutHomeLocation, buildWaitsForPush, earlyStartBrought, HOME_LOCATION_FIELD, homeLocation, workspaceHomeLocation } from "./aidlc-unit-teams.js";
 import { recordHomeLocation } from "./aidlc-state-upgrade.ts";
 import { unitProgressSectionRange } from "./aidlc-unit-landing.ts";
 import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
@@ -5308,6 +5308,11 @@ function unitClaimableSourceChanges(
   if (outsideClaims.length > 0) {
     const otherWork = otherOpenWorkClaims(pd, stageSlug);
     outsideClaims = outsideClaims.filter((pathKey) => !otherWork.some((work) => sourceClaimCovers(pathKey, work.claims)));
+  }
+  // Nor is a file an early start's branch brought: it is where this Unit's branch started.
+  if (outsideClaims.length > 0) {
+    const brought = earlyStartBrought(pd, outsideClaims);
+    if (brought.size > 0) outsideClaims = outsideClaims.filter((pathKey) => !brought.has(pathKey));
   }
   const ignored = unclaimableIgnoredSourceKeys(pd, outsideClaims);
   const unclaimable = new Set(ignored);

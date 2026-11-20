@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-unit:propose, subcommand:aidlc-unit:amend, audit:SHARED_INPUT_AMENDED, function:buildClaimNotes, function:latestCompletionBasesFromAudit
+// covers: subcommand:aidlc-unit:propose, subcommand:aidlc-unit:amend, audit:SHARED_INPUT_AMENDED, function:buildClaimNotes, function:latestCompletionBasesFromAudit, function:earlyStartBrought
 //
 // Starting early and changing a shared input (#2410, item 7). A Unit that waits
 // on another can start early on the branches that one pushed, said to change
@@ -14,7 +14,7 @@
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { latestCompletionBasesFromAudit } from "../../dist/claude/.claude/tools/aidlc-validity.ts";
@@ -49,6 +49,7 @@ import {
   planFrom,
   sharePlan,
 } from "../harness/team-build.ts";
+import { driveCodeGeneration, type EarlyStart, outsideTheUnits, teammateTakes } from "../harness/early-start.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 afterEach(cleanupTeamBuild);
@@ -239,6 +240,85 @@ describe("starting early", () => {
       "refunds was turned down by the lead; reporting started on its branch. Nothing else changes: wait for it, or rebase when you are ready.",
     );
     expect(step.kind).toBe("run-stage");
+  });
+});
+
+// An early start on a Unit built to its end: what that Unit's pushed branch
+// brought is where this Unit's branch started, never a change outside the
+// Units, whether the take switched or the person did later, and whatever the
+// gate rhythm. Read by content at the head the take recorded, so the build's
+// own change to one of those files is said, and so is the person's own
+// uncommitted work the take recorded, whatever undoes it.
+describe("an early start's Code Generation gate, its dependency built to its end", () => {
+  const notes = (build: EarlyStart) => () => writeFileSync(join(build.code, "NOTES.md"), "mine\n");
+
+  test("names only the person's own file, switched at the take or by the person later", () => {
+    for (const uncommitted of [false, true]) {
+      const build = teammateTakes({ early: true, uncommitted });
+      // Switched later: the take kept them on their branch; they switch when ready, carrying their own change.
+      if (uncommitted) git(build.code, ["switch", "-q", build.unit]);
+      const ran = driveCodeGeneration(build, notes(build));
+      expect(ran.refusal, `uncommitted ${uncommitted}`).toBeNull();
+      expect(outsideTheUnits(ran), `uncommitted ${uncommitted}`).toBe("These files changed outside any unit's work in Code Generation: NOTES.md. Kept them.");
+      expect(ran.plans.flat().join(" "), `uncommitted ${uncommitted}`).not.toContain("refunds");
+    }
+  });
+
+  test("under strict, with nothing of theirs outside the Units, completes at the Unit's end and after every stage", () => {
+    for (const rhythm of ["unit-end", "per-stage"] as const) {
+      const build = teammateTakes({ early: true, rhythm, policy: "strict", uncommitted: rhythm === "per-stage" });
+      if (rhythm === "per-stage") git(build.code, ["switch", "-q", build.unit]);
+      const ran = driveCodeGeneration(build);
+      expect(ran.refusal, rhythm).toBeNull();
+      expect(ran.end?.ask_type, rhythm).toBe("unit-push");
+    }
+  });
+
+  test("the build's own change to a dependency's file is said, and so is the person's own uncommitted work it undoes", () => {
+    const build = teammateTakes({ early: true, uncommitted: true });
+    git(build.code, ["switch", "-q", build.unit]);
+    const ran = driveCodeGeneration(build, () => {
+      notes(build)();
+      writeFileSync(join(build.code, "src", "refunds.ts"), "export const built = \"changed by reporting\";\n");
+      git(build.code, ["checkout", "--", "PERSONAL.md"]);
+      unlinkSync(join(build.code, "SCRATCH.md"));
+    });
+    expect(outsideTheUnits(ran)).toBe(
+      "These files changed outside any unit's work in Code Generation: NOTES.md, PERSONAL.md, SCRATCH.md, src/refunds.ts. Kept them.",
+    );
+  });
+
+  test("after the move onto what merged, a squash of the dependency, only the person's own file", () => {
+    const build = teammateTakes({ early: true });
+    mergeOnHost(build.home.remote, "refunds", "squash");
+    next(build.home.dir);
+    fetchRecords(build.dana);
+    const moved = run(UNIT, ["rebase"], build.dana);
+    expect(moved.status, moved.out).toBe(0);
+    expect(spawnSync("git", ["merge-base", "--is-ancestor", "refs/remotes/origin/refunds", "HEAD"], { cwd: build.dana }).status).not.toBe(0);
+    const ran = driveCodeGeneration(build, notes(build));
+    expect(outsideTheUnits(ran)).toBe("These files changed outside any unit's work in Code Generation: NOTES.md. Kept them.");
+  });
+
+  // A known limit, pinned so a change that closes it turns this case: when the
+  // stage's start record comes after the take's switch (Units that start at
+  // Functional Design), a file of the person's own made after the take and
+  // before Code Generation started, which the build then deletes, reads as
+  // absent from the dependency's head too, and is not named.
+  test("a file of the person's own made after the take and before Code Generation started, deleted by the build, is not named", () => {
+    const build = teammateTakes({ early: true, functionalDesignFirst: true });
+    writeFileSync(join(build.code, "DRAFT.md"), "mine, after the take\n");
+    const ran = driveCodeGeneration(build, () => {
+      notes(build)();
+      unlinkSync(join(build.code, "DRAFT.md"));
+    });
+    expect(outsideTheUnits(ran)).toBe("These files changed outside any unit's work in Code Generation: NOTES.md. Kept them.");
+  });
+
+  test("code repositories of their own: the person's own commit the switch left behind is not named", () => {
+    const build = teammateTakes({ early: true, repos: true, rhythm: "unit-end" });
+    const ran = driveCodeGeneration(build, notes(build));
+    expect(outsideTheUnits(ran)).toBe("These files changed outside any unit's work in Code Generation: billing/NOTES.md. Kept them.");
   });
 });
 

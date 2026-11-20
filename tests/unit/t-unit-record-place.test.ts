@@ -16,6 +16,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync
 import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import * as unitTools from "../../dist/claude/.claude/tools/aidlc-unit.ts";
+import * as unitTeams from "../../dist/claude/.claude/tools/aidlc-unit-teams.ts";
 import { auditBlockField, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { unitBuildOf } from "../../dist/claude/.claude/tools/aidlc-unit-teams.ts";
 import { fixtureIntentId8 } from "../harness/fixtures.ts";
@@ -559,7 +560,7 @@ describe("an early take whose record's repository takes no push from them", () =
     const [refunds] = starts;
     expect(takeRow(dana)).toBe(`refunds: checkout-api refunds ${refunds.repos[0].head}, billing refunds ${refunds.repos[1].head}; checkout-ui`);
     const build = unitBuildOf(readFileSync(join(buildOf(dana, "reporting")!, "aidlc-state.md"), "utf-8"))!;
-    expect(unitTools.buildEarlyOn(dana, build)).toEqual(starts);
+    expect(unitTeams.buildEarlyOn(dana, build)).toEqual(starts);
   });
 
   test("a teammate carrying the build on from the team's workspace reads the same starts", () => {
@@ -577,7 +578,7 @@ describe("an early take whose record's repository takes no push from them", () =
     expect(carried.status, carried.out).toBe(0);
     expect(carried.json).toMatchObject({ resumed: true });
     const build = unitBuildOf(readFileSync(join(buildOf(dan, "reporting")!, "aidlc-state.md"), "utf-8"))!;
-    expect(unitTools.buildEarlyOn(dan, build)).toEqual(starts);
+    expect(unitTeams.buildEarlyOn(dan, build)).toEqual(starts);
   });
 
   test("once its repository takes pushes from them, the take is written with the same starts", () => {

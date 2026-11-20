@@ -190,6 +190,12 @@ import {
 import { classifyStateVersion, newerPlanStep, newerRecordStep, newerStateRelease, newerStateStep, recordHomeLocation, TEAM_STATE_VERSION } from "./aidlc-state-upgrade.ts";
 import { ownRemoteAmong } from "./aidlc-unit-holders.ts";
 import {
+  buildEarlyOn,
+  earlyOnField,
+  earlyOnFrom,
+  readTakeTree,
+  type TakeTree,
+  writeTakeTree,
   type Amendment,
   approvedInputsOf,
   artifactAt,
@@ -11239,13 +11245,6 @@ function createUnitBuild(
   return { space, dirName };
 }
 
-// What of the person's own was uncommitted in each of the work's repos when the
-// Unit was taken, so its push never commits it: for each changed file, the
-// blob of its content then (stored in that repo, never pushed), "" for one they
-// had deleted, "untracked" for one git did not track. Object ids only, in the
-// build's engine folder, which is never committed.
-const TAKE_TREE_FILE = "take-tree.json";
-type TakeTree = Record<string, Record<string, string>>;
 
 function recordTakeTree(projectDir: string, record: string, repos: string[]): void {
   const tree: TakeTree = {};
@@ -11264,19 +11263,6 @@ function recordTakeTree(projectDir: string, record: string, repos: string[]): vo
     if (Object.keys(own).length > 0) tree[repo] = own;
   }
   if (Object.keys(tree).length > 0) writeTakeTree(record, tree);
-}
-
-function writeTakeTree(record: string, tree: TakeTree): void {
-  mkdirSync(join(record, ENGINE_DIR), { recursive: true });
-  writeFileAtomic(join(record, ENGINE_DIR, TAKE_TREE_FILE), `${JSON.stringify(tree, null, 2)}\n`);
-}
-
-function readTakeTree(record: string): TakeTree {
-  try {
-    return JSON.parse(readFileSync(join(record, ENGINE_DIR, TAKE_TREE_FILE), "utf-8")) as TakeTree;
-  } catch {
-    return {};
-  }
 }
 
 // The work a Unit's build belongs to, as its commit message names it.
@@ -12025,41 +12011,6 @@ function takeUnit(args: string[], projectDir?: string, rhythm?: UnitClaimPayload
     record: build.dirName,
     ...(notice === null ? {} : { notice }),
   }));
-}
-
-// An early take's row field Early On: each Unit it started on, "; " between
-// them, as "<unit>: <repo> <branch> <head>, ..." with each repository it started
-// from there (a head not known is left off); a Unit that changed none of the
-// take's repositories is its name alone. Read back exactly by earlyOnFrom.
-function earlyOnField(earlyOn: NonNullable<UnitClaimPayload["early_on"]>): string {
-  return earlyOn.map((dep) => dep.repos.length === 0 ? dep.unit
-    : `${dep.unit}: ${dep.repos.map((repo) => [repo.repo, repo.branch, repo.head].filter(Boolean).join(" ")).join(", ")}`).join("; ");
-}
-
-function earlyOnFrom(field: string | null): UnitClaimPayload["early_on"] {
-  if (!field || field.trim() === "") return undefined;
-  return field.split("; ").map((part) => {
-    const at = part.indexOf(": ");
-    if (at === -1) return { unit: part.trim(), repos: [] };
-    return {
-      unit: part.slice(0, at).trim(),
-      repos: part.slice(at + 2).split(", ").map((entry) => {
-        const [repo = "", branch = "", head = ""] = entry.trim().split(" ");
-        return { repo, branch, head };
-      }),
-    };
-  });
-}
-
-// The Units a build started early on, by its own take row (read in any clone
-// of the workspace it was committed in), else, for a build taken before the
-// row carried them, by its record.
-export function buildEarlyOn(projectDir: string, build: UnitBuild, record?: UnitClaimView | null): NonNullable<UnitClaimPayload["early_on"]> {
-  const here = findUnitBuild(projectDir, build.homeWork, build.unit);
-  const row = here === null ? undefined
-    : readAuditShardEvents(projectDir, here.dirName, here.space).findLast((entry) => entry.event === "UNIT_TAKEN_IN");
-  const field = row === undefined ? null : auditBlockField(row.block, "Early On");
-  return earlyOnFrom(field) ?? record?.payload.early_on ?? [];
 }
 
 // The generation a take writes: one more over a take the lead opened again
