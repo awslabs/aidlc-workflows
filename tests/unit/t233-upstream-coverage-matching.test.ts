@@ -76,6 +76,10 @@ setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 const BUN = process.execPath;
 const SENSOR = join(AIDLC_SRC, "tools", "aidlc-sensor-upstream-coverage.ts");
 
+const UNREFERENCED_HINT =
+	"Name each one in a deliverable — its slug as a standalone word, a [[wikilink]] or a backticked filename — " +
+	"or mark its consumes: entry required: false when it did not inform the output.";
+
 const tempDirs: string[] = [];
 afterAll(() => {
 	for (const d of tempDirs) rmSync(d, { recursive: true, force: true });
@@ -547,6 +551,7 @@ describe("t233 one fire over every repository's folder", () => {
 			findings_count: 1,
 			folders_evaluated: 2,
 			failed_outputs: ["codekb/repo-b/architecture.md"],
+			message: UNREFERENCED_HINT,
 			folders: [{
 				file: "codekb/repo-b/architecture.md",
 				unreferenced: ["workspace-scan"],
@@ -570,6 +575,7 @@ describe("t233 one fire over every repository's folder", () => {
 				unreferenced: ["workspace-scan"],
 				scanned_files: [join(dir, "architecture.md"), join(dir, "dependencies.md")],
 				findings_count: 1,
+				message: UNREFERENCED_HINT,
 			})}\n`,
 		);
 	});
