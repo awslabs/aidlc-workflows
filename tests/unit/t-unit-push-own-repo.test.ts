@@ -712,6 +712,68 @@ describe("a Unit on the workspace's own repository", () => {
     expect(said.split("AI-DLC's record of refunds did not go with it").length, said).toBe(2);
     expect(said).toEndWith("AI-DLC's record of refunds did not go with it: GitLab: File name aidlc/ is prohibited (pre-receive hook declined).");
   });
+
+  // A push-time scan in their clone (a pre-push hook) that refuses the push of
+  // the Unit's record ref `times` times, as a secret scanner's false hit does.
+  function scanRefusesRecord(clone: string, times: number): void {
+    const left = join(clone, ".git", "scan-left");
+    writeFileSync(left, String(times));
+    const scan = join(clone, ".git", "hooks", "pre-push");
+    writeFileSync(scan, "#!/bin/sh\nwhile read lref lsha rref rsha; do\n  case \"$rref\" in refs/aidlc/claims/*|refs/heads/aidlc/claims/*)\n" +
+      `    n=$(cat '${left}'); if [ "$n" -gt 0 ]; then echo $((n-1)) > '${left}'; echo 'scan: possible key in unit.json' >&2; exit 1; fi;;\n` +
+      "  esac\ndone\nexit 0\n");
+    chmodSync(scan, 0o755);
+  }
+  const WAY_ON = "Get it merged your usual way.";
+
+  test("a send again after their Not now holds no way-on to merge, so the look after the merge says only what is still true", () => {
+    const home = oneRepoTeams();
+    const alice = cloneOf(home.remote, "alice");
+    finishBuild(builtHere(alice, "refunds", "refunds.ts"));
+    scanRefusesRecord(alice, 1);
+    const chat: NodeJS.ProcessEnv = { ...ENV, AIDLC_SESSION_OVERRIDE: "alice-scan" };
+    const refused = run(UNIT, ["push"], alice, chat);
+    expect(String(refused.json?.notice)).toContain(WAY_ON);
+    expect(next(alice, chat).ask_type).toBe("unit-push");
+    expect(run(UNIT, ["push", "--later"], alice, chat).status).toBe(0);
+    next(alice, chat);
+    // Their later word sends it; no step follows it until their next look, after the merge.
+    const sent = run(UNIT, ["push"], alice, chat);
+    expect(sent.status, sent.out).toBe(0);
+    squashInto(home.remote, "main", "refunds");
+    git(alice, ["fetch", "-q", "origin"]);
+    const look = next(alice, chat);
+    expect(look.change_notices, JSON.stringify(look)).toEqual(["Pushed branch refunds in the repo. AI-DLC's record of refunds went with it, in a commit of its own."]);
+  });
+
+  test("a send again that carries a new commit of the Unit's code says the way-on to merge, as a push of new code does", () => {
+    const home = oneRepoTeams();
+    const alice = cloneOf(home.remote, "alice");
+    finishBuild(builtHere(alice, "refunds", "refunds.ts"));
+    scanRefusesRecord(alice, 1);
+    const chat: NodeJS.ProcessEnv = { ...ENV, AIDLC_SESSION_OVERRIDE: "alice-new-code" };
+    expect(run(UNIT, ["push"], alice, chat).status).toBe(0);
+    writeFileSync(join(alice, "src", "refunds.ts"), "export const built = \"refunds, fixed\";\n");
+    const again = run(UNIT, ["push"], alice, chat);
+    expect(again.status, again.out).toBe(0);
+    expect(JSON.stringify(next(alice, chat).change_notices ?? [])).toContain(WAY_ON);
+  });
+
+  test("a build put off with Not now and pushed by hand first: its push says the way-on to merge, as a first push does", () => {
+    const home = oneRepoTeams();
+    const alice = cloneOf(home.remote, "alice");
+    finishBuild(builtHere(alice, "refunds", "refunds.ts"));
+    const chat: NodeJS.ProcessEnv = { ...ENV, AIDLC_SESSION_OVERRIDE: "alice-by-hand" };
+    expect(next(alice, chat).ask_type).toBe("unit-push");
+    expect(run(UNIT, ["push", "--later"], alice, chat).status).toBe(0);
+    git(alice, ["switch", "-q", "-c", "refunds"]);
+    git(alice, ["add", "--", "src/refunds.ts"]);
+    git(alice, ["commit", "-q", "-m", "refunds by hand"]);
+    git(alice, ["push", "-q", "-u", "origin", "refunds"]);
+    const pushed = run(UNIT, ["push"], alice, chat);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(JSON.stringify(next(alice, chat).change_notices ?? [])).toContain(WAY_ON);
+  });
   // Build and Test runs at the lead's project once every Unit is merged, and
   // on one repository the merges are on the remote's main, not in this checkout.
   const TWO = "# Unit dependencies\n\n```yaml\nunits:\n" +

@@ -13511,6 +13511,8 @@ function pushUnit(args: string[], projectDir?: string,
   const replacedFrom = new Map<string, string>();
   // The repos whose pushed commit git could not list, with their line.
   const unlisted = new Map<string, string>();
+  // The repos where the clone's copy of their remote's branch was at this head before the push: it sent no new commit there.
+  const atHeadBefore = new Set<string>();
   // `own`: a replace not made, whose new branch is a pull request apart from the one the branch has.
   const newBranchWay = (fresh: string, own = false): string =>
     `Ask the person whether to push it as a new branch, ${fresh}${own ? " (it needs a pull request of its own)" : ""}; on their yes, run ` +
@@ -13634,6 +13636,7 @@ function pushUnit(args: string[], projectDir?: string,
         keptLines(name).map((line) => ` ${line}`).join("") + wayOn + forkWay);
     }
     const head = git(dir, ["rev-parse", "HEAD"]).stdout.trim();
+    if (prior === head) atHeadBefore.add(repo);
     if (startedHere.has(repo) && mainChangedUnder(dir, head, integrationOf(repo, dir, remote), paths).length > 0) {
       noteEngineAskMark(pd, mainMovedMark(unit, head));
     }
@@ -13678,11 +13681,15 @@ function pushUnit(args: string[], projectDir?: string,
   const nameOf = (repo: RepoResult): string => (repo.repo === "." ? "the repo" : repo.repo);
   const names = results.map(nameOf);
   const plain = names.filter((name) => !replacedFrom.has(name) && !unlisted.has(name));
+  // A send again of a result whose code an earlier push sent, with no new
+  // commit: that push said the way-on to merge, and these lines may be said
+  // only after the merge.
+  const sendAgain = lastCodePush(pd, unit) === "pushed" && results.every((repo) => atHeadBefore.has(repo.repo));
   // A host's own words stand in for ours (GitLab's say "merge request"):
   // the way on is said only when a repo's host said nothing about it, and
   // never for a replaced branch, which goes on as it was (a pull request open
-  // from it stays the same one).
-  const quiet = hostSaid.filter((said) => said.words === "" && !replacedFrom.has(said.name)).map((said) => said.name);
+  // from it stays the same one), nor on a send again.
+  const quiet = sendAgain ? [] : hostSaid.filter((said) => said.words === "" && !replacedFrom.has(said.name)).map((said) => said.name);
   const lines = [
     joinSaid([
       ...broughtIn,
