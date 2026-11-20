@@ -4792,6 +4792,127 @@ describe("t243 project initialization", () => {
     expect(planned.stdout).not.toContain("\u001b");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // The setup config writes is the team's to share, so the run that first writes a harness's setup into a git clone
+  // says once what git does not track of it, named from the install record; nothing is staged or committed for them.
+  describe("config says once what git does not track of its setup", () => {
+    const SAID = "git does not track AI-DLC's setup";
+    const line = (tool: string, paths: string) =>
+      `Note: ${SAID} for ${tool} in this project yet: ${paths}. Commit them so teammates who use ${tool} get the same setup.`;
+    const git = (cwd: string, ...args: string[]): string => {
+      const result = spawnSync("git", ["-c", "user.name=Pat", "-c", "user.email=pat@example.invalid", ...args], {
+        cwd,
+        encoding: "utf-8",
+      });
+      expect(result.status, `git ${args.join(" ")}: ${result.stdout}${result.stderr}`).toBe(0);
+      return result.stdout;
+    };
+    const repository = (prefix: string, files: Record<string, string> = {}): string => {
+      const project = temp(prefix);
+      git(project, "init", "-q");
+      for (const [path, text] of Object.entries({ "README.md": "# Shop\n", ...files })) {
+        mkdirSync(dirname(join(project, path)), { recursive: true });
+        writeFileSync(join(project, path), text);
+      }
+      git(project, "add", "-A");
+      git(project, "commit", "-q", "-m", "seed");
+      return project;
+    };
+    const configure = (project: string, release: string, harness: string, ...flags: string[]): string => {
+      const result = run(INIT, [
+        "config", "--project-dir", project, "--from", release, "--harness", harness, "--mcp", "none", ...flags,
+      ], project);
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      return result.stdout.replace(/\s+/g, " ");
+    };
+    const times = (out: string) => out.split(SAID).length - 1;
+
+    test("a new project: the first config names the setup once, before its last line, and the next config says nothing", () => {
+      const project = repository("aidlc-t243-setup-new-");
+      const first = configure(project, CLAUDE_RELEASE, "claude");
+      expect(first).toContain(line("Claude Code", ".claude/, aidlc/ and .gitignore"));
+      expect(times(first), first).toBe(1);
+      expect(first.indexOf(SAID)).toBeLessThan(first.indexOf("configured "));
+      // A refresh of a setup that is already here, tracked or not, says nothing.
+      expect(times(configure(project, CLAUDE_RELEASE, "claude"))).toBe(0);
+      expect(git(project, "status", "--porcelain")).toContain("?? .claude/");
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+    test("a .gitignore of the project's own is named, and its own untracked .mcp.json is not", () => {
+      const project = repository("aidlc-t243-setup-own-files-", { ".gitignore": "node_modules/\n" });
+      writeFileSync(join(project, ".mcp.json"), `${JSON.stringify({ mcpServers: { mine: { command: "mine" } } })}\n`);
+      const out = configure(project, CLAUDE_RELEASE, "claude");
+      expect(out).toContain(line("Claude Code", ".claude/, aidlc/ and .gitignore"));
+      expect(out).not.toContain(".mcp.json");
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+    test("Copilot in a repository that tracks .github/: AI-DLC's folders there are named, a draft of the project's is not", () => {
+      const project = repository("aidlc-t243-setup-github-", { ".github/workflows/ci.yml": "on: push\n" });
+      writeFileSync(join(project, ".github", "my-draft.md"), "draft\n");
+      const out = configure(project, COPILOT_RELEASE, "copilot");
+      expect(times(out), out).toBe(1);
+      expect(out).toContain(".github/agents/");
+      expect(out).not.toContain("my-draft");
+      expect(out).not.toMatch(/\.github\/[,. ]/);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+    test("a project in a folder of a bigger repository: the paths named are the project's own", () => {
+      const repo = repository("aidlc-t243-setup-monorepo-", { "apps/shop/README.md": "# Shop\n" });
+      const out = configure(join(repo, "apps", "shop"), CLAUDE_RELEASE, "claude");
+      expect(out).toContain(line("Claude Code", ".claude/, aidlc/ and .gitignore"));
+      expect(out).not.toContain("apps/shop/.claude");
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+    test("a teammate on a second harness: the first config for it names that setup once", () => {
+      const project = repository("aidlc-t243-setup-second-");
+      configure(project, CLAUDE_RELEASE, "claude");
+      git(project, "add", "-A");
+      git(project, "commit", "-q", "-m", "Set up AI-DLC");
+      const codex = configure(project, CODEX_RELEASE, "codex");
+      expect(codex).toContain(line("Codex CLI", ".agents/, .codex/ and AGENTS.md"));
+      expect(times(codex), codex).toBe(1);
+      expect(times(configure(project, CODEX_RELEASE, "codex"))).toBe(0);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+    test("silent for a committed or staged setup, outside git, an ignored setup, a section, and --quiet, --json or --dry-run", () => {
+      const committed = repository("aidlc-t243-setup-committed-");
+      configure(committed, CLAUDE_RELEASE, "claude");
+      git(committed, "add", "-A");
+      git(committed, "commit", "-q", "-m", "Set up AI-DLC");
+      const clone = temp("aidlc-t243-setup-clone-");
+      git(clone, "clone", "-q", committed, "shop");
+      expect(times(configure(join(clone, "shop"), CLAUDE_RELEASE, "claude"))).toBe(0);
+      // Git's index holds the record even where its folder is gone from the clone.
+      for (const keep of ["commit", "stage"]) {
+        const project = repository(`aidlc-t243-setup-${keep}-`);
+        configure(project, CLAUDE_RELEASE, "claude");
+        git(project, "add", "-A");
+        if (keep === "commit") git(project, "commit", "-q", "-m", "Set up AI-DLC");
+        rmSync(join(project, ".claude"), { recursive: true, force: true });
+        expect(times(configure(project, CLAUDE_RELEASE, "claude")), keep).toBe(0);
+      }
+      // A setup the project committed without its record (a copied one) is not new when config first records it.
+      const copied = repository("aidlc-t243-setup-copied-");
+      configure(copied, CLAUDE_RELEASE, "claude");
+      git(copied, "add", "-A");
+      git(copied, "rm", "-q", "--cached", ".claude/tools/data/aidlc-manifest.json");
+      git(copied, "commit", "-q", "-m", "Copy AI-DLC");
+      rmSync(join(copied, ".claude", "tools", "data", "aidlc-manifest.json"));
+      expect(times(configure(copied, CLAUDE_RELEASE, "claude"))).toBe(0);
+      const section = repository("aidlc-t243-setup-section-");
+      expect(times(configure(section, CLAUDE_RELEASE, "claude"))).toBe(1);
+      const project = run(INIT, ["config", "project", "--project-dir", section, "--harness", "claude", "--mcp", "none", "--yes"], section);
+      expect(project.status, project.stdout + project.stderr).toBe(0);
+      expect(project.stdout).not.toContain(SAID);
+      expect(times(configure(temp("aidlc-t243-setup-outside-"), CLAUDE_RELEASE, "claude"))).toBe(0);
+      const ignored = repository("aidlc-t243-setup-ignored-");
+      writeFileSync(join(ignored, ".git", "info", "exclude"), ".claude/\naidlc/\n");
+      expect(times(configure(ignored, CLAUDE_RELEASE, "claude"))).toBe(0);
+      for (const flag of ["--quiet", "--json", "--dry-run"]) {
+        expect(times(configure(repository("aidlc-t243-setup-flag-"), CLAUDE_RELEASE, "claude", flag)), flag).toBe(0);
+      }
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+  });
+
   test("unmarked harmless AI-DLC rules remain user-owned in a real git repository", () => {
     const project = temp("aidlc-t243-visible-records-");
     expect(spawnSync("git", ["init", "-q", project]).status).toBe(0);

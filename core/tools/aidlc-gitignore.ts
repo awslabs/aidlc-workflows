@@ -1,6 +1,9 @@
 import { lstatSync, readFileSync, realpathSync } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { managedBlockMarkers } from "./aidlc-config-diagnostics.ts";
+import type { ProjectionDescriptor } from "./aidlc-distribution.ts";
+import { git } from "./aidlc-git.ts";
+import { SETTINGS_FILE } from "./aidlc-settings.ts";
 
 // Representatives of the five record patterns documented as COMMITTED in the
 // shipped .gitignore. --no-index also checks records already tracked by git.
@@ -96,4 +99,76 @@ export function committedRecordIgnoreConflicts(projectDir: string): string[] {
   return [...hiddenByRule].map(([rule, records]) =>
     `${rule} hides committed workflow records (${records.join(", ")}) from git, so new ones will not reach teammates; narrow the rule if that is not intended`
   );
+}
+
+/**
+ * The line config says on the run that first writes a harness's setup into a
+ * git clone, while git neither holds nor ignores its install record nor tracks
+ * a file the record says AI-DLC wrote whole (a copied setup the project
+ * committed is not new): the setup's paths git lists, for the person to
+ * commit. A path is named only when every file git lists under it is AI-DLC's
+ * by the install record or the harness's data folder, so nothing of the
+ * person's is named; aidlc/, which no record lists, only while git tracks
+ * nothing under it.
+ */
+export function untrackedSetupLine(
+  projectDir: string,
+  descriptor: Pick<ProjectionDescriptor, "harnessDir" | "managedDirectories" | "rootIntegrations" | "productName">,
+): string | null {
+  const data = `${descriptor.harnessDir}/tools/data`;
+  const record = `${data}/aidlc-manifest.json`;
+  // Outside git, already in git's index, or ignored: nothing to say.
+  if (git(projectDir, ["ls-files", "-z", "--", record]) !== "") return null;
+  if (git(projectDir, ["check-ignore", "-q", "--", record]) !== null) return null;
+  const ours = new Set<string>();
+  const merged = new Set<string>();
+  const filled = (value: unknown) => typeof value === "object" && value !== null && Object.keys(value).length > 0;
+  try {
+    const written = JSON.parse(readFileSync(join(projectDir, record), "utf-8")) as {
+      files?: Record<string, unknown>;
+      entries?: Record<string, unknown>;
+      rootContributions?: Record<string, { hash?: unknown; entries?: unknown }>;
+    };
+    for (const path of Object.keys(written.files ?? {})) ours.add(path);
+    for (const [path, part] of Object.entries(written.rootContributions ?? {})) {
+      if (typeof part?.hash === "string" || filled(part?.entries)) ours.add(path);
+    }
+    for (const [path, entries] of Object.entries(written.entries ?? {})) {
+      merged.add(path);
+      if (filled(entries)) ours.add(path);
+    }
+  } catch {
+    return null;
+  }
+  // A settings file AI-DLC merges into may be the project's own, committed before AI-DLC came.
+  const tracked = git(projectDir, ["ls-files", "-z", "--", ...descriptor.managedDirectories])?.split("\0") ?? [];
+  if (tracked.some((path) => ours.has(path) && !merged.has(path))) return null;
+  const own = (path: string) => ours.has(path) || path.startsWith(`${data}/`) || path === SETTINGS_FILE;
+  const roots = [...descriptor.rootIntegrations.map((integration) => integration.path), SETTINGS_FILE];
+  const listed = git(projectDir, ["ls-files", "-z", "--others", "--exclude-standard", "--modified", "--",
+    ...descriptor.managedDirectories, ...roots])?.split("\0").filter(Boolean) ?? [];
+  const named: string[] = [];
+  for (const folder of descriptor.managedDirectories) {
+    const under = listed.filter((path) => path.startsWith(`${folder}/`));
+    if (folder === "aidlc") {
+      if (under.length > 0 && git(projectDir, ["ls-files", "-z", "--", folder]) === "") named.push(`${folder}/`);
+      continue;
+    }
+    // The folder, or the shallowest folders under it holding nothing of the person's.
+    const folders = (path: string) => {
+      const found: string[] = [];
+      for (let at = folder.length; at !== -1; at = path.indexOf("/", at + 1)) found.push(path.slice(0, at + 1));
+      return found;
+    };
+    const mixed = new Set(under.filter((path) => !own(path)).flatMap(folders));
+    for (const path of under.filter(own)) {
+      const shown = folders(path).find((prefix) => !mixed.has(prefix)) ?? path;
+      if (!named.includes(shown)) named.push(shown);
+    }
+  }
+  named.push(...roots.filter((path) => listed.includes(path) && own(path)));
+  if (named.length === 0) return null;
+  const list = named.length === 1 ? named[0] : `${named.slice(0, -1).join(", ")} and ${named[named.length - 1]}`;
+  return `git does not track AI-DLC's setup for ${descriptor.productName} in this project yet: ${list}. ` +
+    `Commit them so teammates who use ${descriptor.productName} get the same setup.`;
 }
