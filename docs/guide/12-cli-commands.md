@@ -2732,7 +2732,13 @@ comes from the completed batch's current evidence, including each Unit's native
 authorized Construction Verification Command. Batch approval binds that digest
 too: a batch already approved keeps its approval when the person approves a new
 command, a batch not yet approved needs fresh verification with it, and older
-native receipts without the digest require fresh verification. When the batch's
+native receipts without the digest require fresh verification. A batch not yet
+approved that was checked with an earlier approved command reports
+`checked_with_earlier_command: true`; `ask` then offers the person Request
+Changes only, and sending it back rebuilds it from its landed source, so it is
+checked with the current command even after its worktrees were removed.
+`finalize` refuses a claimed Unit whose source already landed in the batch and
+whose worktree is gone, and records nothing. When the batch's
 claimed files or outputs changed after it was checked, a strict Guard Policy
 makes it unready with `changed_after_check: true`, and `ask` then offers the
 person Request Changes only; under relaxed or off the change is kept, recorded

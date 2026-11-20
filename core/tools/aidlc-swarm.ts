@@ -3385,6 +3385,34 @@ function handleFinalize(rest: string[]): void {
   const review = reviewerRequirement(projectDir);
   const currentAttempt = currentSwarmAttempt(projectDir);
 
+  // A claimed Unit whose source already landed in this attempt and whose
+  // worktree is gone has nothing to re-verify. Recording it as failed would
+  // contradict the landing, so refuse before any row is written; its batch
+  // checkpoint is the way on (Request Changes rebuilds it from landed source).
+  if (currentAttempt) {
+    const rows = readAuditShardEvents(projectDir);
+    const landed = claimed.filter((unit) => {
+      let identity: BoltIdentity;
+      try {
+        identity = resolveBoltIdentity(projectDir, swarmBoltSlug(unit), selection);
+      } catch {
+        return false;
+      }
+      return !existsSync(identity.dir) && rows.some((row) => row.event === "SWARM_SOURCE_MERGED" &&
+        auditBlockField(row.block, "Unit name") === unit &&
+        auditBlockField(row.block, "Batch number") === batch &&
+        auditBlockField(row.block, "Stage") === currentAttempt.stage &&
+        auditBlockField(row.block, "Run floor") === currentAttempt.floor);
+    });
+    if (landed.length > 0) {
+      fail(
+        `finalize: ${landed.join(", ")} already landed in batch ${batch} and ${landed.length === 1 ? "its worktree was" : "their worktrees were"} removed, ` +
+        "so there is nothing to re-verify and nothing was recorded. Use the batch checkpoint instead: " +
+        `aidlc engine bolt swarm-checkpoint --action status --batch ${batch} --units "<batch units>".`,
+      );
+    }
+  }
+
   // Optional per-declined-unit typed reasons: `--reasons a=unsatisfiable,b=budget-exhausted`.
   // The conductor judged WHY each unclaimed unit gave up (knowledge → conductor,
   // D-I); the tool records that attribution faithfully (determinism → tool),

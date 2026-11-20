@@ -459,6 +459,52 @@ describe("t343 completed swarm batch checkpoints", () => {
     expect(resolveSwarmCheckpoint(pd, 1, BATCH).approved).toBe(true);
   });
 
+  // A batch that landed under an earlier command and was not approved cannot be
+  // approved, but the person can still send it back, so it is checked again
+  // with the current command (#4097).
+  test("a landed batch checked with an earlier command, not yet approved, can be sent back", () => {
+    const pd = fixture();
+    converge(pd);
+    recordCommand(pd, "git diff --exit-code -- src");
+    const status = resolveSwarmCheckpoint(pd, 1, BATCH);
+    expect(status).toMatchObject({
+      ready: false, approved: false, changed_after_check: false, checked_with_earlier_command: true,
+      errors: BATCH.map((unit) => `${unit}: batch was not checked with the authorized Construction Verification Command.`),
+    });
+    expect(() => approveSwarmCheckpoint(pd, 1, BATCH, "Approve", "t343-checkpoint")).toThrow("not ready");
+    const asked = tool(pd, "bolt", ["swarm-checkpoint", "--action", "ask", "--batch", "1", "--units", BATCH.join(","), "--session", "t343-checkpoint"]);
+    expect(asked.code, asked.out).toBe(0);
+    const question = readAuditShardEvents(pd).filter((row) => row.event === "DECISION_RECORDED" &&
+      auditBlockField(row.block, "Checkpoint") === "Swarm Batch Approval").at(-1)!;
+    expect(auditBlockField(question.block, "Options")).toBe("Request Changes");
+    choice(pd, "t343-checkpoint", "Request Changes");
+    rejectSwarmCheckpoint(pd, 1, BATCH, "Request Changes", "Check it again with the current command", "t343-checkpoint");
+    expect(gates(pd, "GATE_REJECTED")).toHaveLength(BATCH.length);
+  });
+
+  test("a batch never checked with any approved command still cannot be asked", () => {
+    const pd = fixture();
+    converge(pd, 1, BATCH, "unchecked");
+    expect(resolveSwarmCheckpoint(pd, 1, BATCH).checked_with_earlier_command).toBe(false);
+    const asked = tool(pd, "bolt", ["swarm-checkpoint", "--action", "ask", "--batch", "1", "--units", BATCH.join(","), "--session", "t343-checkpoint"]);
+    expect(asked.code, asked.out).not.toBe(0);
+    expect(asked.out).toContain("not ready");
+  });
+
+  // Finalize has nothing to re-verify for a Unit whose source landed and whose
+  // worktree is gone; it refuses rather than record that Unit as failed.
+  test("finalize refuses landed Units with no worktree and records no failure", () => {
+    const pd = fixture();
+    converge(pd);
+    const finalized = tool(pd, "swarm", ["finalize", "--batch", "1", "--units", BATCH.join(","), "--claimed", BATCH.join(",")]);
+    expect(finalized.code, finalized.out).toBe(1);
+    expect(finalized.out).toContain("already landed in batch 1");
+    expect(finalized.out).toContain("swarm-checkpoint");
+    const written = readAuditShardEvents(pd).filter((row) =>
+      ["SWARM_UNIT_FAILED", "BOLT_FAILED", "SWARM_BATON_RETURNED", "SWARM_COMPLETED"].includes(row.event));
+    expect(written).toEqual([]);
+  });
+
   // #2208 part 2: the batch's approval records its Units' open review findings
   // through the writer its caller hands in, as the person's approval when they
   // gave it and as nobody's when Construction ran on its own.
