@@ -62,6 +62,7 @@ import {
   hookDebug,
   hostEnvelopeTurnText,
   KIRO_CLI_HOST_TEMPLATES,
+  hostTemplateOrigin,
   kiroTurnOrigin,
   isAidlcAgentFile,
   leadingOrchestratorVerb,
@@ -1602,7 +1603,7 @@ function recordMessagesTypedWhileWorking(command: string): void {
         hook_event_name: "UserPromptSubmit",
         session_id: session,
         prompt: steer.words,
-        origin: { kind: "person", source: "record" },
+        origin: hostTemplateOrigin(steer.words, KIRO_CLI_HOST_TEMPLATES) ?? { kind: "person", source: "record" },
         relays_terminal_output: true,
       });
       if (turn.code !== 0) return;
