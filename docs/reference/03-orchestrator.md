@@ -998,7 +998,12 @@ behind, and the next step writes it again.
 
 The take offer adds **Start <unit> early** for a waiting Unit once every Unit
 it waits on has a result on its claim (`unit take --early`, recorded as
-`early_on`). Once such a Unit is done, the build's step is `ask_type:
+`early_on`). Before that, where a plan offers no start of its own, its sentence
+says "<units> can start early once <units> is pushed.", and the take's refusal of
+the waiting Unit ends "It opens once it is done, or can start early once <units>
+is pushed.": both from `startsEarlyOnce` (every Unit it waits on pushed or taken
+and not pushed yet, not open again, at least one of them; never the walking
+skeleton). Once such a Unit is done, the build's step is `ask_type:
 unit-move-onto` once (and once more if the build was pushed since), naming the
 integration branch it merged into; its choice runs `unit rebase`, which in each
 repo the build started early in fetches that branch and moves the build onto it

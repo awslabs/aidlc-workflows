@@ -199,7 +199,7 @@ describe("starting early", () => {
     const dana = cloneOf(taken.home.remote, "dana");
     const early = run(UNIT, ["take", "reporting", ...planFrom(taken.home), "--early"], dana);
     expect(early.status).not.toBe(0);
-    expect(early.out).toContain("reporting waits on refunds, which is not done yet. It opens once it is done.");
+    expect(early.out).toContain("reporting waits on refunds, which is not done yet. It opens once it is done, or can start early once refunds is pushed.");
   });
 
   // A live run: data, building early on refunds' branch, heard refunds was

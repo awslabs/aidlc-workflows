@@ -603,7 +603,7 @@ describe("a step that waits on the person, and every way on the round added, nev
     expect(took.status, took.out).toBe(0);
     // A clone made under the lead's own git name is a clone all the same: carrying the work on is not offered there.
     const clone = next(withTools(cloneOf(home.remote, "lead")), ENV);
-    expect(String(clone.narration), JSON.stringify(clone)).toEndWith("Nothing is ready to take yet.");
+    expect(String(clone.narration), JSON.stringify(clone)).toEndWith(" reporting can start early once refunds is pushed. Nothing is ready to take yet.");
     expect(clone.offers).toBeUndefined();
     // A copy of the lead's checkout keeps its clone id, so the plan's rows are its own.
     const leadsCopy = (): string => {
@@ -614,7 +614,7 @@ describe("a step that waits on the person, and every way on the round added, nev
     const laptop = leadsCopy();
     const step = next(laptop, ENV);
     expect(step.kind, JSON.stringify(step)).toBe("print");
-    expect(String(step.narration)).toEndWith("Nothing is ready to take yet.");
+    expect(String(step.narration)).toEndWith(" reporting can start early once refunds is pushed. Nothing is ready to take yet.");
     const offer = (step.offers as Offer[] | undefined)?.[0];
     expect(offer?.question, JSON.stringify(step)).toBe("Do you want me to carry on fixture here, as the lead? I'd carry it on here, since you led it so far.");
     expect(offer!.choices.find((entry) => (entry as { recommended?: true }).recommended)?.label).toBe("Carry on fixture here, as the lead");

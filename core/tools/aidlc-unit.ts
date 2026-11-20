@@ -12054,6 +12054,27 @@ export function buildOutOpening(plan: PlanJson, seen: ReadonlySet<string> = new 
   return { units, blockers, completed, landed: new Set(), skeleton: plan.skeleton ?? units[0] ?? "" };
 }
 
+// The Units a waiting Unit can start early on once they are pushed: every Unit
+// it waits on is pushed already or taken by someone and not pushed yet (not
+// open again), at least one is the latter, and those are named. Null when that
+// is not so, and always for the walking skeleton (its token, or its Unit by
+// name while the lead's project builds it), which no team pushes. The look at
+// the Units and the take's refusal read this one rule.
+export function startsEarlyOnce(
+  blockers: readonly string[],
+  claimOf: (unit: string) => UnitClaimView | null | undefined,
+  skeleton: string | null,
+): string[] | null {
+  if (blockers.some((dep) => dep === "walking-skeleton" || dep === skeleton)) return null;
+  const taken = (claim: UnitClaimView | null | undefined): boolean => claim?.status === "claimed" && claim.payload.open_again === undefined;
+  const notPushed = blockers.filter((dep) => claimOf(dep)?.payload.result === undefined);
+  return notPushed.length > 0 && notPushed.every((dep) => taken(claimOf(dep))) ? notPushed : null;
+}
+
+export function startsEarlyOnceWords(units: readonly string[]): string {
+  return `can start early once ${namesInProse([...units])} ${units.length === 1 ? "is" : "are"} pushed`;
+}
+
 // The take of a Unit from the lead's plan, the command the Units offer gives, in a checkout that does not lead the
 // work: the first of `units` (a take is one Unit), the rest said with it. `words`: the person's words flags.
 function takeFromLeadsPlan(pd: string, state: string, units: string[], rhythm?: UnitClaimPayload["gate_rhythm"], words: string[] = []): void {
@@ -12172,10 +12193,12 @@ function takeUnit(args: string[], projectDir?: string, rhythm?: UnitClaimPayload
   if (blockers.length > 0 && !early) {
     // The walking skeleton by its Unit's name, never the engine's token for it.
     const named = [...new Set(blockers.map((dep) => (dep === "walking-skeleton" ? opening.skeleton : dep)))];
+    const once = pushedDeps ? null : startsEarlyOnce(blockers, (dep) => depClaims.get(dep), null);
     fail(
       `${unit} waits on ${named.join(", ")}, which ${named.length === 1 ? "is" : "are"} not done yet. ` +
         `It opens once ${named.length === 1 ? "it is" : "they are"} done` +
-        (pushedDeps ? `, or starts early on ${named.length === 1 ? "its" : "their"} pushed branches if you ask.` : "."),
+        (pushedDeps ? `, or starts early on ${named.length === 1 ? "its" : "their"} pushed branches if you ask.`
+          : once !== null ? `, or ${startsEarlyOnceWords(once)}.` : "."),
     );
   }
   // The Unit's own repos, as its Unit plan lists them (its likely repos; one

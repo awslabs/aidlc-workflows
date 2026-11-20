@@ -1085,7 +1085,10 @@ your checkout is on another, so you can ask for the change there.
 
 ### Start early, and change a shared input
 
-A Unit opens once the Units it waits on are done. When a Unit it waits on has
+A Unit opens once the Units it waits on are done. While someone is building a
+Unit it waits on and has not pushed it, the take says it can start early once
+that Unit is pushed, and so does the offer when it has nothing else to start.
+When a Unit it waits on has
 pushed its branches, the offer also has **Start reporting early**: the build
 starts on that pushed branch in each repo it changed (checked out where you
 have no uncommitted work there, AI-DLC's own files aside; otherwise the branch

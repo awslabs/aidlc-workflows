@@ -647,6 +647,8 @@ import {
   landedNotPushedLine,
   landingPushRefusedHere,
   namesInProse,
+  startsEarlyOnce,
+  startsEarlyOnceWords,
   localUnitClaimOverviewForIntent,
   publishedAtHead,
   pushRemotesToPick,
@@ -10490,6 +10492,8 @@ function unitTakeLook(
     const waiting: string[] = [];
     const building: string[] = [];
     const merged: string[] = [];
+    // Each Unit that waits on Units others build, with those not pushed yet (startsEarlyOnce).
+    const earlyOnce: Array<{ unit: string; on: string[] }> = [];
     for (const unit of opening.units) {
       const claim = overview.claims.get(unit);
       // Done on its claim is the lead's project's word, before its Unit Progress here says so.
@@ -10554,6 +10558,9 @@ function unitTakeLook(
             `On the pushed branches of ${blockers.join(" and ")}; ${blockers.length === 1 ? "it" : "they"} may still change before merging.`,
             " --early",
           ), true));
+        } else {
+          const once = startsEarlyOnce(blockers, (dep) => overview.claims.get(dep), skeleton);
+          if (once !== null) earlyOnce.push({ unit, on: once });
         }
         continue;
       }
@@ -10574,6 +10581,11 @@ function unitTakeLook(
     }
     const label = intentDisplayLabel(intent);
     const change = planLastChange(projectDir, snapshot.oid);
+    // Where this plan starts nothing now: when each Unit waiting on others' builds can start early.
+    const onBlockers = new Map<string, { units: string[]; on: string[] }>();
+    for (const { unit, on } of earlyOnce) onBlockers.set(on.join("\n"), { units: [...(onBlockers.get(on.join("\n"))?.units ?? []), unit], on });
+    const when = choices.length > choicesBefore ? ""
+      : [...onBlockers.values()].map(({ units, on }) => ` ${namesInProse(units)} ${startsEarlyOnceWords(on)}.`).join("");
     if (closed || (ready.length === 0 && waiting.length === 0 && building.length === 0 && merged.length === 0)) {
       if (choices.length === choicesBefore) {
         passed.push({ label, repo: plan.plan_repo.name, address: snapshot.place.address, closed, finished: plan.units.every((unit) => done.has(unit.name)) });
@@ -10585,7 +10597,8 @@ function unitTakeLook(
           (ready.length > 0 ? ` Ready to take: ${ready.join(", ")}.` : "") +
           (waiting.length > 0 ? ` Waiting: ${waiting.join(", ")}.` : "") +
           (building.length > 0 ? ` Being built: ${building.join(", ")}.` : "") +
-          (merged.length > 0 ? ` Merged: ${merged.join(", ")}.` : ""),
+          (merged.length > 0 ? ` Merged: ${merged.join(", ")}.` : "") +
+          when,
       );
     }
     if (ownRules.length > 0) {

@@ -148,6 +148,25 @@ describe("asked what they can take, where the plans read offer nothing", () => {
     expect(String(step.question)).not.toContain("returns");
   });
 
+  test("two plans in one look: when a waiting Unit can start early is said in its own plan's sentence only", () => {
+    const { hosts, home } = refundsTaken();
+    const host = hosts["checkout-api"];
+    expect(run(UNIT, ["take", "checkout-ui", "--plan", home.id8, "--from", host], cloneOf(home.remote, "wen")).status).toBe(0);
+    anotherPlanOnHost(host, home.id8, "000000b2", "orders", () => {});
+    const sam = teamWorkspace(hosts, "sam", ["checkout-api"]);
+    const question = String(next(sam, ENV, ["--units"]).question);
+    const own = "Being built: refunds (by alice in payments), checkout-ui (by wen). reporting can start early once refunds is pushed.";
+    expect(question, question).toContain(own);
+    expect(question.split("can start early once")).toHaveLength(2);
+    // The one clause sits in fixture's own sentence, whichever plan is read first.
+    const fixture = question.indexOf("fixture is shared in");
+    const orders = question.indexOf("orders is shared in");
+    const clause = question.indexOf("can start early once");
+    expect(orders, question).toBeGreaterThan(-1);
+    expect(clause).toBeGreaterThan(fixture);
+    if (orders > fixture) expect(clause).toBeLessThan(orders);
+  });
+
   test("a look nobody asked for says nothing of a closed or finished plan, and never asks for an address", () => {
     const home = makePlanHome();
     const host = home.hosts["checkout-api"];

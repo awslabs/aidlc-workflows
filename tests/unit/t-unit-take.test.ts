@@ -31,6 +31,8 @@ import { planMadeElsewhere } from "../../dist/claude/.claude/tools/aidlc-record-
 import { loadGraph } from "../../dist/claude/.claude/tools/aidlc-graph.ts";
 import { kiroLeadRulesBrief, LEAD_RULES_UNSAVED_LINE, leadRulesBrief, leadRulesBriefLine, resolvedRuleBundle } from "../../dist/claude/.claude/tools/aidlc-steering.ts";
 import { learningsCorrectionChoices, offersLearningsCorrectionChoices } from "../../dist/claude/.claude/tools/aidlc-unit-teams.ts";
+import * as unitTool from "../../dist/claude/.claude/tools/aidlc-unit.ts";
+import type { UnitClaimView } from "../../dist/claude/.claude/tools/aidlc-unit.ts";
 import { AIDLC_SRC, fixtureIntentId8, REPO_ROOT, seedAidlcMemory } from "../harness/fixtures.ts";
 import { typedHarnessName } from "../../core/tools/aidlc-runtime-paths.ts";
 import { hostFor } from "../harness/scope-hosts.ts";
@@ -559,7 +561,8 @@ describe("a team member's clone of the home's workspace", () => {
     expect(waiting.kind, JSON.stringify(waiting)).toBe("print");
     expect(offerText(waiting.narration)).toBe(
       "fixture is shared in checkout-api. Waiting: reporting (on refunds). Being built: refunds " +
-        "(by alice in payments), checkout-ui (by wen in web). Nothing is ready to take yet.",
+        "(by alice in payments), checkout-ui (by wen in web). reporting can start early once refunds is pushed. " +
+        "Nothing is ready to take yet.",
     );
     codeGenerated(alice, record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
@@ -572,6 +575,81 @@ describe("a team member's clone of the home's workspace", () => {
     expect(ready.ask_type, JSON.stringify(ready)).toBe("unit-take");
     expect((ready.choices as Array<{ label: string }>).map((choice) => choice.label)).toContain("Start reporting");
     expect(ready.change_notices ?? []).toEqual([]);
+  });
+
+  // A Unit that waits on Units others have taken and not pushed yet: what it
+  // can do and when is said at every look and at its take, and once one of
+  // them is pushed only the other is named.
+  test("a Unit waiting on two Units others build, neither pushed: every look and its take say it can start early once they are pushed", () => {
+    const both = DEPENDENCIES.replace("depends_on: [refunds]", "depends_on: [refunds, checkout-ui]");
+    const { home, alice, record } = refundsTakenHere(undefined, both);
+    expect(take(cloneOf(home.remote, "wen"), "checkout-ui").status).toBe(0);
+    const dana = cloneOf(home.remote, "dana");
+    inSpace(dana, "data");
+    const line = "fixture is shared in checkout-api. Waiting: reporting (on refunds, checkout-ui). Being built: refunds " +
+      "(by alice in payments), checkout-ui (by wen). reporting can start early once refunds and checkout-ui are pushed. " +
+      "Nothing is ready to take yet.";
+    expect(offerText(next(dana).narration)).toBe(line);
+    expect(offerText(next(dana, ENV, ["--units"]).narration)).toBe(line);
+    const refused = take(dana, "reporting");
+    expect(refused.status).not.toBe(0);
+    expect(String(refused.json?.error)).toBe("reporting waits on refunds, checkout-ui, which are not done yet. " +
+      "It opens once they are done, or can start early once refunds and checkout-ui are pushed.");
+    codeGenerated(alice, record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    const after = next(dana, { ...ENV, AIDLC_SESSION_OVERRIDE: "dana-after-push" });
+    expect(offerText(after.narration), JSON.stringify(after)).toContain(" reporting can start early once checkout-ui is pushed. Nothing is ready to take yet.");
+    expect(String(take(dana, "reporting").json?.error)).toBe("reporting waits on refunds, checkout-ui, which are not done yet. " +
+      "It opens once they are done, or can start early once checkout-ui is pushed.");
+  });
+
+  // A plan that offers a start of its own says nothing of when a waiting Unit can start early.
+  test("a Unit waiting on one someone builds, beside a Unit open to take: the offer is the start, with no word of starting early", () => {
+    const { home } = refundsTakenHere();
+    const dana = cloneOf(home.remote, "dana");
+    inSpace(dana, "data");
+    const offer = next(dana);
+    expect(offer.ask_type, JSON.stringify(offer).slice(0, 600)).toBe("unit-take");
+    expect(offerText(offer.question)).toContain("Waiting: reporting (on refunds).");
+    expect(String(offer.question)).not.toContain("can start early once");
+  });
+
+  // A chain: what waits on a Unit nobody took yet hears nothing of an early start.
+  test("a chain of Units, the first taken and not pushed: only the Unit waiting on it hears when it can start early", () => {
+    const chain = DEPENDENCIES.replace("depends_on: [refunds]", "depends_on: [checkout-ui]")
+      .replace(/(name: checkout-ui[\s\S]*?depends_on: )\[\]/, "$1[refunds]");
+    const { home } = refundsTakenHere(undefined, chain);
+    const dana = cloneOf(home.remote, "dana");
+    inSpace(dana, "data");
+    expect(offerText(next(dana).narration)).toBe(
+      "fixture is shared in checkout-api. Waiting: checkout-ui (on refunds), reporting (on checkout-ui). Being built: refunds " +
+        "(by alice in payments). checkout-ui can start early once refunds is pushed. Nothing is ready to take yet.",
+    );
+    expect(String(take(dana, "reporting").json?.error)).toBe("reporting waits on checkout-ui, which is not done yet. It opens once it is done.");
+  });
+
+  // The one rule both say it by: a Unit someone took, not open again, with no result yet; never the walking skeleton.
+  test("when a waiting Unit can start early: only on Units someone took and has not pushed, never the walking skeleton", () => {
+    const claim = (unit: string, payload: Record<string, unknown>, status: "claimed" | "released" = "claimed"): UnitClaimView =>
+      ({ unit, status, owner: "payments", generation: 1, nonce: "n", oid: "o", ref: "r", payload } as unknown as UnitClaimView);
+    const pushed = { result: { repos: [] } };
+    const claims = new Map<string, UnitClaimView>([
+      ["refunds", claim("refunds", {})],
+      ["checkout-ui", claim("checkout-ui", pushed)],
+      ["orders", claim("orders", {})],
+      ["given-back", claim("given-back", { open_again: { at: "2026-11-20T00:00:00Z" } })],
+      ["freed", claim("freed", {}, "released")],
+    ]);
+    const of = (dep: string) => claims.get(dep);
+    const { startsEarlyOnce } = unitTool;
+    expect(startsEarlyOnce(["refunds"], of, null)).toEqual(["refunds"]);
+    expect(startsEarlyOnce(["refunds", "checkout-ui"], of, null)).toEqual(["refunds"]);
+    expect(startsEarlyOnce(["checkout-ui"], of, null)).toBeNull();
+    expect(startsEarlyOnce(["walking-skeleton", "refunds"], of, null)).toBeNull();
+    expect(startsEarlyOnce(["orders", "refunds"], of, "orders")).toBeNull();
+    expect(startsEarlyOnce(["given-back"], of, null)).toBeNull();
+    expect(startsEarlyOnce(["freed"], of, null)).toBeNull();
+    expect(startsEarlyOnce(["nobody-took-it"], of, null)).toBeNull();
   });
 });
 

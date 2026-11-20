@@ -295,7 +295,8 @@ describe("the lead names a pull request as a Unit's build", () => {
     // Nothing else is open, so the offer is the list alone.
     const offer = next(cloneOf(home.remote, "bob"));
     expect(String(offer.narration), JSON.stringify(offer).slice(0, 600))
-      .toContain("Being built: refunds (by alice in payments), checkout-ui (its build is pull request 7 in checkout-web). Nothing is ready to take yet.");
+      .toContain("Being built: refunds (by alice in payments), checkout-ui (its build is pull request 7 in checkout-web). " +
+        "reporting can start early once refunds is pushed. Nothing is ready to take yet.");
     expect(JSON.stringify(offer)).not.toContain("Start checkout-ui");
   });
 
