@@ -278,6 +278,7 @@ import {
   isValidRepoName,
   repoNameProblem,
   repoNameRefusal,
+  folderRepoName,
   aidlcRootIntegrations,
   codekbDir,
   intentsDir,
@@ -10258,6 +10259,27 @@ export function codekbStageDir(projectDir: string, repo: string, intent?: string
   return join(engineDir(projectDir, intent, space), `codekb-stage-${repo}`);
 }
 
+function codekbStoreRepo(
+  projectDir: string,
+  requested: string | undefined,
+  space: string,
+  intent: string | undefined,
+): string {
+  const engine = codekbRepoName(projectDir, space, intent);
+  if (!isValidRepoName(engine)) die(repoNameRefusal("Invalid --repo", engine));
+  if (requested === undefined || requested === "" || requested === engine) return engine;
+  if (!isValidRepoName(requested)) die(repoNameRefusal("Invalid --repo", requested));
+  let recorded: string[] = [];
+  try {
+    recorded = intentRepos(projectDir, intent, space);
+  } catch {
+    recorded = [];
+  }
+  return recorded.length === 0 && folderRepoName(requested) === folderRepoName(basename(projectDir))
+    ? engine
+    : requested;
+}
+
 // `aidlc-utility.ts codekb-path [--repo <name>] [--json]` — read-only. Prints the
 // deterministic space-level per-repo codekb directory (forward-slash, workspace-
 // relative) the reverse-engineering stage writes its 9 artifacts into. The repo
@@ -10271,9 +10293,7 @@ function handleCodekbPath(projectDir: string, flags: Record<string, string>): vo
   const asJson = flags.json === "true";
   const selection = resolveWorkflowSelection(projectDir);
   const space = selection.space;
-  const repo = flags.repo && flags.repo.length > 0
-    ? flags.repo
-    : codekbRepoName(projectDir, space, selection.intent ?? undefined);
+  const repo = codekbStoreRepo(projectDir, flags.repo, space, selection.intent ?? undefined);
   const dir = relativeCodekbDir(projectDir, repo, space);
   if (asJson) {
     const record = relativeRecordDirForSelection(selection);
@@ -11338,12 +11358,7 @@ function resolveCodekbRepo(
 ): { space: string; repo: string; repoDir: string; storeDir: string; excludes: string[] } {
   const selection = resolveWorkflowSelection(projectDir);
   const space = selection.space;
-  const repo = flags.repo && flags.repo.length > 0
-    ? flags.repo
-    : codekbRepoName(projectDir, space, selection.intent ?? undefined);
-  if (!isValidRepoName(repo)) {
-    die(repoNameRefusal("Invalid --repo", repo));
-  }
+  const repo = codekbStoreRepo(projectDir, flags.repo, space, selection.intent ?? undefined);
   const sourceDir = codekbSourceRoot(projectDir, repo, space);
   return {
     space,
@@ -11904,9 +11919,7 @@ function handleCodekbScopeDiff(projectDir: string, flags: Record<string, string>
   const asJson = flags.json === "true";
   const selection = resolveWorkflowSelection(projectDir);
   const space = selection.space;
-  const repo = flags.repo && flags.repo.length > 0
-    ? flags.repo
-    : codekbRepoName(projectDir, space, selection.intent ?? undefined);
+  const repo = codekbStoreRepo(projectDir, flags.repo, space, selection.intent ?? undefined);
   const storeDir = relativeCodekbDir(projectDir, repo, space);
   const storePath = join(projectDir, ...storeDir.split("/"), "reverse-engineering-timestamp.md");
 

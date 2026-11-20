@@ -132,9 +132,16 @@ aidlc/spaces/default/intents/261013-inventory-api/
 level up, in the space-level per-repo CodeKB —
 `aidlc/spaces/<space>/codekb/<repo>/` — one store per repo rather than a copy
 per intent. When the project folder is itself the repo, `<repo>` starts as the
-folder's name (the main checkout's name in a linked git worktree), with each
-character other than a letter, a digit, `.`, `_` or `-` made a hyphen (`portal app` is `portal-app`;
-the folder keeps its name), and stays with the store: a moved, renamed or copied project folder keeps reading the same
+folder's name (the main checkout's name in a linked git worktree) as it stands
+when that name is one a repo may have — a letter or a digit, then letters,
+digits, spaces, `.`, `_` or `-`, so `My Example App` keeps its store at
+`aidlc/spaces/<space>/codekb/My Example App/`; the folder keeps its name.
+A name a repo may not hold takes the engine's own name for it, each character
+other than a letter, a digit, `.`, `_` or `-` made a hyphen (`R&D` is `R-D`,
+`café` is `cafe`, `.hidden` is `hidden`), so both Unicode spellings of one
+name agree. `--repo` spelled the way the folder is spelled — or given the name
+an earlier release coined for that store — selects that same store, never a
+second one beside it. The store stays with the folder: a moved, renamed or copied project folder keeps reading the same
 store. The exception is a space holding two or more stores that no intent
 records as its repo: there the current folder name is used, and the next step
 can warn that completed stage results have drifted. On each applicable
