@@ -422,11 +422,6 @@ describe("t221 (a) evaluateReviewerScope decision table", () => {
     expect(defaulted).toContain("implicit recursive search");
   });
 
-  // A refused pathless search has to leave the reviewer able to make the next
-  // call correctly: name the two roots it may search (this Unit's artifacts and
-  // the checkout the review runs in) and show one call that names a root. The
-  // paths quoted must be the ones the matcher then allows - a refusal that
-  // points at a blocked path is worse than none. #4073.
   test("blockReason names the roots a refused search may use, and they pass the matcher", () => {
     const full: ReviewerDispatch = { reviewer: "aidlc-architecture-reviewer-agent", stage: "s", ...DISPATCH };
     const artifactsRoot = join(RECORD_ROOT, "construction", "U03-scoring");
@@ -442,7 +437,6 @@ describe("t221 (a) evaluateReviewerScope decision table", () => {
     expect(
       evaluateReviewerScope("Glob", { pattern: "**/*.md", path: artifactsRoot }, DISPATCH, SCOPE_CONTEXT).block,
     ).toBe(false);
-    // The rule is unchanged: the same search with no path stays refused.
     expect(evaluateReviewerScope("Glob", { pattern: "**/*.md" }, DISPATCH, SCOPE_CONTEXT).block).toBe(true);
   });
 

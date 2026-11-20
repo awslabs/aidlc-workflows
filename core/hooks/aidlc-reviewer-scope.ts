@@ -802,14 +802,6 @@ export function parseDispatchRecord(raw: string): ReviewerDispatch | null {
 // PreToolUse error channel. Self-explaining and redirecting: it names the
 // scope, the offending target, and the sanctioned alternative, so the
 // reviewer self-corrects without retrying the same call.
-//
-// A refused pathless search is the common case (a reviewer that does not know
-// the rule issues `Glob {pattern}` with no `path`), so the refusal states the
-// rule for the next call: name one of the two roots this review may search -
-// the Unit's artifacts under the record, and the checkout the review runs in
-// (its claimed source paths) - and shows one call that does it. The paths are
-// resolved from the same context the matcher used, so what the message names
-// is exactly what the next call is judged against.
 export function blockReason(
   target: string,
   dispatch: ReviewerDispatch,
