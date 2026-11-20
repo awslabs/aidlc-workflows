@@ -13,8 +13,8 @@ import {
   appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync,
   rmSync, symlinkSync, writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
-import { dirname, join, relative, sep } from "node:path";
+import { homedir, tmpdir } from "node:os";
+import { delimiter, dirname, join, relative, sep } from "node:path";
 import type { SDKMessage, query as sdkQuery } from "@anthropic-ai/claude-agent-sdk";
 import { cleanupTestProject, createTestProject, seededAuditShard } from "../harness/fixtures.ts";
 
@@ -49,6 +49,13 @@ const opencodeJson = [
   JSON.stringify({ type: "text", timestamp: 1792544402000, sessionID: "ses_1", part: { type: "text", text: "The change is planned. Approve it?" } }),
 ].join("\n");
 process.env.AIDLC_COPILOT_BIN = stub("copilot", copilotJson);
+// The SDK drive starts the claude first on PATH, on the model the run names; the SDK is mocked, so stand-ins do.
+const claudeBin = join(stubs, "claude-bin");
+const standInClaude = join(claudeBin, process.platform === "win32" ? "claude.exe" : "claude");
+mkdirSync(claudeBin);
+writeFileSync(standInClaude, "", { mode: 0o755 });
+process.env.PATH = `${claudeBin}${delimiter}${process.env.PATH ?? ""}`;
+process.env.ANTHROPIC_DEFAULT_OPUS_MODEL = "stand-in-model";
 process.env.AIDLC_OPENCODE_BIN = stub("opencode", opencodeJson);
 
 const { LEG_EVIDENCE_LIMITS, keepAgentWords, keepLegAudit, keepTranscriptWords } = await import("../harness/leg-evidence.ts");
@@ -239,6 +246,40 @@ describe("what the agent told the person, kept with the leg", () => {
     ]);
     const shardInProject = posix(relative(proj, shard));
     expect(keptAudit()[shardInProject]).toBe(readFileSync(shard, "utf8"));
+    cleanupTestProject(proj);
+  });
+
+  test("the SDK drive starts the claude on PATH with no model of its own, and its trace says which Claude Code ran on which model", async () => {
+    const proj = createTestProject();
+    scratch.push(proj);
+    const trace = join(logDir, "sdk-drive-trace.ndjson");
+    const savedTrace = process.env.AIDLC_SDK_TRACE_FILE;
+    process.env.AIDLC_SDK_TRACE_FILE = trace;
+    let options: QueryInput["options"];
+    scenario = async function* (input) {
+      options = input.options;
+      const prompts = (input.prompt as AsyncIterable<unknown>)[Symbol.asyncIterator]();
+      await prompts.next();
+      yield { type: "system", subtype: "init", claude_code_version: "9.9.9-stand-in", model: "stand-in-session-model" } as unknown as SDKMessage;
+      yield { type: "result", subtype: "success", is_error: false, num_turns: 1 } as unknown as SDKMessage;
+    };
+    try {
+      await driveAidlc("/aidlc status", { projectDir: proj });
+    } finally {
+      if (savedTrace === undefined) delete process.env.AIDLC_SDK_TRACE_FILE;
+      else process.env.AIDLC_SDK_TRACE_FILE = savedTrace;
+    }
+    expect(options?.pathToClaudeCodeExecutable).toBe(standInClaude);
+    expect(options).not.toHaveProperty("model");
+    const configDir = String(options?.env?.CLAUDE_CONFIG_DIR);
+    expect(configDir).not.toBe(join(homedir(), ".claude"));
+    expect(realpathSync(dirname(configDir))).toBe(realpathSync(process.env.TMPDIR || tmpdir()));
+    const events = readFileSync(trace, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line));
+    expect(events.find((e) => e.event === "start")).toMatchObject({ executable: standInClaude });
+    expect(events.find((e) => e.event === "session")).toMatchObject({
+      claudeCodeVersion: "9.9.9-stand-in",
+      model: "stand-in-session-model",
+    });
     cleanupTestProject(proj);
   });
 
