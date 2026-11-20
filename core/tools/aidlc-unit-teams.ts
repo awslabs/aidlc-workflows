@@ -1893,6 +1893,14 @@ export function inputName(rel: string): string {
   return (rel.split("/").at(-1) ?? rel).replace(/\.md$/, "").replaceAll("-", " ");
 }
 
+// The record paths a file given for one of them names: the path itself, else
+// each ending with it, as a file name or an artifact's file, on a folder
+// boundary. `unit propose` takes the first, `unit amend` only a single one.
+export function inputsNamed(paths: readonly string[], given: string): string[] {
+  if (paths.includes(given)) return [given];
+  return paths.filter((path) => path.endsWith(`/${given}`) || path.endsWith(`/${artifactFilename(given)}`));
+}
+
 // Which stage produced a record-relative Inception output, and as which artifact.
 export function artifactAt(rel: string): { producer: string; artifact: string } | null {
   const [, producer, file] = rel.split("/");

@@ -17,6 +17,7 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import { auditBlockField, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { latestCompletionBasesFromAudit } from "../../dist/claude/.claude/tools/aidlc-validity.ts";
 import {
   fetchRecords,
@@ -1048,15 +1049,86 @@ describe("a change to a shared input", () => {
     expect(theirs.status, theirs.out).toBe(0);
   });
 
-  test("asked once: after the person spoke without answering, the step says it waits", () => {
+  test("asked once: after the person spoke without answering, the board says it waits on its row and offers it, once each", () => {
     const { home } = proposed();
     expect(next(home.dir).ask_type).toBe("unit-amend");
     appendAuditEntry("HUMAN_TURN", { "Person Reply": "let me think about the board first" }, home.dir);
     const step = next(home.dir);
     expect(step.ask_type).not.toBe("unit-amend");
-    expect(notices(step)).toContain(
-      "The change alice proposed to the requirements waits for your answer: approve it or turn it down when you are ready.",
+    expect(String(step.narration)).toContain("taken by alice; the change alice proposed to the requirements waits for your answer");
+    expect((step.offers as Array<{ question: string }>).map((offer) => offer.question)).toContain(
+      "alice proposes a change to the requirements for refunds. Approve it for every Unit that uses it, or turn it down?",
     );
+    expect(JSON.stringify(step)).not.toContain("approve it or turn it down when you are ready");
+  });
+
+  test("a file name only one waiting change ends with names it; its answer is recorded under that change's own path", () => {
+    const { home, alice } = proposed();
+    receiptHere(home.dir);
+    expect(next(home.dir).ask_type).toBe("unit-amend");
+    const amended = run(UNIT, ["amend", "refunds", "--input", "requirements.md", "--answer", "approve", "--person-words", "yes, partial refunds"], home.dir);
+    expect(amended.status, amended.out).toBe(0);
+    expect(amended.json?.notice).toBe("The requirements are changed here and on the plan, for refunds.");
+    expect(readFileSync(join(home.dir, "aidlc", "spaces", "default", "intents", HOME_RECORD, ...REQUIREMENTS.split("/")), "utf-8"))
+      .toBe("# Requirements\n\nFR1 refunds, partial amounts too.\n");
+    const word = planWordAt(home, "refunds") as { answers?: Array<{ input: string }>; amendments?: Array<{ input: string }> };
+    expect(word.answers?.map((entry) => entry.input)).toEqual([REQUIREMENTS]);
+    expect(word.amendments?.map((entry) => entry.input)).toEqual([REQUIREMENTS]);
+    expect(readAuditShardEvents(home.dir).filter((row) => row.event === "SHARED_INPUT_AMENDED")
+      .map((row) => auditBlockField(row.block, "Input"))).toEqual([REQUIREMENTS]);
+    fetchRecords(alice);
+    expect(notices(next(alice))).toContain("The lead approved your change to the requirements.");
+  });
+
+  test("a name that matches no waiting change, or only part of a file name, is refused with the change that does wait, and nothing is recorded", () => {
+    const { home } = proposed();
+    expect(next(home.dir).ask_type).toBe("unit-amend");
+    for (const given of ["ments.md", "contract-summary.md"]) {
+      const refused = run(UNIT, ["amend", "refunds", "--input", given, "--answer", "approve", "--person-words", "yes"], home.dir);
+      expect(refused.status).not.toBe(0);
+      expect(String(refused.json?.error ?? refused.out)).toBe(`refunds has no change to ${given} waiting for an answer. ` +
+        `The change alice proposed to the requirements (${REQUIREMENTS}) waits for your answer.`);
+    }
+    expect((planWordAt(home, "refunds") as { answers?: unknown[] } | undefined)?.answers ?? []).toEqual([]);
+  });
+
+  test("two waiting changes are both named, in the record's order, and nothing is recorded", () => {
+    const { home, alice, record } = proposed();
+    const UNITS = "inception/units-generation/unit-of-work.md";
+    writeFileSync(join(record, ...UNITS.split("/")), "# Units of work\n\nrefunds (partial too), checkout-ui, reporting.\n");
+    expect(run(UNIT, ["propose", "--input", "unit-of-work.md", "--person-words", "partial refunds unit"], alice).status).toBe(0);
+    git(home.dir, ["fetch", "-q", "origin"]);
+    const refused = run(UNIT, ["amend", "refunds", "--input", "contract-summary.md", "--answer", "approve", "--person-words", "yes"], home.dir);
+    expect(refused.status).not.toBe(0);
+    expect(String(refused.json?.error ?? refused.out)).toBe("refunds has no change to contract-summary.md waiting for an answer. " +
+      `The changes alice proposed to the requirements (${REQUIREMENTS}) and the unit of work (${UNITS}) wait for your answer.`);
+    expect((planWordAt(home, "refunds") as { answers?: unknown[] } | undefined)?.answers ?? []).toEqual([]);
+  });
+
+  test("one reader of a file name for propose and amend: the path itself, else every path ending with it on a folder boundary", async () => {
+    const { inputsNamed } = await import("../../dist/claude/.claude/tools/aidlc-unit-teams.ts");
+    const UNITS = "inception/units-generation/unit-of-work.md";
+    // Two paths ending with the name: amend names neither.
+    expect(inputsNamed(["inception/a/notes.md", "inception/b/notes.md"], "notes.md")).toEqual(["inception/a/notes.md", "inception/b/notes.md"]);
+    expect(inputsNamed([REQUIREMENTS, UNITS], REQUIREMENTS)).toEqual([REQUIREMENTS]);
+    expect(inputsNamed([REQUIREMENTS, UNITS], "requirements.md")).toEqual([REQUIREMENTS]);
+    expect(inputsNamed([REQUIREMENTS, UNITS], "requirements")).toEqual([REQUIREMENTS]);
+    expect(inputsNamed([REQUIREMENTS, UNITS], "ments.md")).toEqual([]);
+  });
+
+  test("a Unit given back keeps its change waiting, and a name for it is refused naming no change", () => {
+    const { home } = proposed();
+    expect(run(UNIT, ["release", "refunds"], home.dir).status).toBe(0);
+    const refused = run(UNIT, ["amend", "refunds", "--input", "contract-summary.md", "--answer", "approve", "--person-words", "yes"], home.dir);
+    expect(String(refused.json?.error ?? refused.out)).toBe("refunds has no change to contract-summary.md waiting for an answer.");
+  });
+
+  test("with no change waiting, or the Unit not there, the refusal names no change", () => {
+    const { home } = refundsTakenInClone();
+    const none = run(UNIT, ["amend", "refunds", "--input", "requirements.md", "--answer", "approve", "--person-words", "yes"], home.dir);
+    expect(String(none.json?.error ?? none.out)).toBe("refunds has no change to requirements.md waiting for an answer.");
+    const unknown = run(UNIT, ["amend", "nosuch", "--input", "requirements.md", "--answer", "approve", "--person-words", "yes"], home.dir);
+    expect(String(unknown.json?.error ?? unknown.out)).toBe("nosuch has no change to requirements.md waiting for an answer.");
   });
 
   test("a Unit already done hears it with an offer of follow-up work, and is never reopened", () => {

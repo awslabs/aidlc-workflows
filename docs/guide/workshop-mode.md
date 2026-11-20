@@ -1105,7 +1105,9 @@ owner to approve; AI-DLC runs `aidlc unit propose --input <file>` and the team
 carries on while the lead decides. At the lead's project the owner of the shared plan is
 asked once, with the path of the team's version to read: **Approve it**,
 **Not now** or **Turn it down**, answered in their own words; after **Not now**
-the board keeps the same choice.
+the board keeps the same choice, and until it is answered the Unit's row on the
+lead's board, in status too, ends "the change bea proposed to the requirements
+waits for your answer".
 An approved change is written into the lead's record, and the stages there
 that used it stay current, so nothing at the lead's project is asked again. Every team
 whose Unit's stages read it gets the new version on its claim (a Unit's build

@@ -214,6 +214,7 @@ import {
   claimsOnBranches,
   claimsOnBranchesFor,
   inputName,
+  inputsNamed,
   LEAD_RULES_FIELD,
   leadRules as leadRulesOf,
   SIGN_OFF_CLAUSE,
@@ -16048,9 +16049,8 @@ function proposeChange(args: string[], projectDir?: string): void {
   if (build === null) fail("A change is proposed from a Unit's build; this work is not one.");
   const record = activeRecordDir(pd);
   const approved = approvedInputsOf(record).filter((entry) => !entry.path.endsWith("unit-of-work-dependency.md"));
-  const match = approved.find((entry) =>
-    entry.path === flags.input || entry.path.endsWith(`/${flags.input}`) || entry.path.endsWith(`/${artifactFilename(flags.input!)}`)
-  );
+  const named = inputsNamed(approved.map((entry) => entry.path), flags.input)[0];
+  const match = approved.find((entry) => entry.path === named);
   if (match === undefined) {
     fail(`${flags.input} is not one of the files ${build.unit} was approved with (${approved.map((entry) => entry.path.split("/").at(-1)).join(", ")}).`);
   }
@@ -16407,8 +16407,16 @@ function amendInput(args: string[], projectDir?: string): void {
   // lead's own records (`lead`).
   const words = personWordsOf(pd, flags);
   const live = leadsRecordNow(pd, unit);
-  const proposal = live?.payload.proposals?.find((entry) => entry.input === flags.input && entry.answer === undefined);
-  if (!live || proposal === undefined) fail(`${unit} has no change to ${flags.input} waiting for an answer.`);
+  const waiting = (live?.payload.proposals ?? []).filter((entry) => entry.answer === undefined);
+  const named = inputsNamed(waiting.map((entry) => entry.input), flags.input);
+  const proposal = named.length === 1 ? waiting.find((entry) => entry.input === named[0]) : undefined;
+  if (!live || proposal === undefined) {
+    // Only a taken Unit's: one given back keeps its proposals, which nobody is asked about.
+    const these = live?.status === "claimed" ? waiting : [];
+    fail(`${unit} has no change to ${flags.input} waiting for an answer.` + (these.length === 0 ? "" :
+      ` The change${these.length > 1 ? "s" : ""} ${builderOf(live!)} proposed to ` +
+        `${joinNames(these.map((entry) => `the ${inputName(entry.input)} (${shellArg(entry.input)})`))} ${these.length > 1 ? "wait" : "waits"} for your answer.`));
+  }
   const lead = leadsWord(pd, flags, "The answer to a proposed change", "unit-amend");
   const name = inputName(proposal.input);
   const reply: NonNullable<UnitWord["answers"]>[number] = {

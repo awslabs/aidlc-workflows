@@ -19951,7 +19951,13 @@ function unitBoardRows(
         (byNaming === null ? "" : `; ${byNaming}`),
     };
   });
-  return { rows, notRead };
+  // A team's change waiting for the lead's answer, on its Unit's row, the first as the ask names one.
+  const waitingChange = (unit: string): string => {
+    const claim = overview?.claims.get(unit);
+    const entry = leadsHere && claim?.status === "claimed" ? claim.payload.proposals?.find((proposal) => proposal.answer === undefined) : undefined;
+    return entry === undefined ? "" : `; the change ${builderOf(claim!)} proposed to the ${inputName(entry.input)} waits for your answer`;
+  };
+  return { rows: rows.map((row) => ({ ...row, status: `${row.status}${waitingChange(row.unit)}` })), notRead };
 }
 
 // `team-board` at a team home: the home's own board, from the same builders as
@@ -20246,7 +20252,7 @@ function emitTeamUnitMajorRunStage(
   // Every Unit left to the home is built: while a team still builds one, the
   // board is the step.
   // A team proposed a change to a shared input: the owner of the plan is asked
-  // once; after they spoke without answering, the step says it waits.
+  // once; after that its Unit's row on the board says it waits, and the board offers it.
   const proposal = [...(overview?.claims.values() ?? [])].flatMap((claim) =>
     claim.status === "claimed" ? (claim.payload.proposals ?? []).filter((entry) => entry.answer === undefined).map((entry) => ({ claim, entry })) : []
   )[0];
@@ -20274,7 +20280,6 @@ function emitTeamUnitMajorRunStage(
       });
       return;
     }
-    sayWithStepOnce(projectDir, `The change ${builderOf(proposal.claim)} proposed to the ${name} waits for your answer: approve it or turn it down when you are ready.`);
   }
   // The lead's sign-off, when it is on: asked once as a team's result arrives.
   const signOffOn = leadSignOffOn(stateContent, projectDir);

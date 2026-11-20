@@ -994,6 +994,9 @@ offers it once when your copy changed. At the lead's project, the owner of the s
 plan is asked once, with the path of the team's version (the board keeps the
 choice after a "Not now"), and the agent runs
 `amend <unit> --input <file> --answer <approve|reject> --request-file <file>`
+(`--input` the change's file as its record path, or a file name only one change
+waiting on that Unit ends with; otherwise nothing is recorded, and the refusal
+names each change that waits with its path)
 with their reply written to that file: their own words after the question was
 shown, not empty and not the agent's. The record keeps their reply as they typed
 it, from the message it came in (the agent names another with `--message <id>`).

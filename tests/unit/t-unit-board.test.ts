@@ -21,6 +21,7 @@ import { teamHandoverMarkName } from "../../dist/claude/.claude/tools/aidlc-unit
 import { fixtureIntentId8, REPO_ROOT } from "../harness/fixtures.ts";
 import { hostFor } from "../harness/scope-hosts.ts";
 import { AgentStandIn, type Directive, PersonScript, type StandInOptions } from "../harness/scope-run.ts";
+import { asLeadsOwnCheckout } from "../harness/team-unit-merge.ts";
 import {
   cleanupTeamBuild,
   cloneCode,
@@ -531,5 +532,46 @@ describe("the lead's project builds nothing it was not asked to", () => {
     expect(step.kind, JSON.stringify(step).slice(0, 400)).toBe("print");
     expect(merged(home.dir)).toBe(1);
     expect(readAuditShardEvents(home.dir).some((row) => row.event === "UNIT_STARTED")).toBe(false);
+  });
+});
+
+// A live run: a team's change waited for the lead's answer while the lead's
+// look said nothing was blocked on them; it was put to them only at a later
+// step.
+describe("a team's change waiting for the lead's answer", () => {
+  const REQUIREMENTS = "inception/requirements-analysis/requirements.md";
+  const ROW = /^- refunds, payments space: building since \d{1,2} [A-Z][a-z]{2}, taken by alice; the change alice proposed to the requirements waits for your answer$/m;
+  function proposed() {
+    const taken = refundsTakenInClone();
+    writeFileSync(join(taken.record, ...REQUIREMENTS.split("/")), "# Requirements\n\nFR1 refunds, partial amounts too.\n");
+    expect(run(UNIT, ["propose", "--input", "requirements.md", "--person-words", "partial amounts"], taken.alice).status).toBe(0);
+    git(taken.home.dir, ["fetch", "-q", "origin"]);
+    return taken;
+  }
+
+  test("is on its Unit's row in status, team-board and the step's board, one text, and goes once it is answered", () => {
+    const { home } = proposed();
+    expect(teamBoard(home.dir)).toMatch(ROW);
+    expect(run(UTILITY, ["status"], home.dir).out).toMatch(ROW);
+    expect(next(home.dir).ask_type).toBe("unit-amend");
+    appendAuditEntry("HUMAN_TURN", { "Person Reply": "let me think about the board first" }, home.dir);
+    const step = next(home.dir);
+    expect(String(step.narration), JSON.stringify(step).slice(0, 600)).toMatch(ROW);
+    expect(teamBoard(home.dir).trim()).toBe(String(step.narration));
+    expect(run(UNIT, ["amend", "refunds", "--input", REQUIREMENTS, "--answer", "reject", "--person-words", "full refunds only"], home.dir).status).toBe(0);
+    expect(teamBoard(home.dir)).toMatch(/^- refunds, payments space: building since \d{1,2} [A-Z][a-z]{2}, taken by alice$/m);
+  });
+
+  test("in a checkout that did not make the plan, its row says nothing of it", () => {
+    const { home } = proposed();
+    // The plan's rows in the lead's own shard, as after the lead's Inception, so a clone did not make it.
+    asLeadsOwnCheckout(home.dir);
+    git(home.dir, ["add", "-A"]);
+    git(home.dir, ["commit", "-q", "-m", "plan approved"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const bob = cloneOf(home.remote, "bob");
+    const board = teamBoard(bob);
+    expect(board).toMatch(/^- refunds, payments space: building since \d{1,2} [A-Z][a-z]{2}, taken by alice$/m);
+    expect(board).not.toContain("waits for your answer");
   });
 });
