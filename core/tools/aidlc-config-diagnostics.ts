@@ -3187,10 +3187,13 @@ export type ConfigOutstandingAction = {
 };
 
 // Codex runs a project's hooks only once the person trusts them inside Codex,
-// the same step the hooks-off stop and doctor name. AI-DLC's own trust review
-// is a different thing, so this step never points at it.
+// and it asks for that itself at every start until they do. Config runs
+// outside a chat, so it names that start; inside a chat that passed the
+// question, the hooks-off stop and doctor name /hooks (harness/codex/manifest.ts).
+// AI-DLC's own trust review is a different thing, so this step never points at it.
 export const CODEX_HOOK_TRUST_UNMET = "Codex has not trusted this project's hooks yet";
-export const CODEX_HOOK_TRUST_STEP = "in Codex, type /hooks, press t to trust all, then press Esc";
+export const CODEX_HOOK_TRUST_STEP =
+  "start Codex in the project folder and choose Trust all and continue when it asks about hooks";
 const CODEX_HOOK_TRUST_IDS = new Set(["codex-hook-trust-missing", "codex-hook-trust-incomplete"]);
 
 /** Codex's own hook-trust step for an issue it alone can fix, else null. */

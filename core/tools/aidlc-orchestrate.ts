@@ -601,6 +601,7 @@ import {
   optionsList,
   turnsPersonCheckOff,
   enterHookWorkflow,
+  isolatedRunWithoutWork,
   type TerminalCommand,
 } from "./aidlc-lib.ts";
 import { canonicalPathKey, chatTookStep, hostNamesThisChat, leadHereByWord, leadsThroughMainCheckout, planMadeElsewhere } from "./aidlc-record-core.ts";
@@ -25081,6 +25082,36 @@ function planApprovalAnswerStep(): string {
     `${PLAN_CHANGE_DETAILS}, then run \`${aidlcToolInvocation("orchestrate")} next\` with no answer arguments. If they have not replied, wait at that question.`;
 }
 
+// The agent's step for a report at the person's gate (a stage's or a team
+// Unit's) that names no choice or passes host cancellation text: with their
+// reply on record, report the choice it makes; with none, show the gate. While
+// the engine's Plan Approval question is open they are answering that, not the
+// gate; a Unit's gate leaves its own plan to codeGenerationCompletionWaits.
+function namesNoChoiceStep(
+  projectDir: string, result: string | undefined, gate: string, userInput: string | undefined, planQuestion: boolean,
+): PrintDirective {
+  const refused = `report --result ${result} for ${gate} ` +
+    (userInput?.trim()
+      ? `received ${formatReceivedReply(userInput)}, which is cancellation boilerplate, not a decision`
+      : "names no choice");
+  const plan = planQuestion ? openPlanApprovalQuestion(projectDir) : null;
+  if (plan !== null && !plan.editing) {
+    return printDirective(
+      `${refused}, and the open question is the Plan Approval question, not the gate for ${gate}. ${planApprovalAnswerStep()}`,
+    );
+  }
+  return humanRepliedSinceGate(projectDir)
+    ? printDirective(
+      `${refused}. The person has replied since the last decision: report the choice their reply makes with ` +
+        '--user-input ("Approve", say), without asking them again.',
+    )
+    : turnEndingPrint(
+      `The question for ${gate} is still open. ${refused}. No reply from the person is on record since the gate ` +
+        'was shown: show the gate with every offered choice, end the turn, then report the choice they make with ' +
+        '--user-input ("Approve", say).',
+    );
+}
+
 // The agent's step for a word after `intent` or `space` that is neither a verb
 // nor a record's exact name: the noun's verbs, the records there, and what the
 // person typed, whole. The agent reads it (a mistyped verb or name, a request
@@ -26051,9 +26082,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
           !humanPresenceGuardDisabled() &&
           !flags.userInput?.trim()
         ) {
-          emit(errorDirective(
-            `report --result approved for unit "${unit}" of "${slug}" requires --user-input with the human's reply.`,
-          ));
+          emit(namesNoChoiceStep(pd, flags.result, `unit "${unit}" of "${slug}"`, flags.userInput, false));
           return;
         }
         if (status !== "awaiting-approval") {
@@ -26230,28 +26259,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
   // Either way it is the agent's next step, never an error for the person.
   if (protectedHumanGate && FORWARD_RESULTS.has(flags.result ?? "") &&
     (!flags.userInput?.trim() || isNonAnswer(flags.userInput))) {
-    const refused = `report --result ${flags.result} for "${slug}" ` +
-      (flags.userInput?.trim()
-        ? `received ${formatReceivedReply(flags.userInput)}, which is cancellation boilerplate, not a decision`
-        : "names no choice");
-    // While the engine's Plan Approval question is the open one, the gate is
-    // not what the person is answering: the way on is that question's answer
-    // command, whether or not they have replied to it yet.
-    const plan = openPlanApprovalQuestion(pd);
-    emit(plan !== null && !plan.editing
-      ? printDirective(
-        `${refused}, and the open question is the Plan Approval question, not the gate for "${slug}". ${planApprovalAnswerStep()}`,
-      )
-      : humanRepliedSinceGate(pd)
-      ? printDirective(
-        `${refused}. The person has replied since the last decision: report the choice their reply makes with ` +
-          '--user-input ("Approve", say), without asking them again.',
-      )
-      : turnEndingPrint(
-        `The question for "${slug}" is still open. ${refused}. No reply from the person is on record since the gate ` +
-          'was shown: show the gate with every offered choice, end the turn, then report the choice they make with ' +
-          '--user-input ("Approve", say).',
-      ));
+    emit(namesNoChoiceStep(pd, flags.result, `"${slug}"`, flags.userInput, true));
     return;
   }
   const stopForNow = isGated && flags.result === "approved" && flags.park === true;
@@ -27346,10 +27354,11 @@ function handleContinue(line: string[], projectDir: string | undefined): void {
 // leaves the conductor with nothing to read. This verb is the sanctioned wait:
 // it polls the same on-disk evidence the engine itself checks (collaborator
 // contribution files, the stage's required artifacts or, given the host's own id
-// for the lead it started, that helper's finish row, or the reviewer's review
-// file) and always returns within the bound, so the conductor re-runs one bare
-// engine command instead of minting its own shell loop. Read-only: it publishes
-// no directive, touches no marker, and writes no audit row.
+// for a helper it started (a lead or a pipeline link), that helper's finish row,
+// or the reviewer's review file) and always returns within the bound, so the
+// conductor re-runs one bare engine command instead of minting its own shell
+// loop. Read-only: it publishes no directive, touches no marker, and writes no
+// audit row.
 interface WaitFlags {
   stage?: string;
   unit?: string;
@@ -27388,7 +27397,7 @@ function parseWaitFlags(args: string[]): WaitFlags {
 // under `agentId` (SUBAGENT_COMPLETED's Agent ID, from the SubagentStop payload).
 // While it does not, the wait holds: the host's own notice of the finish, or of a
 // helper that stopped, is the agent's way on.
-function leadFinishRecorded(pd: string, agentId: string): boolean {
+function helperFinishRecorded(pd: string, agentId: string): boolean {
   try {
     const { intent: chosen, space: chosenSpace } = engineSelection(pd);
     const intent = chosen ?? undefined;
@@ -27406,6 +27415,15 @@ function resumeNext(pd: string, stage: string): string {
     return issuedStepIsIsolatedRun(pd, stage) ? `orchestrate next --stage ${stage} --single` : "orchestrate next";
   } catch {
     return "orchestrate next";
+  }
+}
+
+// Whether this stage runs on its own, open, with no work selected.
+function openRunWithoutWork(pd: string, stage: string): boolean {
+  try {
+    return isolatedRunWithoutWork(pd, engineSelection(pd)) && singleStageAttemptIsOpen(pd, stage);
+  } catch {
+    return false;
   }
 }
 
@@ -27439,10 +27457,10 @@ function handleWait(args: string[], projectDir: string | undefined): void {
     process.exit(1);
   }
   if (flags.agentId !== undefined && target !== "artifacts") {
-    console.error(`--agent-id goes with --for artifacts (the lead's finish). ${WAIT_USAGE}`);
+    console.error(`--agent-id goes with --for artifacts (the helper's finish). ${WAIT_USAGE}`);
     process.exit(1);
   }
-  const leadFinish = flags.agentId;
+  const helperFinish = flags.agentId;
   const seconds =
     flags.timeout !== undefined && Number.isFinite(flags.timeout) && flags.timeout > 0
       ? Math.min(flags.timeout, WAIT_MAX_SECONDS)
@@ -27450,9 +27468,12 @@ function handleWait(args: string[], projectDir: string | undefined): void {
   const started = Date.now();
   const deadline = started + seconds * 1000;
   const relativeRecord = engineRelativeRecordDir(pd);
-  if (target === "artifacts" && relativeRecord === null) {
+  if (target === "artifacts" && relativeRecord === null && !(helperFinish !== undefined && openRunWithoutWork(pd, node.slug))) {
     // Without an intent record there is no declared-artifact location to watch;
-    // settling silently here would tell the conductor its work had landed.
+    // settling silently here would tell the conductor its work had landed. A
+    // helper's finish needs none while this stage's run on its own is open
+    // before any intent: the completion hook records it in the space's audit
+    // then (recordsHelpers), and helperFinishRecorded reads it there.
     console.error(
       "No active intent record resolves for this project, so there are no declared " +
         "artifacts to wait for. Run this from the workflow's project (or pass --project-dir).",
@@ -27514,12 +27535,13 @@ function handleWait(args: string[], projectDir: string | undefined): void {
           missing.push(`${agent} (missing identity-marker first line)`);
         }
       }
-    } else if (leadFinish !== undefined) {
-      // The host's id for the lead it started in the background, as its answer
-      // to the dispatch named it: the finish under that id is the hand-back. The
-      // stage's files are no sign of it, because some of them (Code Generation's
-      // summary and traceability) are the conductor's to write after the lead returns.
-      if (!leadFinishRecorded(pd, leadFinish)) missing.push(`lead ${node.lead_agent ?? "agent"} (no finish recorded yet)`);
+    } else if (helperFinish !== undefined) {
+      // The host's id for the helper (a lead or a pipeline link) it started in the
+      // background, as its answer to the dispatch named it: the finish under that
+      // id is the hand-back. The stage's files are no sign of it, because some of
+      // them (Code Generation's summary and traceability) are the conductor's to
+      // write after the lead returns.
+      if (!helperFinishRecorded(pd, helperFinish)) missing.push(`helper ${helperFinish} (no finish recorded yet)`);
     } else {
       for (const entry of reviewArtifactEntries(pd, node, flags.unit) ?? []) {
         if (!entry.required) continue;
@@ -27547,11 +27569,11 @@ function handleWait(args: string[], projectDir: string | undefined): void {
     waited_ms: Date.now() - started,
     missing,
     next: settled
-      ? leadFinish !== undefined
-        ? "The lead's finish is recorded: read its summary (the host's notice brings it) and continue the stage body."
+      ? helperFinish !== undefined
+        ? "The helper's finish is recorded: read its summary (the host's notice brings it) and continue the stage body."
         : "The dispatched work has landed: read its outputs and continue the stage body."
-      : leadFinish !== undefined
-        ? "Not yet: run this same command again. No finish of the lead is recorded yet: keep running this command " +
+      : helperFinish !== undefined
+        ? "Not yet: run this same command again. No finish of that helper is recorded yet: keep running this command " +
           "in this same turn until it settles, rather than ending your turn to wait for it. When the host's own " +
           "notice says this helper finished or stopped, stop waiting and read what it reports. When this chat was " +
           "resumed after the host quit while the helper worked, that helper is gone: run " +

@@ -404,7 +404,8 @@ provider. The transaction still exits 0. Non-TTY human output names every
 outstanding item and the exact `aidlc config runtime`, `aidlc config trust`, or
 `aidlc config providers --check` follow-up. Two items have no AI-DLC command
 that does them, so their line names the person's own step instead: Codex's own
-hook trust (in Codex, type `/hooks`, press `t` to trust all, then press Esc),
+hook trust (start Codex in the project folder and choose Trust all and continue
+when it asks about hooks),
 and on Kiro IDE a settings file with an error (fix the error in the file it
 names; its `command`, `config trust --check`, only checks the result). JSON
 includes `data.outstandingActions`, where such an item also carries that `step`. Quiet output stays one line when clean and appends
