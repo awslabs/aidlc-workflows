@@ -25,6 +25,7 @@ import {
   cloneCode,
   cloneOf,
   codeGenerated,
+  codeGeneratedAgain,
   codeHost,
   DEPENDENCIES,
   ENV,
@@ -37,6 +38,8 @@ import {
   mergeOnHost,
   next,
   ORCH,
+  hook,
+  personsChat,
   planWordAt,
   recordAt,
   refundsTaken,
@@ -827,6 +830,43 @@ describe("AI-DLC's record committed on the person's word in a Unit's build", () 
     expect(committed.status, committed.out).toBe(0);
     const shown = committedByRecord(alice, before);
     expect(shown.filter((path) => !path.startsWith(`${own}/`)), shown.join("\n")).toEqual([]);
+  });
+
+  test("once the build is pushed and its own record committed on their word, what AI-DLC writes next leaves it as committed, and the next commit carries it", () => {
+    const { alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    expect(run(UNIT, ["commit-record"], alice).status).toBe(0);
+    const audit = join(record, "audit");
+    const shard = join(audit, readdirSync(audit).find((name) => name.endsWith(".md"))!);
+    const rel = shard.slice(alice.length + 1).split("\\").join("/");
+    const said = hook(alice, personsChat("chat-1"), { hook_event_name: "UserPromptSubmit", session_id: "chat-1", prompt: "Carry on with refunds." });
+    expect(said.status, said.out).toBe(0);
+    expect(git(alice, ["status", "--porcelain", "--", "aidlc"])).toBe("");
+    const again = run(UNIT, ["commit-record"], alice);
+    expect(again.status, again.out).toBe(0);
+    expect(again.json?.committed, again.out).toBe(true);
+    // The person's turn, which AI-DLC wrote after the first commit, is in the second.
+    expect(git(alice, ["show", `HEAD:${rel}`])).toMatch(/\*\*Event\*\*: HUMAN_TURN\n\*\*Session\*\*: chat-1\n/);
+    expect(git(alice, ["show", `HEAD~1:${rel}`])).not.toContain("**Session**: chat-1");
+    expect(git(alice, ["status", "--porcelain", "--", "aidlc"])).toBe("");
+  });
+
+  test("a build in code repositories ends each push with that push's own rows in its tracked log, its completion too", () => {
+    const { alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    // Every stage approved, the build left for its push to finish.
+    finishBuild(record);
+    const statePath = join(record, "aidlc-state.md");
+    writeFileSync(statePath, readFileSync(statePath, "utf-8").replace(/^- \*\*Status\*\*: Completed$/m, "- **Status**: Running"));
+    const audit = join(record, "audit");
+    const tracked = (): string => readFileSync(join(audit, readdirSync(audit).find((name) => name.endsWith(".md"))!), "utf-8");
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    expect(tracked().split("**Event**: UNIT_PUSHED").length).toBe(2);
+    expect(tracked()).toContain("**Event**: WORKFLOW_COMPLETED");
+    codeGeneratedAgain(alice);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    expect(tracked().split("**Event**: UNIT_PUSHED").length).toBe(3);
   });
 
   test("in a clone of a workspace that holds the lead's work, it is not committed, in today's words", () => {

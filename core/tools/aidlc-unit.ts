@@ -22,7 +22,10 @@ import {
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
-import { appendAuditEntry, appendAuditEntryUnlocked, SESSION_EVENT_TYPES, startClaimLocalRecord, takeHandedOverAuditRows } from "./aidlc-audit.ts";
+import {
+  appendAuditEntry, appendAuditEntryUnlocked, foldBuildOwnLog, SESSION_EVENT_TYPES, startBuildOwnLog, startClaimLocalRecord,
+  takeHandedOverAuditRows,
+} from "./aidlc-audit.ts";
 import { QUESTION_TYPE_FIELD } from "./aidlc-questions.ts";
 import { completedUnits, scopeStampLanded, unitProgressTable, unitRowMerged } from "./aidlc-unit-landing.ts";
 import { gitUserName, personGitNameField } from "./aidlc-git-name.ts";
@@ -7544,6 +7547,7 @@ function commitRecord(args: string[], projectDir?: string): void {
   // Once nothing above can stop the commit: the list moved into aidlc/ for it to take.
   const moved = toMove && own?.commit.includes(REPOS_FILE) === true && moveReposManifestIntoAidlc(pd, true).moved;
   let files = 0;
+  if (buildOwn !== undefined) carryBuildOwnLog(pd);
   try {
     files = commitPlanHere(pd, given?.text ?? (own ? UPDATE_COMMIT_MESSAGE : RECORD_COMMIT_MESSAGE), false, own?.commit ?? buildOwn);
   } catch (error) {
@@ -11463,6 +11467,8 @@ function createUnitBuild(
       content = setOrInsertField(setField(content, "Project Type", homeType), "## Project Information", PROJECT_TYPE_SOURCE_FIELD, PROJECT_TYPE_SOURCE_HOME);
     }
     writeStateFile(projectDir, content, dirName, space);
+    // From here the build's log is its own (auditFilePath), started with the rows written before.
+    startBuildOwnLog(projectDir, dirName, space);
     appendAuditEntry("UNIT_TAKEN_IN", {
       "Home Location": home.location,
       "Home Work": home.uuid,
@@ -13443,6 +13449,17 @@ function buildRecordPaths(pd: string): string[] {
   return [own, ...folders.filter((path) => !ignored.includes(path))];
 }
 
+// The rows of the build's own log since its record was last committed, into the
+// file the commit takes (foldBuildOwnLog). One that cannot be carried leaves the
+// commit with the file as it stands; the next commit carries them.
+function carryBuildOwnLog(pd: string): void {
+  try {
+    foldBuildOwnLog(pd);
+  } catch {
+    // The commit takes the tracked file as it is.
+  }
+}
+
 // The record commit's message: the Unit's own commit message with its first
 // line marked as the record, so a rule the code commit meets (a ticket key, a
 // sign-off) the record meets too; AI-DLC's own when the person gave none.
@@ -13463,6 +13480,7 @@ function sendBuildRecord(pd: string, remote: string, branch: string, unit: strin
   const notSent = (said: string) => ({ line: `AI-DLC's record of ${unit} did not go with it: ${gitSaid(said).replace(/([^.!?])$/, "$1.")}`, went: false });
   const paths = buildRecordPaths(pd);
   const before = git(pd, ["rev-parse", "HEAD"]).stdout.trim();
+  carryBuildOwnLog(pd);
   try {
     commitUnitPaths(pd, paths, {}, unit, "", "the repo", null, { message: buildRecordMessage(unit, given), refused: (said) => fail(said) });
   } catch (error) {
@@ -14139,6 +14157,9 @@ function pushUnit(args: string[], projectDir?: string,
       }
     }
   }
+  // The rows this push wrote (its UNIT_PUSHED, a completion), into the build's
+  // tracked log, which stopped taking them once the push said pushed.
+  carryBuildOwnLog(pd);
   // The build's record as this push leaves it goes with the code on the
   // workspace's own repository.
   const dot = planned.find((entry) => entry.repo === ".");

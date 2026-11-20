@@ -15,10 +15,11 @@ import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS } from
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { dirname, join, relative } from "node:path";
-import { readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { basename, dirname, join, relative } from "node:path";
+import { noteEngineAskMark, personRepliedAfter, readAuditShardEvents, engineAskMark } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { bringBranchLevel, unitBranchInTheWay, workToCommit } from "../../dist/claude/.claude/tools/aidlc-unit.ts";
-import { fixtureIntentId8, REPO_ROOT, seededStateFile } from "../harness/fixtures.ts";
+import { AIDLC_SRC, fixtureIntentId8, REPO_ROOT, seededStateFile } from "../harness/fixtures.ts";
 import { typedHarnessName } from "../../core/tools/aidlc-runtime-paths.ts";
 import {
   claimPayload,
@@ -30,6 +31,7 @@ import {
   git,
   hook,
   makeHome,
+  mergeOnHost,
   next,
   personsChat,
   run,
@@ -907,6 +909,225 @@ describe("a Unit on the workspace's own repository", () => {
     expect(workToCommit(clone).untracked).toContain("aidlc/spaces/default/memory/org.md");
   });
 
+  // AI-DLC's log of a Unit's build: its tracked audit file, which the record
+  // commit takes, and the build's own log in its engine folder, which git
+  // ignores. After the record commit, what AI-DLC writes goes to the build's own
+  // log only, so the file the commit took stays as it took it.
+  const trackedLog = (record: string): string => {
+    const audit = join(record, "audit");
+    return join(audit, readdirSync(audit).find((name) => name.endsWith(".md"))!);
+  };
+  const ownLog = (record: string): string => join(record, ".aidlc-engine", "audit", basename(trackedLog(record)));
+  const rowsOf = (path: string): string[] =>
+    readFileSync(path, "utf-8").replace(/\r\n/g, "\n").split(/\n---\n/).filter((block) => block.includes("**Timestamp**")).map((block) => block.replace(/^# AI-DLC Audit Log\n/, ""));
+  // A new chat in the person's project: the session-start hook, as the host calls it.
+  function newChat(dir: string, session: string): void {
+    const started = spawnSync(process.execPath, [join(AIDLC_SRC, "tools", "aidlc.ts"), "engine", "hook", "session-start"], {
+      cwd: dir, encoding: "utf-8", env: { ...ENV, AIDLC_SESSION_OVERRIDE: session, CLAUDE_PROJECT_DIR: dir, AIDLC_PROJECT_DIR: dir },
+      input: JSON.stringify({ cwd: dir, hook_event_name: "SessionStart", source: "startup", session_id: session }),
+    });
+    expect(started.status, `${started.stdout}${started.stderr}`).toBe(0);
+  }
+  // A file as a commit holds it, byte for byte.
+  const shownAt = (repo: string, rev: string, rel: string): string =>
+    spawnSync("git", ["show", `${rev}:${rel.replaceAll("\\", "/")}`], { cwd: repo, encoding: "utf-8", env: ENV }).stdout;
+  const committedText = (dir: string, path: string): string => shownAt(dir, "HEAD", relative(dir, path));
+
+  test("a Unit's build keeps its own log in its engine folder from its take, holding every row of its tracked audit file", () => {
+    const home = oneRepoTeams();
+    const alice = cloneOf(home.remote, "alice");
+    const record = builtHere(alice, "refunds", "refunds.ts");
+    expect(existsSync(ownLog(record))).toBe(true);
+    const own = new Set(rowsOf(ownLog(record)));
+    expect(rowsOf(trackedLog(record)).filter((row) => !own.has(row))).toEqual([]);
+    expect(rowsOf(trackedLog(record)).some((row) => row.includes("**Event**: UNIT_TAKEN_IN"))).toBe(true);
+    // Git ignores the build's own log.
+    expect(git(alice, ["status", "--porcelain", "--ignored", "--", relative(alice, ownLog(record)).replaceAll("\\", "/")])).toMatch(/^!! /);
+  });
+
+  for (const merged of [false, true]) {
+    test(`after a finished Unit's push${merged ? " and its merge on the host" : ""}, the next look and a new chat leave nothing of AI-DLC's changed and its audit file as the record commit took it, so the switch back the line names goes`, () => {
+      const home = oneRepoTeams();
+      const alice = cloneOf(home.remote, "alice");
+      const record = builtHere(alice, "refunds", "refunds.ts");
+      finishBuild(record);
+      const pushed = run(UNIT, ["push"], alice);
+      expect(pushed.status, pushed.out).toBe(0);
+      expect(String(pushed.json?.notice)).toContain("You're on refunds now in the repo. Switch back to main any time.");
+      if (merged) mergeOnHost(home.remote, "refunds", "merge");
+      const chat = { ...ENV, AIDLC_SESSION_OVERRIDE: "chat-1" };
+      expect(hook(alice, chat, { hook_event_name: "UserPromptSubmit", session_id: "chat-1", prompt: "/aidlc" }).status).toBe(0);
+      const look = next(alice, chat);
+      expect(look.ask_type, JSON.stringify(look)).toBe("unit-take");
+      newChat(alice, "chat-2");
+      expect(git(alice, ["status", "--porcelain"])).toBe("");
+      expect(readFileSync(trackedLog(record), "utf-8")).toBe(committedText(alice, trackedLog(record)));
+      // What was written after the record commit is in the build's own log.
+      expect(rowsOf(ownLog(record)).some((row) => row.includes("**Event**: QUESTION_ASKED") && row.includes("unit-take"))).toBe(true);
+      expect(rowsOf(ownLog(record)).some((row) => row.includes("**Event**: SESSION_STARTED"))).toBe(true);
+      expect(readAuditShardEvents(alice).filter((row) => row.event === "QUESTION_ASKED").length).toBeGreaterThan(0);
+      const back = spawnSync("git", ["switch", "main"], { cwd: alice, encoding: "utf-8", env: ENV });
+      expect(back.status, back.stderr).toBe(0);
+    });
+  }
+
+  test("a second push of the Unit carries in its record commit the rows written since its first, each once", () => {
+    const home = oneRepoTeams();
+    const alice = cloneOf(home.remote, "alice");
+    const record = builtHere(alice, "refunds", "refunds.ts");
+    finishBuild(record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    const chat = { ...ENV, AIDLC_SESSION_OVERRIDE: "chat-1" };
+    expect(next(alice, chat).ask_type).toBe("unit-take");
+    // A review fix, pushed again.
+    writeFileSync(join(alice, "src", "refunds.ts"), 'export const built = "refunds, fixed";\n');
+    const again = run(UNIT, ["push"], alice);
+    expect(again.status, again.out).toBe(0);
+    expect(String(again.json?.notice)).toContain(recordWent("refunds"));
+    const sent = shownAt(home.remote, "refunds", relative(alice, trackedLog(record)));
+    const rows = rowsOf(trackedLog(record));
+    expect(sent.replace(/\r\n/g, "\n")).toBe(readFileSync(trackedLog(record), "utf-8").replace(/\r\n/g, "\n"));
+    expect(rows.filter((row) => row.includes("**Event**: QUESTION_ASKED") && row.includes("unit-take"))).toHaveLength(1);
+    expect(new Set(rows).size).toBe(rows.length);
+    expect(git(alice, ["status", "--porcelain"])).toBe("");
+  });
+
+  test("a question asked before the record commit and answered after it reads as answered", () => {
+    const home = oneRepoTeams();
+    const alice = cloneOf(home.remote, "alice");
+    builtHere(alice, "refunds", "refunds.ts");
+    noteEngineAskMark(alice, "probe-asked.json");
+    const asked = engineAskMark(alice, "probe-asked.json");
+    expect(asked).not.toBeNull();
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    const said = hook(alice, personsChat("chat-1"), { hook_event_name: "UserPromptSubmit", session_id: "chat-1", prompt: "Yes, do that." });
+    expect(said.status, said.out).toBe(0);
+    expect(personRepliedAfter(alice, asked!)).toBe(true);
+  });
+
+  test("before and after a build's record commit went, the plan-approval guard writes its one row where it reads it, and a review receipt written after is read once, from the build's own log", () => {
+    const home = oneRepoTeams();
+    const alice = cloneOf(home.remote, "alice");
+    const record = builtHere(alice, "refunds", "refunds.ts");
+    const off = { ...ENV, AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "1", AIDLC_SESSION_OVERRIDE: "chat-1" };
+    const guard = (): void => {
+      const called = hook(alice, off, { hook_event_name: "PreToolUse", session_id: "chat-1", tool_name: "Bash", tool_input: { command: "ls" } });
+      expect(called.status, called.out).toBe(0);
+    };
+    const rows = (event: string): number => readAuditShardEvents(alice).filter((row) => row.event === event).length;
+    guard();
+    guard();
+    expect(rows("GUARD_DISABLED")).toBe(1);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    guard();
+    guard();
+    expect(rows("GUARD_DISABLED")).toBe(2);
+    appendAuditEntry("REVIEW_COMPLETED", {
+      Stage: "code-generation", Unit: "refunds", Reviewer: "aidlc-quality-agent", Iteration: "1",
+      "Artifact Fingerprint": "sha256:0000000000000000000000000000000000000000000000000000000000000000", Verdict: "READY",
+    }, alice);
+    expect(rows("REVIEW_COMPLETED")).toBe(1);
+    expect(rowsOf(ownLog(record)).some((row) => row.includes("**Event**: REVIEW_COMPLETED"))).toBe(true);
+    expect(readFileSync(trackedLog(record), "utf-8")).toBe(committedText(alice, trackedLog(record)));
+    expect(git(alice, ["status", "--porcelain"])).toBe("");
+  });
+
+  test("with AI-DLC's install, the build's own log is a file its .gitignore block keeps out", () => {
+    const home = oneRepoTeams();
+    const alice = cloneOf(home.remote, "alice");
+    const install = configured(alice, "claude");
+    const record = builtHere(alice, "refunds", "refunds.ts");
+    finishBuild(record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    newChat(alice, "chat-1");
+    const rule = spawnSync("git", ["check-ignore", "-v", relative(alice, ownLog(record)).replaceAll("\\", "/")], { cwd: alice, encoding: "utf-8", env: ENV });
+    // The rule git names is a line of the block the install writes.
+    const [source, , pattern] = rule.stdout.split("\t")[0].split(":");
+    expect(source, rule.stdout).toBe(".gitignore");
+    expect(readFileSync(join(REPO_ROOT, "harness", "claude", "dot-gitignore"), "utf-8").split(/\r?\n/)).toContain(pattern);
+    expect(git(alice, ["status", "--porcelain"])).toBe(install);
+  });
+
+  // Every stage approved and the build not finished yet, as the real flow leaves it for its push to finish.
+  function approvedForItsPush(record: string): void {
+    finishBuild(record);
+    const statePath = join(record, "aidlc-state.md");
+    writeFileSync(statePath, readFileSync(statePath, "utf-8").replace(/^- \*\*Status\*\*: Completed$/m, "- **Status**: Running"));
+  }
+
+  test("their hook refuses the record's commit and they commit AI-DLC's record themselves: a new chat leaves their commit as it is, and the switch back goes", () => {
+    const home = oneRepoTeams();
+    const alice = cloneOf(home.remote, "alice");
+    const hookFile = join(alice, ".git", "hooks", "commit-msg");
+    writeFileSync(hookFile, "#!/bin/sh\n[ $(head -n 1 \"$1\" | wc -c) -le 51 ] && exit 0\necho 'commit-msg: subject is longer than 50 characters' >&2\nexit 1\n");
+    chmodSync(hookFile, 0o755);
+    const record = builtHere(alice, "refunds", "refunds.ts");
+    finishBuild(record);
+    const pushed = run(UNIT, ["push", "--commit-message-file", commitMessage(alice, record, "PAY-7 refund handler for the checkout totals\n")], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(String(pushed.json?.notice)).toContain("AI-DLC's record of refunds did not go with it");
+    git(alice, ["add", "-A", "--", "aidlc"]);
+    git(alice, ["commit", "-q", "-m", "PAY-7 the build's record"]);
+    newChat(alice, "chat-1");
+    expect(git(alice, ["status", "--porcelain"])).toBe("");
+    const back = spawnSync("git", ["switch", "main"], { cwd: alice, encoding: "utf-8", env: ENV });
+    expect(back.status, back.stderr).toBe(0);
+  });
+
+  test("Not now at the push question, then their own commit of everything: it holds the build's end, and a new chat leaves it as it is", () => {
+    const home = oneRepoTeams();
+    const alice = cloneOf(home.remote, "alice");
+    const record = builtHere(alice, "refunds", "refunds.ts");
+    approvedForItsPush(record);
+    expect(run(UNIT, ["push", "--later"], alice).status).toBe(0);
+    git(alice, ["add", "-A"]);
+    git(alice, ["commit", "-q", "-m", "everything"]);
+    expect(committedText(alice, trackedLog(record))).toContain("**Event**: WORKFLOW_COMPLETED");
+    newChat(alice, "chat-1");
+    expect(git(alice, ["status", "--porcelain"])).toBe("");
+    const away = spawnSync("git", ["switch", "-c", "elsewhere", "origin/main"], { cwd: alice, encoding: "utf-8", env: ENV });
+    expect(away.status, away.stderr).toBe(0);
+  });
+
+  test("a push whose result the lead's project does not take: the next look asks to send it again and leaves the record commit's files as it took them, so the switch back goes", () => {
+    const home = oneRepoTeams();
+    const alice = cloneOf(home.remote, "alice");
+    const record = builtHere(alice, "refunds", "refunds.ts");
+    approvedForItsPush(record);
+    // Their host takes the Unit's branch and refuses AI-DLC's claim refs.
+    const rule = join(home.remote, "hooks", "pre-receive");
+    writeFileSync(rule, "#!/bin/sh\nwhile read old new ref; do case \"$ref\" in refs/heads/refunds) ;; *) echo 'only the Unit branch is taken here' >&2; exit 1;; esac; done\nexit 0\n");
+    chmodSync(rule, 0o755);
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(String(pushed.json?.notice)).toContain("did not take the result of refunds");
+    expect(String(pushed.json?.notice)).toContain("Switch back to main any time.");
+    const chat = { ...ENV, AIDLC_SESSION_OVERRIDE: "chat-1" };
+    expect(hook(alice, chat, { hook_event_name: "UserPromptSubmit", session_id: "chat-1", prompt: "/aidlc" }).status).toBe(0);
+    expect(String(next(alice, chat).question)).toContain("Do you want me to send it again?");
+    expect(git(alice, ["status", "--porcelain"])).toBe("");
+    expect(readFileSync(trackedLog(record), "utf-8")).toBe(committedText(alice, trackedLog(record)));
+    const back = spawnSync("git", ["switch", "main"], { cwd: alice, encoding: "utf-8", env: ENV });
+    expect(back.status, back.stderr).toBe(0);
+  });
+
+  test("a build taken before AI-DLC kept its log in its engine folder writes on in its tracked audit file, as one log", () => {
+    const home = oneRepoTeams();
+    const alice = cloneOf(home.remote, "alice");
+    const record = builtHere(alice, "refunds", "refunds.ts");
+    // As such a build stands: its rows in the tracked audit file only.
+    rmSync(ownLog(record), { force: true });
+    noteEngineAskMark(alice, "probe-asked.json");
+    const asked = engineAskMark(alice, "probe-asked.json");
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    expect(rowsOf(trackedLog(record)).some((row) => row.includes("**Event**: UNIT_PUSHED"))).toBe(true);
+    expect(committedText(alice, trackedLog(record))).toContain("**Event**: UNIT_PUSHED");
+    const said = hook(alice, personsChat("chat-1"), { hook_event_name: "UserPromptSubmit", session_id: "chat-1", prompt: "Yes, do that." });
+    expect(said.status, said.out).toBe(0);
+    expect(personRepliedAfter(alice, asked!)).toBe(true);
+    expect(existsSync(ownLog(record))).toBe(false);
+  });
+
   const OTHER_CHANGES = "; your other changes are still yours, uncommitted.";
   // AI-DLC's install as each teammate's `aidlc config` leaves it in their clone: uncommitted.
   function configured(dir: string, harness: string): string {
@@ -944,11 +1165,12 @@ describe("a Unit on the workspace's own repository", () => {
     const alice = cloneOf(home.remote, "alice");
     builtHere(alice, "refunds", "refunds.ts");
     expect(run(UNIT, ["push"], alice).status).toBe(0);
-    // Their next message in the chat goes into refunds' record, the work still selected.
+    // Their next message in the chat goes into refunds' own log, the work still selected, and leaves the file its
+    // record commit took as it took it.
     const said = hook(alice, personsChat("chat-1"), { hook_event_name: "UserPromptSubmit", session_id: "chat-1", prompt: "I will take checkout-ui." });
     expect(said.status, said.out).toBe(0);
     const earlier = git(alice, ["status", "--porcelain"]);
-    expect(earlier).toMatch(/^M aidlc\/spaces\/payments\/intents\/[^/]+-refunds\/audit\/[^/]+\.md$/);
+    expect(earlier).toBe("");
     builtHere(alice, "checkout-ui", "cart.ts");
     const pushed = run(UNIT, ["push"], alice);
     expect(pushed.status, pushed.out).toBe(0);

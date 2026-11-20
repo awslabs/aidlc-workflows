@@ -26,6 +26,7 @@ import {
   cloneOf,
   fetchRecords,
   codeGenerated,
+  codeGeneratedAgain,
   codeHost,
   commitOnHost,
   DEPENDENCIES,
@@ -692,6 +693,32 @@ describe("at the home", () => {
     expect((next(alice).change_notices ?? []) as string[]).toContain(
       'refunds was turned down in billing by the lead: "billing needs the ledger entry too".',
     );
+  });
+
+  test("a build opened again after a turn-down has what it wrote since in its tracked log at its next push", () => {
+    const hosts = { "checkout-api": codeHost("checkout-api"), billing: codeHost("billing") };
+    const home = makeHome({ repos: hosts });
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    git(home.dir, ["add", "-A"]);
+    git(home.dir, ["commit", "-q", "-m", "teams"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const plan = sharePlan(home);
+    const alice = cloneOf(home.remote, "alice");
+    for (const [name, host] of Object.entries(hosts)) cloneCode(host, alice, name, "alice");
+    expect(takeIn("payments", ["refunds", ...planFrom(plan)], alice).status).toBe(0);
+    const intents = join(alice, "aidlc", "spaces", "payments", "intents");
+    const record = join(intents, readdirSync(intents).find((name) => name.endsWith("-refunds"))!);
+    codeGenerated(alice, record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    git(home.dir, ["fetch", "-q", "origin"]);
+    expect(run(UNIT, ["turned-down", "refunds", "--repo", "billing", "--person-words", "billing needs the ledger entry too"], home.dir).status).toBe(0);
+    next(alice);
+    // The rework, in a chat of its own.
+    expect(hook(alice, personsChat("rework-chat"), { hook_event_name: "UserPromptSubmit", session_id: "rework-chat", prompt: "Add the ledger entry." }).status).toBe(0);
+    codeGeneratedAgain(alice);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    const audit = join(record, "audit");
+    expect(readFileSync(join(audit, readdirSync(audit).find((name) => name.endsWith(".md"))!), "utf-8")).toContain("**Session**: rework-chat");
   });
 
   // A live run on Codex: its sandbox keeps the workspace's .git read-only, so

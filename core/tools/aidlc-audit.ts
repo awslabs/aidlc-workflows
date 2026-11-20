@@ -18,11 +18,13 @@ import {
   writeSync,
 } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { unitBuildLog } from "./aidlc-record-core.ts";
 import {
   acquireAuditLock,
   addPendingPersonLines,
   assertNoSymlinkInChainOrThrow,
   auditFilePath,
+  withAuditLock,
   auditBlockField,
   auditShardBlocks,
   auditShardHostSegment,
@@ -1219,7 +1221,12 @@ interface ClaimAuditRules {
 // its .aidlc/worktree-meta.json) has no rules: it keeps only its local record,
 // since audit-merge copies the delta's rows pin takes into the main checkout's
 // tracked shard, and a second copy in the worktree's own would meet that one
-// when the Bolt lands.
+// when the Bolt lands. A Unit's build with no claim stamp keeps its whole log
+// the same way (auditFilePath): its tracked shard takes a copy of every row
+// until the build is pushed or finished (unitBuildLog), and from then on no
+// rules, as in a Bolt worktree: never a `takes` that drops a row, which
+// startLocalRecordUnlocked would rewrite the committed shard down to. Each push
+// and each commit of the record carry in the rows since (foldBuildOwnLog).
 function claimOfLocalRecord(
   projectDir: string,
   shardPath: string,
@@ -1228,7 +1235,11 @@ function claimOfLocalRecord(
   if (tracked === null) return null;
   if (insideBoltWorktree(projectDir)) return { tracked, rules: null };
   const stamp = readApplicableTeamUnitScopeStamp(projectDir);
-  if (!stamp) return null;
+  if (!stamp) {
+    const build = unitBuildLog(dirname(dirname(dirname(shardPath))));
+    if (build === null) return null;
+    return { tracked, rules: build.kept ? null : COPY_EVERY_ROW };
+  }
   // Loaded only here: a checkout with no claim never pays for the Unit tool.
   const { claimAuditRules } = require("./aidlc-unit.ts") as {
     claimAuditRules(
@@ -1237,6 +1248,46 @@ function claimOfLocalRecord(
     ): ClaimAuditRules;
   };
   return { tracked, rules: claimAuditRules(projectDir, stamp) };
+}
+
+const COPY_EVERY_ROW: ClaimAuditRules = { takes: (block) => block.trim().length > 0, baseHolds: () => false };
+
+// A Unit's build's own log, started at its take as its tracked shard stands
+// (the rows written before its state named the build), so every later row of
+// the build is written there (auditFilePath). One that cannot start leaves the
+// build writing in its tracked shard, as a build taken before this did.
+export function startBuildOwnLog(projectDir: string, intent: string, space: string): void {
+  try {
+    withAuditLock(projectDir, () => {
+      const tracked = auditFilePath(projectDir, intent, space);
+      if (trackedTwin(tracked) !== null) return;
+      const own = join(dirname(dirname(tracked)), ENGINE_DIR, "audit", basename(tracked));
+      startLocalRecordUnlocked(projectDir, own, { tracked, rules: COPY_EVERY_ROW });
+      if (!existsSync(own)) writeAuditBlockAtPath(projectDir, own, "");
+    }, intent, space);
+  } catch {
+    // The build writes on in its tracked shard.
+  }
+}
+
+// At a push of a Unit's build and before a commit of its record: the rows of its
+// own log its tracked shard does not hold yet, carried in as whole blocks, in
+// order (a row both hold is read once, copiedAuditBlocks). A build with no own
+// log has nothing to carry.
+export function foldBuildOwnLog(projectDir: string): void {
+  withAuditLock(projectDir, () => {
+    const own = auditFilePath(projectDir);
+    const tracked = trackedTwin(own);
+    if (tracked === null || unitBuildLog(dirname(dirname(dirname(own)))) === null) return;
+    const text = readShardText(projectDir, own);
+    if (text === null) return;
+    const held = new Set(auditShardBlocks(readShardText(projectDir, tracked) ?? "").map(unheaded));
+    const missing = auditShardBlocks(text)
+      .filter((block) => auditBlockField(block, "Timestamp") !== null && !held.has(unheaded(block)));
+    if (missing.length > 0) {
+      writeAuditBlockAtPath(projectDir, tracked, missing.map((block) => `${unheaded(block)}\n---\n`).join(""));
+    }
+  });
 }
 
 // The tracked shard beside a local record, or null when the path is not one.

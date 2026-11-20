@@ -1763,19 +1763,49 @@ export const OUT_OF_DATE_MAX_CHANGED = 8;
 // record, to a local record of the same name in the record's engine folder,
 // which AI-DLC's .gitignore keeps out of commits: the tracked shard gets a copy
 // of each row pin takes (appendAuditBlockAtPath, aidlc-audit.ts), so a pull of
-// the main that landed the Unit finds nothing of the checkout's own in it.
+// the main that landed the Unit finds nothing of the checkout's own in it. A
+// Unit's build keeps its whole log there too, from its take (createUnitBuild
+// starts it), so its shard is one file for the build's whole life: its tracked
+// shard takes a copy of each row until the build is pushed or finished
+// (unitBuildLog), then changes only when AI-DLC pushes or commits the build's
+// record (claimOfLocalRecord, foldBuildOwnLog), so nothing AI-DLC writes in
+// between stands in the way of the person's switch or pull. A build taken
+// before its log was kept so has no local record and writes on in its tracked
+// shard; a record with no state file reads as no build.
 export function auditFilePath(projectDir: string, intent?: string, space?: string): string {
   const resolved = resolveRecordDir(projectDir, intent, space);
+  const name = auditShardName(projectDir);
   if (resolved.dir === null) {
-    return join(
-      spaceRecordRoot(projectDir, resolved.space),
-      "audit",
-      auditShardName(projectDir),
-    );
+    return join(spaceRecordRoot(projectDir, resolved.space), "audit", name);
   }
-  const local = existsSync(unitScopePath(projectDir)) && scopedAuditShardName(projectDir) !== null &&
+  const claimed = existsSync(unitScopePath(projectDir)) && scopedAuditShardName(projectDir) !== null &&
     ((intent === undefined && space === undefined) || resolved.dir === resolveRecordDir(projectDir).dir);
-  return join(resolved.dir, ...(local ? [ENGINE_DIR] : []), "audit", auditShardName(projectDir));
+  const local = claimed || (existsSync(join(resolved.dir, ENGINE_DIR, "audit", name)) && unitBuildLog(resolved.dir) !== null);
+  return join(resolved.dir, ...(local ? [ENGINE_DIR] : []), "audit", name);
+}
+
+// The state field that makes a piece of work a Unit's build (unitBuildOf,
+// aidlc-unit-teams.ts, reads the rest of it).
+export const UNIT_BUILD_FIELD = "Unit Build";
+// "later" while the person has not asked for the push yet, "unsent" when the
+// code went but the home did not take the result, "pushed" once it reached home.
+export const UNIT_PUSH_FIELD = "Unit Push";
+
+// The record at `recordDir` as a Unit's build, by its own state file, or null
+// for any other record. `kept` once the build is pushed (its code went: `Unit
+// Push` pushed or unsent) or finished (Status Completed): what AI-DLC committed
+// of its log then changes only at the build's next push or record commit.
+// writeStateFile replaces the file by rename, so a read outside the audit lock
+// sees the old file or the new one, never none.
+export function unitBuildLog(recordDir: string): { kept: boolean } | null {
+  try {
+    const state = readRegularFileNoFollowOrThrow(join(recordDir, "aidlc-state.md"), "state file").toString("utf-8");
+    if ((getField(state, UNIT_BUILD_FIELD)?.trim() ?? "") === "") return null;
+    const push = getField(state, UNIT_PUSH_FIELD)?.trim();
+    return { kept: push === "pushed" || push === "unsent" || getField(state, "Status")?.trim() === "Completed" };
+  } catch {
+    return null;
+  }
 }
 
 // The clone-id token file: `aidlc/.aidlc-engine/clone-id`. Workspace-level,

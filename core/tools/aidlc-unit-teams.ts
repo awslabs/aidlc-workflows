@@ -58,7 +58,7 @@ import {
 import { visibleMarkdownLines } from "./aidlc-markdown.ts";
 import { gitUserName } from "./aidlc-git-name.ts";
 import { projectInRepo } from "./aidlc-git.ts";
-import { applicableTeamUnitScopeStamp, idSuffix, listIntents, onlyOwnLookRows, resolveWorkflowSelection, setCheckbox } from "./aidlc-record-core.ts";
+import { applicableTeamUnitScopeStamp, idSuffix, listIntents, onlyOwnLookRows, resolveWorkflowSelection, setCheckbox, UNIT_BUILD_FIELD, UNIT_PUSH_FIELD } from "./aidlc-record-core.ts";
 import { UNIT_PROGRESS_NOTE, unitProgressSectionRange } from "./aidlc-unit-landing.ts";
 import { isReadOnlyEngineProbe, writeFileAtomic } from "./aidlc-locks.ts";
 import { gitAddressKey } from "./aidlc-workspace-repos.ts";
@@ -744,10 +744,7 @@ export function spaceWords(space: string, short = false): string {
 // The piece of work a team builds one Unit of the home's work as, in its own
 // space. Its state names the home's location, the home's work, where its record
 // is, the Unit and the claim attempt it came from.
-export const UNIT_BUILD_FIELD = "Unit Build";
-// "later" while the person has not asked for the push yet, "unsent" when the
-// code went but the home did not take the result, "pushed" once it reached home.
-export const UNIT_PUSH_FIELD = "Unit Push";
+export { UNIT_BUILD_FIELD, UNIT_PUSH_FIELD };
 // The branch the build's code goes on in each repo: the name the person gave
 // (`push --branch`, a team's own branch rule), else the Unit's name.
 export const UNIT_BRANCH_FIELD = "Unit Branch";
