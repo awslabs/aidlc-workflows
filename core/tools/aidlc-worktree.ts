@@ -2027,11 +2027,13 @@ function assertAggregateSourceBeforeMerge(
   // The checkout holds a landing this tool staged and a hook refused: it is
   // mid-landing by design, so the chain is checked and the checkout is not.
   resuming = false,
+  acceptBaseline = false,
 ): {
   state: WorkspaceSourceState;
   openingFingerprint: string;
   // The person's own change this landing keeps, said once it has landed.
   kept?: string;
+  acceptedOpening?: boolean;
 } | null {
   if (!record || record.kind === "bypass") return null;
   const current = workspaceSourceState(pd, intent, space);
@@ -2109,6 +2111,13 @@ function assertAggregateSourceBeforeMerge(
     };
   }
 
+  if (acceptBaseline) {
+    return {
+      state: current,
+      openingFingerprint: current.fingerprint,
+      acceptedOpening: true,
+    };
+  }
   const opening = currentSwarmSourceOpeningFingerprint(
     pd,
     record.stage,
@@ -2156,16 +2165,13 @@ function assertAggregateSourceBeforeMerge(
         ` (${renderChangedPaths(changed)}). ${personDecides(changed)}`,
     );
   }
-  // A rejection an earlier release wrote kept no listing: compare fingerprints.
-  if (
-    opening.source === "prior-accepted" &&
-    openingListing === undefined &&
-    !sameWorkspaceSource(opening.fingerprint, current.fingerprint)
-  ) {
+  if (openingListing === undefined && !sameWorkspaceSource(opening.fingerprint, current.fingerprint)) {
     if (acceptsChanges) return keepChange(opening.fingerprint, null);
     errorWithSlug(
       slug,
-      `refusing to merge: the main checkout source does not match the prior attempt's final reviewed aggregate. ${PERSON_DECIDES_CHANGES}`,
+      opening.source === "prior-accepted"
+        ? `refusing to merge: the main checkout source does not match the prior attempt's final reviewed aggregate. ${PERSON_DECIDES_CHANGES}`
+        : `refusing to merge: the main checkout source does not match the baseline stage "${record.stage}" started from, and that baseline's file list is not on this machine, so the changed files cannot be named. ${PERSON_DECIDES_CHANGES} If that baseline is gone for good, run this same merge with \`--accept-source-baseline\` to start this stage attempt's links from the main checkout as it is.`,
     );
   }
   return {
@@ -2804,7 +2810,8 @@ function reconcileMergedSwarmCleanup(
 }
 
 function handleMerge(args: string[]): void {
-  const flags = parseFlags(args);
+  const acceptSourceBaseline = args.includes("--accept-source-baseline");
+  const flags = parseFlags(args.filter((arg) => arg !== "--accept-source-baseline"));
   const slug = validateSlug(flags.slug);
   if (!flags.target) errorWithSlug(slug, "Missing --target <branch>");
   const strategy = validateStrategy(flags.strategy);
@@ -2917,6 +2924,7 @@ function handleMerge(args: string[]): void {
     flags.intent,
     flags.space,
     resuming,
+    acceptSourceBaseline,
   );
   // Refuse before anything lands when cleanup would have to keep the
   // worktree for a submodule copy; the same check runs again at cleanup.
@@ -3242,6 +3250,7 @@ function handleMerge(args: string[]): void {
           "Source Commit": sourceRecord.commit,
           "Merge commit": commitSha,
           Repo: repoTarget.repo ?? "-",
+          ...(aggregateBefore.acceptedOpening === true ? { "Opening Source": "accepted" } : {}),
           ...(landedChanges.length > 0
             ? { "Landed changes": renderLandedPaths(landedChanges) }
             : {}),
@@ -4578,6 +4587,7 @@ function worktreeUsage(subcommand: string | undefined): string {
       `${invoke("merge")} --slug <slug> --target <branch> --strategy ${[...VALID_STRATEGIES].join("|")}`,
       "  Merges the Bolt's branch into --target and removes its worktree. Required: --slug, --target, --strategy.",
       `  Options: --message <text>, ${selector}`,
+      "  --accept-source-baseline: start the stage attempt's source links from the main checkout as it is, when its start baseline cannot be read. The landing records that the baseline was accepted.",
     ],
     discard: [
       `${invoke("discard")} --slug <slug>`,

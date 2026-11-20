@@ -6184,6 +6184,19 @@ export async function collectDoctorReport(
       auditBlockField(row.block, "Bolt slug") === slug));
     return frontier.length === 1 && frontier[0].event !== "WORKTREE_CREATED";
   };
+  const boltAwaitingLanding = (record: BoltDoctorRecord, slug: string): boolean => {
+    if (boltSlugTerminated(record, slug)) return false;
+    const converged = maximalAttemptEvents(record.events.filter((row) =>
+      row.event === "SWARM_UNIT_CONVERGED" && auditBlockField(row.block, "Unit name") === slug));
+    if (converged.length !== 1) return false;
+    const created = maximalAttemptEvents(record.events.filter((row) =>
+      row.event === "WORKTREE_CREATED" && auditBlockField(row.block, "Bolt slug") === slug));
+    if (created.length !== 1 || created[0].timestamp > converged[0].timestamp) return false;
+    return !record.events.some((row) =>
+      row.event === "SWARM_SOURCE_MERGED" && auditBlockField(row.block, "Unit name") === slug);
+  };
+  const landingStep =
+    ` A converged Unit lands with '${aidlcDispatcherInvocation("worktree merge")} --slug <slug> --target <branch> --strategy squash'; discarding it throws the reviewed work away.`;
   let boltIntentSelectors: Map<string, { intent: string; space: string } | null> | undefined;
   const boltRecords = new Map<string, BoltDoctorRecord | null>();
   // Each namespace must consult its owner's record, never a same-named Unit in
@@ -6247,6 +6260,7 @@ export async function collectDoctorReport(
     const preservedByAbort: string[] = [];
     const orphanActive: string[] = []; // dir present but no audit/Bolt Refs trail
     const cleanupOrphans: string[] = []; // dir present, merge succeeded, cleanup failed
+    const awaitingLanding: string[] = [];
 
     // Helper: did this slug get aborted via `aidlc-bolt abort` (BOLT_FAILED
     // with `Reason: aborted` from multi-failure halt-and-ask)?
@@ -6311,6 +6325,10 @@ export async function collectDoctorReport(
           cleanupOrphans.push(name);
           continue;
         }
+        if (boltAwaitingLanding(record, slug)) {
+          awaitingLanding.push(name);
+          continue;
+        }
         orphanActive.push(name);
       }
     }
@@ -6323,6 +6341,7 @@ export async function collectDoctorReport(
     } else if (pass) {
       const segments: string[] = [];
       if (activeForks.length > 0) segments.push(`${activeForks.length} active fork${activeForks.length === 1 ? "" : "s"}: ${activeForks.join(", ")}`);
+      if (awaitingLanding.length > 0) segments.push(`${awaitingLanding.length} converged, awaiting landing: ${awaitingLanding.join(", ")}`);
       if (preservedByAbort.length > 0) segments.push(`${preservedByAbort.length} preserved-by-abort (awaiting resume): ${preservedByAbort.join(", ")}`);
       label = `Orphan worktrees: 0 (${segments.join(", ")})`;
     } else {
@@ -6336,7 +6355,8 @@ export async function collectDoctorReport(
         );
       }
       label = `Orphan worktrees: ${orphanActive.length + cleanupOrphans.length} drift - ${[...orphanActive, ...cleanupOrphans].join(", ")}`;
-      fix = `${parts.join("; ")}. Inspect the owning intent, then remove via '${aidlcDispatcherInvocation("worktree discard")} --slug <slug> --intent <record> --space <space>'.`;
+      fix = `${parts.join("; ")}. Inspect the owning intent, then remove via '${aidlcDispatcherInvocation("worktree discard")} --slug <slug> --intent <record> --space <space>'.` +
+        (awaitingLanding.length > 0 ? `${landingStep} Not an orphan: ${awaitingLanding.join(", ")}.` : "");
     }
     results.push({ pass, label, fix });
   } catch (e) {
@@ -6432,6 +6452,7 @@ export async function collectDoctorReport(
     const worktreesDir = join(projectDir, ".aidlc", "worktrees");
     const orphan: string[] = [];
     const observed: string[] = [];
+    const awaitingLanding: string[] = [];
 
     if (existsSync(worktreesDir)) {
       for (const entry of readdirSync(worktreesDir)) {
@@ -6456,6 +6477,10 @@ export async function collectDoctorReport(
         observed.push(name);
         if (record.refs.includes(slug)) continue;
         if (findAllEvents(record.audit, "WORKTREE_DISCARDED", slug).length > 0) continue;
+        if (boltAwaitingLanding(record, slug)) {
+          awaitingLanding.push(name);
+          continue;
+        }
         orphan.push(name);
       }
     }
@@ -6465,13 +6490,14 @@ export async function collectDoctorReport(
         pass: true,
         label: observed.length === 0
           ? "Orphan state files: 0 observed"
-          : `Orphan state files: 0 (${observed.length} active: ${observed.join(", ")})`,
+          : `Orphan state files: 0 (${observed.length} active: ${observed.join(", ")}${awaitingLanding.length > 0 ? `; converged, awaiting landing: ${awaitingLanding.join(", ")}` : ""})`,
       });
     } else {
       results.push({
         pass: false,
         label: `Orphan state files: ${orphan.length} drift - ${orphan.join(", ")}`,
-        fix: `Inspect unrecognised names and unknown intent ownership. Recognised state files have no owning Bolt Refs entry or WORKTREE_DISCARDED row. Recover via '${aidlcDispatcherInvocation("worktree discard")} --slug <slug> --intent <record> --space <space>' (idempotent).`,
+        fix: `Inspect unrecognised names and unknown intent ownership. Recognised state files have no owning Bolt Refs entry or WORKTREE_DISCARDED row. Recover via '${aidlcDispatcherInvocation("worktree discard")} --slug <slug> --intent <record> --space <space>' (idempotent).` +
+          (awaitingLanding.length > 0 ? `${landingStep} Not an orphan: ${awaitingLanding.join(", ")}.` : ""),
       });
     }
   } catch (e) {
