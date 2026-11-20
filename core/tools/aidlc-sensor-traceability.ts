@@ -380,6 +380,13 @@ function namesUnit(cell: string, unit: string): boolean {
   return bare === unit || bare.replace(/^u\d+-/i, "") === unit;
 }
 
+// The Unit a target names on its own: its directory as `namesUnit` reads one, or its `U{n}` ID.
+function unitNamedBy(target: string, units: string[], unitIds: Map<string, string>): string | undefined {
+  const raw = target.trim();
+  return units.find((unit) => namesUnit(raw, unit))
+    ?? new Map([...unitIds.entries()].map(([unit, id]) => [id, unit])).get(raw.toUpperCase());
+}
+
 function unitIdMap(unitFile: string, units: string[]): Map<string, string> {
   const map = new Map<string, string>();
   const read = readText(unitFile);
@@ -446,26 +453,14 @@ function handoffRow(id: string, plan: Pick<HandoffPlan, "assignments" | "hasStor
   return key !== undefined && units !== undefined ? { key, units } : undefined;
 }
 
-// The Units, other than `except`, a free-text reason names: the Unit's name, its
-// `U{n}` ID, or (for a name declared without one) the name behind a `u{n}-`
-// prefix, each as a whole token, so `u2-profiles-old` does not name `u2-profile`.
-function unitsNamed(text: string, units: string[], unitIds: Map<string, string>, except: string): string[] {
-  const literal = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return units.filter((unit) => {
-    if (unit === except) return false;
-    const aliases = [literal(unit)];
-    const id = unitIds.get(unit);
-    if (id) aliases.push(literal(id));
-    if (!/^u\d+-/i.test(unit)) aliases.push(`u\\d+-${literal(unit)}`);
-    return new RegExp(`(?<![A-Za-z0-9_-])(?:${aliases.join("|")})(?![A-Za-z0-9_-])`, "i").test(text);
-  });
-}
-
-// The Units an `N/A` row hands its ID to: ones the reason names, for an ID the
-// story map carries. Empty when the row is not a hand-off.
+// The Unit an `N/A` row hands its ID to, for an ID the story map carries: the
+// other Unit its target names on its own, as a Units Generation row names one.
+// A reason's words are never read, since Unit names are often ordinary words.
+// Empty when the row is not a hand-off.
 function handedTo(entry: CoverageEntry, self: string, plan: HandoffPlan): string[] {
   if (entry.status !== "N/A" || !handoffRow(entry.id, plan)) return [];
-  return unitsNamed(entry.target ?? "", plan.units, plan.unitIds, self);
+  const unit = unitNamedBy(entry.target ?? "", plan.units, plan.unitIds);
+  return unit !== undefined && unit !== self ? [unit] : [];
 }
 
 function resolveUnitContext(
@@ -763,11 +758,9 @@ function verifyTargets(
   }
 
   if (stage === "units-generation" && upstream.unitContext && upstream.storyAssignments) {
-    const reverseUnitIds = new Map([...upstream.unitContext.unitIds.entries()].map(([unit, id]) => [id, unit]));
     for (const entry of okEntries) {
       const rawTarget = entry.target?.trim() ?? "";
-      const unit = upstream.unitContext.units.find((candidate) => namesUnit(rawTarget, candidate))
-        ?? reverseUnitIds.get(rawTarget.toUpperCase());
+      const unit = unitNamedBy(rawTarget, upstream.unitContext.units, upstream.unitContext.unitIds);
       if (!unit) {
         invalidTargets.push(`${entry.id}: target "${rawTarget}" is not a declared unit`);
       } else if (!upstream.storyAssignments.get(entry.id)?.has(unit)) {
@@ -1014,7 +1007,7 @@ function finalCoverage(projectDir: string): FinalCoverage {
     ).assignments;
     plan = { units: dag.units, unitIds, assignments, hasStories };
   }
-  // Per ID, the `N/A` reasons that hand it to another Unit.
+  // Per ID, the `N/A` rows that hand it to another Unit.
   const handedOff = new Map<string, string[]>();
   const builtIn = new Map<string, string[]>();
   const badTargets = new Map<string, string[]>();

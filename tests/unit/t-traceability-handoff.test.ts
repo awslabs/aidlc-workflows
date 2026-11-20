@@ -1,13 +1,11 @@
 // covers: stage:construction/functional-design, stage:construction/code-generation, stage:construction/build-and-test
 //
-// A Unit's Functional Design or Code Generation table can mark a criterion
-// `N/A` with a reason such as `delivered by u2-profile`. Nothing checked that
-// hand-off: the named Unit might not be on the story's row in the story map, so
-// it was never asked for the criterion, and Build and Test's rollup settled an
-// ID nothing builds because every row that listed it was `N/A` with a reason.
-// An `N/A` whose reason names another Unit of the plan is now a hand-off: that
-// Unit must be on the ID's row, and the rollup counts the ID as built only when
-// some Unit built it.
+// A Unit's Functional Design or Code Generation table hands a criterion to
+// another Unit with an `N/A` row whose target is that Unit on its own, by
+// directory or `U{n}` ID; a reason's words are never read, since Unit names are
+// often ordinary words. The Unit handed to must be on the ID's row in the story
+// map, or it is never asked for the criterion, and Build and Test's rollup
+// counts the ID as built only when some Unit built it.
 // Runs the built sensor.
 
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
@@ -65,10 +63,13 @@ interface Plan {
   // Cell of the story map's row for US1.1 (or FR1 without stories).
   row: string;
   stories?: boolean;
+  units?: [string, string];
 }
 
-// Two Units, u1-ledger and u2-profile. The item u1-ledger owns sits on `row`.
+// Two Units, u1-ledger and u2-profile unless `units` names others. The item the
+// first owns sits on `row`.
 function project(plan: Plan): string {
+  const [own, other] = plan.units ?? ["u1-ledger", "u2-profile"];
   const proj = createTestProject();
   projects.push(proj);
   mkdirSync(join(seededStateFile(proj), ".."), { recursive: true });
@@ -100,20 +101,20 @@ function project(plan: Plan): string {
     "",
     "| Unit ID | Directory | Purpose |",
     "|---|---|---|",
-    "| U1 | u1-ledger | Ledger |",
-    "| U2 | u2-profile | Profiles |",
+    `| U1 | ${own} | Ledger |`,
+    `| U2 | ${other} | Profiles |`,
   ].join("\n"));
   write(proj, "inception/units-generation/unit-of-work-dependency.md", [
     "# Dependencies",
     "",
     "```yaml",
     "units:",
-    "  - name: u1-ledger",
+    `  - name: ${own}`,
     "    kind: service",
     "    depends_on: []",
-    "  - name: u2-profile",
+    `  - name: ${other}`,
     "    kind: service",
-    "    depends_on: [u1-ledger]",
+    `    depends_on: [${own}]`,
     "```",
   ].join("\n"));
   const first = withStories ? "US1.1" : "FR1";
@@ -124,9 +125,9 @@ function project(plan: Plan): string {
     "| Item | Unit ID | Directory |",
     "|---|---|---|",
     `| ${first} | ${plan.row} |`,
-    `| ${second} | U2 | u2-profile |`,
+    `| ${second} | U2 | ${other} |`,
   ].join("\n"));
-  write(proj, "construction/u1-ledger/functional-design/rules.md", "# Rules\n\n- BR1.1 an entry is posted once\n");
+  write(proj, `construction/${own}/functional-design/rules.md`, "# Rules\n\n- BR1.1 an entry is posted once\n");
   return proj;
 }
 
@@ -171,7 +172,7 @@ const codeTable = (proj: string, reason: string): string =>
 describe("Functional Design: an N/A that hands a criterion to another Unit", () => {
   test("fails when the named Unit is not on the story's row", () => {
     const proj = project({ row: ROW_LEDGER });
-    const result = run(proj, "functional-design", designTable(proj, "delivered by u2-profile"));
+    const result = run(proj, "functional-design", designTable(proj, "u2-profile"));
     expect(result.pass).toBe(false);
     expect(result.invalid_targets).toHaveLength(1);
     const finding = result.invalid_targets[0];
@@ -183,13 +184,13 @@ describe("Functional Design: an N/A that hands a criterion to another Unit", () 
 
   test("passes when the named Unit is on the row", () => {
     const proj = project({ row: ROW_BOTH });
-    const result = run(proj, "functional-design", designTable(proj, "delivered by u2-profile"));
+    const result = run(proj, "functional-design", designTable(proj, "u2-profile"));
     expect(result.invalid_targets).toEqual([]);
     expect(result.pass, result.reason).toBe(true);
   });
 
-  test("a U{n} ID names the Unit, and so does a name inside punctuation", () => {
-    for (const reason of ["handled by U2", "(u2-profile, u3-reports)", "see: u2-profile."]) {
+  test("a U{n} ID names the Unit, and so does its name in backticks", () => {
+    for (const reason of ["U2", "`u2-profile`"]) {
       const proj = project({ row: ROW_LEDGER });
       const result = run(proj, "functional-design", designTable(proj, reason));
       expect(result.invalid_targets, reason).toHaveLength(1);
@@ -199,7 +200,7 @@ describe("Functional Design: an N/A that hands a criterion to another Unit", () 
 
   test("a name that only contains another Unit's name does not name it", () => {
     const proj = project({ row: ROW_LEDGER });
-    const result = run(proj, "functional-design", designTable(proj, "left to u2-profiles-old"));
+    const result = run(proj, "functional-design", designTable(proj, "u2-profiles-old"));
     expect(result.invalid_targets).toEqual([]);
     expect(result.pass, result.reason).toBe(true);
   });
@@ -211,23 +212,23 @@ describe("Functional Design: an N/A that hands a criterion to another Unit", () 
     expect(result.pass, result.reason).toBe(true);
   });
 
-  test("a reason that names only the Unit itself is not a hand-off", () => {
+  test("a target that names only the Unit itself is not a hand-off", () => {
     const proj = project({ row: ROW_LEDGER });
-    const result = run(proj, "functional-design", designTable(proj, "already done in u1-ledger (U1)"));
+    const result = run(proj, "functional-design", designTable(proj, "U1"));
     expect(result.invalid_targets).toEqual([]);
     expect(result.pass, result.reason).toBe(true);
   });
 
   test("without stories the same check reads the requirement's row", () => {
     const proj = project({ row: ROW_LEDGER, stories: false });
-    const file = table(proj, "u1-ledger", "functional-design", [{ id: "FR1", status: "N/A", target: "delivered by u2-profile" }]);
+    const file = table(proj, "u1-ledger", "functional-design", [{ id: "FR1", status: "N/A", target: "u2-profile" }]);
     const result = run(proj, "functional-design", file);
     expect(result.invalid_targets).toHaveLength(1);
     expect(result.invalid_targets[0].startsWith("FR1: ")).toBe(true);
     expect(result.invalid_targets[0]).toContain("u2-profile");
 
     const both = project({ row: ROW_BOTH, stories: false });
-    const ok = table(both, "u1-ledger", "functional-design", [{ id: "FR1", status: "N/A", target: "delivered by u2-profile" }]);
+    const ok = table(both, "u1-ledger", "functional-design", [{ id: "FR1", status: "N/A", target: "u2-profile" }]);
     expect(run(both, "functional-design", ok).invalid_targets).toEqual([]);
   });
 });
@@ -235,7 +236,7 @@ describe("Functional Design: an N/A that hands a criterion to another Unit", () 
 describe("Code Generation: an N/A that hands a criterion to another Unit", () => {
   test("fails when the named Unit is not on the story's row", () => {
     const proj = project({ row: ROW_LEDGER });
-    const result = run(proj, "code-generation", codeTable(proj, "delivered by u2-profile"));
+    const result = run(proj, "code-generation", codeTable(proj, "u2-profile"));
     expect(result.pass).toBe(false);
     expect(result.invalid_targets).toHaveLength(1);
     expect(result.invalid_targets[0].startsWith("AC1.1.2: ")).toBe(true);
@@ -245,7 +246,7 @@ describe("Code Generation: an N/A that hands a criterion to another Unit", () =>
 
   test("passes when the named Unit is on the row, and when no Unit is named", () => {
     const both = project({ row: ROW_BOTH });
-    expect(run(both, "code-generation", codeTable(both, "delivered by u2-profile")).invalid_targets).toEqual([]);
+    expect(run(both, "code-generation", codeTable(both, "u2-profile")).invalid_targets).toEqual([]);
     const plain = project({ row: ROW_LEDGER });
     const result = run(plain, "code-generation", codeTable(plain, "not offered in this release"));
     expect(result.invalid_targets).toEqual([]);
@@ -267,17 +268,17 @@ function rollup(proj: string, ledgerReason: string, profile: Row[]): Final {
 describe("Build and Test: a criterion handed to another Unit", () => {
   test("is uncovered when the Unit it was handed to did not build it", () => {
     const proj = project({ row: ROW_BOTH });
-    const out = rollup(proj, "delivered by u2-profile", []);
+    const out = rollup(proj, "u2-profile", []);
     expect(out.pass).toBe(false);
     expect(out.uncovered).toEqual(["AC1.1.2"]);
     const row = out.coverage.find((entry) => entry.id === "AC1.1.2");
     expect(row?.covered).toBe(false);
-    expect(row?.handed_off).toEqual(["u1-ledger/code-generation: delivered by u2-profile"]);
+    expect(row?.handed_off).toEqual(["u1-ledger/code-generation: u2-profile"]);
   });
 
   test("is covered when the Unit it was handed to built it", () => {
     const proj = project({ row: ROW_BOTH });
-    const out = rollup(proj, "delivered by u2-profile", [{ id: "AC1.1.2", status: "OK", target: "src/profile.ts" }]);
+    const out = rollup(proj, "u2-profile", [{ id: "AC1.1.2", status: "OK", target: "src/profile.ts" }]);
     expect(out.reason).toBeUndefined();
     expect(out.uncovered).toEqual([]);
     expect(out.pass).toBe(true);
@@ -289,6 +290,59 @@ describe("Build and Test: a criterion handed to another Unit", () => {
   test("a plain N/A that names no Unit settles the criterion, as before", () => {
     const proj = project({ row: ROW_BOTH });
     const out = rollup(proj, "not offered in this release", [{ id: "AC1.1.2", status: "N/A", target: "not offered in this release" }]);
+    expect(out.reason).toBeUndefined();
+    expect(out.uncovered).toEqual([]);
+    expect(out.pass).toBe(true);
+    const row = out.coverage.find((entry) => entry.id === "AC1.1.2");
+    expect(row?.covered).toBe(true);
+    expect(row?.not_applicable).toHaveLength(2);
+    expect(row?.handed_off).toBeUndefined();
+  });
+
+  test("an N/A whose target names only the Unit itself settles the criterion", () => {
+    const proj = project({ row: ROW_LEDGER });
+    const out = rollup(proj, "U1", []);
+    expect(out.reason).toBeUndefined();
+    expect(out.uncovered).toEqual([]);
+    expect(out.pass).toBe(true);
+    const row = out.coverage.find((entry) => entry.id === "AC1.1.2");
+    expect(row?.covered).toBe(true);
+    expect(row?.not_applicable).toEqual(["u1-ledger/code-generation: U1"]);
+    expect(row?.handed_off).toBeUndefined();
+  });
+});
+
+// A Unit's name is often an ordinary word, and a reason can mention a Unit
+// without handing it anything.
+describe("a reason that uses a Unit's name or ID as a word is not a hand-off", () => {
+  const cases: Array<{ units: [string, string]; reason: string }> = [
+    { units: ["api", "reporting"], reason: "reporting is out of scope for this release" },
+    { units: ["web", "api"], reason: "no API change is needed for this criterion" },
+    { units: ["u1-ledger", "u2-profile"], reason: "same rule as AC1.1.1; nothing to do with u2-profile" },
+    { units: ["u1-ledger", "u2-profile"], reason: "not offered in this release (see decision in section U2 of the design notes)" },
+  ];
+  for (const { units, reason } of cases) {
+    test(`Functional Design, ${units.join(" and ")}: ${reason}`, () => {
+      const proj = project({ row: `U1 | ${units[0]}`, units });
+      const file = table(proj, units[0], "functional-design", [...DESIGN_OK, { id: "AC1.1.2", status: "N/A", target: reason }]);
+      const result = run(proj, "functional-design", file);
+      expect(result.invalid_targets).toEqual([]);
+      expect(result.pass, result.reason).toBe(true);
+    });
+  }
+
+  test("Build and Test: both Units on the row mark the criterion N/A with such a reason", () => {
+    const proj = project({ row: "U1; U2 | api; reporting", units: ["api", "reporting"] });
+    const reason = "reporting is out of scope for this release";
+    table(proj, "api", "code-generation", [
+      { id: "AC1.1.1", status: "OK", target: "src/ledger.ts" },
+      { id: "AC1.1.2", status: "N/A", target: reason },
+    ]);
+    table(proj, "reporting", "code-generation", [
+      { id: "AC1.2.1", status: "OK", target: "src/profile.ts" },
+      { id: "AC1.1.2", status: "N/A", target: reason },
+    ]);
+    const out = final(proj);
     expect(out.reason).toBeUndefined();
     expect(out.uncovered).toEqual([]);
     expect(out.pass).toBe(true);

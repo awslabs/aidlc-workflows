@@ -591,10 +591,11 @@ person asks to leave planned work out of this build (for example "skip the
 remaining stories"), do it: list each item they left out as `Deferred` (not
 built in this Unit), with their words as its `target`, and carry on; the
 approved plan stays as it is, and the approval says what was left out.
-An `N/A` row takes its reason as its `target`. A reason that hands the ID to
-another Unit names that Unit by its `U{n}` ID or directory; that Unit must be on
-the story's row in `unit-of-work-story-map.md`, and the ID counts as built only
-when that Unit builds it, so Build and Test lists it as uncovered if no Unit did:
+An `N/A` row takes its reason as its `target`; to hand the ID to another Unit,
+name that Unit on its own as the `target`, its directory or `U{n}` ID and
+nothing else (for example `u2-profile`). That Unit must be on the story's row
+in `unit-of-work-story-map.md`, and the ID counts as built only when that Unit
+builds it, so Build and Test lists it as uncovered if no Unit did:
 
 ```json
 {
