@@ -1132,6 +1132,11 @@ async function runBunTestFile(
     copyFileSync(isolatedGitConfig, env.GIT_CONFIG_GLOBAL);
   } else env.GIT_CONFIG_GLOBAL = isolatedGitConfig;
   env.GIT_CONFIG_SYSTEM = NULL_DEVICE;
+  // A test's git reaches only local repositories: git refuses every other transport before it looks a name up, and
+  // allows the local one everywhere, submodule clones included. A case that needs another transport (a stand-in ssh,
+  // the refusing port 127.0.0.1:9, a loopback git server) names it in that call's own env, for example
+  // GIT_ALLOW_PROTOCOL: "file:https"; one that checks git's own local-transport rule runs without the setting.
+  env.GIT_ALLOW_PROTOCOL = "file";
   process.stdout.write(`\n=== START ${base} ===\n`);
 
   const junitXml = context
