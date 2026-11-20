@@ -136,7 +136,9 @@ import {
   submittedToPersonTurnSession,
   typedIntoPersonTurnSession,
 } from "./person-turns.ts";
-import { defaultChoice, LAUNCHING_SESSION_MARKERS, stateFilePathFor } from "./sdk-drive.ts";
+import { defaultChoice, LAUNCHING_SESSION_MARKERS, preseedClaudeOnboarding, stateFilePathFor } from "./sdk-drive.ts";
+
+export { preseedClaudeOnboarding };
 import { createBunBackend } from "./tui-bun-backend.ts";
 import { keepLegAudit, keepTranscriptWords } from "./leg-evidence.ts";
 import { nativeCleanupDeadlineMs } from "./tui-bun-process.ts";
@@ -599,57 +601,6 @@ const tmuxBackend: Backend = {
   },
 };
 
-
-// Claude keeps .claude.json inside an explicit CLAUDE_CONFIG_DIR; without the
-// override it uses the legacy home-level file. Explicit inputs let synthetic
-// checks exercise the Windows preseed without changing the host environment.
-export function preseedClaudeOnboarding(
-  projectDir: string,
-  env: NodeJS.ProcessEnv = process.env,
-  homeDir: string = os.homedir(),
-  trustProject = true,
-): void {
-  try {
-    const configDir = env.CLAUDE_CONFIG_DIR || homeDir;
-    mkdirSync(configDir, { recursive: true });
-    const cfgPath = join(configDir, ".claude.json");
-    let cfg: Record<string, unknown> = {};
-    if (existsSync(cfgPath)) {
-      try {
-        cfg = JSON.parse(readFileSync(cfgPath, "utf8"));
-      } catch {
-        cfg = {};
-      }
-    }
-    cfg.hasCompletedOnboarding = true;
-    if (trustProject) {
-      const projects =
-        (cfg.projects as Record<string, unknown> | undefined) ?? {};
-      // Forward-slash key — Claude normalises project paths this way.
-      const key = projectDir.replaceAll("\\", "/");
-      if (!(key in projects)) projects[key] = { hasTrustDialogAccepted: true };
-      cfg.projects = projects;
-    }
-    // A freshly created profile file can be briefly refused on Windows (a
-    // scanner or indexer holding it); a lost preseed shows Claude's first-run
-    // chooser instead of the expected startup screens.
-    const deadline = Date.now() + 10_000;
-    for (;;) {
-      try {
-        writeFileSync(cfgPath, JSON.stringify(cfg, null, 2));
-        break;
-      } catch (error) {
-        const code = (error as NodeJS.ErrnoException).code ?? "";
-        if (process.platform !== "win32" || !["EPERM", "EACCES", "EBUSY"].includes(code) || Date.now() >= deadline) throw error;
-        Bun.sleepSync(20);
-      }
-    }
-  } catch (error) {
-    // Still best-effort: the startup path answers known modals by keystroke.
-    // Say so, because the first-run screens that follow are otherwise unexplained.
-    process.stderr.write(`tui-drive: Claude onboarding preseed failed: ${(error as NodeJS.ErrnoException).code ?? String(error)}\n`);
-  }
-}
 
 // ---------------------------------------------------------------------------
 // Backend selection.
