@@ -1,0 +1,40 @@
+# Standalone v2 evaluator — version matrix for `run.py version-batch`.
+#
+# This packaging evaluates AIDLC v2 ONLY, across the three standard tasks:
+#   * greenfield  — sci-calc API built from scratch, graded vs the v2 golden
+#     (test_cases/sci-calc-v2/) + the 88-case OpenAPI contract
+#   * brownfield bugfix   — httpbin /base64 error handling (Flask), scored by
+#     3 explicit HTTP assertions (test_cases/brownfield/httpbin/)
+#   * brownfield feature  — RealWorld follow/unfollow (Django), scored by the
+#     project's own Hurl suite (test_cases/brownfield/realworld/)
+#
+# Brownfield testbeds are frozen snapshots pinned to upstream commits
+# (scenario.yaml upstream_commit, verified against UPSTREAM_COMMIT at
+# preflight) so results are repeatable across time.
+#
+# Fields:
+#   scenario     default test_cases/<name>/ for this version (greenfield);
+#                brownfield runs override it via --scenario brownfield/<task>
+#   claude_dist  path to the v2 .claude distribution to copy into each run
+#                workspace. EDIT to your local checkout/release artifact.
+#   runs         default per-version run count (override with --runs)
+
+versions:
+  v2:
+    # The odyssey adaptive branch is merged into v2 (>= 2.5.x): the engine
+    # auto-detects scope and the composer runs only the stages the work needs.
+    # scope: adaptive OMITS --scope, measuring v2's as-shipped default.
+    scenario: sci-calc-v2
+    claude_dist: /home/ec2-user/github/aidlc-workflows-v2/dist/claude/.claude   # EDIT
+    scope: adaptive
+    enabled: true
+    runs: 5
+    # v2 runs per-unit reviewer sub-agents; give it a 5h ceiling to reach SHIP.
+    timeout_seconds: 18000
+
+# Default runs-per-version and concurrency (overridable via CLI flags).
+defaults:
+  runs_per_version: 5
+  max_parallel: 3
+  scope: adaptive
+  timeout_seconds: 18000
