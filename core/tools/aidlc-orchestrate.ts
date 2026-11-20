@@ -4006,8 +4006,10 @@ function scopeConfirmAskDirective(
 // word is considered, not the first, so "Update README.md from docs/spec.pdf"
 // finds the spec. The note offers the step and leaves the judgement with the
 // person: the agent asks them before onboarding something they may have named
-// for another reason.
-const NAMED_DOCUMENT = /(?:^|[\s"'`(<])([\w.][\w./-]*\.(?:pdf|docx))(?=$|[\s"'`)>,;])/gi;
+// for another reason. A file name is letters and digits of any script
+// (docs/Вимоги.docx, docs/需求.pdf), including accents stored as combining
+// marks (\p{M}).
+const NAMED_DOCUMENT = /(?:^|[\s"'`(<])([\p{L}\p{N}_.][\p{L}\p{M}\p{N}_./-]*\.(?:pdf|docx))(?=$|[\s"'`)>,;])/giu;
 
 function onboardableDocument(raw: string, projectDir: string): string | null {
   for (const match of raw.matchAll(NAMED_DOCUMENT)) {

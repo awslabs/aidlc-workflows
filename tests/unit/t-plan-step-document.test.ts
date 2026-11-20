@@ -117,6 +117,33 @@ describe("a document the request names is onboarded at the plan step", () => {
     expect((await next(proj, ["next", "Build what docs/notes.txt describes"])).document_note).toBeUndefined();
   });
 
+  // Teams name their documents in their own language.
+  test("a document named in any script is offered as an English-named one is", async () => {
+    // One project per request: the first `next` opens the plan question, so a
+    // second request in the same project is no longer a fresh offer.
+    for (const [request, named, body] of [
+      ["зроби конвертер за вимогами з docs/Вимоги.docx", "docs/Вимоги.docx", "PK\u0003\u0004"],
+      ["Build what docs/需求.pdf describes", "docs/需求.pdf", "%PDF-1.4\n"],
+      ["Build what docs/café-spec.pdf describes", "docs/café-spec.pdf", "%PDF-1.4\n"],
+    ]) {
+      const proj = projectWithDocument({ [named]: body });
+      const offer = await next(proj, ["next", request]);
+      expect(offer.ask_type, request).toBe("compose-offer");
+      expect(String(offer.document_note ?? ""), request).toContain(`The request names ${JSON.stringify(named)}.`);
+    }
+  });
+
+  test("a non-ASCII name that is not a document still carries no step", async () => {
+    for (const [request, files] of [
+      ["Build what docs/нотатки.txt describes", { "docs/нотатки.txt": "plain" }],
+      ["Build what docs/Відсутній.pdf describes", {}],
+    ] as const) {
+      const offer = await next(projectWithDocument(files), ["next", request]);
+      expect(offer.ask_type, request).toBe("compose-offer");
+      expect(offer.document_note, request).toBeUndefined();
+    }
+  });
+
   test("a request that names no document carries no step", async () => {
     const proj = projectWithDocument();
     const offer = await next(proj, ["next", "Add a CSV download to the sales report page"]);
