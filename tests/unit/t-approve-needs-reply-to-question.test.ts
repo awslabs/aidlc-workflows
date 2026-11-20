@@ -1,4 +1,4 @@
-// covers: function:verifyApprovalDecision, function:handleApprove, function:gatePresentationStart, cli:aidlc-orchestrate(report), cli:aidlc-state(approve)
+// covers: function:verifyApprovalDecision, function:handleApprove, function:gatePresentationStart, function:namesNoChoiceStep, cli:aidlc-orchestrate(report), cli:aidlc-state(approve)
 //
 // A gate approval is the person's reply to that gate: once the stage's approval
 // question is put to them, only a reply sent after it records one. A turn they
@@ -8,7 +8,9 @@
 // the engine backfills for the person's reported approval (report --stage on a
 // running stage) keeps the reply-since-the-last-decision rule: its row is
 // written after their reply by design, and stands on a reply in the chat
-// that reports it.
+// that reports it. A team Unit approval reported with no choice is the agent's
+// step, as a stage gate's is, never a stop: with their reply on record the
+// agent reports the choice it makes, and with none it shows the gate.
 import {
   NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
   NATIVE_STARTUP_TIMEOUT_MS,
@@ -72,11 +74,15 @@ function state(proj: string, args: string[], extra: NodeJS.ProcessEnv = {}) {
   return { rc: r.status ?? -1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
 }
 
-function report(proj: string, args: string[]) {
+function report(proj: string, args: string[], extra: NodeJS.ProcessEnv = {}) {
   const r = spawnSync(BUN, [ORCHESTRATE, "report", ...args, "--project-dir", proj], {
-    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: env(),
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: env(extra),
   });
-  return { rc: r.status ?? -1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
+  return { rc: r.status ?? -1, out: `${r.stdout ?? ""}${r.stderr ?? ""}`, stdout: r.stdout ?? "" };
+}
+
+function directiveOf(stdout: string): { kind?: string; message?: string } {
+  return JSON.parse(stdout.trim().split("\n").at(-1) ?? "{}");
 }
 
 function person(proj: string, prompt: string, session = SESSION) {
@@ -312,6 +318,65 @@ describe("t-approve-needs-reply-to-question: only the person's reply to the appr
       expect(recorded[0].block).toContain("**Review Finding Dispositions**");
       expect(recorded[0].block).toContain("Accepted risk");
       expect(recorded[0].block).toContain("R-01");
+    } finally {
+      cleanupTestProject(team);
+    }
+  });
+
+  // A Unit approval reported with the choice left off is the agent's own step,
+  // as at a stage gate: with the person's reply on record it reports the choice
+  // their reply makes, and they are never stopped and asked to approve again.
+  test("a team Unit approval reported without the choice, after the person's reply, is the agent's step, and its report then approves with no new reply", () => {
+    const team = teamProject();
+    try {
+      const opened = state(team, ["gate-start", "functional-design", "--unit", "alpha"], TEAM_FIXTURE);
+      expect(opened.rc, opened.out).toBe(0);
+      person(team, "Approve");
+      const bare = report(team, ["--stage", "functional-design", "--result", "approved", "--unit", "alpha"]);
+      const step = directiveOf(bare.stdout);
+      expect(step.kind, bare.out).toBe("print");
+      expect(step.message).toContain('report --result approved for unit "alpha" of "functional-design" names no choice.');
+      expect(step.message).toContain("without asking them again");
+      expect(rows(team, "GATE_APPROVED")).toEqual([]);
+      const approved = report(team, ["--stage", "functional-design", "--result", "approved", "--unit", "alpha",
+        "--user-input", "Approve"], TEAM_FIXTURE);
+      const recorded = rows(team, "GATE_APPROVED");
+      expect(recorded.length, approved.out).toBe(1);
+      expect(recorded[0].block).toContain("**Unit**: alpha");
+    } finally {
+      cleanupTestProject(team);
+    }
+  });
+
+  test("with no reply on record, a team Unit approval reported without the choice approves nothing, and the step is to show the gate", () => {
+    const team = teamProject();
+    try {
+      const opened = state(team, ["gate-start", "functional-design", "--unit", "alpha"], TEAM_FIXTURE);
+      expect(opened.rc, opened.out).toBe(0);
+      const bare = report(team, ["--stage", "functional-design", "--result", "approved", "--unit", "alpha"]);
+      const step = directiveOf(bare.stdout);
+      expect(step.kind, bare.out).toBe("print");
+      expect(step.message).toContain('The question for unit "alpha" of "functional-design" is still open.');
+      expect(step.message).toContain("No reply from the person is on record since the gate was shown");
+      expect(rows(team, "GATE_APPROVED")).toEqual([]);
+    } finally {
+      cleanupTestProject(team);
+    }
+  });
+
+  test("a reply sent before the Unit's gate opened approves nothing, with the choice or without it", () => {
+    const team = teamProject();
+    try {
+      person(team, "alpha is fine by me");
+      const opened = state(team, ["gate-start", "functional-design", "--unit", "alpha"], TEAM_FIXTURE);
+      expect(opened.rc, opened.out).toBe(0);
+      const bare = report(team, ["--stage", "functional-design", "--result", "approved", "--unit", "alpha"]);
+      expect(directiveOf(bare.stdout).kind, bare.out).toBe("print");
+      const retry = report(team, ["--stage", "functional-design", "--result", "approved", "--unit", "alpha",
+        "--user-input", "Approve"], TEAM_FIXTURE);
+      expect(retry.out).toContain(WAITS);
+      expect(retry.out.toLowerCase()).toContain(SHOW_IT);
+      expect(rows(team, "GATE_APPROVED")).toEqual([]);
     } finally {
       cleanupTestProject(team);
     }
