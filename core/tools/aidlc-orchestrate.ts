@@ -715,6 +715,7 @@ import {
   takeAside,
   resendQuestion,
   buildRecordRepo,
+  lastCodePush,
   unitDefaultMessage,
   commitMessageFile,
   heldCommitMessage,
@@ -10924,6 +10925,8 @@ function unitPushAsk(projectDir: string, stateContent: string | null): AskDirect
   const push = getField(stateContent, UNIT_PUSH_FIELD)?.trim();
   const unit = build.unit;
   if (push === "later") {
+    // Not now to the send again of a pushed build: their no holds, and the line it printed said what waits.
+    if (lastCodePush(projectDir, unit) === "pushed") return null;
     // The push question is not put again until a push, so this line shows the message it will carry.
     const held = heldCommitMessage(projectDir, commitMessageFile(projectDir));
     sayWithStepOnce(projectDir, `${unit} is built and approved, and not pushed yet. Do you want me to push it now` +
@@ -11095,13 +11098,9 @@ function unitPushToOffer(projectDir: string, stateContent: string): boolean {
 }
 
 // Code Generation approved again since the build's last push (the redo after
-// a turn-down): there is new work to push, and the turn-down is answered. A
-// Unit's build is solo work with one Unit, so its approval names no Unit.
+// a turn-down): there is new work to push, and the turn-down is answered.
 function redoneSincePush(projectDir: string, unit: string): boolean {
-  const rows = sortAttemptEvents(readAuditShardEvents(projectDir));
-  const pushed = rows.findLastIndex((row) => row.event === "UNIT_PUSHED");
-  return pushed >= 0 && rows.slice(pushed + 1).some((row) => row.event === "GATE_APPROVED" &&
-    auditBlockField(row.block, "Stage") === "code-generation" && (auditBlockField(row.block, "Unit") ?? unit) === unit);
+  return lastCodePush(projectDir, unit) === "redone";
 }
 
 function joinRepoNames(repos: string[]): string {

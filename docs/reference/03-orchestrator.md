@@ -888,7 +888,8 @@ When a build has no stage left, `next` returns `ask_type: unit-push` until its
 state records `Unit Push: pushed` (written once the result reached the home's
 claim; `unsent` when the code went and the result did not, the claim refused
 it or was not there, and the ask is then **Send it again**): **Push** runs `unit push`, **Not now** runs
-`unit push --later` (then the end carries one line that it is not pushed yet, with the message the push will carry).
+`unit push --later` (then the end carries one line that it is not pushed yet, with the message the push will carry;
+**Not now** to **Send it again** says that the Unit's record has no result until it is sent, and nothing more is offered).
 A repo with several remotes and none set for pushing (`pushRemotesToPick`)
 turns **Push** into one choice per remote, each running `unit push --remote
 <repo>=<name>`.

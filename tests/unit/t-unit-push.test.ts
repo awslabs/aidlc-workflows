@@ -722,6 +722,38 @@ describe("the push", () => {
     expect(readFileSync(join(record, "aidlc-state.md"), "utf-8")).toContain("- **Unit Push**: pushed");
   });
 
+  test("the code went and its result did not: Not now says its record has no result until it is sent, no step offers the send again, in that chat or a new one, and a push after it sends the result", () => {
+    const { hosts, home, alice, record } = refundsTakenInClone();
+    codeGenerated(alice, record);
+    finishBuild(record);
+    const api = hosts["checkout-api"];
+    const away = `${api}.away`;
+    const hook = join(hosts.billing, "hooks", "pre-receive");
+    writeFileSync(hook, `#!/bin/sh\ncat >/dev/null\n[ -d '${api}' ] && mv '${api}' '${away}'\nexit 0\n`);
+    chmodSync(hook, 0o755);
+    const chat: NodeJS.ProcessEnv = { ...ENV, AIDLC_SESSION_OVERRIDE: "alice-says-no" };
+    expect(run(UNIT, ["push"], alice, chat).status).toBe(0);
+    renameSync(away, api);
+    writeFileSync(hook, "#!/bin/sh\nexit 0\n");
+    const ask = next(alice, chat);
+    expect(ask.ask_type, JSON.stringify(ask)).toBe("unit-push");
+    const notNow = (ask.choices as Array<{ label: string; command: string }>).find((choice) => choice.label === "Not now");
+    expect(notNow?.command).toEndWith("aidlc-unit.ts push --later");
+    const later = run(UNIT, ["push", "--later"], alice, chat);
+    expect(later.status, later.out).toBe(0);
+    expect(later.json?.notice).toBe("refunds's record in checkout-api has no result until you send it.");
+    // Their no holds: no step offers the push or the send again, nor says the pushed code is not pushed.
+    for (const step of [next(alice, chat), next(alice, chat), next(alice, { ...ENV, AIDLC_SESSION_OVERRIDE: "alice-next-day" })]) {
+      expect(step.ask_type ?? null, JSON.stringify(step)).not.toBe("unit-push");
+      expect(JSON.stringify(step)).not.toContain("not pushed yet");
+      expect(JSON.stringify(step)).not.toContain("send it again");
+    }
+    // Their later word sends it.
+    expect(run(UNIT, ["push"], alice, chat).status).toBe(0);
+    expect(readFileSync(join(record, "aidlc-state.md"), "utf-8")).toContain("- **Unit Push**: pushed");
+    expect(recordAt(home, "refunds")?.json.result).toBeDefined();
+  });
+
   // The record a take wrote was taken away by hand: the push records the take
   // again before its result, as for a take its repository did not take then.
   test("a push when the Unit's record is not there now: its code goes, and the take and its result are written there again", () => {

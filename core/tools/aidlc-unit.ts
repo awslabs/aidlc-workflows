@@ -12370,6 +12370,19 @@ export function resultTakeHold(projectDir: string, stateContent: string): "aside
   }
 }
 
+// Where this build's last push of its code stands, by its UNIT_PUSHED row:
+// "pushed" when the code went and Code Generation was not approved again
+// since, "redone" when it was (the redo after a turn-down: new work to push),
+// null before any push. A Unit's build is solo work with one Unit, so its
+// approval names no Unit.
+export function lastCodePush(projectDir: string, unit: string): "pushed" | "redone" | null {
+  const rows = sortAttemptEvents(readAuditShardEvents(projectDir));
+  const pushed = rows.findLastIndex((row) => row.event === "UNIT_PUSHED");
+  if (pushed < 0) return null;
+  return rows.slice(pushed + 1).some((row) => row.event === "GATE_APPROVED" &&
+    auditBlockField(row.block, "Stage") === "code-generation" && (auditBlockField(row.block, "Unit") ?? unit) === unit) ? "redone" : "pushed";
+}
+
 // The offer to send a Unit's result again (unitPushAsk puts it): one text, so a
 // push a rule of its record's repository refused counts it as put in its chat.
 export function resendQuestion(unit: string, repo: string): string {
@@ -13188,9 +13201,15 @@ function pushUnit(args: string[], projectDir?: string,
     withAuditLock(pd, () => writeStateFile(pd, setOrInsertField(readStateFile(pd), "## Runtime State", UNIT_BRANCH_FIELD, branch)));
   }
   if (bareFlags.has("later") || flags.later !== undefined) {
+    // Not now to the send again: the code is pushed, and only its result waits,
+    // said in that choice's own words.
+    const waits = getField(readStateFile(pd), UNIT_PUSH_FIELD)?.trim() === "unsent" ? buildRecordRepo(pd, build) : null;
     withAuditLock(pd, () => writeStateFile(pd, setOrInsertField(readStateFile(pd), "## Runtime State", UNIT_PUSH_FIELD, "later")));
     finishBuildRecord(pd);
-    console.log(JSON.stringify({ pushed: false, notice: `Nothing is pushed. I'll push ${unit} when you ask.` }));
+    console.log(JSON.stringify({
+      pushed: false,
+      notice: waits === null ? `Nothing is pushed. I'll push ${unit} when you ask.` : `${unit}'s record in ${waits} has no result until you send it.`,
+    }));
     return;
   }
   // The commit message the person gave, from the file the agent wrote it to:

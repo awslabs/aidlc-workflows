@@ -888,7 +888,8 @@ hook's own words, and nothing retries. The result (each repo's branch, base,
 every head pushed, each changed file's blob and patch-id, and the Unit outputs
 the lead's project's later stages read) goes onto the Unit's claim at the lead's project, and
 `UNIT_PUSHED` is recorded; until the lead's project takes it (`Unit Push: unsent`), the
-next step offers to send it again. A refusal by a rule of the lead's host (git's
+next step offers to send it again. Not now to that offer says the Unit's record has no result
+until it is sent, and nothing offers it again; `unit push` sends it when you ask. A refusal by a rule of the lead's host (git's
 `[remote rejected]`) is said once, in the host's words, with what to ask its owner for,
 and that chat is not offered the send again; while the take itself is not recorded
 there, the offer waits until a look records it, and the build's end says once per chat
