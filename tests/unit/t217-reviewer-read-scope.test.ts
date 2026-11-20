@@ -76,4 +76,36 @@ describe("t217 reviewer read-scope bound is stated on every surface", () => {
       expect(body, labelled).toContain("stage-protocol-reviewer.md");
     }
   });
+
+  // A pathless Glob/Grep is refused by the reviewer-scope hook (it recurses
+  // from the session folder through every unit). The rule that avoids the
+  // refusal has to reach the reviewer BEFORE its first search: §12a step 1's
+  // pass list tells the conductor to state it, the per-unit module states it
+  // with the two roots and a call, and the persona repeats it where the
+  // reviewer reads its own scope. #4073.
+  test("the per-unit brief states the search-root rule before the first search", () => {
+    const protocol = readFileSync(join(AIDLC_SRC, PROTOCOL), "utf-8");
+    expect(protocol).toContain("The search roots");
+    expect(protocol).toContain("`Glob` and `Grep` MUST name the root");
+    expect(protocol).toContain(
+      'Grep {pattern: "<what to find>", path: "<record>/construction/<directive.unit>"}',
+    );
+
+    const unitProtocol = readFileSync(join(AIDLC_SRC, UNIT_PROTOCOL), "utf-8");
+    expect(unitProtocol).toContain("Every search names its root.");
+    expect(unitProtocol).toContain("no `path` recurses from the session folder through every unit");
+    expect(unitProtocol).toContain("`<record>/construction/<unit>/`");
+    expect(unitProtocol).toContain('Grep {pattern: "timeout", path: "<record>/construction/<unit>"}');
+    expect(unitProtocol).toContain("source-manifest.json");
+
+    const persona = readFileSync(join(AIDLC_SRC, PERSONA), "utf-8");
+    expect(persona).toContain("Name the root in every search.");
+
+    // The shared source is projected verbatim into every harness tree, so the
+    // rule must be present in each shipped copy, not only the Claude one.
+    for (const harness of HARNESS_MATRIX) {
+      const shipped = readFileSync(join(harness.engineRoot, UNIT_PROTOCOL), "utf-8");
+      expect(`harness ${harness.name}\n${shipped}`).toContain("Every search names its root.");
+    }
+  });
 });
