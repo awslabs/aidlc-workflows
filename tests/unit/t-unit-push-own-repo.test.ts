@@ -616,7 +616,8 @@ describe("a Unit on the workspace's own repository", () => {
     squashOnHost(home.remote, "refunds", "Refunds", "Merge branch 'refunds' into 'main'\n\nRefunds\n\nSee merge request payments/checkout!2");
     writeFileSync(join(alice, "aidlc", "spaces", "payments", "intents", "active-intent"), "");
     const look = next(alice, ENV, ["--units"]);
-    expect(String(look.question), JSON.stringify(look)).toContain("refunds (pushed by alice in payments, merged)");
+    expect(String(look.question), JSON.stringify(look)).toContain("Merged: refunds (pushed by alice in payments).");
+    expect(String(look.question)).not.toContain("Being built: refunds");
     expect(((look.choices ?? []) as Array<{ label: string }>).map((choice) => choice.label)).toContain("Start reporting");
     const took = takeIn("reports", ["reporting", ...fromHome(home)], cloneOf(home.remote, "wen"));
     expect(took.status, took.out).toBe(0);

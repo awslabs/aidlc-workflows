@@ -222,7 +222,8 @@ describe("at the home", () => {
       const api = join(alice, "checkout-api");
       const refsBefore = git(api, ["for-each-ref", "--format=%(refname)"]);
       const look = unitsLook(alice);
-      expect(String(look.question), JSON.stringify(look)).toContain("refunds (pushed by alice in payments, merged)");
+      expect(String(look.question), JSON.stringify(look)).toContain("Merged: refunds (pushed by alice in payments).");
+      expect(String(look.question)).not.toContain("Being built: refunds");
       expect(String(look.question)).toContain("reporting (open");
       expect(labels(look)).toContain("Start reporting");
       expect(labels(look).filter((label) => label.includes("early"))).toEqual([]);
@@ -252,7 +253,8 @@ describe("at the home", () => {
     expect(labels(waiting)).toContain("Start reporting early");
     mergeOnHost(hosts.billing, "refunds", "squash");
     const merged = unitsLook(alice);
-    expect(String(merged.question), JSON.stringify(merged)).toContain("refunds (pushed by alice in payments, merged)");
+    expect(String(merged.question), JSON.stringify(merged)).toContain("Merged: refunds (pushed by alice in payments).");
+    expect(String(merged.question)).not.toContain("Being built: refunds");
     expect(labels(merged)).toContain("Start reporting");
     const bob = cloneOf(home.remote, "bob");
     for (const [name, host] of Object.entries(hosts)) cloneCode(host, bob, name, "bob");

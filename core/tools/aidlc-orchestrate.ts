@@ -10487,6 +10487,7 @@ function unitTakeLook(
     const ready: string[] = [];
     const waiting: string[] = [];
     const building: string[] = [];
+    const merged: string[] = [];
     for (const unit of opening.units) {
       const claim = overview.claims.get(unit);
       // Done on its claim is the lead's project's word, before its Unit Progress here says so.
@@ -10507,7 +10508,8 @@ function unitTakeLook(
         const mine = buildIsMine(projectDir, built, live, worked.by) === true;
         if (standing.kind !== "building" && standing.kind !== "turned-down") {
           // Merged in every repo by the lead's own rule, read here and never written (teamMergeSeen).
-          building.push(`${unit} (pushed by ${who}${where}, ${standing.kind === "merged" ? "merged" : "waiting for its merge"})`);
+          if (standing.kind === "merged") merged.push(`${unit} (pushed by ${who}${where})`);
+          else building.push(`${unit} (pushed by ${who}${where}, waiting for its merge)`);
           continue;
         }
         if (!mine) {
@@ -10570,7 +10572,7 @@ function unitTakeLook(
     }
     const label = intentDisplayLabel(intent);
     const change = planLastChange(projectDir, snapshot.oid);
-    if (closed || (ready.length === 0 && waiting.length === 0 && building.length === 0)) {
+    if (closed || (ready.length === 0 && waiting.length === 0 && building.length === 0 && merged.length === 0)) {
       if (choices.length === choicesBefore) {
         passed.push({ label, repo: plan.plan_repo.name, address: snapshot.place.address, closed, finished: plan.units.every((unit) => done.has(unit.name)) });
       }
@@ -10580,7 +10582,8 @@ function unitTakeLook(
           (skeleton !== null ? ` The walking skeleton, ${skeleton}, is built at the lead's project first.` : "") +
           (ready.length > 0 ? ` Ready to take: ${ready.join(", ")}.` : "") +
           (waiting.length > 0 ? ` Waiting: ${waiting.join(", ")}.` : "") +
-          (building.length > 0 ? ` Being built: ${building.join(", ")}.` : ""),
+          (building.length > 0 ? ` Being built: ${building.join(", ")}.` : "") +
+          (merged.length > 0 ? ` Merged: ${merged.join(", ")}.` : ""),
       );
     }
     if (ownRules.length > 0) {

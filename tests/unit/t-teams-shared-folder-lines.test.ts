@@ -164,7 +164,8 @@ describe("Carry on in a shared workspace", () => {
     expect(look()).toContain("refunds (pushed by alice in payments, waiting for its merge)");
     mergeOnHost(hosts.billing, "refunds", "squash");
     const merged = look();
-    expect(merged).toContain("refunds (pushed by alice in payments, merged)");
+    expect(merged).toContain("Merged: refunds (pushed by alice in payments).");
+    expect(merged).not.toContain("Being built: refunds");
     expect(merged).not.toContain("waiting for its merge");
     expect(planWordAt(home, "refunds")?.verdicts).toBeUndefined();
   });
