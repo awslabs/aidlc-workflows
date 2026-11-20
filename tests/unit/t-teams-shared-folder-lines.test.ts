@@ -18,7 +18,7 @@ import { join } from "node:path";
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { arrivedAtLastPull, checkInState } from "../../dist/claude/.claude/tools/aidlc-unit-teams.ts";
 import { mergedAtTeamLook, type UnitClaimPayload } from "../../dist/claude/.claude/tools/aidlc-unit.ts";
-import { REPO_ROOT } from "../harness/fixtures.ts";
+import { fixtureIntentId8, REPO_ROOT } from "../harness/fixtures.ts";
 import { asLeadsOwnCheckout } from "../harness/team-unit-merge.ts";
 import {
   cleanupTeamBuild,
@@ -49,6 +49,8 @@ import {
   tempDir,
   sharePlan,
   planFrom,
+  leadRecordOnItsOwnBranch,
+  teamWorkspace,
 } from "../harness/team-build.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
@@ -784,6 +786,43 @@ describe("AI-DLC's record committed on the person's word in a Unit's build", () 
     expect(git(alice, ["status", "--porcelain", "--", other])).toContain("zz-another-work");
     const again = run(UNIT, ["commit-record"], alice);
     expect(again.json?.notice, again.out).toBe("AI-DLC's record in aidlc/ has nothing new to commit.");
+  });
+
+  // The record commit-record makes, by path, against where it started.
+  const committedByRecord = (dir: string, before: string): string[] =>
+    git(dir, ["diff", "--name-only", before, "HEAD"]).split("\n").filter(Boolean);
+
+  test("in a clone made before the lead's record reached main, the build's own folder is committed and the lead's space's memory is not", () => {
+    const units = "# Unit dependencies\n\n```yaml\nunits:\n  - name: refunds\n    kind: service\n    depends_on: []\n```\n";
+    const { home, clone } = leadRecordOnItsOwnBranch(units);
+    const took = run(UNIT, ["take", "refunds", "--plan", fixtureIntentId8(home.dir), "--from", home.remote], clone);
+    expect(took.status, took.out).toBe(0);
+    const intents = join(clone, "aidlc", "spaces", "default", "intents");
+    const own = `aidlc/spaces/default/intents/${readdirSync(intents).find((name) => name.endsWith("-refunds"))}`;
+    const before = git(clone, ["rev-parse", "HEAD"]);
+    const committed = run(UNIT, ["commit-record"], clone);
+    expect(committed.status, committed.out).toBe(0);
+    const shown = committedByRecord(clone, before);
+    expect(shown.length).toBeGreaterThan(0);
+    expect(shown.filter((path) => !path.startsWith(`${own}/`)), shown.join("\n")).toEqual([]);
+    expect(git(clone, ["status", "--porcelain", "--", "aidlc/spaces/default/memory/project.md"])).toBe("?? aidlc/spaces/default/memory/project.md");
+  });
+
+  test("in a team's own workspace building in the default space, the space the lead's plan names, with nothing of aidlc/ in git yet: the build's own folder only", () => {
+    const hosts = { "checkout-api": codeHost("checkout-api"), billing: codeHost("billing") };
+    const home = makePlanHomeWithRemote({ repos: hosts });
+    const alice = teamWorkspace(hosts, "alice");
+    git(alice, ["rm", "-r", "-q", "--cached", "aidlc"]);
+    git(alice, ["commit", "-q", "-m", "aidlc/ out of git"]);
+    const took = run(UNIT, ["take", "refunds", ...planFrom(home)], alice);
+    expect(took.status, took.out).toBe(0);
+    const intents = join(alice, "aidlc", "spaces", "default", "intents");
+    const own = `aidlc/spaces/default/intents/${readdirSync(intents).find((name) => name.endsWith("-refunds"))}`;
+    const before = git(alice, ["rev-parse", "HEAD"]);
+    const committed = run(UNIT, ["commit-record"], alice);
+    expect(committed.status, committed.out).toBe(0);
+    const shown = committedByRecord(alice, before);
+    expect(shown.filter((path) => !path.startsWith(`${own}/`)), shown.join("\n")).toEqual([]);
   });
 
   test("in a clone of a workspace that holds the lead's work, it is not committed, in today's words", () => {

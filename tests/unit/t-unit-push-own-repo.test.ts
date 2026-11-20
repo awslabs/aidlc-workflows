@@ -40,6 +40,7 @@ import {
   commitMessage,
   squashOnHost,
   TICKET_RULE_WORDS,
+  leadRecordOnItsOwnBranch,
 } from "../harness/team-build.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
@@ -660,6 +661,92 @@ describe("a Unit on the workspace's own repository", () => {
     expect(String(pushed.json?.notice)).toContain(recordWent("refunds"));
     // Their change to the lead's record stays uncommitted; aidlc/ is AI-DLC's record, so the line names no change of theirs.
     expect(String(pushed.json?.notice)).not.toContain("your other changes are still yours");
+  });
+
+  // A Unit taken and built in a clone of leadRecordOnItsOwnBranch, in the lead's
+  // own space (the default one, the take's) unless `space` names another.
+  function builtInClone(dir: string, home: ReturnType<typeof makeHome>, unit: string, file: string, space?: string): string {
+    const took = space === undefined ? run(UNIT, ["take", unit, ...fromHome(home)], dir) : takeIn(space, [unit, ...fromHome(home)], dir);
+    expect(took.status, took.out).toBe(0);
+    const intents = join(dir, "aidlc", "spaces", space ?? "default", "intents");
+    const record = join(intents, readdirSync(intents).find((name) => name.endsWith(`-${unit}`))!);
+    mkdirSync(join(dir, "src"), { recursive: true });
+    writeFileSync(join(dir, "src", file), `export const built = "${unit}";\n`);
+    const stage = join(record, "construction", unit, "code-generation");
+    mkdirSync(stage, { recursive: true });
+    writeFileSync(join(stage, "source-manifest.json"), `${JSON.stringify({
+      stage: "code-generation", unit, version: 1, writes: [{ path: `src/${file}` }],
+    })}\n`);
+    writeFileSync(join(stage, "code-summary.md"), `# Code summary\n\n${unit}.\n`);
+    return record;
+  }
+  const SEEDED = ["org.md", "phases/construction.md", "phases/ideation.md", "phases/inception.md", "phases/operation.md",
+    "project.md", "team.md", "templates/.gitkeep"];
+  // The install's memory files in a clone, untracked and as the install laid them.
+  const seedsAsLaid = (dir: string): void => {
+    for (const rel of SEEDED) {
+      const path = `aidlc/spaces/default/memory/${rel}`;
+      expect(git(dir, ["status", "--porcelain", "--untracked-files=all", "--", path]), path).toBe(`?? ${path}`);
+      expect(readFileSync(join(dir, ...path.split("/")))).toEqual(readFileSync(join(REPO_ROOT, "dist", "claude", ...path.split("/"))));
+    }
+  };
+  const ownOnly = (record: string, dir: string, recorded: string[]): void => {
+    const own = record.slice(dir.length + 1).replaceAll("\\", "/");
+    expect(recorded.length).toBeGreaterThan(0);
+    expect(recorded.filter((path) => !path.startsWith(`${own}/`)), recorded.join(", ")).toEqual([]);
+  };
+
+  test("a teammate's first Unit in the lead's space, cloned before the lead's record reached main: the record commit carries the build's folder only, and the request merges once the lead's record is in", () => {
+    const { home, clone, mergeLeadRecord } = leadRecordOnItsOwnBranch(UNITS);
+    const record = builtInClone(clone, home, "refunds", "refunds.ts");
+    const pushed = run(UNIT, ["push"], clone);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(String(pushed.json?.notice)).toContain(recordWent("refunds"));
+    ownOnly(record, clone, committed(home.remote, "refunds"));
+    seedsAsLaid(clone);
+    mergeLeadRecord();
+    expect(spawnSync("git", ["merge-tree", "--write-tree", "main", "refunds"], { cwd: home.remote }).status).toBe(0);
+  });
+
+  test("a teammate's first Unit in the lead's space, cloned before, the lead's record merged before the push: the build's folder only, and the request merges", () => {
+    const { home, clone, mergeLeadRecord } = leadRecordOnItsOwnBranch(UNITS);
+    const record = builtInClone(clone, home, "refunds", "refunds.ts");
+    mergeLeadRecord("squash");
+    const pushed = run(UNIT, ["push"], clone);
+    expect(pushed.status, pushed.out).toBe(0);
+    ownOnly(record, clone, committed(home.remote, "refunds"));
+    expect(spawnSync("git", ["merge-tree", "--write-tree", "main", "refunds"], { cwd: home.remote }).status).toBe(0);
+  });
+
+  test("the planner's own Unit with nothing of aidlc/ committed: the record commit carries the build's folder only", () => {
+    const { home } = leadRecordOnItsOwnBranch(UNITS);
+    git(home.dir, ["switch", "-q", "-c", "lead-local"]);
+    git(home.dir, ["reset", "-q", "--mixed", "HEAD~1"]);
+    expect(git(home.dir, ["ls-files", "--", "aidlc"])).toBe("");
+    const record = builtInClone(home.dir, home, "refunds", "refunds.ts");
+    const pushed = run(UNIT, ["push"], home.dir);
+    expect(pushed.status, pushed.out).toBe(0);
+    ownOnly(record, home.dir, committed(home.remote, "refunds"));
+  });
+
+  test("a teammate in a space of their own, cloned before the lead's record reached main: the new space's own files go with its first Unit", () => {
+    const { home, clone } = leadRecordOnItsOwnBranch(UNITS);
+    builtInClone(clone, home, "refunds", "refunds.ts", "payments");
+    const pushed = run(UNIT, ["push"], clone);
+    expect(pushed.status, pushed.out).toBe(0);
+    const recorded = committed(home.remote, "refunds");
+    expect(recorded).toContain("aidlc/spaces/payments/memory/project.md");
+    expect(recorded.filter((path) => !path.startsWith("aidlc/spaces/payments/"))).toEqual([]);
+  });
+
+  test("a teammate cloned after the lead's record reached main: the record commit carries the build's folder only", () => {
+    const { home, mergeLeadRecord } = leadRecordOnItsOwnBranch(UNITS);
+    mergeLeadRecord();
+    const lee = cloneOf(home.remote, "lee");
+    const record = builtInClone(lee, home, "refunds", "refunds.ts");
+    const pushed = run(UNIT, ["push"], lee);
+    expect(pushed.status, pushed.out).toBe(0);
+    ownOnly(record, lee, committed(home.remote, "refunds"));
   });
 
   const OTHER_CHANGES = "; your other changes are still yours, uncommitted.";

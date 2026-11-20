@@ -13242,11 +13242,20 @@ export function submoduleOverOwnCode(projectDir: string, unit: string): string |
 // AI-DLC's record of the build this workspace holds, as the Unit's pull
 // request carries it: the build's own folder, and its space's own folders
 // outside its works while git has none of that space yet (a team's new space).
-// Never another work's folder, the lead's record, or a path git ignores.
+// Never another work's folder, the lead's record, or a path git ignores. The
+// space the lead's plan names is the lead's record, which reaches the
+// repository with the lead's own request: never a team's new space, whatever
+// this checkout's HEAD has of it yet (a clone made before that request merged).
 function buildRecordPaths(pd: string): string[] {
   const own = relative(pd, activeRecordDir(pd)).split(sep).join("/");
   const space = own.split("/").slice(0, 3).join("/");
   if (git(pd, ["ls-files", "--", space]).stdout.trim() !== "") return [own];
+  try {
+    const build = unitBuildOf(readStateFile(pd));
+    if (build !== null && buildHomeSpace(pd, build) === own.split("/")[2]) return [own];
+  } catch {
+    // The build cannot be read here: the space's own folders go, as for a team's new space.
+  }
   const works = own.split("/").slice(0, 4).join("/");
   const folders = readdirSync(join(pd, ...space.split("/")), { withFileTypes: true })
     .filter((entry) => entry.isDirectory()).map((entry) => `${space}/${entry.name}`).filter((path) => path !== works);

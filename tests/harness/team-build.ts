@@ -297,6 +297,73 @@ export function cloneOf(remote: string, label: string): string {
   return dir;
 }
 
+/**
+ * Work on the workspace's own repository whose main is protected: the host's
+ * main holds only the code, and the lead's record (aidlc/, a rule its work
+ * learned in project.md) waits on a branch of its own for the lead's request,
+ * the plan shared meanwhile. `clone` is a teammate's clone made then, with the
+ * default space's memory AI-DLC's install lays, untracked. `mergeLeadRecord`
+ * merges the lead's request on the host.
+ */
+export function leadRecordOnItsOwnBranch(dependencies: string): {
+  home: Home;
+  clone: string;
+  mergeLeadRecord: (how?: "merge" | "squash") => void;
+} {
+  const home = makeHome({ repos: {}, dependencies });
+  const chose = run(STATE, ["set-unit-ownership", "team"], home.dir);
+  expect(chose.status, chose.out).toBe(0);
+  const statePath = seededStateFile(home.dir);
+  const state = readFileSync(statePath, "utf-8");
+  if (!state.includes("- **Home Location**:")) {
+    writeFileSync(statePath, state.replace("## Runtime State\n", `## Runtime State\n- **Home Location**: ${home.remote}\n`));
+  }
+  const project = join(home.dir, "aidlc", "spaces", "default", "memory", "project.md");
+  writeFileSync(project, `${readFileSync(project, "utf-8")}\n- Gift card codes are compared case-insensitively.\n`);
+  // The code, as main holds it, so the lead's request adds the record and nothing else.
+  mkdirSync(join(home.dir, "src"), { recursive: true });
+  writeFileSync(join(home.dir, "src", "app.ts"), "export const app = 1;\n");
+  git(home.dir, ["add", "-A"]);
+  git(home.dir, ["commit", "-q", "-m", "lead: the plan and its record"]);
+  const recordTree = git(home.dir, ["rev-parse", "HEAD^{tree}"]);
+  const seed = join(tempDir("code-seed"), "repo");
+  git(tempDir("code-seed-parent"), ["clone", "-q", home.remote, seed]);
+  git(seed, ["config", "user.name", "lead"]);
+  git(seed, ["config", "user.email", "lead@example.test"]);
+  git(seed, ["switch", "-q", "--orphan", "code"]);
+  writeFileSync(join(seed, ".gitignore"), readFileSync(join(home.dir, ".gitignore"), "utf-8"));
+  mkdirSync(join(seed, "src"), { recursive: true });
+  writeFileSync(join(seed, "src", "app.ts"), "export const app = 1;\n");
+  git(seed, ["add", "--", ".gitignore", "src/app.ts"]);
+  git(seed, ["commit", "-q", "-m", "shop: the code"]);
+  const codeOnly = git(seed, ["rev-parse", "HEAD"]);
+  git(seed, ["push", "-q", "--force", "origin", "code:main"]);
+  git(home.dir, ["fetch", "-q", "origin", "main"]);
+  const record = git(home.dir, ["commit-tree", recordTree, "-p", codeOnly, "-m", "lead: AI-DLC's record"]);
+  git(home.dir, ["push", "-q", "origin", `${record}:refs/heads/lead-record`]);
+  git(home.dir, ["fetch", "-q", "origin"]);
+  git(home.dir, ["switch", "-q", "-C", "lead-record", "--track", "origin/lead-record"]);
+  const shared = run(UNIT, ["share", "--plan"], home.dir);
+  expect(shared.status, shared.out).toBe(0);
+  const clone = cloneOf(home.remote, "kai");
+  seedAidlcMemory(clone);
+  const mergeLeadRecord = (how: "merge" | "squash" = "merge"): void => {
+    const dir = join(tempDir("lead-merger"), "repo");
+    git(tempDir("lead-merger-parent"), ["clone", "-q", home.remote, dir]);
+    git(dir, ["config", "user.name", "reviewer"]);
+    git(dir, ["config", "user.email", "reviewer@example.test"]);
+    git(dir, ["fetch", "-q", "origin", "lead-record"]);
+    if (how === "squash") {
+      git(dir, ["merge", "-q", "--squash", "origin/lead-record"]);
+      git(dir, ["commit", "-q", "-m", "lead-record (squashed)"]);
+    } else {
+      git(dir, ["merge", "-q", "--no-ff", "-m", "Merge branch 'lead-record' into 'main'", "origin/lead-record"]);
+    }
+    git(dir, ["push", "-q", "origin", "main"]);
+  };
+  return { home, clone, mergeLeadRecord };
+}
+
 export const ENV: NodeJS.ProcessEnv = {
   ...GIT_ENV,
   AIDLC_SKIP_ARTIFACT_GUARD: "1",
