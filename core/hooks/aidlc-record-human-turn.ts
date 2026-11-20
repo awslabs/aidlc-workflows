@@ -60,6 +60,7 @@
 // The MARKER is deliberately still written. It is not an authority signal, and
 // suppressing it would change the Stop hook's conversational carve-out, which is
 // a separate behaviour with its own tests.
+import { readHookInput } from "../tools/aidlc-hook-input.ts";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -1173,5 +1174,5 @@ if (
   process.argv.includes("--internal-aidlc-record-human-turn") &&
   (process.env.AIDLC_INTERNAL_HUMAN_TURN_TOKEN ?? "") !== ""
 ) {
-  process.exit(await run(await Bun.stdin.text()));
+  process.exit(await run(await readHookInput()));
 }

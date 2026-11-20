@@ -111,6 +111,8 @@ export type InstalledPlugin = {
   baseProblem: PluginBaseProblem | { kind: "unreadable"; reason: string } | null;
   // The commands its own manifest names (aidlc.commands), well-formed ones only.
   commands?: Record<string, PluginCommandEntry>;
+  // aidlc.advertiseMetrics from its manifest; absent or non-boolean means false.
+  advertiseMetrics?: boolean;
   // The host's own id for it (name@marketplace), where the host lists plugins.
   hostId?: string;
 };
@@ -143,6 +145,9 @@ export type CompositionStamp = {
   // them), and the names the sync that wrote this found taken, so it says each
   // once. Absent when it has none.
   commands?: Record<string, PluginCommandEntry>;
+  // Written only when true: the plugin's metrics carry its version and run its
+  // tools/<plugin>-metrics.ts (aidlc-metrics.ts reads it). Absent means false.
+  advertiseMetrics?: true;
   skippedCommands?: string[];
 };
 
@@ -359,7 +364,17 @@ export function normalizeInstalledPlugin(
     sourceHash: pluginSourceHash(canonicalRoot),
     ...installedBase(canonicalRoot, key),
     commands: installedCommands(canonicalRoot),
+    advertiseMetrics: installedAdvertiseMetrics(canonicalRoot),
   };
+}
+
+function installedAdvertiseMetrics(root: string): boolean {
+  try {
+    const manifest = readJson(join(root, ".aidlc-plugin", "plugin.json")) as { aidlc?: { advertiseMetrics?: unknown } } | null;
+    return manifest?.aidlc?.advertiseMetrics === true;
+  } catch {
+    return false;
+  }
 }
 
 // A projection built before the plugin's own manifest travelled with it names
@@ -790,7 +805,8 @@ function parseStamp(path: string): CompositionStamp | null {
       STRICT_SEMVER.test(value.version) &&
       typeof value.sourceHash === "string" &&
       /^sha256:[0-9a-f]{64}$/.test(value.sourceHash) &&
-      (value.base === undefined || (typeof value.base === "string" && SAFE_PLUGIN_KEY.test(value.base)))
+      (value.base === undefined || (typeof value.base === "string" && SAFE_PLUGIN_KEY.test(value.base))) &&
+      (value.advertiseMetrics === undefined || value.advertiseMetrics === true)
     ) {
       return value as CompositionStamp;
     }
@@ -1185,6 +1201,7 @@ function writeCompositionRecords(
     sourceHash: plugin.sourceHash,
     ...(plugin.base ? { base: plugin.base.name } : {}),
     ...(Object.keys(commands).length > 0 ? { commands } : {}),
+    ...(plugin.advertiseMetrics === true ? { advertiseMetrics: true as const } : {}),
   };
   writeFileSync(
     join(dataDir, `plugin-owned-${plugin.key}.json`),
@@ -2564,7 +2581,8 @@ function compositionIsCurrent(
     !stamp ||
     stamp.version !== plugin.version ||
     stamp.sourceHash !== plugin.sourceHash ||
-    (stamp.base ?? null) !== (plugin.base?.name ?? null)
+    (stamp.base ?? null) !== (plugin.base?.name ?? null) ||
+    (stamp.advertiseMetrics === true) !== (plugin.advertiseMetrics === true)
   ) return false;
   // Turning a plugin off strips what it merged into core stages and removes
   // its record of that, so when it is on again its compose merges it back. A

@@ -37,6 +37,7 @@
 // on the chat's next shell call, the setter's own as a rule (sayOnceNoteLine),
 // and never beside a relay line.
 
+import { readHookInput } from "../tools/aidlc-hook-input.ts";
 import { LONG_SUBPROCESS_TIMEOUT_MS } from "../tools/aidlc-runtime-budget.ts";
 import { statSync } from "node:fs";
 import { basename, join } from "node:path";
@@ -405,6 +406,6 @@ return 0;
 }
 
 if (import.meta.main) {
-  process.exit(await run(await Bun.stdin.text()));
+  process.exit(await run(await readHookInput()));
 }
 import { spawnSync } from "node:child_process";

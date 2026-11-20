@@ -61,6 +61,7 @@
 // the words the agent wrote are what runs and what the shipped
 // rules/default.rules prefixes match.
 
+import { readHookInput } from "../tools/aidlc-hook-input.ts";
 import { createHash, randomUUID } from "node:crypto";
 import {
   existsSync,
@@ -1083,5 +1084,5 @@ switch (target) {
 }
 
 if (import.meta.main) {
-  process.exit(await run(process.argv[2] ?? "", await Bun.stdin.text(), process.argv.slice(3)));
+  process.exit(await run(process.argv[2] ?? "", await readHookInput(), process.argv.slice(3)));
 }

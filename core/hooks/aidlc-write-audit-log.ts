@@ -6,6 +6,7 @@
 // Receives JSON on stdin from Claude Code. No-op if no audit.md exists (no
 // active workflow in this cwd) to preserve the "only log when
 // relevant" behaviour.
+import { readHookInput } from "../tools/aidlc-hook-input.ts";
 import { existsSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { appendAuditEntryUnlocked } from "../tools/aidlc-audit.ts";
@@ -237,5 +238,5 @@ return 0;
 }
 
 if (import.meta.main) {
-  process.exit(await run(await Bun.stdin.text()));
+  process.exit(await run(await readHookInput()));
 }

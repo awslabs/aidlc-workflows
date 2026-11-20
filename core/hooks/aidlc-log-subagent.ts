@@ -6,6 +6,7 @@
 // helper was sent), is written by recordSubagentDispatch: from the dispatch
 // hook every adapter but Cursor's and Kiro IDE's runs, and here for a
 // `hook_event_name: "SubagentStart"` those two forward.
+import { readHookInput } from "../tools/aidlc-hook-input.ts";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry } from "../tools/aidlc-audit.ts";
@@ -232,5 +233,5 @@ export async function run(input: string): Promise<number> {
 }
 
 if (import.meta.main) {
-  process.exit(await run(await Bun.stdin.text()));
+  process.exit(await run(await readHookInput()));
 }

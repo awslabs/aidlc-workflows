@@ -6,6 +6,7 @@
   "dependencies": ["core"],
   "aidlc": {
     "rulesLevel": "team",
+    "advertiseMetrics": true,
     "contributes": {
       "stages": "stages/",
       "overlays": "contributions/",

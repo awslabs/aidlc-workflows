@@ -35,6 +35,7 @@
 //                  guard-tool-call | state-transition-guard | plan-approval-guard |
 //                  reviewer-scope | review-freeze | deliver-stage-rules
 
+import { readHookInput } from "../tools/aidlc-hook-input.ts";
 import {
   existsSync,
   mkdirSync,
@@ -1653,5 +1654,5 @@ return result.code;
 }
 
 if (import.meta.main) {
-  process.exit(await run(process.argv[2] ?? "", await Bun.stdin.text(), process.argv.slice(3)));
+  process.exit(await run(process.argv[2] ?? "", await readHookInput(), process.argv.slice(3)));
 }
