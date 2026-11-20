@@ -48,6 +48,8 @@ import {
   takeIn,
   planFrom,
   sharePlan,
+  finishInception,
+  planRefOf,
 } from "../harness/team-build.ts";
 import { driveCodeGeneration, type EarlyStart, outsideTheUnits, teammateTakes } from "../harness/early-start.ts";
 
@@ -1161,5 +1163,53 @@ describe("who hears a change to the contract summary", () => {
     approveContracts(home);
     next(home.dir);
     expect([amendments(home, "refunds"), amendments(home, "checkout-ui"), amendments(home, "reporting")]).toEqual([1, 1, 1]);
+  });
+});
+
+// A change the lead approved is one the lead decided: the plan's write comes
+// before the receipt the answer renews, so the plan and a take keep the
+// stage's gate time for it, with nothing said as changed.
+describe("a team's change the lead approved, on a plan whose Inception has its receipts", () => {
+  test("goes on the plan under its stage's gate time; a share after it keeps that, and a take says nothing of a change", () => {
+    const hosts = { "checkout-api": codeHost("checkout-api"), billing: codeHost("billing"), "checkout-web": codeHost("checkout-web") };
+    const lead = makeHome({ repos: hosts });
+    expect(run(STATE, ["set-unit-ownership", "team"], lead.dir).status).toBe(0);
+    const gates = finishInception(lead.dir);
+    git(lead.dir, ["add", "-A"]);
+    git(lead.dir, ["commit", "-q", "-m", "teams"]);
+    git(lead.dir, ["push", "-q", "origin", "main"]);
+    const home = sharePlan(lead);
+    const alice = cloneOf(home.remote, "alice");
+    for (const [name, host] of Object.entries(hosts)) git(alice, ["clone", "-q", host, join(alice, name)]);
+    expect(takeIn("payments", ["refunds", ...planFrom(home)], alice).status).toBe(0);
+    const intents = join(alice, "aidlc", "spaces", "payments", "intents");
+    const record = join(intents, readdirSync(intents).find((name) => name.endsWith("-refunds"))!);
+    const theirs = "# Requirements\n\nFR1 refunds, partial amounts too.\n";
+    writeFileSync(join(record, ...REQUIREMENTS.split("/")), theirs);
+    expect(run(UNIT, ["propose", "--input", "requirements.md", "--person-words", "partial amounts"], alice).status).toBe(0);
+    git(home.dir, ["fetch", "-q", "origin"]);
+    expect(next(home.dir).ask_type).toBe("unit-amend");
+    expect(run(UNIT, ["amend", "refunds", "--input", REQUIREMENTS, "--answer", "approve", "--person-words", "yes"], home.dir).status).toBe(0);
+    const planNow = () => JSON.parse(git(home.hosts["checkout-api"], ["show", `${planRefOf(home.id8)}:plan.json`])) as
+      { inputs: Array<{ path: string; fingerprint: string; approved?: string }>; [key: string]: unknown };
+    const amended = planNow().inputs.find((input) => input.path === REQUIREMENTS);
+    expect(amended?.approved).toBe(gates["requirements-analysis"]);
+    expect("changed_since_approval" in planNow()).toBe(false);
+    // The share after it writes the same for that file, and lists nothing as changed.
+    const shared = run(UNIT, ["share", "--plan"], home.dir);
+    expect(shared.status, shared.out).toBe(0);
+    expect(planNow().inputs.find((input) => input.path === REQUIREMENTS)).toEqual(amended);
+    expect("changed_since_approval" in planNow()).toBe(false);
+    const bob = cloneOf(home.remote, "bob");
+    const took = takeIn("web", ["checkout-ui", ...planFrom(home)], bob);
+    expect(took.status, took.out).toBe(0);
+    expect(String(took.json?.notice)).toContain("from what the lead approved. If it is not yours to build");
+    const bobIntents = join(bob, "aidlc", "spaces", "web", "intents");
+    const taken = readFileSync(join(bobIntents, readdirSync(bobIntents).find((name) => name.endsWith("-checkout-ui"))!, "approved-inputs.md"), "utf-8");
+    expect(taken).toContain(`- requirements-analysis approved by the lead ${gates["requirements-analysis"]}`);
+    // A stage that only read the changed file keeps its own gate's time.
+    expect(taken).toContain(`- units-generation approved by the lead ${gates["units-generation"]}`);
+    expect(taken).toContain("These files are the lead's: approved there, read here.");
+    expect(taken).toContain(`| ${REQUIREMENTS} | sha256:`);
   });
 });

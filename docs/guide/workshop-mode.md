@@ -721,7 +721,12 @@ from a copy of what the lead approved. The copy is what the lead's Ideation
 and Inception stages wrote (the mockups and the Unit plan among them), at the
 paths the lead's project holds them, listed with their fingerprints in
 `approved-inputs.md`; the lead's Reverse Engineering and Practices Discovery
-notes stay theirs. The build records the lead's repos, cloned here or not
+notes stay theirs. A file the lead changed after its stage was approved goes as
+the lead changed it, and the take says so ("from what the lead approved, with
+the requirements as the lead changed them since"): its stage gets no approval
+time in `approved-inputs.md`, and at that share the lead hears that anyone
+already building keeps the version they have until the lead redoes that stage,
+which then sends it to them. A build keeps the record its take wrote. The build records the lead's repos, cloned here or not
 yet. The lead's Inception shows as done there and does not run again, and its
 approvals stay the lead's. Your team approves its Unit the way the lead's
 work does: after every stage, or once at its end.

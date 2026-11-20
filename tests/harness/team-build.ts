@@ -20,6 +20,10 @@ import {
 } from "./fixtures.ts";
 import { readConductorSurface } from "./conductor-skill.ts";
 import { copyOf } from "../../dist/claude/.claude/tools/aidlc-unit-teams.ts";
+import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import { loadGraph } from "../../dist/claude/.claude/tools/aidlc-graph.ts";
+import { stageValidationAuditFields, VALIDATION_BASIS_FIELD } from "../../dist/claude/.claude/tools/aidlc-validity.ts";
+import { rawFingerprintForm } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { asLeadsOwnCheckout } from "./team-unit-merge.ts";
 
 export const UNIT = join(AIDLC_SRC, "tools", "aidlc-unit.ts");
@@ -547,6 +551,31 @@ export function recordHostOf(home: PlanHome, unit: string): string {
   const name = plan.units.find((entry) => entry.name === unit)?.record;
   if (name === undefined || home.hosts[name] === undefined) throw new Error(`the plan names no host for ${unit}'s record`);
   return home.hosts[name];
+}
+
+/**
+ * The lead's Inception as a finished run leaves it: Requirements Analysis (with
+ * its questions file, so a stage holds more than one file) and Units Generation
+ * each approved at its gate and completed with its receipt (`olderForm`: as an
+ * older AI-DLC recorded it, over the files' raw bytes). Returns each gate's time.
+ */
+export function finishInception(dir: string, olderForm = false): Record<"requirements-analysis" | "units-generation", string> {
+  writeFileSync(join(seededRecordDir(dir), "inception", "requirements-analysis", "requirements-analysis-questions.md"),
+    "# Questions\n\nQ1 Partial refunds? Yes.\n");
+  const state = readFileSync(seededStateFile(dir), "utf-8");
+  const graph = loadGraph();
+  const gate = (slug: "requirements-analysis" | "units-generation"): string => {
+    const at = appendAuditEntry("GATE_APPROVED", { Stage: slug, "User Input": "Approve" }, dir).timestamp;
+    const fields = stageValidationAuditFields(dir, graph.find((node) => node.slug === slug)!, state);
+    if (olderForm) {
+      const basis = JSON.parse(fields[VALIDATION_BASIS_FIELD]) as Record<"inputs" | "outputs", { contentHash: string }[]>;
+      for (const item of [...basis.inputs, ...basis.outputs]) item.contentHash = rawFingerprintForm(item.contentHash) ?? item.contentHash;
+      fields[VALIDATION_BASIS_FIELD] = JSON.stringify(basis);
+    }
+    appendAuditEntry("STAGE_COMPLETED", { Stage: slug, ...fields }, dir);
+    return at;
+  };
+  return { "requirements-analysis": gate("requirements-analysis"), "units-generation": gate("units-generation") };
 }
 
 export function stateOf(dir: string): string {

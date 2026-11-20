@@ -24,6 +24,7 @@ import {
   codeHost,
   DEPENDENCIES,
   ENV,
+  finishInception,
   git,
   hook,
   HOME_RECORD,
@@ -1976,3 +1977,104 @@ describe("at the lead's own work whose plan is its own ref, the lines that named
   });
 });
 
+// A live run: the lead approved Requirements Analysis, later had their agent
+// change requirements.md, and shared the plan again; the next take recorded
+// the changed text as approved at the old gate's time, and the teams already
+// building kept the old text with no word to the lead.
+describe("a stage's documents the lead changed after approving them", () => {
+  const REQUIREMENTS = "inception/requirements-analysis/requirements.md";
+  const QUESTIONS = "inception/requirements-analysis/requirements-analysis-questions.md";
+  const UNITS = "inception/units-generation/unit-of-work.md";
+  const approvedOf = (plan: Plan, path: string): string | undefined =>
+    (plan.inputs.find((input) => input.path === path) as { approved?: string } | undefined)?.approved;
+  const changed = "# Requirements\n\nFR1 refunds, partial amounts too.\n";
+
+  test("go on the plan as they are, with no approval time on any file of that stage, listed as changed since", () => {
+    const home = makePlanHome({ share: false });
+    const gates = finishInception(home.dir);
+    share(home.dir);
+    const ref = planRefOf(home.id8);
+    const first = planAt(home.hosts["checkout-api"], ref);
+    // As approved: each file with its stage's gate time, and nothing listed as changed.
+    expect(approvedOf(first, REQUIREMENTS), JSON.stringify(first.inputs)).toBe(gates["requirements-analysis"]);
+    expect(approvedOf(first, QUESTIONS)).toBe(gates["requirements-analysis"]);
+    expect(approvedOf(first, UNITS)).toBe(gates["units-generation"]);
+    expect("changed_since_approval" in first).toBe(false);
+    const path = join(seededRecordDir(home.dir), ...REQUIREMENTS.split("/"));
+    const approved = readFileSync(path, "utf-8");
+    writeFileSync(path, changed);
+    expect(share(home.dir).json?.notice).toBe("The plan is shared in checkout-api.");
+    const second = planAt(home.hosts["checkout-api"], ref);
+    expect(second.inputs.find((input) => input.path === REQUIREMENTS)?.fingerprint).toBe(textFingerprint(changed));
+    expect(approvedOf(second, REQUIREMENTS)).toBeUndefined();
+    expect(approvedOf(second, QUESTIONS)).toBeUndefined();
+    expect(approvedOf(second, UNITS)).toBe(gates["units-generation"]);
+    expect(second.changed_since_approval).toEqual([REQUIREMENTS]);
+    // Shared again with nothing new: nothing written.
+    expect(share(home.dir).json?.notice).toBe("The plan in checkout-api already has everything here.");
+    // The approved text put back: the stage's time is back, and nothing is listed.
+    writeFileSync(path, approved);
+    share(home.dir);
+    const back = planAt(home.hosts["checkout-api"], ref);
+    expect(approvedOf(back, REQUIREMENTS)).toBe(gates["requirements-analysis"]);
+    expect(approvedOf(back, QUESTIONS)).toBe(gates["requirements-analysis"]);
+    expect("changed_since_approval" in back).toBe(false);
+  });
+
+  test("the lead hears at that share, once, while someone builds a Unit that reads it", () => {
+    const home = makePlanHome({ share: false });
+    finishInception(home.dir);
+    share(home.dir);
+    const pay = teamWorkspace(home.hosts, "pay", ["billing"]);
+    expect(run(UNIT, ["take", "refunds", "--plan", home.id8, "--from", home.hosts["checkout-api"]], pay).status).toBe(0);
+    // The lead's look reads the take.
+    expect(run(ORCH, ["team-board"], home.dir).status).toBe(0);
+    writeFileSync(join(seededRecordDir(home.dir), ...REQUIREMENTS.split("/")), changed);
+    expect(share(home.dir).json?.notice).toBe(
+      "The plan is shared in checkout-api. requirements.md changed after Requirements Analysis finished. Anyone who takes a " +
+        "Unit from now gets it as it is; anyone already building keeps the version they have until you redo Requirements " +
+        "Analysis with your change.",
+    );
+    expect(share(home.dir).json?.notice).toBe("The plan in checkout-api already has everything here.");
+  });
+
+  test("a receipt an older AI-DLC recorded over raw line endings reads as approved when nothing changed", () => {
+    const home = makePlanHome({ share: false });
+    writeFileSync(join(seededRecordDir(home.dir), ...REQUIREMENTS.split("/")), "# Requirements\r\n\r\nFR1 refunds.\r\n");
+    const gates = finishInception(home.dir, true);
+    share(home.dir);
+    const plan = planAt(home.hosts["checkout-api"], planRefOf(home.id8));
+    expect(approvedOf(plan, REQUIREMENTS), JSON.stringify(plan.inputs)).toBe(gates["requirements-analysis"]);
+    expect("changed_since_approval" in plan).toBe(false);
+  });
+
+  test("the Unit plan changed with a team building is not named to the lead: a redo does not send it", () => {
+    const home = makePlanHome({ share: false });
+    finishInception(home.dir);
+    share(home.dir);
+    const pay = teamWorkspace(home.hosts, "pay", ["billing"]);
+    expect(run(UNIT, ["take", "refunds", "--plan", home.id8, "--from", home.hosts["checkout-api"]], pay).status).toBe(0);
+    expect(run(ORCH, ["team-board"], home.dir).status).toBe(0);
+    writeFileSync(join(seededRecordDir(home.dir), "inception", "units-generation", "unit-of-work-dependency.md"),
+      DEPENDENCIES.replace("```\n", "  - name: ledger-sync\n    kind: service\n    repos: [billing]\n    depends_on: []\n```\n"));
+    const notice = String(share(home.dir).json?.notice);
+    expect(notice).toContain("ledger-sync");
+    expect(notice).not.toContain("changed after");
+  });
+
+  test("several files, of several stages, are named together, and the redo names the earliest stage", () => {
+    const home = makePlanHome({ share: false });
+    finishInception(home.dir);
+    share(home.dir);
+    const pay = teamWorkspace(home.hosts, "pay", ["billing"]);
+    expect(run(UNIT, ["take", "refunds", "--plan", home.id8, "--from", home.hosts["checkout-api"]], pay).status).toBe(0);
+    expect(run(ORCH, ["team-board"], home.dir).status).toBe(0);
+    writeFileSync(join(seededRecordDir(home.dir), ...REQUIREMENTS.split("/")), changed);
+    writeFileSync(join(seededRecordDir(home.dir), ...UNITS.split("/")), "# Units of work\n\nrefunds (partial too), checkout-ui, reporting.\n");
+    expect(share(home.dir).json?.notice).toBe(
+      "The plan is shared in checkout-api. requirements.md and unit-of-work.md changed after Requirements Analysis and Units " +
+        "Generation finished. Anyone who takes a Unit from now gets them as they are; anyone already building keeps the " +
+        "versions they have until you redo Requirements Analysis with your changes.",
+    );
+  });
+});

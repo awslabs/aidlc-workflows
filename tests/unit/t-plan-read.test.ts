@@ -15,7 +15,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSyn
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { repoCopyKey } from "../../dist/claude/.claude/tools/aidlc-unit-teams.ts";
-import { AIDLC_SRC, seededStateFile } from "../harness/fixtures.ts";
+import { AIDLC_SRC, seededRecordDir, seededStateFile } from "../harness/fixtures.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { asLeadsOwnCheckout } from "../harness/team-unit-merge.ts";
 import {
@@ -25,6 +25,7 @@ import {
   codeGenerated,
   codeHost,
   ENV,
+  finishInception,
   git,
   type Home,
   HOME_RECORD,
@@ -1555,5 +1556,67 @@ describe("a clone of the team's workspace when the lead moves the plan", () => {
     expect((step.change_notices ?? []) as string[], JSON.stringify(step).slice(0, 900))
       .toContain(`The plan of fixture moved to billing (${home.hosts.billing}); this computer writes it there now.`);
     expect(readFileSync(seededStateFile(laptop), "utf-8")).toContain(`- **Home Location**: ${home.hosts.billing}`);
+  });
+});
+
+// A live run: a file the lead changed after approving it went to the next
+// take as "approved by the lead" at the old gate's time, and the take said it
+// was built "from what the lead approved".
+describe("a take of a plan with a file the lead changed after approving it", () => {
+  const REQUIREMENTS = "inception/requirements-analysis/requirements.md";
+  const QUESTIONS = "inception/requirements-analysis/requirements-analysis-questions.md";
+
+  test("copies it as it is, with no approval line for its stage, and says the lead changed it since", () => {
+    const home = makePlanHome({ share: false });
+    const gates = finishInception(home.dir);
+    expect(run(UNIT, ["share", "--plan"], home.dir).status).toBe(0);
+    writeFileSync(join(seededRecordDir(home.dir), ...REQUIREMENTS.split("/")), "# Requirements\n\nFR1 refunds, partial amounts too.\n");
+    expect(run(UNIT, ["share", "--plan"], home.dir).status).toBe(0);
+    const plan = home.hosts["checkout-api"];
+    const pay = teamWorkspace(home.hosts, "pay", ["billing"]);
+    const took = run(UNIT, ["take", "refunds", "--plan", home.id8, "--from", plan], pay);
+    expect(took.status, took.out).toBe(0);
+    expect(String(took.json?.notice)).toStartWith("refunds is yours. You build it under your team's rules, from what the lead " +
+      "approved, with the requirements as the lead changed them since. If it is not yours to build, tell me and I will hand it back.");
+    const record = readFileSync(join(buildDir(pay, "refunds"), "approved-inputs.md"), "utf-8");
+    expect(record).toContain("These files are the lead's: approved there, with the requirements as the lead changed them since, " +
+      "read here. Change one and AI-DLC asks whether to put your change on the Unit's record, for the lead to decide.");
+    expect(record).toContain(`| ${REQUIREMENTS} | sha256:`);
+    expect(record).toContain(`| ${QUESTIONS} | sha256:`);
+    expect(record).not.toContain("requirements-analysis approved by the lead");
+    expect(record).toContain(`- units-generation approved by the lead ${gates["units-generation"]}`);
+  });
+
+  test("one file the lead changed is said as it, two as them, each by its name", () => {
+    const home = makePlanHome({ share: false });
+    finishInception(home.dir);
+    expect(run(UNIT, ["share", "--plan"], home.dir).status).toBe(0);
+    const UNITS = "inception/units-generation/unit-of-work.md";
+    writeFileSync(join(seededRecordDir(home.dir), ...UNITS.split("/")), "# Units of work\n\nrefunds (partial too), checkout-ui, reporting.\n");
+    expect(run(UNIT, ["share", "--plan"], home.dir).status).toBe(0);
+    const pay = teamWorkspace(home.hosts, "pay", ["billing"]);
+    const one = run(UNIT, ["take", "refunds", "--plan", home.id8, "--from", home.hosts["checkout-api"]], pay);
+    expect(String(one.json?.notice), one.out).toContain("from what the lead approved, with the unit of work as the lead changed it since.");
+    writeFileSync(join(seededRecordDir(home.dir), ...REQUIREMENTS.split("/")), "# Requirements\n\nFR1 refunds, partial amounts too.\n");
+    expect(run(UNIT, ["share", "--plan"], home.dir).status).toBe(0);
+    const web = teamWorkspace(home.hosts, "web", ["checkout-web"]);
+    const two = run(UNIT, ["take", "checkout-ui", "--plan", home.id8, "--from", home.hosts["checkout-api"]], web);
+    expect(String(two.json?.notice), two.out).toContain(
+      "from what the lead approved, with the requirements and the unit of work as the lead changed them since.");
+  });
+
+  test("a take of a plan with every file as approved records each stage's approval and says nothing of a change", () => {
+    const home = makePlanHome({ share: false });
+    const gates = finishInception(home.dir);
+    expect(run(UNIT, ["share", "--plan"], home.dir).status).toBe(0);
+    const pay = teamWorkspace(home.hosts, "pay", ["billing"]);
+    const took = run(UNIT, ["take", "refunds", "--plan", home.id8, "--from", home.hosts["checkout-api"]], pay);
+    expect(took.status, took.out).toBe(0);
+    expect(String(took.json?.notice)).toStartWith("refunds is yours. You build it under your team's rules, from what the lead " +
+      "approved. If it is not yours to build, tell me and I will hand it back.");
+    const record = readFileSync(join(buildDir(pay, "refunds"), "approved-inputs.md"), "utf-8");
+    expect(record).toContain("These files are the lead's: approved there, read here.");
+    expect(record).toContain(`- requirements-analysis approved by the lead ${gates["requirements-analysis"]}`);
+    expect(record).toContain(`- units-generation approved by the lead ${gates["units-generation"]}`);
   });
 });

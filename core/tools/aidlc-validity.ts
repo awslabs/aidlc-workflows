@@ -137,6 +137,8 @@ interface CompletionReceipts {
    * message's id.
    */
   approvedIn: Map<string, string>;
+  /** When the person last approved each stage at its gate. */
+  approvedAt: Map<string, string>;
 }
 
 interface ObservedDependency {
@@ -664,6 +666,7 @@ function completionReceiptsFromAudit(audit: string): CompletionReceipts {
   // run's own approval), ends both.
   const approvals = new Map<string, string>();
   const approvedWith = new Map<string, string>();
+  const approvedAt = new Map<string, string>();
   let latestMessage: string | null = null;
 
   for (const event of orderedMainWorkflowEvents(audit)) {
@@ -683,6 +686,7 @@ function completionReceiptsFromAudit(audit: string): CompletionReceipts {
       const message = auditBlockField(event.block, "Message Id");
       if (message) approvals.set(stage, message);
       else approvals.delete(stage);
+      approvedAt.set(stage, event.timestamp);
       continue;
     }
     if (event.event === "STAGE_STARTED") {
@@ -733,7 +737,38 @@ function completionReceiptsFromAudit(audit: string): CompletionReceipts {
     }
   }
   const approvedIn = new Map([...approvedWith].filter(([, message]) => message === latestMessage));
-  return { current, latestKnown, renewed, approvedIn };
+  return { current, latestKnown, renewed, approvedIn, approvedAt };
+}
+
+/**
+ * Which version of each of `slugs`'s documents the person approved, and when,
+ * as its receipt says: the time its gate last approved it, and its outputs not
+ * as its last receipt holds them now, read as the validity check reads them
+ * (null with no receipt to compare, or none that could be read).
+ */
+export function approvedStageVersions(
+  projectDir: string, stateContent: string, slugs: Iterable<string>, audit: string,
+): Map<string, { at: string | undefined; changed: ReadonlySet<string> | null }> {
+  const { latestKnown, approvedAt } = completionReceiptsFromAudit(audit);
+  const stages = loadGraph();
+  const versions = new Map<string, { at: string | undefined; changed: ReadonlySet<string> | null }>();
+  for (const slug of slugs) {
+    const receipt = latestKnown.get(slug);
+    const stage = stages.find((node) => node.slug === slug);
+    let changed: Set<string> | null = null;
+    try {
+      if (receipt !== undefined && stage !== undefined) {
+        // Captured first: a receipt's older forms are known once its files are read.
+        const current = captureStageValidationBasis(projectDir, stage, stateContent, stages);
+        changed = new Set(diffStageValidationBasis(basisInCurrentForm(receipt), current)
+          .flatMap((change) => change.startsWith("output:") ? [change.slice("output:".length)] : []));
+      }
+    } catch {
+      // Not read: the stage keeps its approval time.
+    }
+    versions.set(slug, { at: approvedAt.get(slug), changed });
+  }
+  return versions;
 }
 
 /** Return schema-3 receipts for each stage's current attempt. */

@@ -1222,8 +1222,9 @@ Location` recorded), `unit share --plan` shares the plan as a git ref of its
 own, `refs/aidlc/plans/<work id>`, in one code repository everyone who takes a Unit can read:
 the first of the work's repositories with an address, or the one `--repo <name
 or address>` names. The ref holds `plan.json` (the Units, the repositories each
-is built in, the stages and settings), the approved inputs, and your team's
-practices and project rules. It is pushed with your own git as a commit on the
+is built in, the stages and settings), the inputs your stages wrote, each with
+when you approved it (a file you changed after approving it goes as changed,
+with no time), and your team's practices and project rules. It is pushed with your own git as a commit on the
 ref's tip, never forced, and nothing is committed or pushed in the workspace:
 no branch is made, and no code clone gains a remote or a setting. It says where
 the plan is and the address anyone taking a Unit needs; run again with nothing new, it writes

@@ -281,8 +281,8 @@ import { maskUserinfo, workspaceCloneUrl } from "./aidlc-workspace-sync.ts";
 import { gitAddressKey } from "./aidlc-workspace-repos.ts";
 import { loadGraph } from "./aidlc-graph.ts";
 import {
+  approvedStageVersions,
   captureStageValidationBasis,
-  diffStageValidationBasis,
   latestCompletionBasesFromAudit,
   sharedInputAmendedFields,
   stageLabel,
@@ -7595,6 +7595,39 @@ export const planNoRemoteLine = (repo: string, later = false): string =>
   (later ? "Give me its address and I'll share it." : "Give me its address, or name another repository everyone who takes a Unit can read, and I'll share it there.");
 export const PLAN_NOT_NOW = "Nothing is pushed; say when you want it shared.";
 
+// The lead's files a share put on the plan changed since their approval, said
+// once at that share while someone other than the lead's own project builds a
+// Unit, not done, whose stages read one: who gets which version, and the way
+// to send it. Null otherwise.
+function changedSharedLine(pd: string, before: PlanJson | null, after: PlanJson | null): string | null {
+  // Only the inputs a redo sends (the Unit plan reaches the teams its own way).
+  const sent = new Set(approvedInputPathsHere(pd));
+  const listed = after === null ? [] : changedSinceApproval(after).filter((path) => sent.has(path));
+  if (listed.length === 0) return null;
+  let claims: Map<string, UnitClaimView>;
+  try {
+    claims = cachedClaims(pd);
+  } catch {
+    return null;
+  }
+  const own = leadsOwnClaims(pd, readStateFile(pd), claims);
+  const building = [...claims.values()].filter((claim) => claim.status === "claimed" && !own.has(claim.unit) && claim.payload.done !== true);
+  const fingerprint = (plan: PlanJson | null, path: string) => plan?.inputs.find((input) => input.path === path)?.fingerprint;
+  const graph = loadGraph();
+  const order = (slug: string) => graph.findIndex((stage) => stage.slug === slug);
+  const put = listed.filter((path) => fingerprint(before, path) !== fingerprint(after, path) &&
+    building.some((claim) => unitsReading(pd, path).has(claim.unit)))
+    .sort((a, b) => order(a.split("/")[1]) - order(b.split("/")[1]));
+  if (put.length === 0) return null;
+  const slugs = [...new Set(put.map((path) => path.split("/")[1]))];
+  const stages = slugs.map((slug) => stageLabel(graph.find((stage) => stage.slug === slug), slug) ?? slug);
+  const several = put.length > 1;
+  return `${joinNames(put.map((path) => path.split("/").at(-1)!))} changed after ` +
+    `${joinNames(stages)} finished. Anyone who takes a Unit from now gets ${several ? "them as they are" : "it as it is"}; ` +
+    `anyone already building keeps the ${several ? "versions" : "version"} they have until you redo ${stages[0]} with your ` +
+    `${several ? "changes" : "change"}.`;
+}
+
 // The share's write of the plan: where it goes, written on its tip, and what
 // the share says of it; a write that did not go stops the share with its line.
 type SharedPlan = { repo: string; address: string; commit: string; said: string; step?: string } | { notShared: { notice: string; step: string } };
@@ -7661,7 +7694,9 @@ function writeSharedPlan(pd: string, message?: string, named?: string, carry?: C
   // the line after says what was written, what the plan keeps, and what is still open.
   let carried: string | null = null;
   const carryRun: { now: { written: CarryWord[]; kept: CarryQuestion[]; list: CarryWord[]; open: CarryQuestion[] } | null } = { now: null };
+  let before: PlanJson | null = null;
   const what = (tip: PlanJson | null): string => {
+    before = tip;
     added = tip === null ? [] : unitsNotIn(pd, tip.units.map((unit) => unit.name));
     released = tip !== null && tip.skeleton !== null && !skeletonHere ? tip.skeleton : null;
     if (carried !== null) return carried;
@@ -7711,6 +7746,7 @@ function writeSharedPlan(pd: string, message?: string, named?: string, carry?: C
   const repo = went?.place.repo ?? place.repo;
   const address = maskUserinfo(went?.place.address ?? place.address);
   const followedLine = [...moved, ...(went === null ? [] : [went.line])];
+  const changedLine = written.kind === "written" ? changedSharedLine(pd, before, keptPlan(pd, place.id8)?.plan ?? null) : null;
   // The work's Home Location is the plan's repository, where the lead put it.
   if (written.kind === "written" || written.kind === "unchanged") planHomeHere(pd, went?.place.address ?? place.address);
   if (carryRun.now !== null && (written.kind === "unchanged" || written.kind === "written")) {
@@ -7725,7 +7761,8 @@ function writeSharedPlan(pd: string, message?: string, named?: string, carry?: C
     const still = carryOpenLine(repo, list, open, said.length === 0);
     // A carry that says nothing leaves the share's own line, for a write made for another reason too.
     if (said.length > 0 || still.said.length > 0) {
-      return { repo, address, commit: written.commit, said: [...followedLine, ...said, ...still.said].join(" "), ...(still.step === null ? {} : { step: still.step }) };
+      return { repo, address, commit: written.commit, said: [...followedLine, ...said, ...still.said, ...(changedLine === null ? [] : [changedLine])].join(" "),
+        ...(still.step === null ? {} : { step: still.step }) };
     }
   }
   if (written.kind === "unchanged") {
@@ -7754,7 +7791,7 @@ function writeSharedPlan(pd: string, message?: string, named?: string, carry?: C
             ...(released !== null ? [`The plan in ${repo} has your answer now${stillWaitedOn(released) ? "." : `: no Unit in it waits on ${released}.`}`] : [])].join(" ")
           : `The plan is shared in ${repo}.`;
     const told = written.back === undefined ? said : `${said} ${planBackLine(repo, written.back)}`;
-    return { repo, address, commit: written.commit, said: [...followedLine, told].join(" ") };
+    return { repo, address, commit: written.commit, said: [...followedLine, told, ...(changedLine === null ? [] : [changedLine])].join(" ") };
   }
   if (written.kind === "unreached") {
     fail(`${repo} could not be reached, so the plan is not shared${written.words === null ? "." : `: git says "${written.words}".`} Say when to try again.`);
@@ -9431,6 +9468,22 @@ export function planApprovals(plan: PlanJson, produced: Set<string>): string[] {
   return approvalWords(times);
 }
 
+// The inputs a plan lists as changed since the lead approved them (its
+// changed_since_approval), read past when not in its shape.
+function changedSinceApproval(plan: PlanJson): string[] {
+  const listed = plan.changed_since_approval;
+  return Array.isArray(listed) ? listed.filter((entry): entry is string => typeof entry === "string") : [];
+}
+
+// What a take says of the lead's files it copied that the lead changed after
+// approving them: in its line and in approved-inputs.md, the same words.
+function changedSinceClause(changed: readonly string[]): string {
+  if (changed.length === 0) return "";
+  const names = changed.map(inputName);
+  return `, with ${joinNames(names.map((name) => `the ${name}`))} as the lead changed ` +
+    `${names.length > 1 || names[0].endsWith("s") ? "them" : "it"} since`;
+}
+
 function approvalWords(times: ReadonlyMap<string, string>): string[] {
   return [...times].sort(([a], [b]) => a.localeCompare(b)).map(([stage, when]) => `${stage} approved by the lead ${when}`.trim());
 }
@@ -10469,13 +10522,23 @@ export function planFilesNow(projectDir: string, tip: PlanJson | null, place: Pl
   const files: Record<string, string | null> = {};
   const inputs: PlanJson["inputs"] = [];
   const paths = homeInputPaths(unitStages, state);
-  const times = approvalTimes(readAuditShardEvents(pd), new Set(paths.map((path) => path.split("/")[1])));
+  // Which version of each stage's documents the lead approved, and when, as
+  // its receipt says: a stage with one of them changed since has no time on
+  // any (a take lists its approval per stage), and those go as changed since.
+  const versions = approvedStageVersions(pd, state, new Set(paths.map((path) => path.split("/")[1])), readAllAuditShards(pd));
+  const changed: string[] = [];
   for (const path of paths) {
     const text = planText(join(record, ...path.split("/")));
     if (text === null) continue;
     files[`inputs/${path}`] = text;
-    const approved = times.get(path.split("/")[1]);
-    inputs.push({ path, fingerprint: textFingerprint(text), ...(approved === undefined ? {} : { approved }) });
+    const at = artifactAt(path);
+    if (at !== null && versions.get(at.producer)?.changed?.has(at.artifact) === true) changed.push(path);
+  }
+  for (const path of paths) {
+    if (!(`inputs/${path}` in files)) continue;
+    const stage = path.split("/")[1];
+    const approved = changed.some((entry) => entry.split("/")[1] === stage) ? undefined : versions.get(stage)?.at;
+    inputs.push({ path, fingerprint: textFingerprint(files[`inputs/${path}`]!), ...(approved === undefined ? {} : { approved }) });
   }
   for (const gone of tip?.inputs ?? []) if (!(`inputs/${gone.path}` in files)) files[`inputs/${gone.path}`] = null;
   const rules = leadRulesOf(pd, space).paths;
@@ -10546,6 +10609,8 @@ export function planFilesNow(projectDir: string, tip: PlanJson | null, place: Pl
     inputs,
   };
   for (const [key, value] of Object.entries(tip ?? {})) if (!(key in plan)) plan[key] = value;
+  if (changed.length > 0) plan.changed_since_approval = changed;
+  else delete plan.changed_since_approval;
   return { plan, files };
 }
 
@@ -10979,6 +11044,10 @@ export function leadsPlanWrite(projectDir: string, change: {
           plan.inputs = plan.inputs.some((input) => input.path === path)
             ? plan.inputs.map((input) => (input.path === path ? entry : input))
             : [...plan.inputs, entry];
+          // A text the lead's word puts on the plan is one they approved.
+          const still = changedSinceApproval(plan).filter((entry) => entry !== path);
+          if (still.length > 0) plan.changed_since_approval = still;
+          else delete plan.changed_since_approval;
         }
         {
           // The lead's own settings go with every write of theirs: one set
@@ -11276,6 +11345,8 @@ function buildPlanOf(plan: PlanJson): BuildPlan {
 interface BuildSource {
   read: (rel: string) => string | null;
   approvals: (produced: Set<string>) => string[];
+  // The inputs the plan lists as changed since the lead approved them.
+  changed?: readonly string[];
 }
 
 function createUnitBuild(
@@ -11337,7 +11408,8 @@ function createUnitBuild(
   const produced = new Set(inputs.map((input) => input.path.split("/")[1]));
   const approvals = source.approvals(produced);
   const fingerprint = textFingerprint(inputs.map((input) => `${input.path} ${input.fingerprint}`).join("\n"));
-  writeFileSync(join(record, APPROVED_INPUTS_FILE), approvedInputsText(unit, home, baseOid, inputs, approvals, plan.planRepo), "utf-8");
+  const changed = changedSinceClause((source.changed ?? []).filter((path) => inputs.some((input) => input.path === path)));
+  writeFileSync(join(record, APPROVED_INPUTS_FILE), approvedInputsText(unit, home, baseOid, inputs, approvals, plan.planRepo, changed), "utf-8");
   // Done at the home: the stages before Construction show as done, and are not
   // this build's plan.
   withAuditLock(projectDir, () => {
@@ -11815,13 +11887,14 @@ function approvedInputsText(
   inputs: Array<{ path: string; fingerprint: string }>,
   approvals: string[],
   planRepo: string | null,
+  changed = "",
 ): string {
   return [
     "# What this Unit was approved with",
     "",
     planRepo !== null
       ? `${unit} of ${home.label}, from the plan shared in ${planRepo} (${home.location}), copied from its commit ` +
-        `${baseOid.slice(0, 12)}. These files are the lead's: approved there, read here. Change one and AI-DLC asks ` +
+        `${baseOid.slice(0, 12)}. These files are the lead's: approved there${changed}, read here. Change one and AI-DLC asks ` +
         "whether to put your change on the Unit's record, for the lead to decide."
       : `${unit} of ${home.label}, from the lead's project at ${home.location} (space ${home.space}), copied from its commit ` +
         `${baseOid.slice(0, 12)}. These files are the lead's: approved there, read here. Change one and AI-DLC ` +
@@ -11956,7 +12029,7 @@ function planTakeSource(pd: string, id8: string, from: string, unit: string): Ta
     likely: new Map(plan.units.map((unit) => [unit.name, [...unit.repos]])),
     rhythm: plan.settings[UNIT_GATE_RHYTHM_FIELD] === "unit-end" ? "unit-end" : "per-stage",
     rules: () => leadRulesOf(pd, home.space, (rel) => snapshot.text(rel), (file) => `rules/${file}`),
-    copy: { read: (rel) => snapshot.text(`inputs/${rel}`), approvals: (produced) => planApprovals(plan, produced) },
+    copy: { read: (rel) => snapshot.text(`inputs/${rel}`), approvals: (produced) => planApprovals(plan, produced), changed: changedSinceApproval(plan) },
     addresses: new Map(plan.repos.flatMap((repo) => (repo.address === null ? [] : [[repo.name, repo.address] as [string, string]]))),
     ...(met?.follow.kind === "followed" && !met.built ? { moved: planMovedLine(met.follow, "look") } : {}),
   };
@@ -12202,7 +12275,8 @@ function takeUnit(args: string[], projectDir?: string, rhythm?: UnitClaimPayload
     withWorkPinned({ space: build.space, intent: build.dirName }, () => noteEngineAskMark(pd, toForkDueMark(unit)));
   }
   const taken = `${closed === null ? "" : `The plan of ${closed.label} in ${closed.repo} was closed by ${closed.name}, ${closed.day}, so its Units are no longer offered. `}` +
-    `${src.moved === undefined ? "" : `${src.moved} `}${unit} is yours. You build it${spaceWords(build.space)} under your team's rules${leadsToo}, from what the lead approved.` +
+    `${src.moved === undefined ? "" : `${src.moved} `}${unit} is yours. You build it${spaceWords(build.space)} under your team's rules${leadsToo}, from what the lead approved` +
+    `${changedSinceClause((src.copy.changed ?? []).filter((path) => plan.inputs.includes(path)))}.` +
     // The way back (release, run in this build), said once with the take.
     " If it is not yours to build, tell me and I will hand it back." +
     earlyLines.map((line) => ` ${line}`).join("") +
@@ -16144,10 +16218,9 @@ export function sendLeadsApprovedChanges(projectDir: string): string[] {
     const record = activeRecordDir(pd);
     const recordRel = relativeRecordDir(pd)?.split(sep).join("/") ?? null;
     const texts: Record<string, string> = {};
-    const state = readStateFile(pd);
-    const graph = loadGraph();
     const rows = readAuditShardEvents(pd);
-    const receipts = latestCompletionBasesFromAudit(readAllAuditShards(pd));
+    const inputs = approvedInputPathsHere(pd);
+    const versions = approvedStageVersions(pd, readStateFile(pd), new Set(inputs.map((input) => input.split("/")[1])), readAllAuditShards(pd));
     const kept = keptPlan(pd, activeIdentity(pd).intentId8);
     // The lead's latest word on an input: its stage's gate, or a team's change
     // to it the lead approved (SHARED_INPUT_AMENDED), which reaches a Unit
@@ -16160,15 +16233,12 @@ export function sendLeadsApprovedChanges(projectDir: string): string[] {
     // one write puts on the plan.
     const reaches = new Map<string, { view: UnitClaimView; inputs: string[] }>();
     const changed: string[] = [];
-    for (const input of approvedInputPathsHere(pd)) {
+    for (const input of inputs) {
       const at = artifactAt(input);
       const approved = at === null ? undefined : approval(at.producer, input);
       if (at === null || approved === undefined) continue;
       // Edited since its completion recorded it: not what the gate approved.
-      const node = graph.find((entry) => entry.slug === at.producer);
-      const receipt = receipts.get(at.producer);
-      if (node !== undefined && receipt !== undefined &&
-          diffStageValidationBasis(receipt, captureStageValidationBasis(pd, node, state, graph)).includes(`output:${at.artifact}`)) continue;
+      if (versions.get(at.producer)?.changed?.has(at.artifact) === true) continue;
       let text: string;
       try {
         text = readFileSync(join(record, ...input.split("/")), "utf-8");
