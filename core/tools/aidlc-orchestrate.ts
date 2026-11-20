@@ -21202,6 +21202,27 @@ function practicesDraftPostureProblem(pd: string): string | null {
   return promotableTestingPosture(extractMarkdownSection(content, "## Testing Posture")).problem;
 }
 
+function practicesDraftRuleFormProblem(pd: string): string | null {
+  const prefix = engineRelativeRecordDir(pd);
+  if (prefix === null) return null;
+  let draft: string;
+  try {
+    draft = readFileSync(join(pd, prefix, "inception", "practices-discovery", "discovered-rules.md"), "utf-8");
+  } catch {
+    return null;
+  }
+  const { mandated, forbidden } = practicesRulesToAdd(draft, "");
+  const stray = [
+    ...mandated.filter((rule) => !/^ALWAYS\s+\S/.test(rule)).map((rule) => `"${rule}" under ## Mandated`),
+    ...forbidden.filter((rule) => !/^NEVER\s+\S/.test(rule)).map((rule) => `"${rule}" under ## Forbidden`),
+  ];
+  if (stray.length === 0) return null;
+  return (
+    `these list items are not rules: ${stray.join("; ")}. Each list item under ## Mandated is one rule starting ALWAYS, ` +
+    "each under ## Forbidden one starting NEVER, and a heading with no new rule holds only a plain None. line with no list marker."
+  );
+}
+
 // The rules Approve at Practices Discovery adds to the project's rules, said
 // with the gate from the reading practices-promote writes them from; said too
 // when it adds none, so a summary that counts rules the draft does not hold as
@@ -21274,6 +21295,15 @@ function checkStageCompletionEvidence(
         message:
           `Practices Discovery is not ready for approval yet. In team-practices.md: ${problem} ` +
           "Once that line is fixed, Practices Discovery comes back for approval.",
+      };
+    }
+    const ruleProblem = practicesDraftRuleFormProblem(pd);
+    if (ruleProblem !== null) {
+      return {
+        ok: false,
+        message:
+          `Practices Discovery is not ready for approval yet. In discovered-rules.md: ${ruleProblem} ` +
+          "Once those items are fixed, Practices Discovery comes back for approval.",
       };
     }
   }
