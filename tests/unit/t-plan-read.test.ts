@@ -666,18 +666,19 @@ describe("a team takes a Unit from the plan where it is shared", () => {
 
   test("a sign-in in an unlisted clone's URL or in a repos.json url never goes on git's command line at the ask", () => {
     const pay = teamWorkspace({}, "pay", []);
+    // Nothing listens on port 9 of the loopback, so each fetch is refused there and no host name is looked up.
     // A clone on disk that repos.json does not list, whose URL carries a sign-in.
     const billing = join(pay, "billing");
     git(pay, ["init", "-q", "-b", "main", billing]);
-    git(billing, ["remote", "add", "origin", "https://lead:s3cret@example.invalid/org/billing.git"]);
+    git(billing, ["remote", "add", "origin", "https://lead:s3cret@127.0.0.1:9/org/billing.git"]);
     // A repos.json url that carries one, with no clone on disk.
-    writeFileSync(join(pay, "repos.json"), `${JSON.stringify({ repos: [{ name: "ledger", url: "https://lead:t0ken@example.invalid/org/ledger.git" }] })}\n`);
+    writeFileSync(join(pay, "repos.json"), `${JSON.stringify({ repos: [{ name: "ledger", url: "https://lead:t0ken@127.0.0.1:9/org/ledger.git" }] })}\n`);
     const trace = join(tempDir("trace"), "git.trace");
     run(ORCH, ["next", "--units"], pay, { ...ENV, GIT_TRACE: trace });
     // AI-DLC's own git calls (git's helper for https is handed the URL by git itself, as for any fetch in that clone).
     const calls = readFileSync(trace, "utf-8").split("\n").filter((line) => /trace: (built-in|exec|run_command): git fetch/.test(line));
-    expect(calls.some((line) => line.includes("example.invalid/org/billing.git")), calls.join("\n")).toBe(true);
-    expect(calls.some((line) => line.includes("example.invalid/org/ledger.git")), calls.join("\n")).toBe(true);
+    expect(calls.some((line) => line.includes("127.0.0.1:9/org/billing.git")), calls.join("\n")).toBe(true);
+    expect(calls.some((line) => line.includes("127.0.0.1:9/org/ledger.git")), calls.join("\n")).toBe(true);
     expect(calls.filter((line) => /s3cret|t0ken/.test(line)), calls.join("\n")).toEqual([]);
   });
 
