@@ -34,6 +34,20 @@ interface Result {
 	questions_file: string;
 	findings_count: number;
 	reason?: string;
+	message?: string;
+}
+
+const SOURCE_TAG_CHOICES = "[desc], [Q<n>], [scope], [memory:<id>] or [assumption]";
+
+function fixHints(findings: readonly string[]): string | undefined {
+	const hints: string[] = [];
+	if (findings.some((finding) => finding.includes("assumption/open question lacks [assumption]"))) {
+		hints.push("Prefix each assumption or open question with [assumption].");
+	}
+	if (findings.some((finding) => finding.includes("claim block has no source tag"))) {
+		hints.push(`Add ${SOURCE_TAG_CHOICES} to each untagged claim block.`);
+	}
+	return hints.length === 0 ? undefined : hints.join(" ");
 }
 
 interface ClaimBlock {
@@ -1106,12 +1120,14 @@ export function main(argv: string[]): void {
 		);
 	}
 
+	const hint = fixHints(findings);
 	const result: Result = {
 		pass: findings.length === 0,
 		findings,
 		scanned_files: scanPaths,
 		questions_file: questionsPath,
 		findings_count: findings.length,
+		...(hint === undefined ? {} : { message: hint }),
 	};
 	writeSensorResult(result);
 }

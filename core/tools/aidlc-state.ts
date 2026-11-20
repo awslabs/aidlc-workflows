@@ -304,7 +304,7 @@ import {
   mainCheckoutChangeStep, personTurnStands, proveMessage, readMessage, requestMessageStep, standingPersonTurn,
 } from "./aidlc-message-store.ts";
 import { swarmSourceChangedSince } from "./aidlc-swarm-source.ts";
-import { memoryDirFor, PATH_SET_SENSOR_IDS, STAGE_WIDE_SENSOR_IDS, templateEligibleArtifacts, withStageProgressRow } from "./aidlc-graph.ts";
+import { memoryDirFor, PATH_SET_SENSOR_IDS, stageDeliverablePaths, STAGE_WIDE_SENSOR_IDS, withStageProgressRow } from "./aidlc-graph.ts";
 import { generateFireId, recordUnfinishedFire, sensorMatchesPath, unfinishedFire } from "./aidlc-sensor-record.ts";
 import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
 import { aidlcDispatcherInvocation, aidlcToolInvocation, compiledExecutable, entrySkillInvocation, syncFolderClause } from "./aidlc-runtime-paths.ts";
@@ -3939,9 +3939,8 @@ function gateSensorOutputs(
   paths: string[],
   stageSlug: string,
 ): GateSensorFire[] {
-  const matching = paths.filter((path) => gateSensorMatchesOutput(sensor, path));
-  const isDocument = (path: string): boolean =>
-    path.endsWith(".md") && templateEligibleArtifacts([basename(path, ".md")]).length === 1;
+  const matching = stageDeliverablePaths(paths).filter((path) => gateSensorMatchesOutput(sensor, path));
+  const isDocument = (path: string): boolean => path.endsWith(".md");
   if (KNOWN_CODEKB_STAGES.has(stageSlug) && PATH_SET_SENSOR_IDS.has(sensor.id)) {
     if (matching.length === 0) return [];
     return [{ outputPath: matching.find(isDocument) ?? matching[0], covered: matching, pathSet: true }];

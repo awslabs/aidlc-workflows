@@ -9,8 +9,13 @@ interface Result {
 	unreferenced: string[];
 	scanned_files: string[];
 	reason?: string;
+	message?: string;
 	findings_count: number;
 }
+
+const UNREFERENCED_HINT =
+	"Name each one in a deliverable — its slug as a standalone word, a [[wikilink]] or a backticked filename — " +
+	"or mark its consumes: entry required: false when it did not inform the output.";
 
 interface Consume {
 	slug: string;
@@ -166,6 +171,7 @@ export function main(argv: string[]): void {
 		scanned_files: folder.scannedFiles,
 		// findings_count emitted by the script (sensor-id-agnostic dispatcher).
 		findings_count: folder.unreferenced.length,
+		...(folder.unreferenced.length > 0 ? { message: UNREFERENCED_HINT } : {}),
 	};
 	writeSensorResult(result);
 }
@@ -278,6 +284,7 @@ function evaluatePathSet(consumes: Consume[], deliverables: string[]): void {
 		folders_evaluated: byFolder.size,
 		failed_outputs: failing.map((f) => f.file),
 		folders: failing,
+		...(failing.length > 0 ? { message: UNREFERENCED_HINT } : {}),
 	});
 }
 
