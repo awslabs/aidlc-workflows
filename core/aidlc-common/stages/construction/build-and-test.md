@@ -306,7 +306,9 @@ marked `N/A` with its reason, and the Units and files that build it. Write
 `<record>/construction/build-and-test/cross-unit-traceability.md` from that
 output with a pass/fail verdict, per-ID coverage, owning stage/Unit, target
 file, and every uncovered element. Any uncovered ID is a build-and-test finding
-that must be surfaced at the approval gate.
+that must be surfaced at the approval gate. A criterion one Unit marked `N/A`
+by handing it to another Unit, when no Unit built it, is uncovered: the output
+lists it under `handed_off` with who handed it to whom; say so in the finding.
 
 ### Step 11: Completion Handoff
 
