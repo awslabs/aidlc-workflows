@@ -1096,26 +1096,106 @@ describe("a Unit on the workspace's own repository", () => {
     expect(away.status, away.stderr).toBe(0);
   });
 
-  test("a push whose result the lead's project does not take: the next look asks to send it again and leaves the record commit's files as it took them, so the switch back goes", () => {
+  // Their host takes the Unit's branch and refuses AI-DLC's claim refs, so the lead's project does not take the result.
+  function hostTakesOnlyTheBranch(host: string): string {
+    const rule = join(host, "hooks", "pre-receive");
+    writeFileSync(rule, "#!/bin/sh\nwhile read old new ref; do case \"$ref\" in refs/heads/refunds) ;; *) echo 'only the Unit branch is taken here' >&2; exit 1;; esac; done\nexit 0\n");
+    chmodSync(rule, 0o755);
+    return rule;
+  }
+
+  test("a first push whose result the lead's project does not take: no record commit yet, and the next look and Not now change nothing git tracks, so the switch back goes", () => {
     const home = oneRepoTeams();
     const alice = cloneOf(home.remote, "alice");
     const record = builtHere(alice, "refunds", "refunds.ts");
     approvedForItsPush(record);
-    // Their host takes the Unit's branch and refuses AI-DLC's claim refs.
-    const rule = join(home.remote, "hooks", "pre-receive");
-    writeFileSync(rule, "#!/bin/sh\nwhile read old new ref; do case \"$ref\" in refs/heads/refunds) ;; *) echo 'only the Unit branch is taken here' >&2; exit 1;; esac; done\nexit 0\n");
-    chmodSync(rule, 0o755);
+    hostTakesOnlyTheBranch(home.remote);
     const pushed = run(UNIT, ["push"], alice);
     expect(pushed.status, pushed.out).toBe(0);
-    expect(String(pushed.json?.notice)).toContain("did not take the result of refunds");
-    expect(String(pushed.json?.notice)).toContain("Switch back to main any time.");
+    const said = String(pushed.json?.notice);
+    expect(said).toContain("did not take the result of refunds");
+    expect(said).toContain("Switch back to main any time.");
+    expect(said).not.toContain("AI-DLC's record of refunds");
+    expect(git(home.remote, ["log", "--format=%s", "main..refunds"])).toBe("refunds: fixture");
+    const tracked = (): string => git(alice, ["status", "--porcelain", "--untracked-files=no"]);
     const chat = { ...ENV, AIDLC_SESSION_OVERRIDE: "chat-1" };
     expect(hook(alice, chat, { hook_event_name: "UserPromptSubmit", session_id: "chat-1", prompt: "/aidlc" }).status).toBe(0);
     expect(String(next(alice, chat).question)).toContain("Do you want me to send it again?");
-    expect(git(alice, ["status", "--porcelain"])).toBe("");
-    expect(readFileSync(trackedLog(record), "utf-8")).toBe(committedText(alice, trackedLog(record)));
+    expect(tracked()).toBe("");
+    const later = run(UNIT, ["push", "--later"], alice, chat);
+    expect(later.status, later.out).toBe(0);
+    expect(tracked()).toBe("");
     const back = spawnSync("git", ["switch", "main"], { cwd: alice, encoding: "utf-8", env: ENV });
     expect(back.status, back.stderr).toBe(0);
+  });
+
+  test("Send it again, taken, asked from main: the record goes on the Unit's branch, and main is as it was", () => {
+    const home = oneRepoTeams();
+    const alice = cloneOf(home.remote, "alice");
+    const record = builtHere(alice, "refunds", "refunds.ts");
+    approvedForItsPush(record);
+    const rule = hostTakesOnlyTheBranch(home.remote);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    const back = spawnSync("git", ["switch", "main"], { cwd: alice, encoding: "utf-8", env: ENV });
+    expect(back.status, back.stderr).toBe(0);
+    const mainBefore = git(alice, ["rev-parse", "main"]);
+    // Their host's owner lets AI-DLC's refs through.
+    rmSync(rule);
+    const again = run(UNIT, ["push"], alice);
+    expect(again.status, again.out).toBe(0);
+    const said = String(again.json?.notice);
+    expect(said).toContain("You're on refunds now in the repo.");
+    expect(said).toContain(recordWent("refunds"));
+    expect(git(home.remote, ["log", "--format=%s", "main..refunds"]).split("\n")).toEqual(["refunds: AI-DLC's record", "refunds: fixture"]);
+    expect(git(alice, ["rev-parse", "main"])).toBe(mainBefore);
+    expect(git(alice, ["branch", "--show-current"])).toBe("refunds");
+  });
+
+  // Their host refuses this teammate's pushes of AI-DLC's own refs while the rule's file is there; the hook runs in
+  // the host's repository, so the file is named from there.
+  function hostRefusesTheirAidlcRefs(host: string): string {
+    const rule = join(host, "hooks", "pre-receive");
+    writeFileSync(rule, "#!/bin/sh\n[ -e their-aidlc-refs-refused ] || exit 0\n" +
+      "while read old new ref; do case \"$ref\" in refs/aidlc/*|refs/heads/aidlc/*) echo 'AI-DLC refs are refused here' >&2; exit 1;; esac; done\nexit 0\n");
+    chmodSync(rule, 0o755);
+    const theirs = join(host, "their-aidlc-refs-refused");
+    writeFileSync(theirs, "");
+    return theirs;
+  }
+
+  test("their host refuses their pushes of AI-DLC's own refs from the take on: the first push makes the record commit, and once the Unit's branch is merged a fresh clone's board says it is being built and offers no start of it", () => {
+    const home = oneRepoTeams();
+    hostRefusesTheirAidlcRefs(home.remote);
+    const alice = cloneOf(home.remote, "alice");
+    const record = builtHere(alice, "refunds", "refunds.ts");
+    approvedForItsPush(record);
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(String(pushed.json?.notice)).toContain(recordWent("refunds"));
+    expect(git(home.remote, ["log", "--format=%s", "main..refunds"]).split("\n")).toEqual(["refunds: AI-DLC's record", "refunds: fixture"]);
+    mergeOnHost(home.remote, "refunds", "merge");
+    const bob = cloneOf(home.remote, "bob");
+    const board = next(bob, { ...ENV, AIDLC_SESSION_OVERRIDE: "bob-1" }, ["--units"]);
+    expect(String(board.question)).toContain("Being built: refunds");
+    expect(((board.choices ?? []) as Array<{ label: string }>).map((choice) => choice.label)).not.toContain("Start refunds");
+  });
+
+  test("a take set aside, another's written on the lead's record before theirs could be: the first push makes the record commit", () => {
+    const home = oneRepoTeams();
+    const theirs = hostRefusesTheirAidlcRefs(home.remote);
+    const alice = cloneOf(home.remote, "alice");
+    const record = builtHere(alice, "refunds", "refunds.ts");
+    approvedForItsPush(record);
+    rmSync(theirs);
+    const bob = cloneOf(home.remote, "bob");
+    const took = takeIn("payments", ["refunds", ...fromHome(home)], bob);
+    expect(took.status, took.out).toBe(0);
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    const said = String(pushed.json?.notice);
+    expect(said).toContain("before your take could be");
+    expect(said).toContain(recordWent("refunds"));
+    expect(git(home.remote, ["log", "--format=%s", "main..refunds"]).split("\n")).toEqual(["refunds: AI-DLC's record", "refunds: fixture"]);
   });
 
   test("a build taken before AI-DLC kept its log in its engine folder writes on in its tracked audit file, as one log", () => {

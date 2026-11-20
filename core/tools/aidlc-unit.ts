@@ -14194,9 +14194,15 @@ function pushUnit(args: string[], projectDir?: string,
   // tracked log, which stopped taking them once the push said pushed.
   carryBuildOwnLog(pd);
   // The build's record as this push leaves it goes with the code on the
-  // workspace's own repository.
+  // workspace's own repository. While git has none of it yet and its take is
+  // on the lead's record, it waits for a result the lead's project took: the
+  // wait's own steps (the send again, Not now, the build's end) would change a
+  // record committed now. A take off that record asks nothing while it stays
+  // off, so the record goes now and tells the team of the build.
   const dot = planned.find((entry) => entry.repo === ".");
-  const record = dot === undefined ? null : sendBuildRecord(pd, dot.remote, branch, unit, given?.text ?? null);
+  const waits = dot !== undefined && !sentOn && resultTakeHold(pd, readStateFile(pd)) === null &&
+    git(pd, ["ls-files", "--", relative(pd, activeRecordDir(pd)).split(sep).join("/")]).stdout.trim() === "";
+  const record = dot === undefined || waits ? null : sendBuildRecord(pd, dot.remote, branch, unit, given?.text ?? null);
   if (record?.line) lines.push(record.line);
   // With the result on the Unit's record no line asks anything: the lines ride
   // the step that follows, as the take's carry-on line does, so a next run at

@@ -877,7 +877,9 @@ is behind, or still on the branch of a Unit merged before, starts fresh; with
 commits of your own there that the branch does not have yet, it starts where
 you are, and the line names them. Once the code is pushed, AI-DLC's record of
 the build goes with it on the same branch as a second commit made with your own
-git: the build's own folder under `aidlc/spaces/<space>/intents/`, and, in a
+git (when your take is written in the lead's project and the lead's project
+does not take the result at the first push, the record waits and goes with the
+send that is taken): the build's own folder under `aidlc/spaces/<space>/intents/`, and, in a
 space other than the lead's, that space's own files while it is new to git;
 never the lead's space, the lead's record or another build's. Its message is "refunds: AI-DLC's record", or your own
 message with its first line as it is and "AI-DLC's record of refunds." as the
