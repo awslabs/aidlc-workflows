@@ -28,12 +28,14 @@ import {
   seedAidlcMemory,
   seedBoltDag,
   seededRecordDir,
+  recordArtifactWriteViaHook,
   seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
   artifactFilename,
+  auditBlockField,
   latestMainWorkflowStageRunFloorForProject,
   readAuditShardEvents,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -318,6 +320,31 @@ describe("t-approve-needs-reply-to-question: only the person's reply to the appr
       expect(recorded[0].block).toContain("**Review Finding Dispositions**");
       expect(recorded[0].block).toContain("Accepted risk");
       expect(recorded[0].block).toContain("R-01");
+    } finally {
+      cleanupTestProject(team);
+    }
+  });
+
+  // A team Unit's gate keeps the rule that a reply sent before what the gate
+  // shows was last written approves nothing there, even when it is the
+  // person's latest turn at the open gate (a stage gate reads it against the
+  // documents as written before it: t-gate-reply-before-document).
+  test("a team Unit gate: their reply, named after the agent's edit to the Unit's document, approves nothing", () => {
+    const team = teamProject();
+    try {
+      const opened = state(team, ["gate-start", "functional-design", "--unit", "alpha"], TEAM_FIXTURE);
+      expect(opened.rc, opened.out).toBe(0);
+      Bun.sleepSync(1100);
+      person(team, "Fix the rule name, then go on");
+      const asked = auditBlockField(rows(team, "HUMAN_TURN").at(-1)?.block ?? "", "Message Id") as string;
+      Bun.sleepSync(1100);
+      const spec = join(seededRecordDir(team), "construction", "alpha", "functional-design", artifactFilename("functional-spec"));
+      appendFileSync(spec, "\n- The rule is named in full.\n");
+      recordArtifactWriteViaHook(team, spec, "Edit");
+      const named = state(team, ["approve", "functional-design", "--unit", "alpha", "--user-input", "Approve", "--message", asked], TEAM_FIXTURE);
+      expect(named.rc).not.toBe(0);
+      expect(named.out).toContain(`their message ${asked} came before the gate's output was last written`);
+      expect(rows(team, "GATE_APPROVED")).toEqual([]);
     } finally {
       cleanupTestProject(team);
     }
