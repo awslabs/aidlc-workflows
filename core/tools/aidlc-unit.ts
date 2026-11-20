@@ -13469,6 +13469,34 @@ function buildRecordMessage(unit: string, given: string | null): string {
   return [`${subject} (AI-DLC's record)`, ...rest].join("\n");
 }
 
+// A practice the person kept during this build, which learnings persist wrote in
+// the build's space's rules with this build's marker, that the record commit
+// leaves out (a space git already has): said once per content of that file.
+function practicesLeftOut(pd: string, unit: string): string[] {
+  const record = recordDir(pd);
+  if (record === null) return [];
+  const space = relative(pd, record).split(sep)[2] ?? "";
+  const marker = `<!-- cid:${basename(record)}:`;
+  const lines: string[] = [];
+  for (const scope of KEPT_RULE_SCOPES) {
+    const file = keptRuleFile(space, scope);
+    let text: string;
+    try {
+      text = readFileSync(join(pd, ...file.split("/")), "utf-8");
+    } catch {
+      continue;
+    }
+    const committed = git(pd, ["show", `HEAD:${file}`]);
+    const held = new Set((committed.ok ? committed.stdout : "").replace(/\r\n/g, "\n").split("\n"));
+    if (!text.replace(/\r\n/g, "\n").split("\n").some((line) => line.includes(marker) && !held.has(line))) continue;
+    const said = `unit-practice-left-${unit}-${createHash("sha256").update(text).digest("hex").slice(0, 12)}`;
+    if (engineAskMark(pd, said) !== null) continue;
+    noteEngineAskMark(pd, said);
+    lines.push(`The practice you kept in ${file} is not in it: commit it your usual way when your team should have it.`);
+  }
+  return lines;
+}
+
 // After the Unit's code is pushed on the workspace's own repository, AI-DLC's
 // record of the build goes with it on the same branch, as a second commit made
 // with the person's own git and pushed the same plain way. A commit or push
@@ -13489,7 +13517,9 @@ function sendBuildRecord(pd: string, remote: string, branch: string, unit: strin
   const head = git(pd, ["rev-parse", "HEAD"]).stdout.trim();
   if (head === before) return { line: null, went: false };
   const pushed = git(pd, ["push", remote, branch]);
-  if (pushed.ok) return { line: `AI-DLC's record of ${unit} went with it, in a commit of its own.`, went: true };
+  if (pushed.ok) {
+    return { line: [`AI-DLC's record of ${unit} went with it, in a commit of its own.`, ...practicesLeftOut(pd, unit)].join(" "), went: true };
+  }
   git(pd, ["update-ref", `refs/heads/${branch}`, before, head]);
   git(pd, ["reset", "-q", "--", ...paths]);
   return notSent(pushRefusal(pushed.stderr));

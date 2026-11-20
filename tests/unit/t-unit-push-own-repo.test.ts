@@ -19,7 +19,7 @@ import { basename, dirname, join, relative } from "node:path";
 import { noteEngineAskMark, personRepliedAfter, readAuditShardEvents, engineAskMark } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { bringBranchLevel, unitBranchInTheWay, workToCommit } from "../../dist/claude/.claude/tools/aidlc-unit.ts";
-import { AIDLC_SRC, fixtureIntentId8, REPO_ROOT, seededStateFile } from "../harness/fixtures.ts";
+import { AIDLC_SRC, fixtureIntentId8, REPO_ROOT, seededStateFile, writeLearningsSelections } from "../harness/fixtures.ts";
 import { typedHarnessName } from "../../core/tools/aidlc-runtime-paths.ts";
 import {
   claimPayload,
@@ -91,10 +91,10 @@ describe("a Unit on the workspace's own repository", () => {
   }
 
   // The team's take of a Unit and its Code Generation, in the workspace itself; the build's record folder.
-  function builtHere(dir: string, unit: string, file: string): string {
-    const took = takeIn("payments", [unit, "--plan", fixtureIntentId8(dir, undefined, "default"), "--from", git(dir, ["remote", "get-url", "origin"])], dir);
+  function builtHere(dir: string, unit: string, file: string, space = "payments"): string {
+    const took = takeIn(space, [unit, "--plan", fixtureIntentId8(dir, undefined, "default"), "--from", git(dir, ["remote", "get-url", "origin"])], dir);
     expect(took.status, took.out).toBe(0);
-    const intents = join(dir, "aidlc", "spaces", "payments", "intents");
+    const intents = join(dir, "aidlc", "spaces", space, "intents");
     const record = join(intents, readdirSync(intents).find((name) => name.endsWith(`-${unit}`))!);
     mkdirSync(join(dir, "src"), { recursive: true });
     writeFileSync(join(dir, "src", file), `export const built = "${unit}";\n`);
@@ -1126,6 +1126,66 @@ describe("a Unit on the workspace's own repository", () => {
     expect(said.status, said.out).toBe(0);
     expect(personRepliedAfter(alice, asked!)).toBe(true);
     expect(existsSync(ownLog(record))).toBe(false);
+  });
+
+  // A practice the person kept during a build, as learnings persist writes it into the build's space's rules.
+  function practiceKept(dir: string, record: string, scope: "team" | "project", text: string): void {
+    const path = writeLearningsSelections(dir, {
+      space: basename(dirname(dirname(record))), intent: basename(record), stage_slug: "code-generation",
+      selections: [{ candidate_id: "c1", type: "learning", scope, heading: "Corrections", text, source: "user_addition" }],
+    });
+    const kept = run(join(AIDLC_SRC, "tools", "aidlc-learnings.ts"), ["persist", "--slug", "code-generation", "--selections-json", path], dir);
+    expect(kept.status, kept.out).toBe(0);
+    expect(kept.json?.rule_learned, kept.out).toBe(1);
+  }
+  const practiceLeft = (file: string): string =>
+    `The practice you kept in ${file} is not in it: commit it your usual way when your team should have it.`;
+
+  test("a practice kept for the team during a build in the lead's space is named once, in the record's line at the push that leaves it out", () => {
+    const home = oneRepoTeams();
+    const wen = cloneOf(home.remote, "wen");
+    const record = builtHere(wen, "refunds", "refunds.ts", "default");
+    practiceKept(wen, record, "team", "Test pages without a real browser");
+    const pushed = run(UNIT, ["push"], wen);
+    expect(pushed.status, pushed.out).toBe(0);
+    const said = String(pushed.json?.notice);
+    expect(said).toEndWith(`${recordWent("refunds")} ${practiceLeft("aidlc/spaces/default/memory/team.md")}`);
+    expect(said.split("The practice you kept").length, said).toBe(2);
+    expect(git(wen, ["status", "--porcelain"])).toBe("M aidlc/spaces/default/memory/team.md");
+    // The next push of the same Unit, the file unchanged since: not said again.
+    writeFileSync(join(wen, "src", "refunds.ts"), 'export const built = "refunds, fixed";\n');
+    const again = run(UNIT, ["push"], wen);
+    expect(again.status, again.out).toBe(0);
+    expect(String(again.json?.notice)).toContain(recordWent("refunds"));
+    expect(String(again.json?.notice)).not.toContain("The practice you kept");
+  });
+
+  test("the line names the project's rules file for a practice kept for the project, and nothing for a rules file only the person changed", () => {
+    const home = oneRepoTeams();
+    const wen = cloneOf(home.remote, "wen");
+    const record = builtHere(wen, "refunds", "refunds.ts", "default");
+    const team = join(wen, "aidlc", "spaces", "default", "memory", "team.md");
+    writeFileSync(team, `${readFileSync(team, "utf-8")}\nmy note\n`);
+    practiceKept(wen, record, "project", "Keep refund handlers thin");
+    const pushed = run(UNIT, ["push"], wen);
+    expect(pushed.status, pushed.out).toBe(0);
+    const said = String(pushed.json?.notice);
+    expect(said).toEndWith(`${recordWent("refunds")} ${practiceLeft("aidlc/spaces/default/memory/project.md")}`);
+    expect(said).not.toContain("memory/team.md");
+  });
+
+  test("a push whose record does not go says nothing of a practice kept", () => {
+    const home = oneRepoTeams();
+    const wen = cloneOf(home.remote, "wen");
+    const hook = join(wen, ".git", "hooks", "commit-msg");
+    writeFileSync(hook, "#!/bin/sh\n[ $(head -n 1 \"$1\" | wc -c) -le 51 ] && exit 0\necho 'commit-msg: subject is longer than 50 characters' >&2\nexit 1\n");
+    chmodSync(hook, 0o755);
+    const record = builtHere(wen, "refunds", "refunds.ts", "default");
+    practiceKept(wen, record, "team", "Test pages without a real browser");
+    const pushed = run(UNIT, ["push", "--commit-message-file", commitMessage(wen, record, "PAY-7 refund handler for the checkout totals\n")], wen);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(String(pushed.json?.notice)).toContain("AI-DLC's record of refunds did not go with it");
+    expect(String(pushed.json?.notice)).not.toContain("The practice you kept");
   });
 
   const OTHER_CHANGES = "; your other changes are still yours, uncommitted.";
