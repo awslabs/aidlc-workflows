@@ -594,6 +594,7 @@ import {
   optionsList,
   turnsPersonCheckOff,
   enterHookWorkflow,
+  isolatedRunWithoutWork,
   type TerminalCommand,
 } from "./aidlc-lib.ts";
 import { canonicalPathKey, chatTookStep, hostNamesThisChat, planMadeElsewhere } from "./aidlc-record-core.ts";
@@ -23948,10 +23949,11 @@ function handleContinue(line: string[], projectDir: string | undefined): void {
 // leaves the conductor with nothing to read. This verb is the sanctioned wait:
 // it polls the same on-disk evidence the engine itself checks (collaborator
 // contribution files, the stage's required artifacts or, given the host's own id
-// for the lead it started, that helper's finish row, or the reviewer's review
-// file) and always returns within the bound, so the conductor re-runs one bare
-// engine command instead of minting its own shell loop. Read-only: it publishes
-// no directive, touches no marker, and writes no audit row.
+// for a helper it started (a lead or a pipeline link), that helper's finish row,
+// or the reviewer's review file) and always returns within the bound, so the
+// conductor re-runs one bare engine command instead of minting its own shell
+// loop. Read-only: it publishes no directive, touches no marker, and writes no
+// audit row.
 interface WaitFlags {
   stage?: string;
   unit?: string;
@@ -23990,7 +23992,7 @@ function parseWaitFlags(args: string[]): WaitFlags {
 // under `agentId` (SUBAGENT_COMPLETED's Agent ID, from the SubagentStop payload).
 // While it does not, the wait holds: the host's own notice of the finish, or of a
 // helper that stopped, is the agent's way on.
-function leadFinishRecorded(pd: string, agentId: string): boolean {
+function helperFinishRecorded(pd: string, agentId: string): boolean {
   try {
     const { intent: chosen, space: chosenSpace } = engineSelection(pd);
     const intent = chosen ?? undefined;
@@ -24008,6 +24010,15 @@ function resumeNext(pd: string, stage: string): string {
     return issuedStepIsIsolatedRun(pd, stage) ? `orchestrate next --stage ${stage} --single` : "orchestrate next";
   } catch {
     return "orchestrate next";
+  }
+}
+
+// Whether this stage runs on its own, open, with no work selected.
+function openRunWithoutWork(pd: string, stage: string): boolean {
+  try {
+    return isolatedRunWithoutWork(pd, engineSelection(pd)) && singleStageAttemptIsOpen(pd, stage);
+  } catch {
+    return false;
   }
 }
 
@@ -24041,10 +24052,10 @@ function handleWait(args: string[], projectDir: string | undefined): void {
     process.exit(1);
   }
   if (flags.agentId !== undefined && target !== "artifacts") {
-    console.error(`--agent-id goes with --for artifacts (the lead's finish). ${WAIT_USAGE}`);
+    console.error(`--agent-id goes with --for artifacts (the helper's finish). ${WAIT_USAGE}`);
     process.exit(1);
   }
-  const leadFinish = flags.agentId;
+  const helperFinish = flags.agentId;
   const seconds =
     flags.timeout !== undefined && Number.isFinite(flags.timeout) && flags.timeout > 0
       ? Math.min(flags.timeout, WAIT_MAX_SECONDS)
@@ -24052,9 +24063,12 @@ function handleWait(args: string[], projectDir: string | undefined): void {
   const started = Date.now();
   const deadline = started + seconds * 1000;
   const relativeRecord = engineRelativeRecordDir(pd);
-  if (target === "artifacts" && relativeRecord === null) {
+  if (target === "artifacts" && relativeRecord === null && !(helperFinish !== undefined && openRunWithoutWork(pd, node.slug))) {
     // Without an intent record there is no declared-artifact location to watch;
-    // settling silently here would tell the conductor its work had landed.
+    // settling silently here would tell the conductor its work had landed. A
+    // helper's finish needs none while this stage's run on its own is open
+    // before any intent: the completion hook records it in the space's audit
+    // then (recordsHelpers), and helperFinishRecorded reads it there.
     console.error(
       "No active intent record resolves for this project, so there are no declared " +
         "artifacts to wait for. Run this from the workflow's project (or pass --project-dir).",
@@ -24116,12 +24130,13 @@ function handleWait(args: string[], projectDir: string | undefined): void {
           missing.push(`${agent} (missing identity-marker first line)`);
         }
       }
-    } else if (leadFinish !== undefined) {
-      // The host's id for the lead it started in the background, as its answer
-      // to the dispatch named it: the finish under that id is the hand-back. The
-      // stage's files are no sign of it, because some of them (Code Generation's
-      // summary and traceability) are the conductor's to write after the lead returns.
-      if (!leadFinishRecorded(pd, leadFinish)) missing.push(`lead ${node.lead_agent ?? "agent"} (no finish recorded yet)`);
+    } else if (helperFinish !== undefined) {
+      // The host's id for the helper (a lead or a pipeline link) it started in the
+      // background, as its answer to the dispatch named it: the finish under that
+      // id is the hand-back. The stage's files are no sign of it, because some of
+      // them (Code Generation's summary and traceability) are the conductor's to
+      // write after the lead returns.
+      if (!helperFinishRecorded(pd, helperFinish)) missing.push(`helper ${helperFinish} (no finish recorded yet)`);
     } else {
       for (const entry of reviewArtifactEntries(pd, node, flags.unit) ?? []) {
         if (!entry.required) continue;
@@ -24149,11 +24164,11 @@ function handleWait(args: string[], projectDir: string | undefined): void {
     waited_ms: Date.now() - started,
     missing,
     next: settled
-      ? leadFinish !== undefined
-        ? "The lead's finish is recorded: read its summary (the host's notice brings it) and continue the stage body."
+      ? helperFinish !== undefined
+        ? "The helper's finish is recorded: read its summary (the host's notice brings it) and continue the stage body."
         : "The dispatched work has landed: read its outputs and continue the stage body."
-      : leadFinish !== undefined
-        ? "Not yet: run this same command again. No finish of the lead is recorded yet: keep running this command " +
+      : helperFinish !== undefined
+        ? "Not yet: run this same command again. No finish of that helper is recorded yet: keep running this command " +
           "in this same turn until it settles, rather than ending your turn to wait for it. When the host's own " +
           "notice says this helper finished or stopped, stop waiting and read what it reports. When this chat was " +
           "resumed after the host quit while the helper worked, that helper is gone: run " +
