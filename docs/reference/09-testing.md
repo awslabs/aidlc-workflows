@@ -713,13 +713,13 @@ the tool results so far satisfy it, for a stop that needs more than one result
 (an engine line that can arrive before or after the step that creates the
 work).
 
-A suite launched from inside a Claude Code session (`CLAUDECODE=1`) does not
-hand that session's `ANTHROPIC_DEFAULT_*_MODEL` defaults to its drives: the
-SDK's bundled Claude Code may be older than the session's model and refuse it.
-When a drive's final provider is Bedrock, it gets CI's pinned models
-(`CI_BEDROCK_MODELS` in `scripts/ci-credential-broker.ts`) for any model the
-project settings or the test did not set; otherwise the bundled defaults. A run
-from any other shell, CI's included, keeps its environment unchanged.
+Each drive runs the first `claude` on the run's `PATH`, the Claude Code a
+person and the TUI legs start, never the Agent SDK's bundled copy; with none
+there it stops before it starts and says so in one line. It names no model of
+its own: the installed Claude Code takes the model the run's environment names,
+else the model names in the env block of the box's own `~/.claude/settings.json`,
+and when neither names one it runs its own default. Each drive's trace records
+the Claude Code version and the model its session ran on.
 
 | Assertion | Surface | On fail |
 |-----------|---------|---------|
@@ -1215,7 +1215,8 @@ Live SDK and TUI harness drivers default to the project's own Claude setting
 sources: the SDK driver loads the copied test `.claude/` project settings and
 hooks, and the TUI driver also loads that project's `.claude/settings.local.json`,
 where the person's choice of AI-DLC's status line lives. Both exclude developer
-user-level hooks/settings. This mirrors the installed
+user-level hooks/settings; the SDK driver takes only the model names from them,
+when the run names no model. This mirrors the installed
 framework surface and prevents local interactive preferences from changing test
 behavior; explicit driver options or `AIDLC_TUI_SETTING_SOURCES` remain the
 escape hatch for calibration.

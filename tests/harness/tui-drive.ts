@@ -136,7 +136,7 @@ import {
   submittedToPersonTurnSession,
   typedIntoPersonTurnSession,
 } from "./person-turns.ts";
-import { defaultChoice, stateFilePathFor } from "./sdk-drive.ts";
+import { defaultChoice, LAUNCHING_SESSION_MARKERS, stateFilePathFor } from "./sdk-drive.ts";
 import { createBunBackend } from "./tui-bun-backend.ts";
 import { keepLegAudit, keepTranscriptWords } from "./leg-evidence.ts";
 import { nativeCleanupDeadlineMs } from "./tui-bun-process.ts";
@@ -393,13 +393,6 @@ function tuiSettingSources(env: NodeJS.ProcessEnv = process.env): string | null 
   if (value === "" || value === "default") return null;
   return value;
 }
-
-// The suite often runs from inside a Claude Code session, which marks every
-// child process with CLAUDE_CODE_CHILD_SESSION. A Claude started with that
-// marker saves no transcript ("Transcript saving is off"), so the TUI under
-// test would not be the session a person starts. Every session starts without
-// it, on both backends.
-const LAUNCHING_SESSION_MARKERS = ["CLAUDE_CODE_CHILD_SESSION"];
 
 /**
  * Keep live TUI runs isolated from developer/user-level Claude settings and

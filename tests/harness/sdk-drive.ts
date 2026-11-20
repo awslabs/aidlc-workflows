@@ -59,7 +59,7 @@ import {
   readFileSync,
   rmSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { query, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
@@ -79,7 +79,6 @@ import { keepAgentWords, keepLegAudit } from "./leg-evidence.ts";
 import { PersonTurnLedger, unbackedFailure } from "./person-turns.ts";
 import type { PermissionRequest } from "./stock-permissions.ts";
 import { recordWindowsFolderHolderVerdict } from "./windows-folder-holders.ts";
-import { CI_BEDROCK_MODELS } from "../../scripts/ci-credential-broker.ts";
 
 const HARNESS_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(HARNESS_DIR, "..", "..");
@@ -90,7 +89,6 @@ const SHIPPED_SETTINGS = join(
   ".claude",
   "settings.json",
 );
-const HARNESS_DEFAULT_MODEL = "opus[1m]";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -404,7 +402,7 @@ export function driveInput(prompt: string): DriveInput {
 }
 
 /** Claude Code's own result when the person picks a picker's "Chat about
- *  this" instead of an option (bundled CLI 2.1.158): no answer, and the agent
+ *  this" instead of an option (the same in 2.1.158 and 2.1.329): no answer, and the agent
  *  is told to ask what they want to clarify. */
 export function chatAboutThisResult(questions: AskUserQuestionItem[]): string {
   return `The user wants to clarify these questions.
@@ -481,11 +479,6 @@ export interface DriveOptions {
     | "plan"
     | "dontAsk"
     | "auto";
-  /**
-   * Explicit SDK model override. Defaults to the shipped dist/claude settings
-   * model so live harness runs exercise the same model pin users receive.
-   */
-  model?: string;
   /**
    * settingSources for the SDK. Default ['project'] so live harness runs load
    * the copied shipped .claude/settings.json/CLAUDE.md but do not inherit the
@@ -596,14 +589,13 @@ export interface CapturedStopHook {
 }
 
 interface ClaudeSettings {
-  model?: unknown;
   env?: unknown;
 }
 
 interface DriveSdkSettings {
-  model?: string;
+  /** The Claude Code the drive starts: the first claude on the drive's own PATH. */
+  executable: string;
   env: Record<string, string>;
-  modelSource?: string;
 }
 
 function readClaudeSettings(path: string): ClaudeSettings | undefined {
@@ -623,45 +615,80 @@ function stringEnv(settings: ClaudeSettings | undefined): Record<string, string>
   return out;
 }
 
-function settingsModel(settings: ClaudeSettings | undefined): string | undefined {
-  return typeof settings?.model === "string" && settings.model.trim()
-    ? settings.model
-    : undefined;
-}
+// The suite often runs from inside a Claude Code session, which marks every
+// child process with CLAUDE_CODE_CHILD_SESSION. A Claude started with that
+// marker saves no transcript ("Transcript saving is off"), so the session under
+// test would not be the one a person starts. Every drive and TUI session starts
+// without it.
+export const LAUNCHING_SESSION_MARKERS = ["CLAUDE_CODE_CHILD_SESSION"];
 
-// A Claude Code session that launches the suite (it sets CLAUDECODE=1) passes
-// its own model defaults to every child. The SDK's bundled Claude Code resolves
-// `opus` from them, so a session model newer than that build turns every live
-// drive into a refused request. They are the session's, not the suite's: such a
-// run uses CI's pinned models when the drive's final provider is Bedrock, and
-// the bundled defaults otherwise. A run from any other shell, CI's included,
-// keeps its environment as it is.
-const SESSION_MODEL_ENV = Object.keys(CI_BEDROCK_MODELS.claude);
+/** The environment names Claude Code takes a model from. */
+const MODEL_NAME = /^ANTHROPIC_(?:MODEL|DEFAULT_[A-Z]+_MODEL)$/;
 
-function launchedFromClaudeSession(): boolean {
-  return process.env.CLAUDECODE === "1";
-}
-
-function processEnv(): Record<string, string> {
-  const fromSession = launchedFromClaudeSession();
-  const out: Record<string, string> = {};
-  for (const [key, value] of Object.entries(process.env)) {
-    if (typeof value !== "string" || (fromSession && SESSION_MODEL_ENV.includes(key))) continue;
-    out[key] = value;
-  }
-  return out;
+function namesAModel(env: Record<string, string>): boolean {
+  return Object.entries(env).some(([key, value]) => MODEL_NAME.test(key) && value.trim() !== "");
 }
 
 /**
- * Resolve the SDK model/env the harness should pass explicitly. Per-call
- * options remain the escape hatch for adversarial calibration; shipped dist
- * settings retain authority when they carry a model; project settings are the
- * next fallback for non-repo harness reuse; the test-only harness default is
- * last so live coverage remains deterministic when shipped settings inherit.
+ * The box's own Claude Code settings, the file a person's Claude Code and the
+ * pool read, give only their model names. The drive's child gets them; the
+ * suite's own environment never does. A file Claude Code itself could not read
+ * names nothing here either.
+ */
+function boxModelNames(home: string): Record<string, string> {
+  let settings: ClaudeSettings | undefined;
+  try {
+    settings = readClaudeSettings(join(home, ".claude", "settings.json"));
+  } catch {
+    return {};
+  }
+  return Object.fromEntries(Object.entries(stringEnv(settings)).filter(([key]) => MODEL_NAME.test(key)));
+}
+
+/** Windows keys its environment in any case; the last layer's spelling of PATH is the one the child keeps. */
+function onePathKey(env: Record<string, string>): string {
+  if (process.platform !== "win32") return "PATH";
+  const keys = Object.keys(env).filter((key) => key.toUpperCase() === "PATH");
+  const kept = keys.at(-1) ?? "PATH";
+  for (const key of keys) if (key !== kept) delete env[key];
+  return kept;
+}
+
+/**
+ * The Claude Code a person and the TUI legs start: the first claude on PATH.
+ * The Agent SDK spawns it without a shell, so on Windows an npm .cmd or .ps1
+ * shim cannot stand in for claude.exe.
+ */
+function installedClaudeCode(path: string): string {
+  const found = path.trim() === "" ? null : Bun.which("claude", { PATH: path });
+  if (!found) {
+    const name = process.platform === "win32" ? "claude.exe" : "claude";
+    throw new Error(
+      `Live SDK drive stopped before it started: no ${name} on this run's PATH. ` +
+        "Install Claude Code, or put the folder that holds it on PATH, and run again.",
+    );
+  }
+  if (process.platform === "win32" && !/\.exe$/i.test(found)) {
+    throw new Error(
+      `Live SDK drive stopped before it started: the first claude on this run's PATH is ${found}, a shim the Agent ` +
+        "SDK cannot start. Put the folder that holds claude.exe before it on PATH, and run again.",
+    );
+  }
+  return found;
+}
+
+/**
+ * Which Claude Code a drive starts and the environment its child gets. The
+ * drive names no model: the installed Claude Code takes it from the run's
+ * environment (project settings, shipped settings and per-call env layered over
+ * it), else from the box's own Claude Code settings, else runs its own default.
+ * It never updates itself under a drive, whose scratch config carries no
+ * autoUpdates setting.
  */
 export function resolveDriveSdkSettings(
   projectDir: string,
-  opts: Pick<DriveOptions, "model" | "env"> = {},
+  opts: Pick<DriveOptions, "env"> = {},
+  home: string = homedir(),
 ): DriveSdkSettings {
   const shipped = readClaudeSettings(SHIPPED_SETTINGS);
   const projectSettingsPath = join(projectDir, ".claude", "settings.json");
@@ -669,33 +696,15 @@ export function resolveDriveSdkSettings(
     ? shipped
     : readClaudeSettings(projectSettingsPath);
 
-  const explicitModel = opts.model?.trim();
-  const shippedModel = settingsModel(shipped);
-  const projectModel = settingsModel(project);
-  const model = explicitModel || shippedModel || projectModel || HARNESS_DEFAULT_MODEL;
-  const modelSource = explicitModel
-    ? "option"
-    : shippedModel
-      ? SHIPPED_SETTINGS
-      : projectModel
-        ? projectSettingsPath
-        : "harness-default";
-
-  // Keep the normal shell environment (PATH, AWS creds, etc.) intact. Project
-  // settings provide fallbacks, shipped dist settings win by default, and
-  // explicit per-call env remains the final override for focused tests.
-  const env: Record<string, string> = {
-    ...processEnv(),
-    ...stringEnv(project),
-    ...stringEnv(shipped),
-    ...(opts.env ?? {}),
-  };
-  // A session's dropped model defaults are replaced only for the provider the
-  // drive ends up on, and only where no later layer named a model itself.
-  if (launchedFromClaudeSession() && env.CLAUDE_CODE_USE_BEDROCK === "1") {
-    for (const [key, pinned] of Object.entries(CI_BEDROCK_MODELS.claude)) env[key] ??= pinned;
-  }
-  return { model, modelSource, env };
+  const env: Record<string, string> = {};
+  for (const [key, value] of Object.entries(process.env)) if (typeof value === "string") env[key] = value;
+  Object.assign(env, stringEnv(project), stringEnv(shipped), opts.env ?? {});
+  for (const name of LAUNCHING_SESSION_MARKERS) delete env[name];
+  const executable = installedClaudeCode(env[onePathKey(env)] ?? "");
+  // All or nothing: a box name never sits beside a model the run names itself.
+  if (!namesAModel(env)) Object.assign(env, boxModelNames(home));
+  env.DISABLE_AUTOUPDATER = "1";
+  return { executable, env };
 }
 
 function sdkTracePath(): string | undefined {
@@ -875,8 +884,7 @@ export async function driveAidlc(
     permissionMode,
     settingSources,
     persistSession: opts.persistSession ?? false,
-    model: sdkSettings.model,
-    modelSource: sdkSettings.modelSource,
+    executable: sdkSettings.executable,
     timeoutMs: opts.timeoutMs,
     stopAfterAskUserQuestionAt,
     stopAfterAskUserQuestionWhen: opts.stopAfterAskUserQuestionWhen !== undefined,
@@ -975,8 +983,8 @@ export async function driveAidlc(
         persistSession: opts.persistSession ?? false,
         // The SDK reports a hook other than SessionStart only when asked.
         ...(opts.captureStopHooks || opts.capturePromptHooks || opts.captureSubagentStartHooks ? { includeHookEvents: true } : {}),
-        ...(sdkSettings.model ? { model: sdkSettings.model } : {}),
-        ...(Object.keys(sdkSettings.env).length > 0 ? { env: sdkSettings.env } : {}),
+        pathToClaudeCodeExecutable: sdkSettings.executable,
+        env: sdkSettings.env,
         ...(containment
           ? { spawnClaudeCodeProcess: (spawnOptions) => containment.spawn(spawnOptions) }
           : {}),
@@ -1064,6 +1072,10 @@ export async function driveAidlc(
       if (msg.type === "system") {
         const m = msg as Record<string, unknown>;
         trackDriveTask(pendingTasks, m, settledTasks);
+        // Which Claude Code ran and on which model: the live tier follows the box's install.
+        if (m.subtype === "init") {
+          writeSdkTrace(tracePath, "session", { claudeCodeVersion: m.claude_code_version, model: m.model });
+        }
         if (m.subtype === "hook_response" && m.hook_event === "SessionStart" && typeof m.stdout === "string") {
           sessionStarts.push(m.stdout);
         }

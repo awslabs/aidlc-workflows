@@ -18,8 +18,8 @@
 //
 // Records are read by script, the agent's words to the person by a model (judgeWords, with what the person had been
 // shown before their reply); a difference in
-// wording between runs is never a failure. The drivers: Claude Code through the SDK (its own Claude Code, the nightly's
-// model pins) and through the box's own `claude -p` (AIDLC_GATE_FUZZ_CLAUDE_BIN, the shell's models), Codex through `codex exec`,
+// wording between runs is never a failure. The drivers: Claude Code through the SDK (the claude on PATH, the run's
+// models) and through the box's own `claude -p` (AIDLC_GATE_FUZZ_CLAUDE_BIN, the shell's models), Codex through `codex exec`,
 // Kiro CLI over ACP, opencode through `opencode run`, the Cursor agent through `agent -p`, Copilot CLI through
 // `copilot -p`. tests/e2e/t-live-gate-fuzz.serial.test.ts runs a sample; `bun tests/harness/live-gate-fuzz.ts
 // --write-corpus` writes the first corpus from the answers corpus and the measured cases; `--rejudge <report dir>`
@@ -43,7 +43,6 @@ import { homeDigest, judgeVerdict, liveProject, PERSON_READS_RULE } from "./live
 import { auditCursor, type PersonTurn, unbackedDecisions } from "./person-turns.ts";
 import { driveAidlc } from "./sdk-drive.ts";
 import { remainingOperationTimeoutMs } from "./test-budget.ts";
-import { CI_BEDROCK_MODELS } from "../../scripts/ci-credential-broker.ts";
 
 type Lib = typeof import("../../dist/claude/.claude/tools/aidlc-lib.ts");
 type Store = typeof import("../../dist/claude/.claude/tools/aidlc-message-store.ts");
@@ -423,10 +422,7 @@ export async function exchange(tool: LiveTool, rig: LiveRig, lines: string[], le
       const starts: Array<{ text: number; tool: number } | "box"> = [{ text: 0, tool: 0 }];
       const asked: number[] = [];
       const r = await driveAidlc(lines[0], {
-        // The SDK's own Claude Code is the nightly's, which takes the nightly's model pins (the newest models need a newer
-        // Claude Code; the claude-tui driver runs the box's own).
         projectDir: rig.proj, permissionMode: "bypassPermissions",
-        env: { DISABLE_AUTOUPDATER: "1", ...(process.env.AIDLC_GATE_FUZZ_KEEP_MODELS === "1" ? {} : CI_BEDROCK_MODELS.claude) },
         // The first one-question box after the question was shown takes the person's next line as a person answers a
         // box: the option it names, else their words in the box's own field. Any other box is left for the chat.
         chatAboutQuestionWhen: (menu) => menu.questions.length !== 1 || next >= lines.length || starts.includes("box"),
