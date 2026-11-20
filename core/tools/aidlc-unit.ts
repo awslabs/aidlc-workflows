@@ -13779,7 +13779,8 @@ function pushUnit(args: string[], projectDir?: string,
       const refused = "refused" in sent ? sent : null;
       notTaken = { byRule: refused?.byRule === true };
       lines.push(notTaken.byRule ? resultRefusedByRuleLine(unit, place.repo, refused!.refused, refused!.branchTried === true)
-        : `${place.repo} did not take ${unit}'s result: ${refused?.refused ?? "its record there changed while it was being sent"}. Do you want me to send it again?`);
+        : `${place.repo} did not take ${unit}'s result: ${(refused?.refused ?? "its record there changed while it was being sent").replace(/([^.!?])$/, "$1.")} ` +
+          "Do you want me to send it again?");
     }
     else invalidateLiveClaimPayloadCache(pd, unit);
     homeHasIt = sent.ok;

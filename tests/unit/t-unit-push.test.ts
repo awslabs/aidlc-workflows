@@ -716,6 +716,9 @@ describe("the push", () => {
     writeFileSync(hook, "#!/bin/sh\nexit 0\n");
     expect(String(pushed.json?.notice)).toContain("checkout-api did not take refunds's result:");
     expect(String(pushed.json?.notice)).toContain("Do you want me to send it again?");
+    // git's own words end in a full stop, and the line adds none of its own after them.
+    expect(String(pushed.json?.notice)).toContain(". Do you want me to send it again?");
+    expect(String(pushed.json?.notice)).not.toContain(".. Do you want me to send it again?");
     const again = next(alice, chat);
     expect(again.ask_type, JSON.stringify(again)).toBe("unit-push");
     expect(run(UNIT, ["push"], alice, chat).status).toBe(0);
