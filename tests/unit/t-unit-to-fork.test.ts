@@ -18,7 +18,7 @@
 
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, renameSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { auditBlockField, noteEngineAskMark, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import * as unitTool from "../../dist/claude/.claude/tools/aidlc-unit.ts";
@@ -134,6 +134,19 @@ describe("the push of a Unit's branch early to the person's fork", () => {
     expect(yes.status, yes.out).toBe(0);
     expect(git(fork, ["diff", "--name-only", "refunds~1", "refunds"])).toBe("");
     expect(git(api, ["diff", "--cached", "--name-only"])).toBe("MINE.md");
+  });
+
+  test("an ignored file of theirs where the plan's main tracks one: git refuses the branch, the file is as it was, and nothing is pushed", () => {
+    const { alice, api, fork } = forked();
+    offered(alice);
+    writeFileSync(join(api, ".git", "info", "exclude"), "CHANGES.md\n");
+    writeFileSync(join(api, "CHANGES.md"), "my own notes\n");
+    const refused = run(UNIT, ["push", "--to-fork"], alice);
+    expect(refused.status).not.toBe(0);
+    expect(String(refused.json?.error), refused.out).toBe('Branch refunds could not be made in checkout-api: git says "The following ' +
+      'untracked working tree files would be overwritten by checkout: CHANGES.md". Nothing was pushed. Say when to try again.');
+    expect(readFileSync(join(api, "CHANGES.md"), "utf-8")).toBe("my own notes\n");
+    expect(onFork(fork)).not.toBe(0);
   });
 
   test("the Unit's own push later goes to the fork on top of it, and a branch of the person's own does not take its place", () => {
