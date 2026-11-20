@@ -151,6 +151,8 @@ interface WrapperOptionSpec {
 
 interface ShellInvocationParseState {
   executableResolutionChanged: boolean;
+  // Collects the names of the variables the command is handed, when asked for.
+  variables?: string[];
 }
 
 function changesExecutableResolution(name: string): boolean {
@@ -240,6 +242,7 @@ function shellInvocation(
       if (changesExecutableResolution(match[1])) {
         state.executableResolutionChanged = true;
       }
+      state.variables?.push(match[1]);
       index++;
     }
   };
@@ -562,6 +565,26 @@ export function shellCommandAltersExecutableResolution(command: string): boolean
     if (state.executableResolutionChanged) return true;
   }
   return false;
+}
+
+// Each command of a shell line that is handed variables on its own command
+// line (`NAME=value cmd`, `env NAME=value cmd`), with their names. A variable a
+// separate `export` sets, or the shell already holds, is not on the line.
+export function shellCommandVariables(
+  command: string,
+): { invocation: ShellInvocationDetails; variables: string[] }[] {
+  const handed: { invocation: ShellInvocationDetails; variables: string[] }[] = [];
+  for (const segment of shellCommandSegments(command)) {
+    const state: ShellInvocationParseState = {
+      executableResolutionChanged: false,
+      variables: [],
+    };
+    const invocation = shellInvocation(shellWords(segment), 0, false, [], state);
+    if (invocation && state.variables?.length) {
+      handed.push({ invocation, variables: state.variables });
+    }
+  }
+  return handed;
 }
 
 export function shellCommandInvocations(command: string): ShellInvocation[] {

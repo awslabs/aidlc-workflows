@@ -59,6 +59,7 @@ import {
   shellCommandAltersExecutableResolution,
   shellCommandInvocationDetails,
   shellCommandInvocations,
+  shellCommandVariables,
   writeTargets,
 } from "../../dist/claude/.claude/hooks/aidlc-review-freeze.ts";
 import {
@@ -237,6 +238,18 @@ test("inspection marks altered executable lookup and data-driven mutations", () 
       launchers: ["env"],
     },
   ]);
+  // The variables a command is handed on its own command line, bare or through
+  // env, command by command; a word after the command is an argument.
+  expect(
+    shellCommandVariables("A=1 B=2 rg TODO | env C=3 sort; cat D=4; E=5 command git diff").map(
+      ({ invocation, variables }) => [invocation.name, variables],
+    ),
+  ).toEqual([
+    ["rg", ["A", "B"]],
+    ["sort", ["C"]],
+    ["git", ["E"]],
+  ]);
+  expect(shellCommandVariables("rg TODO src")).toEqual([]);
   expect(shellCommandInvocationDetails("xargs rm -rf")).toEqual([
     {
       name: "rm",

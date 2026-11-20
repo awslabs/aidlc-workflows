@@ -3448,6 +3448,125 @@ describe("t265b hook lifecycle", () => {
     }
   });
 
+  // A read command that starts another program (the program its command line
+  // names through an option or a variable, or one of the machine's
+  // decompressors), or that writes a file through an option, is judged as a
+  // command the guard cannot read, the way `sort -o` is: it waits while the
+  // plan waits and runs once the plan is approved.
+  test("a read command that starts another program or writes through an option waits for the plan", () => {
+    const proj = scratchProject();
+    try {
+      seedState(proj);
+      seedActiveDirective(proj, "code-generation");
+      seedUnit(proj, null, { plan: true, answer: null });
+      const waits = [
+        "rg --pre ./tool TODO src",
+        "rg --pre=./tool TODO src",
+        "rg --pre-glob '*.ts' TODO src",
+        "rg --hostname-bin ./tool TODO src",
+        "rg --hostname-bin=./tool TODO src",
+        "rg -z TODO src",
+        "rg -nz TODO src",
+        "rg --search-zip TODO src",
+        "sort --compress-program=./tool input.txt",
+        "sort --compress-program ./tool input.txt",
+        // sort and file take a long option cut to a prefix that names only it.
+        "sort --co=./tool input.txt",
+        "file -z src/inline.ts",
+        "file -bZ src/inline.ts",
+        "file --uncompress src/inline.ts",
+        "file --uncompress-noreport src/inline.ts",
+        // git grep handed a pager, and a read subcommand of git handed a
+        // program through configuration on the command line.
+        "git grep -O./tool TODO",
+        "git grep -nO./tool TODO",
+        "git grep --open-files-in-pager=./tool TODO",
+        "git grep --op=./tool TODO",
+        "git -c diff.external=./tool diff",
+        "git -c diff.notes.textconv=./tool show HEAD",
+        "git -c filter.notes.clean=./tool diff",
+        "git -c core.hooksPath=./hooks status",
+        "git -c include.path=./gitconfig status",
+        "git -C . -c core.fsmonitor=./tool status",
+        "git -c core.quotePath=false -c core.fsmonitor=./tool status",
+        "git --config-env=diff.external=TOOL diff",
+        "git --config-env diff.external=TOOL diff",
+        "git --config-env=core.fsmonitor=MONITOR status",
+        // The same program handed through a variable on the command line.
+        "RIPGREP_CONFIG_PATH=./rgrc rg TODO src",
+        "env RIPGREP_CONFIG_PATH=./rgrc rg TODO src",
+        "GIT_EXTERNAL_DIFF=./tool git diff",
+        "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=diff.external GIT_CONFIG_VALUE_0=./tool git diff",
+        "GIT_CONFIG_GLOBAL=./gitconfig git status",
+        "LESSOPEN='|./tool %s' more src/inline.ts",
+        // A file written through an option, in every spelling the command takes.
+        "sort input.txt --o=src/sorted.txt",
+        "sort input.txt --outp src/sorted.txt",
+        "sort -osrc/sorted.txt input.txt",
+        "sort -uo src/sorted.txt input.txt",
+        "file -C -m magic",
+        "file --compile -m magic",
+        // However the command is reached.
+        "env rg --pre ./tool TODO src",
+        "/usr/bin/sort --compress-program=./tool input.txt",
+        "cat input.txt | sort --compress-program=./tool",
+        "cat input.txt | RIPGREP_CONFIG_PATH=./rgrc rg TODO",
+      ];
+      for (const command of waits) {
+        const held = runHook(proj, BASH(command));
+        expect(held.code, command).toBe(2);
+        expect(held.stderr, command).toContain("could not be read");
+      }
+      // The same letters and words as an option's value, after `--`, or in
+      // another option are a read.
+      for (const command of [
+        "rg TODO src",
+        "rg -tzsh TODO src",
+        "rg -ez src",
+        "rg -e --pre src",
+        "rg -- --pre src",
+        "rg --pretty TODO src",
+        "rg TODO src | sort",
+        "sort --check input.txt",
+        "sort -t, -k2 input.txt",
+        "file -b src/inline.ts",
+        "file -e compress src/inline.ts",
+        "file -c src/inline.ts",
+        "file -m magic src/inline.ts",
+        "sort -to input.txt",
+        "git grep -e -O TODO",
+        "git grep --only-matching TODO",
+        "git grep -C 3 TODO",
+        "git log -c -1",
+        "git -C . status",
+        "git diff -Oorder.txt",
+        // A setting that names no program is a read.
+        "git -c core.quotePath=false status --short",
+        "git -c core.fsmonitor=false status --short",
+        "git -c color.ui=never log -1",
+        "git --config-env=http.proxy=PROXY status --short",
+        // What the person's own git configuration names is theirs, a pager
+        // never starts without a terminal, and neither does a pager command.
+        "git diff --ext-diff",
+        "GIT_PAGER=cat git log -1",
+        "more '+!./tool' src/inline.ts",
+        "LC_ALL=C sort input.txt",
+        "GIT_CONFIG_NOSYSTEM=1 git status",
+        // Not one of git's read subcommands: a program run, as before.
+        "git -c user.name=x commit -m y",
+      ]) {
+        expect(runHook(proj, BASH(command)).code, command).toBe(0);
+      }
+
+      seedUnit(proj, null, { plan: true, answer: "A. Approve Plan" });
+      for (const command of waits) {
+        expect(runHook(proj, BASH(command)).code, command).toBe(0);
+      }
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
   // Kiro IDE's execute_pwsh arrives as Bash marked as PowerShell. The probes an
   // agent writes there before approval are reads and stay available; every
   // form that can write, or that the guard cannot read, is still refused.
