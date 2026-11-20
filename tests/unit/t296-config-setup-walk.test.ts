@@ -498,7 +498,7 @@ describe("t296 first-run config setup walk", () => {
     const home = temp("aidlc-t296-codex-home-");
     const env = hookPathEnv("aidlc", true, { HOME: home, CODEX_HOME: home });
     const unmet = "Codex has not trusted this project's hooks yet";
-    const step = "in Codex, type /hooks, press t to trust all, then press Esc";
+    const step = "start Codex in the project folder and choose Trust all and continue when it asks about hooks";
 
     const scaffold = run(
       ["config", "--project-dir", path, "--from", CODEX_RELEASE, "--harness", "codex", "--yes"],
