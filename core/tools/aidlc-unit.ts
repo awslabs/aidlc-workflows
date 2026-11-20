@@ -13461,12 +13461,15 @@ function carryBuildOwnLog(pd: string): void {
 }
 
 // The record commit's message: the Unit's own commit message with its first
-// line marked as the record, so a rule the code commit meets (a ticket key, a
-// sign-off) the record meets too; AI-DLC's own when the person gave none.
+// line as it is and the record named as the first paragraph of its body, their
+// body and trailers after it, so every rule the code commit meets (a ticket key,
+// the subject's length, a sign-off) the record meets too; AI-DLC's own when the
+// person gave none.
 function buildRecordMessage(unit: string, given: string | null): string {
   if (given === null) return `${unit}: AI-DLC's record`;
   const [subject, ...rest] = given.replace(/\r\n/g, "\n").split("\n");
-  return [`${subject} (AI-DLC's record)`, ...rest].join("\n");
+  const body = rest.join("\n").replace(/^\n+/, "");
+  return [subject, "", `AI-DLC's record of ${unit}.`, ...(body.trim() === "" ? [""] : ["", body])].join("\n");
 }
 
 // A practice the person kept during this build, which learnings persist wrote in

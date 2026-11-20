@@ -880,8 +880,9 @@ the build goes with it on the same branch as a second commit made with your own
 git: the build's own folder under `aidlc/spaces/<space>/intents/`, and, in a
 space other than the lead's, that space's own files while it is new to git;
 never the lead's space, the lead's record or another build's. Its message is "refunds: AI-DLC's record", or your own
-message with " (AI-DLC's record)" after its first line, so a ticket key or a
-sign-off your code commit carries is on it too. The line then says "AI-DLC's
+message with its first line as it is and "AI-DLC's record of refunds." as the
+first paragraph of its body, so a ticket key, a rule on the subject's length or
+a sign-off your code commit meets, the record meets too. The line then says "AI-DLC's
 record of refunds went with it, in a commit of its own." AI-DLC never pushes the record again to an open pull
 request; a later push of the Unit (a redo) carries it as it is then. When your
 hook or your host refuses the record, the code stays pushed, the branch stays

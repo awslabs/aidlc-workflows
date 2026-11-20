@@ -350,8 +350,8 @@ describe("a Unit on the workspace's own repository", () => {
   });
   // AI-DLC's record of the build rides in the Unit's pull request: a second
   // commit after the Unit's code, AI-DLC's own message, or the person's own
-  // with its first line marked as the record, so a rule their code commit
-  // meets the record meets too.
+  // with its first line as it is and the record named in its body, so a rule
+  // their code commit meets the record meets too.
   const recordWent = (unit: string): string =>
     `AI-DLC's record of ${unit} went with it, in a commit of its own.`;
   const committed = (host: string, rev: string): string[] =>
@@ -1055,12 +1055,19 @@ describe("a Unit on the workspace's own repository", () => {
     writeFileSync(statePath, readFileSync(statePath, "utf-8").replace(/^- \*\*Status\*\*: Completed$/m, "- **Status**: Running"));
   }
 
-  test("their hook refuses the record's commit and they commit AI-DLC's record themselves: a new chat leaves their commit as it is, and the switch back goes", () => {
+  // Their host refuses a push of the Unit's branch that changes aidlc/, so AI-DLC's record does not go.
+  function hostRefusesTheRecord(host: string): void {
+    const file = join(host, "hooks", "pre-receive");
+    writeFileSync(file, "#!/bin/sh\nwhile read old new ref; do\n  [ \"$ref\" = refs/heads/refunds ] || continue\n" +
+      "  if git diff --name-only \"$old\" \"$new\" 2>/dev/null | grep -q '^aidlc/'; then echo 'GitLab: File name aidlc/ is prohibited' >&2; exit 1; fi\n" +
+      "done\nexit 0\n");
+    chmodSync(file, 0o755);
+  }
+
+  test("their host refuses the record and they commit AI-DLC's record themselves: a new chat leaves their commit as it is, and the switch back goes", () => {
     const home = oneRepoTeams();
+    hostRefusesTheRecord(home.remote);
     const alice = cloneOf(home.remote, "alice");
-    const hookFile = join(alice, ".git", "hooks", "commit-msg");
-    writeFileSync(hookFile, "#!/bin/sh\n[ $(head -n 1 \"$1\" | wc -c) -le 51 ] && exit 0\necho 'commit-msg: subject is longer than 50 characters' >&2\nexit 1\n");
-    chmodSync(hookFile, 0o755);
     const record = builtHere(alice, "refunds", "refunds.ts");
     finishBuild(record);
     const pushed = run(UNIT, ["push", "--commit-message-file", commitMessage(alice, record, "PAY-7 refund handler for the checkout totals\n")], alice);
@@ -1176,10 +1183,8 @@ describe("a Unit on the workspace's own repository", () => {
 
   test("a push whose record does not go says nothing of a practice kept", () => {
     const home = oneRepoTeams();
+    hostRefusesTheRecord(home.remote);
     const wen = cloneOf(home.remote, "wen");
-    const hook = join(wen, ".git", "hooks", "commit-msg");
-    writeFileSync(hook, "#!/bin/sh\n[ $(head -n 1 \"$1\" | wc -c) -le 51 ] && exit 0\necho 'commit-msg: subject is longer than 50 characters' >&2\nexit 1\n");
-    chmodSync(hook, 0o755);
     const record = builtHere(wen, "refunds", "refunds.ts", "default");
     practiceKept(wen, record, "team", "Test pages without a real browser");
     const pushed = run(UNIT, ["push", "--commit-message-file", commitMessage(wen, record, "PAY-7 refund handler for the checkout totals\n")], wen);
@@ -1357,12 +1362,49 @@ describe("a Unit on the workspace's own repository", () => {
     const pushed = run(UNIT, ["push", "--commit-message-file", commitMessage(alice, record, "PAY-7 refund handler\n")], alice);
     expect(pushed.status, pushed.out).toBe(0);
     expect(git(home.remote, ["log", "--format=%s", "main..refunds"]).split("\n"))
-      .toEqual(["PAY-7 refund handler (AI-DLC's record)", "PAY-7 refund handler"]);
+      .toEqual(["PAY-7 refund handler", "PAY-7 refund handler"]);
+    expect(git(home.remote, ["log", "-1", "--format=%b", "refunds"])).toBe("AI-DLC's record of refunds.");
+  });
+
+  test("their hook refuses a subject the last commit already has: the code goes, the record commit is not made, the line says so once in the hook's words, and nothing of the record is left staged or gone", () => {
+    const home = oneRepoTeams();
+    const alice = cloneOf(home.remote, "alice");
+    const hookFile = join(alice, ".git", "hooks", "commit-msg");
+    writeFileSync(hookFile, "#!/bin/sh\n[ \"$(head -n 1 \"$1\")\" = \"$(git log -1 --format=%s 2>/dev/null)\" ] || exit 0\n" +
+      "echo 'commit-msg: a subject the last commit already has' >&2\nexit 1\n");
+    chmodSync(hookFile, 0o755);
+    const record = builtHere(alice, "refunds", "refunds.ts");
+    const pushed = run(UNIT, ["push", "--commit-message-file", commitMessage(alice, record, "PAY-7 refund handler\n")], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(git(home.remote, ["log", "--format=%s", "main..refunds"])).toBe("PAY-7 refund handler");
+    expect(git(alice, ["rev-parse", "refunds"])).toBe(git(home.remote, ["rev-parse", "refunds"]));
+    const said = String(pushed.json?.notice);
+    expect(said.split("AI-DLC's record of refunds did not go with it").length, said).toBe(2);
+    expect(said).toEndWith("AI-DLC's record of refunds did not go with it: commit-msg: a subject the last commit already has.");
+    expect(git(alice, ["diff", "--cached", "--name-only"])).toBe("");
+    // The record is still theirs to check in: every file of it there, untracked.
+    const folder = relative(alice, record).split(/[\\/]/).join("/");
+    const left = git(alice, ["status", "--porcelain", "--untracked-files=all", "--", folder]).split("\n");
+    expect(left).toContain(`?? ${folder}/aidlc-state.md`);
+    expect(left.every((line) => line.startsWith("?? ")), left.join("\n")).toBe(true);
+  });
+
+  test("their message with a body and a sign-off: the record's commit keeps their first line, names the record first in its body, and the sign-off stays last", () => {
+    const home = oneRepoTeams();
+    const alice = cloneOf(home.remote, "alice");
+    const record = builtHere(alice, "refunds", "refunds.ts");
+    const message = "PAY-7 refund handler\n\nRefunds go through the ledger.\n\nSigned-off-by: alice <alice@example.test>\n";
+    const pushed = run(UNIT, ["push", "--commit-message-file", commitMessage(alice, record, message)], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    const recordMessage = spawnSync("git", ["log", "-1", "--format=%B", "refunds"], { cwd: home.remote, encoding: "utf-8", env: ENV }).stdout;
+    expect(recordMessage.trimEnd()).toBe("PAY-7 refund handler\n\nAI-DLC's record of refunds.\n\nRefunds go through the ledger.\n\nSigned-off-by: alice <alice@example.test>");
+    const trailers = spawnSync("git", ["interpret-trailers", "--parse"], { cwd: home.remote, encoding: "utf-8", env: ENV, input: recordMessage }).stdout;
+    expect(trailers.trim()).toBe("Signed-off-by: alice <alice@example.test>");
   });
 
   // Their commit-msg hook keeps subjects to 50 characters: their own message
-  // fits, the record's longer one does not.
-  test("their hook refuses the record's commit: the Unit's code is pushed, the record is not, and the line says so in the hook's words", () => {
+  // fits, and the record's commit keeps their first line.
+  test("their hook keeps subjects to 50 characters: their own subject fits, the record's commit keeps it, and both go", () => {
     const home = oneRepoTeams();
     const alice = cloneOf(home.remote, "alice");
     const hook = join(alice, ".git", "hooks", "commit-msg");
@@ -1371,12 +1413,11 @@ describe("a Unit on the workspace's own repository", () => {
     const record = builtHere(alice, "refunds", "refunds.ts");
     const pushed = run(UNIT, ["push", "--commit-message-file", commitMessage(alice, record, "PAY-7 refund handler for the checkout totals\n")], alice);
     expect(pushed.status, pushed.out).toBe(0);
-    expect(git(home.remote, ["log", "--format=%s", "main..refunds"])).toBe("PAY-7 refund handler for the checkout totals");
+    expect(git(home.remote, ["log", "--format=%s", "main..refunds"]).split("\n"))
+      .toEqual(["PAY-7 refund handler for the checkout totals", "PAY-7 refund handler for the checkout totals"]);
+    expect(git(home.remote, ["log", "-1", "--format=%b", "refunds"])).toBe("AI-DLC's record of refunds.");
     expect(git(alice, ["rev-parse", "refunds"])).toBe(git(home.remote, ["rev-parse", "refunds"]));
-    const said = String(pushed.json?.notice);
-    // Said once, in this computer's words, and nothing after it about the record.
-    expect(said.split("AI-DLC's record of refunds did not go with it").length, said).toBe(2);
-    expect(said).toEndWith("AI-DLC's record of refunds did not go with it: commit-msg: subject is longer than 50 characters.");
+    expect(String(pushed.json?.notice)).toEndWith(recordWent("refunds"));
   });
 
   // A host rule on the record's files, as a GitLab push rule on file names or a
