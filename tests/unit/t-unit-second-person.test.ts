@@ -314,6 +314,25 @@ describe("a teammate opens solo work built from another machine", () => {
     expect(after.ask_type, JSON.stringify(after)).toBeUndefined();
     expect(JSON.stringify(after)).not.toContain("repos.json");
   });
+
+  // The switch runs the approval setter itself: on the builder's other
+  // machine, which may not read as where the work's plan was made, it is still
+  // the work's own rhythm, never a lead's word to ask about.
+  test("on the builder's other machine, the switch to teams keeps once at the end and says the take", () => {
+    const home = soloAtA(true);
+    const took = run(UNIT, ["take", "checkout-ui", "--home", HOME_RECORD], cloneOf(home.remote, "bob"));
+    expect(took.status, took.out).toBe(0);
+    const laptop = cloneOf(home.remote, "lead");
+    const step = next(laptop);
+    expect((step.change_notices ?? []) as string[], JSON.stringify(step).slice(0, 900)).toContain(
+      "bob took checkout-ui; this session carries on with the rest, one Unit at a time, and you can ask to sign off each taken Unit's result yourself before it counts as done.",
+    );
+    expect(JSON.stringify(step)).not.toContain("Do you lead fixture from here?");
+    const state = stateOf(laptop);
+    expect(field(state, "Unit Ownership")).toBe("team");
+    expect(field(state, "Unit Gate Rhythm")).toBe("unit-end");
+    expect(readAuditShardEvents(laptop).filter((row) => row.event === "UNIT_GATE_RHYTHM_SET")).toHaveLength(1);
+  });
 });
 
 describe("the lead's own chat hears a teammate's take once a chat starts and between Units", () => {

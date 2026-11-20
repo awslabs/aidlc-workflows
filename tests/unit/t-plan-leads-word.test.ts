@@ -44,6 +44,7 @@ import {
   refundsTaken,
   refundsTakenInClone,
   run,
+  STATE,
   teamWorkspace,
   stateOf,
   teammateWithLeadsWork,
@@ -152,6 +153,28 @@ describe("the lead's word goes on the plan", () => {
     expect(run(UNIT, ["turned-down", "refunds", "--repo", "billing", "--person-words", "the totals are wrong"], home.dir).status).toBe(0);
     const plan = JSON.parse(git(hosts["checkout-api"], ["show", `${planRefOf(home.id8)}:plan.json`])) as { settings: Record<string, string> };
     expect(plan.settings["Lead Sign-off"]).toBe("on");
+  });
+
+  // The lead's answer on how the Units are approved goes on the plan as the
+  // sign-off setting does, with the same line when the plan does not take it.
+  test("the approval setting the plan does not take is changed here only, and goes with the lead's next write", () => {
+    const { home, hosts } = refundsPushed();
+    const hook = join(hosts["checkout-api"], "hooks", "pre-receive");
+    writeFileSync(hook, "#!/bin/sh\necho 'plans are read only here' >&2\nexit 1\n");
+    chmodSync(hook, 0o755);
+    const set = run(STATE, ["set-unit-gate-rhythm", "unit-end"], home.dir);
+    expect(set.status, set.out).toBe(0);
+    expect(String(set.json?.notice)).toStartWith("checkout-api did not take the change to the plan (");
+    expect(String(set.json?.notice)).toEndWith(
+      "so the approval setting for the Units is not written. Say when to try again, or name another repository everyone who takes a Unit can read " +
+      "and I will move the plan there. The approval setting for the Units is changed here only; the plan gets it with my next write to it.",
+    );
+    const rhythm = (): string => (JSON.parse(git(hosts["checkout-api"], ["show", `${planRefOf(home.id8)}:plan.json`])) as { settings: Record<string, string> })
+      .settings["Unit Gate Rhythm"];
+    expect(rhythm()).toBe("per-stage");
+    writeFileSync(hook, "#!/bin/sh\nexit 0\n");
+    expect(run(UNIT, ["turned-down", "refunds", "--repo", "billing", "--person-words", "the totals are wrong"], home.dir).status).toBe(0);
+    expect(rhythm()).toBe("unit-end");
   });
 });
 
@@ -993,5 +1016,23 @@ describe("the lead's words in a checkout that does not lead the work", () => {
       expect(signed.status, `${where}: ${signed.out}`).toBe(0);
       expect(planWordAt(plan, "refunds"), where).toMatchObject({ signoff: { words: "looks right" } });
     }
+  });
+
+  // The approval setting is the lead's word too: asked once here, and nothing
+  // written, neither this clone's copy of the lead's state nor the plan.
+  test("the approval setting in a checkout that does not lead the work asks once whether they lead it, and writes nothing", () => {
+    const { plan, carl } = scene();
+    const tip = tipOf(plan);
+    const before = stateOf(carl);
+    const said = run(STATE, ["set-unit-gate-rhythm", "unit-end"], carl);
+    expect(said.status, said.out).not.toBe(0);
+    expect(said.json?.error).toBe(asked("The approval setting for the Units", "the lead's to change", "changed it"));
+    const onYes = String(said.json?.on_yes);
+    expect(onYes).toContain(" and \"No, the lead does\" (Nothing is written on the plan, and I won't ask this here again. " +
+      "The approval setting for the Units stays with the lead.).");
+    expect(onYes).toMatch(/then `[^`]*aidlc-state\.ts set-unit-gate-rhythm unit-end` in the same turn/);
+    expect(stateOf(carl)).toBe(before);
+    expect(tipOf(plan)).toBe(tip);
+    expect(readAuditShardEvents(carl).some((row) => row.event === "UNIT_GATE_RHYTHM_SET")).toBe(false);
   });
 });

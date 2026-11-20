@@ -10442,11 +10442,13 @@ export function planFilesNow(projectDir: string, tip: PlanJson | null, place: Pl
       (tip?.plan_repo.name === unit.record ? { name: tip.plan_repo.name, address: tip.plan_repo.address, branch: null } : undefined);
     if (listed !== undefined) repos.push(listed);
   }
-  // The lead's sign-off is their own word: a state that never heard it (a
-  // worktree or another computer of theirs, behind) keeps the plan's, last as
-  // PLAN_SETTINGS puts it, so a share with nothing new writes nothing.
+  // The lead's own settings are their word: a state that never heard one (a
+  // worktree or another computer of theirs, behind) keeps the plan's, in the
+  // place PLAN_SETTINGS puts it, so a share with nothing new writes nothing.
   const settings = planSettings(state);
-  if (settings[LEAD_SIGNOFF_FIELD] === undefined && tip?.settings[LEAD_SIGNOFF_FIELD] !== undefined) settings[LEAD_SIGNOFF_FIELD] = tip.settings[LEAD_SIGNOFF_FIELD];
+  for (const name of LEADS_OWN_SETTINGS) {
+    if (!getField(state, name)?.trim() && tip?.settings[name] !== undefined) settings[name] = tip.settings[name];
+  }
   const plan: PlanJson = {
     format: PLAN_FORMAT,
     version: (tip?.version ?? 0) + 1,
@@ -10904,10 +10906,10 @@ export function leadsPlanWrite(projectDir: string, change: {
             : [...plan.inputs, entry];
         }
         {
-          // The lead's sign-off setting goes with every write of theirs: one set
+          // The lead's own settings go with every write of theirs: one set
           // while a write did not go reaches the plan with the next.
           const settings = { ...plan.settings };
-          for (const key of new Set([LEAD_SIGNOFF_FIELD, ...(change.take?.settings ?? [])])) {
+          for (const key of new Set([...LEADS_OWN_SETTINGS, ...(change.take?.settings ?? [])])) {
             if (built.plan.settings[key] === undefined) delete settings[key];
             else settings[key] = built.plan.settings[key];
           }
@@ -16414,14 +16416,14 @@ function sameCommand(message?: string): string {
 
 // The lead's work selected in a checkout that does not lead it (planMadeElsewhere): a teammate's clone of the
 // lead's workspace, or the lead's other computer before they say they lead there.
-function ledFromElsewhere(pd: string): boolean {
+export function ledFromElsewhere(pd: string): boolean {
   const state = stateHere(pd);
   return state !== null && isTeamUnitOwnership(state) && homeLocation(state) !== null && unitBuildOf(state) === null && planMadeElsewhere(pd);
 }
 
 // A lead's word asked for where the work is led from elsewhere: nothing is written. The reply is the question, once
 // on this clone for this work; after their no (leadHereByWord), the line that says so. `again` runs the word as asked.
-function askWhoLeads(pd: string, word: { name: string; start?: string; lead?: string; doIt?: string; notDone?: string }, again: string): never {
+export function askWhoLeads(pd: string, word: { name: string; start?: string; lead?: string; doIt?: string; notDone?: string }, again: string): never {
   const start = word.start ?? word.name.replace(/^your /, "Your ");
   const work = keptPlan(pd, activeIdentity(pd).intentId8)?.plan.work.label ?? activeIdentity(pd).intentId8;
   const unit = aidlcToolInvocation("unit");
@@ -16449,15 +16451,24 @@ class LeadWordUnwritten extends Error {
   }
 }
 
+// What a lead's word not written gives the agent beside its line, printed the
+// same by every tool that writes one: the step on a yes, the command again, or
+// the lead's question with its choices.
+export function leadWordFields(error: unknown): Record<string, unknown> {
+  if (!(error instanceof LeadWordUnwritten)) return {};
+  if (error.onYes !== undefined) return { on_yes: error.onYes };
+  return error.ask === undefined ? { again: error.again } : { ask_type: "lead-plan-change", choices: error.ask.choices, after_answer: error.again };
+}
+
 // A lead's write that did not go stops the step: on a plan a newer AI-DLC
 // wrote, the update offer; on a tip that is not a plan, that; on work whose
 // plan is not shared yet, that `what` (the word, "refunds's sign-off") waits
 // for the share; else why, in git's or the host's words, and that `what` is
 // not written. `message`: the message the lead's words came in, kept for the
 // same command.
-function failUnlessWritten(pd: string, written: LeadWrite, what: string, message?: string): void {
+// `same`: the command the word was set with, where another tool ran it.
+function failUnlessWritten(pd: string, written: LeadWrite, what: string, message?: string, same = sameCommand()): void {
   if (written.kind === "written" || written.kind === "unchanged") return;
-  const same = sameCommand();
   const again = message === undefined ? null : sameCommand(message);
   if (written.kind === "led-elsewhere") askWhoLeads(pd, { name: what }, again ?? same);
   const stop = (said: string): never => {
@@ -17203,6 +17214,21 @@ export function switchSoloToTeams(projectDir: string, sessionId?: string): strin
 // then waits for the lead's own word before the Unit counts as done.
 export const LEAD_SIGNOFF_FIELD = "Lead Sign-off";
 
+// The settings that are the lead's own word on the plan, set by their own
+// setters: every lead write carries them, and a state that never heard one
+// keeps the plan's (planFilesNow).
+const LEADS_OWN_SETTINGS = [LEAD_SIGNOFF_FIELD, UNIT_GATE_RHYTHM_FIELD] as const;
+
+// The shared plan of the work selected here as this checkout keeps it, null
+// where it keeps none (not shared yet, solo work, or never read here).
+export function leadsKeptPlan(projectDir: string): PlanJson | null {
+  try {
+    return keptPlan(projectDir, activeIdentity(projectDir).intentId8)?.plan ?? null;
+  } catch {
+    return null;
+  }
+}
+
 // The word this checkout's state has, else the plan's as this checkout keeps
 // it (`plan`, or read here): a worktree or another computer of the lead's
 // whose state is behind never heard the word the plan has.
@@ -17262,6 +17288,33 @@ function leadHere(args: string[], projectDir?: string): void {
   }));
 }
 
+// A setting of the lead's own (LEADS_OWN_SETTINGS) as their state has it now,
+// put on the plan by the lead's one writer: teams read it there. A write that
+// does not go leaves it here, and every lead write after it carries it
+// (leadsPlanWrite). `name`: the setting as its lines say it; `what`: the plan
+// commit's words; `again`: the command that sets it, run again after the
+// lead's question. `line`: why it is not on the plan, null when it went or the
+// plan is not shared; `changed`: the plan took it as a new commit.
+export function leadsSettingOnPlan(pd: string, setting: { field: string; name: string; what: string }, again: string):
+  { line: string | null; changed: boolean } {
+  if (homeLocation(readStateFile(pd)) === null) return { line: null, changed: false };
+  let sent: LeadWrite;
+  try {
+    sent = leadsPlanWrite(pd, { what: setting.what, take: { settings: [setting.field] } });
+  } catch (error) {
+    if (error instanceof GitWriteRefused) throw error;
+    sent = { kind: "refused", words: errorMessage(error), byRule: false };
+  }
+  if (sent.kind === "stopped" || (sent.kind === "unfollowed" && sent.follow.kind === "not-followed")) failUnlessWritten(pd, sent, setting.name, undefined, again);
+  const here = `${setting.name.charAt(0).toUpperCase()}${setting.name.slice(1)} is changed here only; the plan gets it with my next write to it.`;
+  if (sent.kind === "unreadable") return { line: unreadablePlanLine(pd, sent.format), changed: false };
+  if (sent.kind === "unfollowed") return { line: `${planUnfollowedSay(pd, sent.follow, setting.name, false).line} ${here}`, changed: false };
+  if (sent.kind !== "written" && sent.kind !== "unchanged" && sent.kind !== "unshared") {
+    return { line: `${planWriteRefusedLine(pd, sent, setting.name, false)} ${here}`, changed: false };
+  }
+  return { line: null, changed: sent.kind === "written" };
+}
+
 function leadSignOffSetting(args: string[], projectDir?: string): void {
   const value = args[0];
   if (value !== "on" && value !== "off") fail(`usage: ${unitUsage("lead-sign-off")}`);
@@ -17276,26 +17329,7 @@ function leadSignOffSetting(args: string[], projectDir?: string): void {
     writeStateFile(pd, setOrInsertField(readStateFile(pd), "## Runtime State", LEAD_SIGNOFF_FIELD, value));
     appendAuditEntryUnlocked("LEAD_SIGN_OFF_SET", { Mode: value, ...(words ? { "Person Words": words } : {}) }, pd);
   });
-  // Teams read the setting from the plan: once it is shared, the plan carries
-  // it now. A write that does not go leaves the setting here, and every lead
-  // write after it carries it (leadsPlanWrite).
-  let unwritten: string | null = null;
-  if (homeLocation(readStateFile(pd)) !== null) {
-    let sent: LeadWrite;
-    try {
-      sent = leadsPlanWrite(pd, { what: `lead sign-off ${value}`, take: { settings: [LEAD_SIGNOFF_FIELD] } });
-    } catch (error) {
-      if (error instanceof GitWriteRefused) throw error;
-      sent = { kind: "refused", words: errorMessage(error), byRule: false };
-    }
-    if (sent.kind === "stopped" || (sent.kind === "unfollowed" && sent.follow.kind === "not-followed")) failUnlessWritten(pd, sent, "the sign-off setting");
-    if (sent.kind === "unreadable") unwritten = unreadablePlanLine(pd, sent.format);
-    else if (sent.kind === "unfollowed") {
-      unwritten = `${planUnfollowedSay(pd, sent.follow, "the sign-off setting", false).line} The sign-off setting is changed here only; the plan gets it with my next write to it.`;
-    } else if (sent.kind !== "written" && sent.kind !== "unchanged" && sent.kind !== "unshared") {
-      unwritten = `${planWriteRefusedLine(pd, sent, "the sign-off setting", false)} The sign-off setting is changed here only; the plan gets it with my next write to it.`;
-    }
-  }
+  const unwritten = leadsSettingOnPlan(pd, { field: LEAD_SIGNOFF_FIELD, name: "the sign-off setting", what: `lead sign-off ${value}` }, sameCommand()).line;
   console.log(JSON.stringify({
     lead_sign_off: value,
     notice: withPlanNotes(unwritten ?? (value === "on"
@@ -17477,10 +17511,7 @@ export function main(argv: string[]): void {
     console.error(JSON.stringify({
       error: errorMessage(error),
       ...(error instanceof CandidateExactPolicyError ? { candidate_exact: error.details } : {}),
-      ...(error instanceof LeadWordUnwritten
-        ? error.onYes !== undefined ? { on_yes: error.onYes }
-        : error.ask === undefined ? { again: error.again } : { ask_type: "lead-plan-change", choices: error.ask.choices, after_answer: error.again }
-        : {}),
+      ...leadWordFields(error),
     }));
     process.exit(1);
   }

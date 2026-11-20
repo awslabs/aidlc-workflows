@@ -14,7 +14,7 @@
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { auditBlockField, readAuditShardEvents, REQUEST_TEXT_DIR } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -31,15 +31,21 @@ import {
   homeState,
   hook,
   makeHome,
+  makePlanHomeWithRemote,
   mergeOnHost,
   next,
   ORCH,
+  type PlanHome,
+  planFrom,
+  planRefOf,
   run,
+  sharePlan,
   STATE,
   stateOf,
   tempDir,
   takeIn,
   teammateWithLeadsWork,
+  teamWorkspace,
   tellsWhatToType,
   UNIT,
   UTILITY,
@@ -1499,6 +1505,82 @@ describe("the approval rhythm is offered only while it can still change", () => 
     expect(board.kind, JSON.stringify(board)).toBe("print");
     expect(JSON.stringify(board.offers ?? [])).not.toContain("Whoever builds a Unit will approve it");
     expect(run(STATE, ["set-unit-gate-rhythm", "unit-end"], home.dir).status).not.toBe(0);
+  });
+});
+
+// The lead's answer goes on the shared plan, which is all a team's take reads:
+// a Unit taken after it is built with it, one taken before keeps its own.
+describe("the lead's answer on how the Units are approved reaches the teams", () => {
+  const WRITTEN_AT_END = "Written on the plan: a Unit taken from now on is approved once at its end; one already taken keeps how it is approved.";
+  const WRITTEN_EACH_STAGE = "Written on the plan: a Unit taken from now on is approved after every stage; one already taken keeps how it is approved.";
+  const planOf = (home: PlanHome): { version: number; settings: Record<string, string> } =>
+    JSON.parse(git(home.hosts["checkout-api"], ["show", `${planRefOf(home.id8)}:plan.json`]));
+  // A teammate's take in a workspace of their own, and how its build is approved.
+  const take = (home: PlanHome, who: string, repos: string[], unit: string, space: string): string => {
+    const workspace = teamWorkspace(home.hosts, who, repos);
+    const took = takeIn(space, [unit, ...planFrom(home)], workspace);
+    expect(took.status, took.out).toBe(0);
+    const intents = join(workspace, "aidlc", "spaces", space, "intents");
+    return join(intents, readdirSync(intents).find((name) => name.endsWith(`-${unit}`))!, "aidlc-state.md");
+  };
+  const builtWith = (state: string): string[] =>
+    ["Construction Iteration", "Construction Checkpoints"].map((name) => String(field(readFileSync(state, "utf-8"), name)));
+  const answer = (dir: string, rhythm: "per-stage" | "unit-end") => {
+    const set = run(STATE, ["set-unit-gate-rhythm", rhythm], dir);
+    expect(set.status, set.out).toBe(0);
+    return set.json;
+  };
+
+  test("the lead's answer after the share goes on the plan, and a Unit taken after it is built with it, one taken before keeps its own", () => {
+    const home = makePlanHomeWithRemote();
+    const before = take(home, "alice", ["checkout-api", "billing"], "refunds", "payments");
+    expect(builtWith(before)).toEqual(["stage-major", "disabled"]);
+    expect(answer(home.dir, "unit-end")).toEqual({ updated: true, unit_gate_rhythm: "unit-end", notice: WRITTEN_AT_END });
+    expect(planOf(home).settings["Unit Gate Rhythm"]).toBe("unit-end");
+    const after = take(home, "bea", ["checkout-web"], "checkout-ui", "web");
+    expect(builtWith(after)).toEqual(["unit-major", "enabled"]);
+    expect(builtWith(before)).toEqual(["stage-major", "disabled"]);
+  });
+
+  test("a changed answer goes on the plan, and keeping it as the plan has it writes nothing", () => {
+    const home = makePlanHomeWithRemote();
+    const tip = (): string => git(home.hosts["checkout-api"], ["rev-parse", planRefOf(home.id8)]);
+    const shared = tip();
+    expect(answer(home.dir, "per-stage")).toEqual({ updated: true, unit_gate_rhythm: "per-stage" });
+    expect(tip()).toBe(shared);
+    expect(answer(home.dir, "unit-end")).toEqual({ updated: true, unit_gate_rhythm: "unit-end", notice: WRITTEN_AT_END });
+    expect(planOf(home)).toMatchObject({ version: 2, settings: { "Unit Gate Rhythm": "unit-end" } });
+    expect(answer(home.dir, "per-stage")).toEqual({ updated: true, unit_gate_rhythm: "per-stage", notice: WRITTEN_EACH_STAGE });
+    expect(planOf(home)).toMatchObject({ version: 3, settings: { "Unit Gate Rhythm": "per-stage" } });
+    expect(builtWith(take(home, "bea", ["checkout-web"], "checkout-ui", "web"))).toEqual(["stage-major", "disabled"]);
+  });
+
+  test("before the share the answer writes nothing on the plan, and the share carries it", () => {
+    const hosts = { "checkout-api": codeHost("checkout-api"), billing: codeHost("billing"), "checkout-web": codeHost("checkout-web") };
+    const home = makeHome({ repos: hosts });
+    chooseTeams(home.dir);
+    expect(answer(home.dir, "unit-end")).toEqual({ updated: true, unit_gate_rhythm: "unit-end" });
+    const id8 = fixtureIntentId8(home.dir);
+    expect(git(hosts["checkout-api"], ["for-each-ref", planRefOf(id8)])).toBe("");
+    const plan = sharePlan(home);
+    expect(planOf(plan).settings["Unit Gate Rhythm"]).toBe("unit-end");
+  });
+
+  // On the lead's other computer the question says each Unit is approved after
+  // every stage: once the plan says once at the end, that is not so, and the
+  // recommended choice would put after every stage back.
+  test("the board on the lead's other computer does not offer the approval rhythm once the plan says once at the end", () => {
+    const home = makePlanHomeWithRemote();
+    answer(home.dir, "unit-end");
+    expect(run(UNIT, ["share", "--plan"], home.dir).status).toBe(0);
+    expect(planOf(home).settings["Unit Gate Rhythm"]).toBe("unit-end");
+    const laptop = cloneOf(home.remote, "laptop");
+    expect(run(UTILITY, ["intent", "switch", HOME_RECORD], laptop).status).toBe(0);
+    expect(run(UNIT, ["lead-here", "--person-words", "I lead this work, carry it on here"], laptop).status).toBe(0);
+    expect(field(stateOf(laptop), "Unit Gate Rhythm")).toBeUndefined();
+    const board = next(laptop);
+    expect(board.kind, JSON.stringify(board).slice(0, 600)).toBe("print");
+    expect(JSON.stringify(board.offers ?? [])).not.toContain("Whoever builds a Unit will approve it");
   });
 });
 

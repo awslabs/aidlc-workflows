@@ -112,9 +112,12 @@ export const TEAM_RHYTHM_OFFER = "Whoever builds a Unit will approve it after ev
   "at the end of each Unit instead? I'd keep after every stage, so a wrong turn is caught at the stage where it happens.";
 
 // The offer is put only until the lead answers it: either answer runs the
-// setter, which records the rhythm, so nothing asks it again.
-export function unitGateRhythmChosen(stateContent: string): boolean {
-  return getField(stateContent, UNIT_GATE_RHYTHM_FIELD) !== null;
+// setter, which records the rhythm, so nothing asks it again. On a computer of
+// the lead's whose state never heard the answer, a shared plan that says once
+// at the end counts as the answer (`plan`, read only when the state has none):
+// there the offer's first sentence is no longer true.
+export function unitGateRhythmChosen(stateContent: string, plan?: () => PlanJson | null): boolean {
+  return getField(stateContent, UNIT_GATE_RHYTHM_FIELD) !== null || plan?.()?.settings[UNIT_GATE_RHYTHM_FIELD] === "unit-end";
 }
 
 // Which team flow new team work takes, decided once as teams are chosen: the

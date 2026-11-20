@@ -1064,8 +1064,8 @@ anything the checkout wrote to the plan while it was the lead's stays, for the l
 
 In a checkout that does not lead the work, the lead's own words write nothing: a sign-off, a repo turned down, a merge
 counted in your words, a pull request named as a build, an answer on a builder's proposed change, the sign-off setting,
-a Unit freed, a send-back from Build and Test, the plan's share, its move to another repository, and taking it off its
-branch. You are asked once, in that clone for that piece of work, whether you lead the work from there. Yes records it,
+the approval setting for the Units, a Unit freed, a send-back from Build and Test, the plan's share, its move to another
+repository, and taking it off its branch. You are asked once, in that clone for that piece of work, whether you lead the work from there. Yes records it,
 shows where the work stands, then does what you asked, and from then on the lead's questions come there; no
 leaves it with the lead (`unit lead-here --off`), and a later one of the lead's words there says so, with the way on if
 you do lead it after all. A practice kept there stays there and is not written on the plan.

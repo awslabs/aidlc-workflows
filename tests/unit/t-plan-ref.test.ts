@@ -418,6 +418,61 @@ describe("a later share goes on the plan's tip and keeps what is on it", () => {
   });
 });
 
+// The lead's answer on how the Units are approved goes on the plan by the
+// lead's own writer, as the sign-off setting does: that setting and the
+// version, nothing else, and with every later write of the lead's.
+describe("the lead's answer on how the Units are approved goes on the shared plan", () => {
+  const rhythmAt = (host: string, id8: string): string | undefined =>
+    (planAt(host, planRefOf(id8)).settings as Record<string, string>)["Unit Gate Rhythm"];
+
+  test("the approval setting's write puts only that setting on the plan", () => {
+    const home = makePlanHomeWithRemote();
+    const host = home.hosts["checkout-api"];
+    const ref = planRefOf(home.id8);
+    const before = planAt(host, ref);
+    const set = run(STATE, ["set-unit-gate-rhythm", "unit-end"], home.dir);
+    expect(set.status, set.out).toBe(0);
+    const after = planAt(host, ref);
+    const changed = [...new Set([...Object.keys(before), ...Object.keys(after)])]
+      .filter((key) => JSON.stringify(before[key]) !== JSON.stringify(after[key])).sort();
+    expect(changed).toEqual(["settings", "version"]);
+    expect(after.version).toBe(before.version + 1);
+    expect(after.settings).toEqual({ ...(before.settings as Record<string, string>), "Unit Gate Rhythm": "unit-end" });
+    expect(git(host, ["diff", "--name-only", `${ref}~1`, ref])).toBe("plan.json");
+    expect(git(host, ["log", "-1", "--format=%s", ref])).toBe(`aidlc plan fixture ${after.version}: approvals once at the end of each Unit`);
+    expect(run(STATE, ["set-unit-gate-rhythm", "per-stage"], home.dir).status).toBe(0);
+    expect(git(host, ["log", "-1", "--format=%s", ref])).toBe(`aidlc plan fixture ${after.version + 1}: approvals after every stage`);
+  });
+
+  test("a lead write carries the answered setting, and a computer that never answered keeps the plan's", () => {
+    const home = makePlanHomeWithRemote();
+    const host = home.hosts["checkout-api"];
+    const hookPath = join(host, "hooks", "pre-receive");
+    writeFileSync(hookPath, "#!/bin/sh\necho 'plans are read only here' >&2\nexit 1\n");
+    chmodSync(hookPath, 0o755);
+    expect(run(STATE, ["set-unit-gate-rhythm", "unit-end"], home.dir).status).toBe(0);
+    expect(rhythmAt(host, home.id8)).toBe("per-stage");
+    writeFileSync(hookPath, "#!/bin/sh\nexit 0\n");
+    const signed = run(UNIT, ["lead-sign-off", "on"], home.dir);
+    expect(signed.status, signed.out).toBe(0);
+    expect(rhythmAt(host, home.id8)).toBe("unit-end");
+    // The lead's other computer, whose state never heard the answer: its own
+    // writes, a share included, keep the plan's.
+    const laptop = cloneOf(home.remote, "laptop");
+    expect(run(UTILITY, ["intent", "switch", HOME_RECORD], laptop).status).toBe(0);
+    expect(run(UNIT, ["lead-here", "--person-words", "I lead this work, carry it on here"], laptop).status).toBe(0);
+    next(laptop);
+    expect(readFileSync(seededStateFile(laptop), "utf-8")).not.toContain("Unit Gate Rhythm");
+    const off = run(UNIT, ["lead-sign-off", "off"], laptop);
+    expect(off.status, off.out).toBe(0);
+    expect((planAt(host, planRefOf(home.id8)).settings as Record<string, string>)["Lead Sign-off"]).toBe("off");
+    expect(rhythmAt(host, home.id8)).toBe("unit-end");
+    const shared = run(UNIT, ["share", "--plan"], laptop);
+    expect(shared.status, shared.out).toBe(0);
+    expect(rhythmAt(host, home.id8)).toBe("unit-end");
+  });
+});
+
 describe("a person alone meets nothing of it", () => {
   test("solo work across repositories: its steps make no read or write of a plan, and no repository gets one", () => {
     const api = codeHost("checkout-api");

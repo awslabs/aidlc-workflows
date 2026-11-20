@@ -203,6 +203,7 @@ import {
   ROUTE_CHECK_ENV,
   readUnitMergeTransaction,
   readUnitGateRhythm,
+  UNIT_GATE_RHYTHM_FIELD,
   readUnitScopeStamp,
   otherOpenWorkClaims,
   recordDir,
@@ -333,7 +334,18 @@ import {
   shownAgainFields,
 } from "./aidlc-questions.ts";
 import { codeGenerationPlanWaitsStep, promotableTestingPosture } from "./aidlc-testing-posture.ts";
-import { planHomeAddress, recordIntegrationBranch, recordLeadsOwnStart, unitSkippedFields } from "./aidlc-unit.ts";
+import {
+  askWhoLeads,
+  ledFromElsewhere,
+  leadsKeptPlan,
+  leadsSettingOnPlan,
+  leadWordFields,
+  planHomeAddress,
+  recordIntegrationBranch,
+  recordLeadsOwnStart,
+  takePlanNotes,
+  unitSkippedFields,
+} from "./aidlc-unit.ts";
 import {
   approvedOverUnfinishedReview,
   approvedUnitChanges,
@@ -1851,6 +1863,14 @@ function handleSetUnitGateRhythm(args: string[]): void {
     error(`Invalid unit gate rhythm "${value}". Valid: ${values.join(", ")}.`);
   }
   const pd = resolveProjectDir(projectDir);
+  // Every team's take reads the rhythm from the work's shared plan, so the
+  // lead's answer goes there, as their sign-off setting does. Where this
+  // checkout keeps no shared plan (before the share, or solo work a teammate's
+  // take just switched, whose step runs this setter itself) nothing is looked
+  // at or asked; where it keeps one and does not lead the work, the lead's word
+  // is asked for and nothing is written.
+  const shared = leadsKeptPlan(pd) !== null;
+  const elsewhere = shared && ledFromElsewhere(pd);
   withAuditLock(pd, () => {
     let content = readStateFile(pd);
     if (!isTeamUnitOwnership(content)) {
@@ -1863,6 +1883,7 @@ function handleSetUnitGateRhythm(args: string[]): void {
     if (!unitGateRhythmCanBe(pd, content, value as UnitGateScope)) {
       error(unitGateRhythmStaysLine(pd, content, current));
     }
+    if (elsewhere) return;
     content = setOrInsertField(
       content,
       "## Runtime State",
@@ -1871,8 +1892,31 @@ function handleSetUnitGateRhythm(args: string[]): void {
     );
     emitAudit(pd, "UNIT_GATE_RHYTHM_SET", { Rhythm: value });
     writeStateFile(pd, content);
-    console.log(JSON.stringify({ updated: true, unit_gate_rhythm: value }));
   });
+  const again = `${aidlcToolInvocation("state")} set-unit-gate-rhythm ${value}`;
+  const name = "the approval setting for the Units";
+  try {
+    if (elsewhere) {
+      askWhoLeads(pd, { name, start: "The approval setting for the Units", lead: "the lead's to change", doIt: `change ${name}`, notDone: "changed it" }, again);
+    }
+    const sent = shared
+      ? leadsSettingOnPlan(pd, {
+        field: UNIT_GATE_RHYTHM_FIELD,
+        name,
+        what: value === "unit-end" ? "approvals once at the end of each Unit" : "approvals after every stage",
+      }, again)
+      : { line: null, changed: false };
+    const how = value === "unit-end" ? "once at its end" : "after every stage";
+    const notice = [
+      sent.line ?? (sent.changed ? `Written on the plan: a Unit taken from now on is approved ${how}; one already taken keeps how it is approved.` : null),
+      ...takePlanNotes(),
+    ].filter((line): line is string => line !== null && line !== "").join(" ");
+    console.log(JSON.stringify({ updated: true, unit_gate_rhythm: value, ...(notice !== "" ? { notice } : {}) }));
+  } catch (e) {
+    // The lead's word not written, printed as the unit tool prints it.
+    console.error(JSON.stringify({ error: errorMessage(e), ...leadWordFields(e) }));
+    process.exit(1);
+  }
 }
 
 // Whether the Units' approvals can take `value` as their rhythm: the setter's

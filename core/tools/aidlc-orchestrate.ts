@@ -752,6 +752,7 @@ import {
   changesReachMain,
   shareTarget,
   practicesBranchOffCheckout,
+  leadsKeptPlan,
   teamHandoverMarkName,
   teamSharedHere,
   unitBranchInTheWay,
@@ -20176,7 +20177,7 @@ function emitTeamUnitMajorRunStage(
     // A Unit the lead's walk builds before the board: the approval rhythm is
     // offered with its step, before its first approval question, after which
     // the rhythm no longer changes.
-    if (teamHome && !keepsWalk && step.kind === "work" && !unitGateRhythmChosen(refreshedState) &&
+    if (teamHome && !keepsWalk && step.kind === "work" && !unitGateRhythmChosen(refreshedState, () => leadsKeptPlan(projectDir)) &&
       unitGateRhythmCanBe(projectDir, refreshedState, "unit-end")) {
       sayWithStepOnce(projectDir, TEAM_RHYTHM_OFFER);
     }
@@ -20338,7 +20339,7 @@ function emitTeamUnitMajorRunStage(
     // runs the setter, so their answer is on the record and not asked again.
     // With every Unit done there is no Unit left to approve, so it is not asked.
     const setRhythm = `${aidlcToolInvocation("state")} set-unit-gate-rhythm`;
-    const rhythm = teamHome && !keepsWalk && !unitGateRhythmChosen(stateContent) &&
+    const rhythm = teamHome && !keepsWalk && !unitGateRhythmChosen(stateContent, () => leadsKeptPlan(projectDir)) &&
         unitGateRhythmCanBe(projectDir, stateContent, "unit-end") && !planUnitsAllDone(projectDir)
       ? [{
         question: TEAM_RHYTHM_OFFER,
