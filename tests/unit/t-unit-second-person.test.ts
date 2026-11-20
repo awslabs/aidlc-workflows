@@ -517,8 +517,12 @@ describe("a solo home looks for a teammate's take only once its Unit walk has be
 
   test("a remote that does not answer holds the step a few seconds at most, nothing is said, and off Windows nothing of the look keeps running", async () => {
     const home = betweenUnits();
+    const asked = join(tempDir("silent-host"), "asked.txt");
     const child = spawn(process.execPath, ["-e", `
-      const server = Bun.serve({ port: 0, fetch: () => new Promise(() => {}) });
+      const server = Bun.serve({ port: 0, fetch: () => {
+        require("node:fs").appendFileSync(${JSON.stringify(asked)}, "asked\\n");
+        return new Promise(() => {});
+      } });
       console.log(server.port);
     `], { stdio: ["ignore", "pipe", "inherit"] });
     servers.push(() => child.kill());
@@ -526,8 +530,9 @@ describe("a solo home looks for a teammate's take only once its Unit walk has be
     git(home.dir, ["remote", "set-url", "origin", `http://127.0.0.1:${port}/org/ws.git`]);
     const { env } = traced();
     const started = Date.now();
-    const step = next(home.dir, env);
+    const step = next(home.dir, { ...env, GIT_ALLOW_PROTOCOL: "file:http" });
     expect(Date.now() - started, JSON.stringify(step)).toBeLessThan(8000);
+    expect(existsSync(asked)).toBe(true);
     expect(JSON.stringify(step.change_notices ?? [])).not.toContain("could not be reached");
     // On Windows what the look started ends at its own limits (git() in aidlc-unit.ts).
     if (process.platform !== "win32") expect(runningFor(port)).toEqual([]);

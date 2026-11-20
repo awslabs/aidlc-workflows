@@ -215,10 +215,11 @@ describe("Carry on in a shared workspace", () => {
     };
     const auth = await start("auth");
     const silent = await start("silent");
-    const before = { askpass: process.env.GIT_ASKPASS, prompt: process.env.GIT_TERMINAL_PROMPT };
+    const before = { askpass: process.env.GIT_ASKPASS, prompt: process.env.GIT_TERMINAL_PROMPT, protocols: process.env.GIT_ALLOW_PROTOCOL };
     // The person's own sign-in program, which a quiet fetch must never run.
     process.env.GIT_ASKPASS = askpass;
     process.env.GIT_TERMINAL_PROMPT = "1";
+    process.env.GIT_ALLOW_PROTOCOL = "file:http";
     try {
       for (const url of ["http://127.0.0.1:9/billing.git", `http://127.0.0.1:${auth.port}/billing.git`, `http://127.0.0.1:${silent.port}/billing.git`]) {
         git(join(alice, "billing"), ["remote", "set-url", "origin", url]);
@@ -235,6 +236,8 @@ describe("Carry on in a shared workspace", () => {
       else process.env.GIT_ASKPASS = before.askpass;
       if (before.prompt === undefined) delete process.env.GIT_TERMINAL_PROMPT;
       else process.env.GIT_TERMINAL_PROMPT = before.prompt;
+      if (before.protocols === undefined) delete process.env.GIT_ALLOW_PROTOCOL;
+      else process.env.GIT_ALLOW_PROTOCOL = before.protocols;
       auth.child.kill();
       silent.child.kill();
       rmSync(dir, { recursive: true, force: true });
@@ -260,7 +263,8 @@ describe("Carry on in a shared workspace", () => {
     try {
       for (const repo of ["checkout-api", "billing"]) git(join(alice, repo), ["remote", "set-url", "origin", `http://127.0.0.1:${port}/${repo}.git`]);
       writeFileSync(join(alice, "aidlc", "spaces", "payments", "intents", "active-intent"), "");
-      next(alice);
+      // http allowed, so a merge check that did run would reach the server and be logged.
+      next(alice, { ...ENV, GIT_ALLOW_PROTOCOL: "file:http" });
       expect(readFileSync(log, "utf-8")).toBe("");
     } finally {
       child.kill();

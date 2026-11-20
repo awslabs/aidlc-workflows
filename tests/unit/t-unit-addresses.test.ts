@@ -107,10 +107,14 @@ describe("addresses", () => {
 });
 
 // A git host stand-in that wants a sign-in for everything: git then asks its
-// credential helpers and an askpass program, never anything else.
-async function signInHost(): Promise<string> {
+// credential helpers and an askpass program, never anything else. Each request
+// is noted in `asked`.
+async function signInHost(asked: string): Promise<string> {
   const child = spawn(process.execPath, ["-e", `
-    const server = Bun.serve({ port: 0, fetch: () => new Response("sign in", { status: 401, headers: { "WWW-Authenticate": 'Basic realm="host"' } }) });
+    const server = Bun.serve({ port: 0, fetch: () => {
+      require("node:fs").appendFileSync(${JSON.stringify(asked)}, "asked\\n");
+      return new Response("sign in", { status: 401, headers: { "WWW-Authenticate": 'Basic realm="host"' } });
+    } });
     console.log(server.port);
   `], { stdio: ["ignore", "pipe", "inherit"] });
   servers.push({ kill: () => child.kill() });
@@ -127,13 +131,15 @@ describe("the person's own git, on steps nobody typed", () => {
     git(home.dir, ["push", "-q", "origin", "main"]);
     const plan = sharePlan(home);
     // The work's records are in app, where the plan is: the lead's git now reaches it at a host that wants a sign-in.
-    git(home.dir, ["config", `url.${await signInHost()}.insteadOf`, plan.hosts.app]);
+    const asked = join(tempDir("sign-in-host"), "asked.txt");
+    git(home.dir, ["config", `url.${await signInHost(asked)}.insteadOf`, plan.hosts.app]);
     const marker = join(tempDir("askpass"), "asked");
     const askpass = join(tempDir("askpass-bin"), "askpass.sh");
     writeFileSync(askpass, `#!/bin/sh\necho asked >> '${marker}'\necho nobody\n`);
     chmodSync(askpass, 0o755);
-    const step = next(home.dir, { ...ENV, GIT_ASKPASS: askpass, SSH_ASKPASS: askpass });
+    const step = next(home.dir, { ...ENV, GIT_ASKPASS: askpass, SSH_ASKPASS: askpass, GIT_ALLOW_PROTOCOL: "file:http" });
     expect(step.kind, JSON.stringify(step)).toBe("print");
+    expect(existsSync(asked)).toBe(true);
     expect(existsSync(marker)).toBe(false);
     expect(((step.change_notices ?? []) as string[]).filter((line) => line.includes("could not be reached"))).toHaveLength(1);
   });
@@ -151,9 +157,10 @@ describe("the person's own git, on steps nobody typed", () => {
     git(home.dir, ["config", "core.sshCommand", `${join(bin, "ssh")} workspace`]);
     const billing = join(home.dir, "billing");
     git(billing, ["config", "core.sshCommand", `${join(bin, "ssh")} billing`]);
-    git(billing, ["remote", "set-url", "origin", `ssh://codehost${hosts.billing}`]);
+    // On the loopback's port 9, where nothing listens: an ssh that is not the stand-in is refused there.
+    git(billing, ["remote", "set-url", "origin", `ssh://127.0.0.1:9${hosts.billing}`]);
     const trace = join(tempDir("trace"), "trace2.json");
-    const env: NodeJS.ProcessEnv = { ...ENV, GIT_TRACE2_EVENT: trace };
+    const env: NodeJS.ProcessEnv = { ...ENV, GIT_TRACE2_EVENT: trace, GIT_ALLOW_PROTOCOL: "file:ssh" };
     delete env.GIT_SSH_COMMAND;
     delete env.GIT_SSH;
     next(home.dir, env);

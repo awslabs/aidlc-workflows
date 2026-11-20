@@ -222,7 +222,7 @@ describe("the plan is shared as a ref of its own in the work's first code reposi
     const plain = "https://127.0.0.1:9/acme/checkout-api.git";
     git(join(home.dir, "checkout-api"), ["remote", "set-url", "origin", signed]);
     const trace = join(tempDir("trace"), "git.jsonl");
-    run(UNIT, ["share", "--plan"], home.dir, { ...ENV, GIT_TRACE2_EVENT: trace });
+    run(UNIT, ["share", "--plan"], home.dir, { ...ENV, GIT_TRACE2_EVENT: trace, GIT_ALLOW_PROTOCOL: "file:https" });
     const argv = readFileSync(trace, "utf-8").split("\n").filter((line) => line.includes('"event":"start"'))
       .map((line) => (JSON.parse(line) as { argv: string[] }).argv.join(" "));
     // No command AI-DLC runs carries the password. The push still signs in:

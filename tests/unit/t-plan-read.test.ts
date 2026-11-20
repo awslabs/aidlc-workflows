@@ -322,13 +322,17 @@ describe("a team takes a Unit from the plan where it is shared", () => {
     // A third clone whose remote never answers.
     const silent = join(sam, "reports");
     git(sam, ["init", "-q", "-b", "main", silent]);
-    git(silent, ["remote", "add", "origin", "ssh://silent.example/reports.git"]);
+    // On the loopback's port 9, where nothing listens: an ssh that is not the stand-in is refused there.
+    git(silent, ["remote", "add", "origin", "ssh://127.0.0.1:9/reports.git"]);
     const sleeper = join(tempDir("ssh"), "never-answers.sh");
-    writeFileSync(sleeper, "#!/bin/sh\nsleep 60\n");
+    const asked = `${sleeper.replaceAll("\\", "/")}.calls`;
+    writeFileSync(sleeper, `#!/bin/sh\necho "$*" >> '${asked}'\nsleep 60\n`);
     chmodSync(sleeper, 0o755);
     const started = Date.now();
-    const ask = next(sam, { ...ENV, GIT_SSH_COMMAND: sleeper }, ["--units"]);
+    const ask = next(sam, { ...ENV, GIT_SSH_COMMAND: sleeper, GIT_ALLOW_PROTOCOL: "file:ssh" }, ["--units"]);
     expect(Date.now() - started, JSON.stringify(ask).slice(0, 400)).toBeLessThan(30_000);
+    // git for Windows hands this backslash path to sh, which cannot find it, so the stand-in never runs there.
+    if (process.platform !== "win32") expect(readFileSync(asked, "utf-8")).toContain("127.0.0.1");
     expect(ask.ask_type, JSON.stringify(ask).slice(0, 600)).toBe("unit-take");
     expect((ask.choices as Array<{ label: string }>).map((choice) => choice.label)).toContain("Start checkout-ui");
   });
@@ -375,13 +379,14 @@ describe("a team takes a Unit from the plan where it is shared", () => {
     const sam = teamWorkspace({}, "sam", []);
     const silent = join(sam, "reports");
     git(sam, ["init", "-q", "-b", "main", silent]);
-    git(silent, ["remote", "add", "origin", "ssh://plans.example/reports.git"]);
+    // On the loopback's port 9, where nothing listens: an ssh that is not the stand-in is refused there.
+    git(silent, ["remote", "add", "origin", "ssh://127.0.0.1:9/reports.git"]);
     // An ssh that notes each call; the repository the workspace has never answers, the said one refuses at once.
     const bin = tempDir("ssh-bin");
     const log = join(bin, "calls.log");
     writeFileSync(join(bin, "ssh"), `#!/bin/sh\necho "$*" >> '${log}'\ncase "$*" in *reports*) sleep 60;; esac\nexit 128\n`);
     chmodSync(join(bin, "ssh"), 0o755);
-    run(ORCH, ["next", "--lead-address", "ssh://plans.example/plans.git"], sam, { ...ENV, GIT_SSH_COMMAND: join(bin, "ssh") });
+    run(ORCH, ["next", "--lead-address", "ssh://127.0.0.1:9/plans.git"], sam, { ...ENV, GIT_SSH_COMMAND: join(bin, "ssh"), GIT_ALLOW_PROTOCOL: "file:ssh" });
     const calls = readFileSync(log, "utf-8").trim().split("\n");
     expect(calls[0], calls.join("\n")).toContain("plans.git");
     expect(calls[0]).not.toContain("BatchMode=yes");
@@ -676,8 +681,9 @@ describe("a team takes a Unit from the plan where it is shared", () => {
     // A repos.json url that carries one, with no clone on disk.
     writeFileSync(join(pay, "repos.json"), `${JSON.stringify({ repos: [{ name: "ledger", url: "https://lead:t0ken@127.0.0.1:9/org/ledger.git" }] })}\n`);
     const trace = join(tempDir("trace"), "git.trace");
-    run(ORCH, ["next", "--units"], pay, { ...ENV, GIT_TRACE: trace });
+    run(ORCH, ["next", "--units"], pay, { ...ENV, GIT_TRACE: trace, GIT_ALLOW_PROTOCOL: "file:https" });
     // AI-DLC's own git calls (git's helper for https is handed the URL by git itself, as for any fetch in that clone).
+    expect(readFileSync(trace, "utf-8")).toMatch(/remote-https/);
     const calls = readFileSync(trace, "utf-8").split("\n").filter((line) => /trace: (built-in|exec|run_command): git fetch/.test(line));
     expect(calls.some((line) => line.includes("127.0.0.1:9/org/billing.git")), calls.join("\n")).toBe(true);
     expect(calls.some((line) => line.includes("127.0.0.1:9/org/ledger.git")), calls.join("\n")).toBe(true);
@@ -1249,26 +1255,34 @@ describe("a teammate's clone of the planner's record from before the plan was sh
   });
 
   test("the plan's repository is silent: the look ends at its time limit and the step is the one a clone of solo work meets", () => {
-    const { bea } = planAhead(SHAPES[1][1](), undefined, checkoutApiAt("ssh://silent.example/checkout-api.git"));
+    // On the loopback's port 9, where nothing listens: an ssh that is not the stand-in is refused there.
+    const { bea } = planAhead(SHAPES[1][1](), undefined, checkoutApiAt("ssh://127.0.0.1:9/checkout-api.git"));
     const sleeper = join(tempDir("ssh"), "never-answers.sh");
-    writeFileSync(sleeper, "#!/bin/sh\nsleep 60\n");
+    const asked = `${sleeper.replaceAll("\\", "/")}.calls`;
+    writeFileSync(sleeper, `#!/bin/sh\necho "$*" >> '${asked}'\nsleep 60\n`);
     chmodSync(sleeper, 0o755);
     const started = Date.now();
-    const step = next(bea, { ...chat("bea-chat"), GIT_SSH_COMMAND: sleeper });
+    const step = next(bea, { ...chat("bea-chat"), GIT_SSH_COMMAND: sleeper, GIT_ALLOW_PROTOCOL: "file:ssh" });
     expect(Date.now() - started).toBeLessThan(30_000);
+    // git for Windows hands this backslash path to sh, which cannot find it, so the stand-in never runs there.
+    if (process.platform !== "win32") expect(readFileSync(asked, "utf-8")).toContain("127.0.0.1");
     expectCarryOn(step);
   });
 
   test("the workspace's remote is silent and names no default branch here: the look ends at its time limit and the step is the one a clone of solo work meets", () => {
     const { bea } = planAhead(SHAPES[0][1]());
     git(bea, ["remote", "set-head", "origin", "-d"]);
-    git(bea, ["remote", "set-url", "origin", "ssh://silent.example/workspace.git"]);
+    // On the loopback's port 9, where nothing listens: an ssh that is not the stand-in is refused there.
+    git(bea, ["remote", "set-url", "origin", "ssh://127.0.0.1:9/workspace.git"]);
     const sleeper = join(tempDir("ssh"), "never-answers.sh");
-    writeFileSync(sleeper, "#!/bin/sh\nsleep 60\n");
+    const asked = `${sleeper.replaceAll("\\", "/")}.calls`;
+    writeFileSync(sleeper, `#!/bin/sh\necho "$*" >> '${asked}'\nsleep 60\n`);
     chmodSync(sleeper, 0o755);
     const started = Date.now();
-    const step = next(bea, { ...chat("bea-chat"), GIT_SSH_COMMAND: sleeper });
+    const step = next(bea, { ...chat("bea-chat"), GIT_SSH_COMMAND: sleeper, GIT_ALLOW_PROTOCOL: "file:ssh" });
     expect(Date.now() - started).toBeLessThan(30_000);
+    // git for Windows hands this backslash path to sh, which cannot find it, so the stand-in never runs there.
+    if (process.platform !== "win32") expect(readFileSync(asked, "utf-8")).toContain("127.0.0.1");
     expectCarryOn(step);
   });
 
@@ -1426,8 +1440,9 @@ describe("a teammate's clone made before the planner's record reached the branch
     const said = join(bin, "said.txt");
     writeFileSync(join(bin, "ssh"), `#!/bin/sh\necho "$@" >> '${said}'\nexit 255\n`);
     chmodSync(join(bin, "ssh"), 0o755);
-    git(bea, ["remote", "set-url", "origin", "ssh://git@shop.example.invalid/shop.git"]);
-    const step = next(bea, { ...chat("bea-chat"), GIT_SSH_COMMAND: join(bin, "ssh") });
+    // On the loopback's port 9, where nothing listens: an ssh that is not the stand-in is refused there.
+    git(bea, ["remote", "set-url", "origin", "ssh://git@127.0.0.1:9/shop.git"]);
+    const step = next(bea, { ...chat("bea-chat"), GIT_SSH_COMMAND: join(bin, "ssh"), GIT_ALLOW_PROTOCOL: "file:ssh" });
     expect(step.narration).toBe(NOTHING_YET);
     expect(readFileSync(said, "utf-8")).toContain("-o BatchMode=yes");
   });
@@ -1436,12 +1451,15 @@ describe("a teammate's clone made before the planner's record reached the branch
   test.skipIf(process.platform === "win32")("a remote that never answers: the look is given up after its five seconds and the step is the one of today", () => {
     const { bea } = planBeforeRecord(false);
     const bin = tempDir("ssh");
-    writeFileSync(join(bin, "ssh"), "#!/bin/sh\nsleep 60\n");
+    const asked = join(bin, "asked.txt");
+    writeFileSync(join(bin, "ssh"), `#!/bin/sh\necho "$@" >> '${asked}'\nsleep 60\n`);
     chmodSync(join(bin, "ssh"), 0o755);
-    git(bea, ["remote", "set-url", "origin", "ssh://git@silent.example.invalid/shop.git"]);
+    // On the loopback's port 9, where nothing listens: an ssh that is not the stand-in is refused there.
+    git(bea, ["remote", "set-url", "origin", "ssh://git@127.0.0.1:9/shop.git"]);
     const started = Date.now();
-    const step = next(bea, { ...chat("bea-chat"), GIT_SSH_COMMAND: join(bin, "ssh") });
+    const step = next(bea, { ...chat("bea-chat"), GIT_SSH_COMMAND: join(bin, "ssh"), GIT_ALLOW_PROTOCOL: "file:ssh" });
     const took = Date.now() - started;
+    expect(readFileSync(asked, "utf-8")).toContain("127.0.0.1");
     expect(step.narration).toBe(NOTHING_YET);
     expect(took).toBeGreaterThanOrEqual(5_000);
     expect(took).toBeLessThan(30_000);
