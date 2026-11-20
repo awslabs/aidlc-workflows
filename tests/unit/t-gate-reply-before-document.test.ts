@@ -27,6 +27,21 @@
 // neither approves it nor is offered, and once the agent shows the gate, or the
 // person replies again in chat, that reply approves it; a reply after the
 // document approves it at once.
+//
+// The person's reply at the open gate on Claude Code, "fix R-01 and R-02 as
+// suggested, then go on": the agent made the fixes, then reported the
+// approval naming that reply, and the engine refused it because the document
+// was written after it, so the person was asked to approve again. A reply that
+// is their latest turn and came after the gate's latest showing is read
+// against the document as written before it: the agent's writes after it do
+// not move it, under off on Claude Code and Kiro CLI and, through the one
+// recovery review, under strict on Claude Code, and the record keeps what was
+// shown and what changed. Still refused: the first reply named when a later
+// message of theirs came after the edit (that one approves); a reply sent
+// during a revision, named after the gate is shown again; and, under strict, a
+// reply named after a recovery review that is NOT-READY, or READY with a
+// finding of its own, which its note brings to them at the gate (there, their
+// approval meets the revision backstop and one more review first).
 
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -39,7 +54,7 @@ import {
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { artifactFilename, auditBlockField, findStageBySlug, readAuditShardEvents, setGuardPolicyLine } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { saveMessage } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
-import { env, exec, projectAt, SESSION, say, templateProjects, type Exec } from "../harness/aidlc-answers-corpus.ts";
+import { env, exec, pick, projectAt, SESSION, say, templateProjects, type AnswersItem, type Exec } from "../harness/aidlc-answers-corpus.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -101,15 +116,48 @@ async function writeAndReview(proj: string): Promise<void> {
   writeFileSync(doc, "# Requirements\n\n- FR-1: a bad duration stops with a clear error.\n", "utf-8");
   recordArtifactWriteViaHook(proj, doc);
   writeFileSync(join(stageDir(proj), `${STAGE}-questions.md`), "# Questions\n\n## Q1\n\nWhich database?\n\n[Answer]: SQLite\n", "utf-8");
-  const base = ["review", "--reviewer", REVIEWER, "--iteration", "1"];
+  await review(proj, 1, "READY");
+}
+
+// One review pass, requested and recorded with the verdict and the new
+// finding row given (none by default); the verdict's note for the agent.
+async function review(proj: string, iteration: number, verdict: "READY" | "NOT-READY", finding = ""): Promise<string> {
+  const base = ["review", "--reviewer", REVIEWER, "--iteration", String(iteration)];
   const asked = await log(proj, base);
   expect(asked.status, asked.stdout + asked.stderr).toBe(0);
   const reviewFile = (JSON.parse(asked.stdout.split("\n").find((line) => line.startsWith("{")) ?? "{}") as { reviewFile?: string }).reviewFile;
   writeFileSync(join(proj, reviewFile as string),
-    `## Review\n\n**Verdict:** READY\n**Reviewer:** ${REVIEWER}\n**Date:** 2026-01-01T00:00:00Z\n**Iteration:** 1\n\n` +
+    `## Review\n\n**Verdict:** ${verdict}\n**Reviewer:** ${REVIEWER}\n**Date:** 2026-01-01T00:00:00Z\n**Iteration:** ${iteration}\n\n` +
       "### Findings\n\n**Prior findings**\n\n| ID | Now | Severity | Note |\n|---|---|---|---|\n\n" +
-      "**New findings**\n\n| Severity | Location | Finding | Required action |\n|---|---|---|---|\n\n### Summary\n\nReady.\n", "utf-8");
-  expect((await log(proj, [...base, "--verdict", "READY"])).status).toBe(0);
+      `**New findings**\n\n| Severity | Location | Finding | Required action |\n|---|---|---|---|\n${finding}\n### Summary\n\nDone.\n`, "utf-8");
+  const done = await log(proj, [...base, "--verdict", verdict]);
+  expect(done.status, done.stdout + done.stderr).toBe(0);
+  const line = done.stdout.split("\n").find((entry) => entry.startsWith("{")) ?? "{}";
+  return String((JSON.parse(line) as { agent_note?: string }).agent_note ?? "");
+}
+// The one recovery review under strict, after an edit made the review stale.
+const recoveryReview = (proj: string, verdict: "READY" | "NOT-READY", finding = "") => review(proj, 2, verdict, finding);
+
+const FIX_AND_GO_ON = "Fix R-01 and R-02 the way you suggested, then go on.";
+
+// The person's reply at the open gate: picked in Claude Code's question box,
+// or typed on Kiro CLI.
+async function replyAtGate(proj: string, words: string, harness: "claude" | "kiro"): Promise<string> {
+  if (harness === "claude") {
+    const item = { picker: { question: "Requirements Analysis complete. How would you like to proceed?",
+      options: ["Approve", "Request Changes"], answer: words } } as unknown as AnswersItem;
+    expect((await pick(proj, item, "claude")).status).toBe(0);
+  } else {
+    expect((await say(proj, words, "kiro")).status).toBe(0);
+  }
+  return latestMessageId(proj);
+}
+
+// The agent writes to the stage's document after their reply (the write hook records it).
+function agentEdits(proj: string, line: string): void {
+  const doc = join(stageDir(proj), "requirements.md");
+  writeFileSync(doc, `${readFileSync(doc, "utf-8")}${line}\n`, "utf-8");
+  recordArtifactWriteViaHook(proj, doc, "Edit");
 }
 
 describe("t-gate-reply-before-document: a reply sent before the stage's document was last written does not approve its gate", () => {
@@ -300,5 +348,145 @@ describe("t-gate-reply-before-document: a reply sent before the stage's document
       expect(answered.status, answered.stdout + answered.stderr).toBe(0);
       expect(auditBlockField(rows(proj, "SUMMARY_CONFIRMATION_RECORDED").at(-1)?.block ?? "", "Message Id")).toBe(confirmed);
     });
+
+    // Their reply at the open gate asks for a change and to go on; the agent
+    // writes to the document after it, then reports the approval naming it.
+    // It is their latest turn and was sent with the gate on screen, so the
+    // writes after it do not move what it saw: one approval, theirs, with their
+    // words, beside the rows that say what was shown and what changed after.
+    for (const harness of policy === "off" ? (["claude", "kiro"] as const) : (["claude"] as const)) {
+      test(`${policy}, ${harness}: their reply at the gate approves it after the agent's edit for it, when named`, async () => {
+        const proj = await at("learnings", policy);
+        await writeAndReview(proj);
+        expect((await report(proj, ["--result", "awaiting-approval"])).status).toBe(0);
+        sleep();
+        const asked = await replyAtGate(proj, FIX_AND_GO_ON, harness);
+        sleep();
+        agentEdits(proj, "- FR-2: the store keeps the redeemed order ids.");
+        let approved = await report(proj, ["--result", "approved", "--user-input", "Approve", "--message", asked]);
+        if (policy === "strict") {
+          // The edit made the review stale: the one recovery review runs first,
+          // and its note says their reply still stands.
+          expect(rows(proj, "GATE_APPROVED"), approved.stdout).toHaveLength(0);
+          expect(approved.stdout).toContain("ARTIFACT_REVIEW_STALE");
+          expect(await recoveryReview(proj, "READY")).toContain(`if their message ${asked} (sent `);
+          approved = await report(proj, ["--result", "approved", "--user-input", "Approve", "--message", asked]);
+        }
+        expect(message(approved)).not.toContain("came before");
+        const gate = rows(proj, "GATE_APPROVED");
+        expect(gate, approved.stdout).toHaveLength(1);
+        expect(auditBlockField(gate[0].block, "Message Id")).toBe(asked);
+        expect(auditBlockField(gate[0].block, "Message Ids")).toBeNull();
+        expect(auditBlockField(gate[0].block, "Person Reply")).toBe(FIX_AND_GO_ON);
+        const shown = rows(proj, "STAGE_AWAITING_APPROVAL").at(-1)!;
+        const turn = rows(proj, "HUMAN_TURN").find((row) => auditBlockField(row.block, "Message Id") === asked)!;
+        expect(auditBlockField(shown.block, "Question Shows")).toMatch(/^sha256:/);
+        expect(shown.pos).toBeLessThan(turn.pos);
+        expect(rows(proj, "ARTIFACT_UPDATED").some((row) => row.pos > turn.pos && row.pos < gate[0].pos &&
+          (auditBlockField(row.block, "File") ?? "").endsWith("requirements.md"))).toBe(true);
+        expect(rows(proj, "STAGE_COMPLETED").some((row) => auditBlockField(row.block, "Stage") === STAGE && row.pos > gate[0].pos)).toBe(true);
+        if (policy === "off") {
+          const accepted = rows(proj, "CHANGE_ACCEPTED").at(-1);
+          expect(auditBlockField(accepted?.block ?? "", "Changed") ?? "").toContain("requirements.md");
+          expect(approved.stdout).toContain("requirements.md changed after the Requirements Analysis review; carrying on.");
+        } else {
+          expect(rows(proj, "REVIEW_COMPLETED").some((row) => auditBlockField(row.block, "Iteration") === "2" &&
+            auditBlockField(row.block, "Verdict") === "READY" && row.pos > turn.pos && row.pos < gate[0].pos)).toBe(true);
+        }
+      });
+    }
+
+    if (policy === "off") {
+      // A message of theirs after the edit may have seen it: that one is the
+      // one to name, and the first one, named, is refused.
+      test("off: with a later message of theirs after the edit, the first reply named is refused and the later one approves", async () => {
+        const proj = await at("learnings", policy);
+        await writeAndReview(proj);
+        expect((await report(proj, ["--result", "awaiting-approval"])).status).toBe(0);
+        sleep();
+        const asked = await replyAtGate(proj, FIX_AND_GO_ON, "claude");
+        sleep();
+        agentEdits(proj, "- FR-2: the store keeps the redeemed order ids.");
+        sleep();
+        expect((await say(proj, "and keep the error short", "claude")).status).toBe(0);
+        const later = latestMessageId(proj);
+        const first = await report(proj, ["--result", "approved", "--user-input", "Approve", "--message", asked]);
+        expect(rows(proj, "GATE_APPROVED"), first.stdout).toHaveLength(0);
+        expect(message(first)).toContain(`their message ${asked} came before the gate's output was last written`);
+        const named = await report(proj, ["--result", "approved", "--user-input", "Approve", "--message", later]);
+        expect(rows(proj, "GATE_APPROVED"), named.stdout).toHaveLength(1);
+        expect(auditBlockField(rows(proj, "GATE_APPROVED")[0].block, "Message Id")).toBe(later);
+      });
+
+      // A reply sent during a revision, before its write and before the gate
+      // was shown again, did not see the gate it names: refused.
+      test("off: a reply sent during a revision, named after the gate is shown again, is refused", async () => {
+        const proj = await at("learnings", policy);
+        await writeAndReview(proj);
+        expect((await report(proj, ["--result", "awaiting-approval"])).status).toBe(0);
+        sleep();
+        expect((await say(proj, "Rename FR-1 to FR-1a", "claude")).status).toBe(0);
+        const rejected = await report(proj, ["--result", "rejected", "--user-input", "Request Changes", "--reason", "Rename FR-1 to FR-1a"]);
+        expect(rows(proj, "GATE_REJECTED"), rejected.stdout).toHaveLength(1);
+        sleep();
+        expect((await say(proj, "No wait, I approved it as it was", "claude")).status).toBe(0);
+        const during = latestMessageId(proj);
+        sleep();
+        const doc = join(stageDir(proj), "requirements.md");
+        writeFileSync(doc, readFileSync(doc, "utf-8").replace("FR-1:", "FR-1a:"), "utf-8");
+        recordArtifactWriteViaHook(proj, doc, "Edit");
+        await review(proj, 1, "READY");
+        expect((await report(proj, ["--result", "revised"])).status).toBe(0);
+        const named = await report(proj, ["--result", "approved", "--user-input", "Approve", "--message", during]);
+        expect(rows(proj, "GATE_APPROVED"), named.stdout).toHaveLength(0);
+        expect(message(named)).toContain(`their message ${during} came before the gate's output was last written`);
+      });
+    } else {
+      // A review that finished after their reply with a finding they have not
+      // seen (NOT-READY, or READY with a point of its own) goes to them at the
+      // gate, as its note says: their reply, named, approves nothing there.
+      for (const [verdict, finding] of [
+        ["NOT-READY", "| Major | requirements.md | FR-2 has no acceptance rule | Add one |\n"],
+        ["READY", "| Minor | requirements.md | FR-2 could say when the ids reset | Say it |\n"],
+      ] as const) {
+        test(`strict: after a ${verdict} recovery review with a new finding, their earlier reply named is refused and the gate is shown again`, async () => {
+          const proj = await at("learnings", policy);
+          await writeAndReview(proj);
+          expect((await report(proj, ["--result", "awaiting-approval"])).status).toBe(0);
+          sleep();
+          const asked = await replyAtGate(proj, FIX_AND_GO_ON, "claude");
+          sleep();
+          agentEdits(proj, "- FR-2: the store keeps the redeemed order ids.");
+          const stale = await report(proj, ["--result", "approved", "--user-input", "Approve", "--message", asked]);
+          expect(stale.stdout).toContain("ARTIFACT_REVIEW_STALE");
+          const note = await recoveryReview(proj, verdict, finding);
+          expect(note).not.toContain("still stands");
+          expect(note).toContain("ask the approval question in this turn");
+          const named = await report(proj, ["--result", "approved", "--user-input", "Approve", "--message", asked]);
+          expect(rows(proj, "GATE_APPROVED"), named.stdout).toHaveLength(0);
+          expect(message(named)).toContain(`their message ${asked} came before the gate's output was last written`);
+          // The note's step: the gate shown again, with the finding.
+          const reshown = await report(proj, ["--result", "awaiting-approval"]);
+          expect(reshown.status).toBe(0);
+          expect(reshown.stdout).toContain("Approve accepts the open review finding R-01");
+          // Their approval then: the revision backstop reads the edit, which a
+          // later turn of theirs followed, as a revision at the open gate, and
+          // the stage takes one more review before their next reply approves.
+          sleep();
+          expect((await say(proj, "approve", "claude")).status).toBe(0);
+          const revision = await report(proj, ["--result", "approved", "--user-input", "Approve"]);
+          expect(rows(proj, "GATE_APPROVED"), revision.stdout).toHaveLength(0);
+          expect(revision.stdout).toContain("REVIEW_EVIDENCE_MISSING");
+          expect(auditBlockField(rows(proj, "GATE_REJECTED").at(-1)?.block ?? "", "Recovered")).toBe("true");
+          expect(await review(proj, 1, "READY")).toContain("ask the approval question in this turn");
+          expect((await report(proj, ["--result", "awaiting-approval"])).status).toBe(0);
+          sleep();
+          expect((await say(proj, "approve", "claude")).status).toBe(0);
+          const approved = await report(proj, ["--result", "approved", "--user-input", "Approve"]);
+          expect(rows(proj, "GATE_APPROVED"), approved.stdout).toHaveLength(1);
+          expect(auditBlockField(rows(proj, "GATE_APPROVED")[0].block, "Message Id")).toBe(latestMessageId(proj));
+        });
+      }
+    }
   }
 });
