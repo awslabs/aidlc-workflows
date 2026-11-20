@@ -139,7 +139,12 @@ Set each ID's `coverage` row: `OK` with a `target` naming one or more
 such as a `ui` Unit, instead names on its own the file of this stage that
 covers the ID, `functional-spec.md` or `frontend-components.md`, which must
 exist); `N/A` with the reason as its `target`
-(for example `delivered by u2-profile`); `Deferred` with the later stage that
+(for example `not offered in this release`). To hand the ID to another Unit,
+name that Unit on its own as the `target`, its directory or `U{n}` ID and
+nothing else (for example `u2-profile`); that Unit must be on the story's row
+in `unit-of-work-story-map.md` (a Unit not on the row is never asked for it,
+and the check reports the row), and the ID counts as built only when that Unit
+builds it. `Deferred` with the later stage that
 covers it as its `target`; or `GAP` while this design does not cover it. Use
 the optional `reverse` array to explain rules that intentionally have no
 upstream ID; any unexplained rule is mechanically derived as an orphan:
@@ -152,7 +157,7 @@ upstream ID; any unexplained rule is mechanically derived as an orphan:
   "coverage": [
     { "id": "AC1.1.1", "status": "OK", "target": "BR1.1" },
     { "id": "AC1.1.2", "status": "GAP" },
-    { "id": "AC1.2.1", "status": "N/A", "target": "delivered by u2-profile" }
+    { "id": "AC1.2.1", "status": "N/A", "target": "u2-profile" }
   ],
   "reverse": [
     { "id": "BR1.3", "status": "N/A", "target": "technical validation rule" }

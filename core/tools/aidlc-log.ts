@@ -3854,6 +3854,17 @@ function stageBox(state: string, stage: string): string | undefined {
   return parseCheckboxes(state).find((row) => row.slug === stage)?.state;
 }
 
+// Whether the stage's latest review lists a finding as New or still open
+// (Unresolved). A review that finished after the person's reply brings such a
+// finding to them at the gate, so that reply stands for nothing it lists: the
+// recovery pass's note (reviewVerdictStep) and an approval naming the reply
+// (gateShownToNamedReply) read this one rule. An unknown stage counts as one.
+export function reviewHasUnseenFinding(pd: string, slug: string): boolean {
+  const reviewed = loadStageGraphAll().find((stage) => stage.slug === slug);
+  return reviewed === undefined || readReviewArtifactContexts(pd, reviewed).some((context) =>
+    context.findings.some((finding) => finding.status === "New" || finding.status === "Unresolved"));
+}
+
 // The agent's next step after a stage's verdict is recorded (#2400). The
 // verdict used to come back with no step, so an agent that took it as the end
 // of the work ended its turn before the approval gate, and on a host that
@@ -3962,11 +3973,8 @@ export function reviewVerdictStep(
   // another chat is not named: the agent here never saw its words. A pass with
   // a finding they have not seen (a NOT-READY one, or a READY one with a minor
   // point) brings it to them at the gate, with the brief.
-  const reviewed = loadStageGraphAll().find((stage) => stage.slug === flags.stage);
-  const unseen = () => reviewed === undefined || readReviewArtifactContexts(pd, reviewed).some((context) =>
-    context.findings.some((finding) => finding.status === "New" || finding.status === "Unresolved"));
   if (request.recovery && box === "awaiting-approval" && verdict === "READY" &&
-    personRepliedSinceGateShown(pd, { stage: flags.stage }) === true && !unseen()) {
+    personRepliedSinceGateShown(pd, { stage: flags.stage }) === true && !reviewHasUnseenFinding(pd, flags.stage)) {
     const replies = personsGateReply(pd, resolveInvokingSessionId(pd), flags.stage).replies;
     if (replies.length > 0) {
       const report = `orchestrate report --stage ${quoteCommandArgument(flags.stage)}`;
@@ -5716,7 +5724,7 @@ function handleReview(args: string[]): void {
       // (codeGenerationApprovalArtifacts), which covers a worker checkout whose
       // meta does not validate. A person's own Unit worktree records it.
       const reviewedContract = flags.stage === "code-generation" && swarmWorkerWorktreeMeta(pd) === null
-        ? reviewedTestingContract(pd)
+        ? reviewedTestingContract(pd, flags.unit ?? null)
         : null;
       if (reviewedContract !== null) fields[REVIEW_TESTING_CONTRACT_FIELD] = reviewedContract;
       recordPath = slot.recordRelative;

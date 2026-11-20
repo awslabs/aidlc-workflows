@@ -1537,7 +1537,11 @@ with the aidlc-devsecops-agent providing security testing expertise.
     reason in every table there that lists it; an `N/A` with no reason is not
     settled. A story Units Generation kept out of every Unit, `Deferred` with
     its reason, settles its criteria the same way (a requirement, in work
-    without stories), unless a later stage's table lists them. Write
+    without stories), unless a later stage's table lists them. A Code Generation
+    `N/A` whose target names another Unit on its own, by directory or `U{n}` ID,
+    hands the ID to that Unit and settles nothing: if no Unit built it, it is
+    uncovered and its row lists the hand-offs as `handed_off`.
+    Write
     `cross-unit-traceability.md` from that output with the verdict, per-ID
     coverage and every uncovered ID; an uncovered ID is a finding shown at the
     approval gate.

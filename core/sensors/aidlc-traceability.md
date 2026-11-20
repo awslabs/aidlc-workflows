@@ -48,11 +48,15 @@ opens, on the tables as they are then:
    out of every Unit on purpose: a `Deferred` row with a non-empty target (the
    reason, and where it is handled, say Operation) settles it, with `none` in
    its story-map Units cell. An `N/A` row does not, since it is also how an ID
-   is handed to another Unit. With stories, a story whose row names only
-   `library`, `spec` or `packaging` Units says how it is reached
-   (`existing: <where>` or `interface`, on its row or once as a `Reached
-   through:` line), or it is reported as an invalid target. A Functional Design
-   Unit
+   is handed to another Unit. At Functional Design and Code Generation, an `N/A`
+   row for an acceptance criterion (or an FR when there are no stories) whose
+   target is another Unit of the plan, named on its own by directory or `U{n}`
+   ID, is a hand-off (a reason's words are never read); that Unit must be on
+   that story's (or FR's) row in `unit-of-work-story-map.md`, or it is reported
+   as an invalid target. With stories, a story whose row names only `library`,
+   `spec` or `packaging` Units says how it is reached (`existing: <where>` or
+   `interface`, on its row or once as a `Reached through:` line), or it is
+   reported as an invalid target. A Functional Design Unit
    whose kind writes no `rules.md` (a `ui` Unit) names one of its design files
    (`functional-spec.md`, `frontend-components.md`) on each row instead of a
    business rule.
@@ -75,7 +79,9 @@ NFR Requirements, then Code Generation) marked it `N/A` with its reason in
 every table there that lists it; an `N/A` with no reason is not settled. A
 story Units Generation kept out of every Unit, `Deferred` with its reason,
 settles its criteria the same way (a requirement, in work without stories),
-unless a later stage's table lists them.
+unless a later stage's table lists them. A Code Generation `N/A` that hands the
+ID to another Unit settles nothing: if no Unit built it, it is uncovered and its
+row lists the hand-offs as `handed_off` (`<Unit>/code-generation: <target>`).
 
 ## Expected JSON schema
 

@@ -129,6 +129,8 @@ import {
   messageRetryStep,
   personCommandedSinceGateShown,
   personRepliedSinceGateShown,
+  personRepliedSincePresentation,
+  ownShardRows,
   unshownGateReplyStands,
   personsGateReply,
   windowMessageIds,
@@ -309,7 +311,7 @@ import { generateFireId, recordUnfinishedFire, sensorMatchesPath, unfinishedFire
 import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
 import { aidlcDispatcherInvocation, aidlcToolInvocation, compiledExecutable, entrySkillInvocation, syncFolderClause } from "./aidlc-runtime-paths.ts";
 import { markdownBlocks, projectVisibleMarkdownLines } from "./aidlc-markdown.ts";
-import { type EngineUnitDirective, readEngineUnitDirective, routesUnitStep, routesWave } from "./aidlc-log.ts";
+import { type EngineUnitDirective, readEngineUnitDirective, reviewHasUnseenFinding, routesUnitStep, routesWave } from "./aidlc-log.ts";
 import {
   stageLabel,
   stageValidationAuditFields,
@@ -8154,14 +8156,15 @@ function verifyApprovalDecision(
       const proof = proveMessage(pd, message, "approval");
       if ("refusal" in proof) refuseForAgent(proof.refusal);
       // Sent before the stage's output was last written, it did not see what
-      // the gate shows, so it approves nothing there (the summary's rule).
+      // the gate shows, so it approves nothing there (the summary's rule);
+      // gateShownToNamedReply says which writes count.
       const { step, named, before } = answeredBeforeShownStep(pd, stage.slug, {
         refused: `Cannot approve "${stage.slug}"`,
         question: `the "${stage.slug}" gate`,
         shown: "the gate",
         command: "report",
         why: "",
-        shownWriting: gateOutputWriting(pd, stage.slug),
+        shownWriting: gateShownToNamedReply(pd, stage.slug, proof.message.id, unit),
       }, proof.message);
       if (before) refuseForAgent(step, { personDecided: named });
     } else if (!humanRepliedSinceGate(pd)) {
@@ -8218,6 +8221,34 @@ function refuseGateShownAfterReply(
   });
   const command = personCommandedSinceGateShown(pd, gate) === true ? ` ${COMMAND_TURN_SENTENCE}` : "";
   refuseForAgent(`${step}${command}`, { personDecided: named });
+}
+
+// What the gate showed the reply an approval names: its outputs as written
+// before that reply, when it is the person's latest turn here and a reply of
+// theirs came after the gate's latest showing (so this one did). What the
+// agent writes after it, before their next message, does not move it, as their
+// approval's own edits after it stand (inspectStageValidity). A review that
+// finished after it and is not READY, or lists a finding as New or still open,
+// goes to them at the gate (reviewVerdictStep): every write counts then, as at
+// a team Unit's gate and when the record cannot be read.
+function gateShownToNamedReply(pd: string, slug: string, message: string, unit?: string): ShownWriting | undefined {
+  const shown = gateOutputWriting(pd, slug);
+  if (shown === undefined || unit !== undefined) return shown;
+  try {
+    const { mine } = ownShardRows(pd);
+    const at = mine.findLastIndex((row) => row.event === "HUMAN_TURN");
+    const turn = mine[at];
+    if (turn === undefined || auditBlockField(turn.block, "Message Id") !== message) return shown;
+    if (personRepliedSincePresentation(pd, { stage: slug }) !== true) return shown;
+    const review = mine.slice(at + 1)
+      .findLast((row) => row.event === "REVIEW_COMPLETED" && auditBlockField(row.block, "Stage") === slug);
+    if (review !== undefined && (auditBlockField(review.block, "Verdict") !== "READY" || reviewHasUnseenFinding(pd, slug))) {
+      return shown;
+    }
+    return { ...shown, until: (row) => row.shard === turn.shard && row.pos === turn.pos };
+  } catch {
+    return shown;
+  }
 }
 
 // An approval of a stage gate the record never shows, with no reply of theirs

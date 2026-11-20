@@ -2865,14 +2865,17 @@ describe("t294 post-apply outstanding actions", () => {
       "--yes",
     ], project, env);
     expect(applied.status, applied.stdout + applied.stderr).toBe(0);
-    // Codex's hook trust is given inside Codex. The line names that step, the
-    // same one the hooks-off stop and doctor name, never AI-DLC's own review.
+    // Codex's hook trust is given inside Codex, never by AI-DLC's own review.
+    // Config runs outside a chat, and Codex asks for the trust itself at every
+    // start until it is given, so the line names that start. Inside a chat
+    // that passed the question, doctor and the hooks-off stop name /hooks.
     const recovery = (JSON.parse(readFileSync(
       join(DIST_RELEASE, "codex", ".codex", "tools", "data", "harness.json"),
       "utf-8",
     )) as { hookActivation: { recovery: string } }).hookActivation.recovery;
-    const step = "in Codex, type /hooks, press t to trust all, then press Esc";
-    expect(recovery.startsWith(`I${step.slice(1)}.`), recovery).toBe(true);
+    const step = "start Codex in the project folder and choose Trust all and continue when it asks about hooks";
+    expect(recovery.startsWith("In Codex, type /hooks, press t to trust all, then press Esc."), recovery).toBe(true);
+    expect(applied.stdout).not.toContain("/hooks");
     // The list names the config section, never the action's internal id.
     expect(applied.stdout).toContain(
       `\n  trust: Codex has not trusted this project's hooks yet - ${step}`,

@@ -395,7 +395,7 @@ import {
   type TrustRecord,
 } from "./aidlc-config-diagnostics.ts";
 import { gitCommonDirOf } from "./aidlc-git.ts";
-import { committedRecordIgnoreConflicts } from "./aidlc-gitignore.ts";
+import { committedRecordIgnoreConflicts, untrackedSetupLine } from "./aidlc-gitignore.ts";
 import { deepFolder } from "./aidlc-folder-depth.ts";
 import {
   LOCAL_SETTINGS_FILE,
@@ -9322,6 +9322,11 @@ function renderFirstRunEnding(
     writeMenuRow("  Note: ", deep.note);
     process.stdout.write("\n");
   }
+  const untracked = untrackedSetupLine(projectDir, choices.candidate.descriptor);
+  if (untracked) {
+    writeMenuRow("  Note: ", untracked);
+    process.stdout.write("\n");
+  }
   const steps = leadingCliGuidance(choices.candidate.descriptor, choices.candidate.stamp.distribution)?.firstRunSteps ??
     choices.candidate.descriptor.firstRunSteps ??
       firstRunNextCommands(choices.candidate.stamp.distribution);
@@ -15004,6 +15009,12 @@ export async function main(
         "This project is not in a git repository. Cursor may skip AI-DLC's hooks there, and without them your approvals are not recorded.",
       );
     }
+    // Said once: by the run that first writes this harness's setup here, which found no install record before it.
+    const untracked = prior === null && !choicesContext && !diagnosticsContext && !modelsContext &&
+        !internal.setupWalkChild && options.mode === "human"
+      ? untrackedSetupLine(projectDir, descriptor)
+      : null;
+    if (untracked) prepared.notes.push(untracked);
     if (options.mode === "human") {
       writeMenuLines("", prepared.notes.map((note) => `  Note: ${note}`));
     }

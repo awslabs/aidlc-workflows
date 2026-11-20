@@ -178,7 +178,15 @@ the learnings question just before the gate; the refusal and the step for
 their reply at an open gate list the ids). A message sent by the time the
 outputs the gate shows were last written on this clone (every output of each
 stage it approves, optional ones included, the questions file aside) is no
-approval of them: it is neither listed nor taken. It records the person's words: every
+approval of them: it is neither listed nor taken.
+A named reply that is the person's latest turn on this clone, sent after the
+gate's latest showing, is read against the outputs as written before it: what
+the agent writes after it, before their next message, does not move it, as an
+approval's own edits after it stand (`STAGE_OUTPUT_AMENDED`). The rule above
+holds instead when a review of the stage recorded after that reply is not READY
+or has a finding the person has not seen (New or Unresolved), and at a team
+Unit's gate: the gate is shown again.
+The engine records the person's words: every
 reply of theirs in that chat since then, except one an answer on record already
 names unless it is the latest, as the message record keeps them, on
 `GATE_APPROVED` as `Person Reply` and on `GATE_REJECTED` as the feedback, with

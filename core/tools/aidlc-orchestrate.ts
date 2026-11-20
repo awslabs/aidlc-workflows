@@ -279,6 +279,7 @@ import {
   openReviewRequests,
   latestReviewerRowAfter,
   hooksHealthReadDir,
+  issuedStepIsIsolatedRun,
   personMayApproveOverUnfinishedReview,
   personSpokeSinceReviewRequest,
   type GuardAttemptState,
@@ -593,6 +594,7 @@ import {
   optionsList,
   turnsPersonCheckOff,
   enterHookWorkflow,
+  isolatedRunWithoutWork,
   type TerminalCommand,
 } from "./aidlc-lib.ts";
 import { canonicalPathKey, chatTookStep, hostNamesThisChat, planMadeElsewhere } from "./aidlc-record-core.ts";
@@ -5188,15 +5190,17 @@ function routingQuestionOptions(question: StoredQuestion): readonly RoutingOptio
 
 // The routing question the person was asked and has not answered: the latest
 // question this engine kept, asked with options (its digest marks that), with
-// nothing started from it, and no other question put to them or decision
-// recorded since. It answers however far the work it named has moved on (its
-// commands act on that work or ask again), and it never offers work that is
-// finished or archived. Words handed to `next` while it is open may be its
-// answer, which only the agent can tell.
+// nothing started from it, no words passed on as a request beside it (it is
+// then replaced by the request they became: handleNext), and no other question
+// put to them or decision recorded since. It answers however far the work it
+// named has moved on (its commands act on that work or ask again), and it never
+// offers work that is finished or archived. Words handed to `next` while it is
+// open may be its answer, which only the agent can tell.
 function openRoutingQuestion(projectDir: string): StoredQuestion | null {
   try {
     const question = latestQuestion(projectDir);
-    if (question?.origin !== "routing" || question.stateSha256 === undefined || !question.askedAbout) return null;
+    if (question?.origin !== "routing" || question.replacedBy !== undefined || question.stateSha256 === undefined ||
+      !question.askedAbout) return null;
     if (intentStartedByQuestion(projectDir, question.id) !== null) return null;
     if (question.approvedRequest && intentStartedByQuestion(projectDir, question.approvedRequest)) return null;
     const targets = openTargets(projectDir, question.askedAbout);
@@ -11390,6 +11394,11 @@ let settledNotices: string[] = [];
 // which the step's publication binds a tracked Copilot claim over.
 let jumpsMade = 0;
 let ownJumpMove: { from: string; to: string } | null = null;
+// The routing question open when the agent ran `next` with only the person's
+// words, marked as their request (routeNext): once the pass has kept the
+// request they became, the question is marked replaced by it, so it no longer
+// waits and its own commands still answer it.
+let passedOnRoutingQuestion: string | null = null;
 
 function handleNext(args: string[], projectDir: string | undefined): void {
   routingPassActive = true;
@@ -11398,9 +11407,15 @@ function handleNext(args: string[], projectDir: string | undefined): void {
   settledNotices = [];
   jumpsMade = 0;
   ownJumpMove = null;
+  passedOnRoutingQuestion = null;
   try {
     routeNext(args, projectDir);
+    const passed = passedOnRoutingQuestion;
+    const pd = resolveProjectDir(projectDir);
+    const newer = passed === null || isReadOnlyEngineProbe() ? null : latestQuestion(pd);
+    if (passed !== null && newer !== null && newer.id !== passed) markReplaced(pd, [passed], newer.id);
   } finally {
+    passedOnRoutingQuestion = null;
     routingEvidence = null;
     routingPassActive = false;
     routingArgs = null;
@@ -12063,6 +12078,12 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       key === "intent" || key === "markedWords" || value === undefined || value === false);
   const unmarkedProse = onlyProse && flags.markedWords !== true;
   const openRouting = unmarkedProse ? openRoutingQuestion(questionDir) : null;
+  // Their words alone, marked as their request in the line the agent ran (the "something else" command of
+  // routingQuestionReplyDirective, or another step's that hands their words on), are passed on beside the open
+  // routing question; a line the engine took from their chat itself (takePersonsOwnLine) was passed on by no one.
+  if (onlyProse && flags.markedWords === true && taken === agentArgs) {
+    passedOnRoutingQuestion ??= openRoutingQuestion(questionDir)?.id ?? null;
+  }
   const routingStep = openRouting === null ? null : routingQuestionReplyDirective(openRouting, flags.intent ?? "", questionDir);
   if (routingStep !== null) {
     emit(routingStep);
@@ -21685,6 +21706,36 @@ function planApprovalAnswerStep(): string {
     `${PLAN_CHANGE_DETAILS}, then run \`${aidlcToolInvocation("orchestrate")} next\` with no answer arguments. If they have not replied, wait at that question.`;
 }
 
+// The agent's step for a report at the person's gate (a stage's or a team
+// Unit's) that names no choice or passes host cancellation text: with their
+// reply on record, report the choice it makes; with none, show the gate. While
+// the engine's Plan Approval question is open they are answering that, not the
+// gate; a Unit's gate leaves its own plan to codeGenerationCompletionWaits.
+function namesNoChoiceStep(
+  projectDir: string, result: string | undefined, gate: string, userInput: string | undefined, planQuestion: boolean,
+): PrintDirective {
+  const refused = `report --result ${result} for ${gate} ` +
+    (userInput?.trim()
+      ? `received ${formatReceivedReply(userInput)}, which is cancellation boilerplate, not a decision`
+      : "names no choice");
+  const plan = planQuestion ? openPlanApprovalQuestion(projectDir) : null;
+  if (plan !== null && !plan.editing) {
+    return printDirective(
+      `${refused}, and the open question is the Plan Approval question, not the gate for ${gate}. ${planApprovalAnswerStep()}`,
+    );
+  }
+  return humanRepliedSinceGate(projectDir)
+    ? printDirective(
+      `${refused}. The person has replied since the last decision: report the choice their reply makes with ` +
+        '--user-input ("Approve", say), without asking them again.',
+    )
+    : turnEndingPrint(
+      `The question for ${gate} is still open. ${refused}. No reply from the person is on record since the gate ` +
+        'was shown: show the gate with every offered choice, end the turn, then report the choice they make with ' +
+        '--user-input ("Approve", say).',
+    );
+}
+
 // The agent's step for a word after `intent` or `space` that is neither a verb
 // nor a record's exact name: the noun's verbs, the records there, and what the
 // person typed, whole. The agent reads it (a mistyped verb or name, a request
@@ -22652,9 +22703,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
           !humanPresenceGuardDisabled() &&
           !flags.userInput?.trim()
         ) {
-          emit(errorDirective(
-            `report --result approved for unit "${unit}" of "${slug}" requires --user-input with the human's reply.`,
-          ));
+          emit(namesNoChoiceStep(pd, flags.result, `unit "${unit}" of "${slug}"`, flags.userInput, false));
           return;
         }
         if (status !== "awaiting-approval") {
@@ -22831,28 +22880,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
   // Either way it is the agent's next step, never an error for the person.
   if (protectedHumanGate && FORWARD_RESULTS.has(flags.result ?? "") &&
     (!flags.userInput?.trim() || isNonAnswer(flags.userInput))) {
-    const refused = `report --result ${flags.result} for "${slug}" ` +
-      (flags.userInput?.trim()
-        ? `received ${formatReceivedReply(flags.userInput)}, which is cancellation boilerplate, not a decision`
-        : "names no choice");
-    // While the engine's Plan Approval question is the open one, the gate is
-    // not what the person is answering: the way on is that question's answer
-    // command, whether or not they have replied to it yet.
-    const plan = openPlanApprovalQuestion(pd);
-    emit(plan !== null && !plan.editing
-      ? printDirective(
-        `${refused}, and the open question is the Plan Approval question, not the gate for "${slug}". ${planApprovalAnswerStep()}`,
-      )
-      : humanRepliedSinceGate(pd)
-      ? printDirective(
-        `${refused}. The person has replied since the last decision: report the choice their reply makes with ` +
-          '--user-input ("Approve", say), without asking them again.',
-      )
-      : turnEndingPrint(
-        `The question for "${slug}" is still open. ${refused}. No reply from the person is on record since the gate ` +
-          'was shown: show the gate with every offered choice, end the turn, then report the choice they make with ' +
-          '--user-input ("Approve", say).',
-      ));
+    emit(namesNoChoiceStep(pd, flags.result, `"${slug}"`, flags.userInput, true));
     return;
   }
   const stopForNow = isGated && flags.result === "approved" && flags.park === true;
@@ -23920,22 +23948,25 @@ function handleContinue(line: string[], projectDir: string | undefined): void {
 // A harness that returns from an Agent/Task dispatch before the worker finishes
 // leaves the conductor with nothing to read. This verb is the sanctioned wait:
 // it polls the same on-disk evidence the engine itself checks (collaborator
-// contribution files, the stage's required artifacts, or the reviewer's review
-// file) and always returns within the bound, so the conductor re-runs one bare
-// engine command instead of minting its own shell loop. Read-only: it publishes
-// no directive, touches no marker, and writes no audit row.
+// contribution files, the stage's required artifacts or, given the host's own id
+// for a helper it started (a lead or a pipeline link), that helper's finish row,
+// or the reviewer's review file) and always returns within the bound, so the
+// conductor re-runs one bare engine command instead of minting its own shell
+// loop. Read-only: it publishes no directive, touches no marker, and writes no
+// audit row.
 interface WaitFlags {
   stage?: string;
   unit?: string;
   for?: string;
   reviewFile?: string;
+  agentId?: string;
   timeout?: number;
 }
 
 const WAIT_TARGETS = ["collaborators", "artifacts", "review"] as const;
 const WAIT_USAGE =
   "Usage: wait --stage <slug> --for collaborators|artifacts|review " +
-  "[--unit <unit>] [--review-file <path>] [--timeout <seconds>]";
+  "[--unit <unit>] [--review-file <path>] [--agent-id <id>] [--timeout <seconds>]";
 const WAIT_DEFAULT_SECONDS = 90;
 const WAIT_MAX_SECONDS = 540;
 // A review file unchanged this long ends the wait for a reviewer whose finish left no trace.
@@ -23951,9 +23982,44 @@ function parseWaitFlags(args: string[]): WaitFlags {
     else if (a === "--unit") { flags.unit = v; i++; }
     else if (a === "--for") { flags.for = v; i++; }
     else if (a === "--review-file") { flags.reviewFile = v; i++; }
+    else if (a === "--agent-id") { flags.agentId = v; i++; }
     else if (a === "--timeout") { flags.timeout = Number(v); i++; }
   }
   return flags;
+}
+
+// Whether the selected record holds the finish of the helper the host started
+// under `agentId` (SUBAGENT_COMPLETED's Agent ID, from the SubagentStop payload).
+// While it does not, the wait holds: the host's own notice of the finish, or of a
+// helper that stopped, is the agent's way on.
+function helperFinishRecorded(pd: string, agentId: string): boolean {
+  try {
+    const { intent: chosen, space: chosenSpace } = engineSelection(pd);
+    const intent = chosen ?? undefined;
+    return readAuditShardEvents(pd, intent, intent ? chosenSpace : undefined).some((row) =>
+      row.event === "SUBAGENT_COMPLETED" && auditBlockField(row.block, "Agent ID") === agentId);
+  } catch {
+    return false;
+  }
+}
+
+// The engine call that picks this work up again: the stage run on its own when
+// the step issued last is one (`--single`), else the workflow's own next.
+function resumeNext(pd: string, stage: string): string {
+  try {
+    return issuedStepIsIsolatedRun(pd, stage) ? `orchestrate next --stage ${stage} --single` : "orchestrate next";
+  } catch {
+    return "orchestrate next";
+  }
+}
+
+// Whether this stage runs on its own, open, with no work selected.
+function openRunWithoutWork(pd: string, stage: string): boolean {
+  try {
+    return isolatedRunWithoutWork(pd, engineSelection(pd)) && singleStageAttemptIsOpen(pd, stage);
+  } catch {
+    return false;
+  }
 }
 
 function fileHasBytes(path: string): boolean {
@@ -23981,6 +24047,15 @@ function handleWait(args: string[], projectDir: string | undefined): void {
     console.error(`--for review needs --review-file <path>. ${WAIT_USAGE}`);
     process.exit(1);
   }
+  if (args.includes("--agent-id") && (!flags.agentId || flags.agentId.startsWith("-"))) {
+    console.error(`--agent-id needs the id the dispatch's answer gave the helper. ${WAIT_USAGE}`);
+    process.exit(1);
+  }
+  if (flags.agentId !== undefined && target !== "artifacts") {
+    console.error(`--agent-id goes with --for artifacts (the helper's finish). ${WAIT_USAGE}`);
+    process.exit(1);
+  }
+  const helperFinish = flags.agentId;
   const seconds =
     flags.timeout !== undefined && Number.isFinite(flags.timeout) && flags.timeout > 0
       ? Math.min(flags.timeout, WAIT_MAX_SECONDS)
@@ -23988,9 +24063,12 @@ function handleWait(args: string[], projectDir: string | undefined): void {
   const started = Date.now();
   const deadline = started + seconds * 1000;
   const relativeRecord = engineRelativeRecordDir(pd);
-  if (target === "artifacts" && relativeRecord === null) {
+  if (target === "artifacts" && relativeRecord === null && !(helperFinish !== undefined && openRunWithoutWork(pd, node.slug))) {
     // Without an intent record there is no declared-artifact location to watch;
-    // settling silently here would tell the conductor its work had landed.
+    // settling silently here would tell the conductor its work had landed. A
+    // helper's finish needs none while this stage's run on its own is open
+    // before any intent: the completion hook records it in the space's audit
+    // then (recordsHelpers), and helperFinishRecorded reads it there.
     console.error(
       "No active intent record resolves for this project, so there are no declared " +
         "artifacts to wait for. Run this from the workflow's project (or pass --project-dir).",
@@ -24052,6 +24130,13 @@ function handleWait(args: string[], projectDir: string | undefined): void {
           missing.push(`${agent} (missing identity-marker first line)`);
         }
       }
+    } else if (helperFinish !== undefined) {
+      // The host's id for the helper (a lead or a pipeline link) it started in the
+      // background, as its answer to the dispatch named it: the finish under that
+      // id is the hand-back. The stage's files are no sign of it, because some of
+      // them (Code Generation's summary and traceability) are the conductor's to
+      // write after the lead returns.
+      if (!helperFinishRecorded(pd, helperFinish)) missing.push(`helper ${helperFinish} (no finish recorded yet)`);
     } else {
       for (const entry of reviewArtifactEntries(pd, node, flags.unit) ?? []) {
         if (!entry.required) continue;
@@ -24079,8 +24164,16 @@ function handleWait(args: string[], projectDir: string | undefined): void {
     waited_ms: Date.now() - started,
     missing,
     next: settled
-      ? "The dispatched work has landed: read its outputs and continue the stage body."
-      : "Not yet: run this same command again. Never replace it with a shell loop or a sleep.",
+      ? helperFinish !== undefined
+        ? "The helper's finish is recorded: read its summary (the host's notice brings it) and continue the stage body."
+        : "The dispatched work has landed: read its outputs and continue the stage body."
+      : helperFinish !== undefined
+        ? "Not yet: run this same command again. No finish of that helper is recorded yet: keep running this command " +
+          "in this same turn until it settles, rather than ending your turn to wait for it. When the host's own " +
+          "notice says this helper finished or stopped, stop waiting and read what it reports. When this chat was " +
+          "resumed after the host quit while the helper worked, that helper is gone: run " +
+          `\`${aidlcDispatcherInvocation(resumeNext(pd, node.slug))}\` instead. Never replace it with a shell loop or a sleep.`
+        : "Not yet: run this same command again. Never replace it with a shell loop or a sleep.",
   }));
 }
 
