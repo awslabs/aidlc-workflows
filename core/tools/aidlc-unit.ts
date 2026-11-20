@@ -9576,18 +9576,25 @@ export function planHomeAddress(projectDir: string, dirName: string, space: stri
   return own === "local" ? null : own;
 }
 
-// Whether this work's plan is shared where the share puts it: one quiet look
-// there, at that work's plan only, finding an open plan of this very work that
-// this AI-DLC reads. Any look that fails or finds none is false.
-export function planSharedAtHome(projectDir: string, dirName: string, space: string, uuid: string): boolean {
+// Whether a plan is shared where the share puts it: one quiet look there,
+// finding an open plan that this AI-DLC reads. For a work here, that work's plan
+// only, where its share puts it; with no work known here (a clone that holds no
+// record yet), every plan in the workspace's own repository, one counting only
+// when its plan.json names that repository as its own. Any look that fails or
+// finds none is false.
+export function planSharedAtHome(projectDir: string, dirName?: string, space?: string, uuid?: string): boolean {
   try {
-    const address = planHomeAddress(projectDir, dirName, space);
+    const known = dirName !== undefined && space !== undefined && uuid !== undefined;
+    const own = known ? null : workspaceHomeLocation(projectDir);
+    const address = known ? planHomeAddress(projectDir, dirName, space) : own === "local" ? null : own;
     if (address === null) return false;
-    const ref = planRecordRef(idSuffix(uuid));
-    const looked = lookAt(projectDir, address, [ref]);
-    if (!looked.ok || !looked.refs[ref]?.now) return false;
-    const read = planAtCopy(projectDir, copyOf(address, ref), { found: true });
-    return read.kind === "read" && read.plan.work.id === uuid && read.plan.closed === undefined;
+    const looked = lookAt(projectDir, address, [known ? planRecordRef(idSuffix(uuid)) : "refs/aidlc/plans/"]);
+    if (!looked.ok) return false;
+    return Object.entries(looked.refs).some(([ref, seen]) => {
+      if (seen.now === null) return false;
+      const read = planAtCopy(projectDir, copyOf(address, ref), { found: true });
+      return read.kind === "read" && (!known || read.plan.work.id === uuid) && read.plan.closed === undefined;
+    });
   } catch {
     // An address git would read as an option.
     return false;

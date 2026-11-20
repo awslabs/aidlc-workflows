@@ -9971,16 +9971,20 @@ function leadAddressStep(projectDir: string, address: string): Directive | null 
 // repository the plan is shared in; where the plans read offer nothing, what
 // each is (closed, or every Unit done); null when a plan here is gone from where
 // it was shared (said once with the step), and the step goes on as a plain next.
-function unitsAskedStep(projectDir: string): Directive | null {
+// `quiet`: a look nobody asked for, which says what the plans read hold (their
+// Units, or that nothing is ready to take yet) or nothing: null in place of the
+// ask, the nothing-to-take line, an error or a refused write.
+function unitsAskedStep(projectDir: string, options: { quiet?: true } = {}): Directive | null {
   let looked: ReturnType<typeof unitTakeLook>;
   try {
     looked = unitTakeLook(projectDir, true, {});
   } catch (e) {
+    if (options.quiet) return null;
     if (e instanceof GitWriteRefused) throw e;
     return errorDirective(e instanceof Error ? e.message : String(e));
   }
   if (looked.choices.length === 0 && looked.sentences.length === 0) {
-    if (looked.gone.length > 0) return null;
+    if (looked.gone.length > 0 || options.quiet) return null;
     const nothing = nothingToTakeLine(looked.passed);
     if (nothing !== null) return lineEndingTurn(nothing);
     return looked.passed.length > 0 ? null : lineEndingTurn(noPlanFoundAsk(looked.read ?? [], looked.unread ?? []));
@@ -16430,7 +16434,17 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     // is asked what to build, as above. Work whose state file is gone is still
     // the error, which the Kiro IDE Plan Approval recovery reads as failing
     // closed.
-    if (!flags.resume && readIntentRegistry(pd, engineSelection(pd).space).every(isArchivedIntent)) {
+    const registry = readIntentRegistry(pd, engineSelection(pd).space);
+    if (!flags.resume && registry.every(isArchivedIntent)) {
+      // A teammate's clone with no work recorded in any space (made before the
+      // lead's record reached its branch): the plan shared in its own
+      // repository, by one quiet look there, is offered as next --units offers it.
+      const noWorkHere = registry.length === 0 && listSpaces(pd).every(({ name }) => readIntentRegistry(pd, name).length === 0);
+      const shared = noWorkHere && !isReadOnlyEngineProbe() && planSharedAtHome(pd) ? unitsAskedStep(pd, { quiet: true }) : null;
+      if (shared !== null) {
+        emit(shared);
+        return;
+      }
       const ask = turnEndingPrint(
         "Nothing is in progress here yet. Say the line above, then wait: when they say what to build, run that as " +
           `their request (${entrySkillInvocation()} "<their words>").`,

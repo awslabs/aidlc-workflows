@@ -14,6 +14,7 @@ import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { repoCopyKey } from "../../dist/claude/.claude/tools/aidlc-unit-teams.ts";
 import { AIDLC_SRC, seededRecordDir, seededStateFile } from "../harness/fixtures.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
@@ -1302,6 +1303,194 @@ describe("a teammate's clone of the planner's record from before the plan was sh
     const bare = remoteReads(home.dir, chat("planner-later"));
     expectCarryOn(bare.step);
     expect(bare.reads.filter((read) => read.includes("refs/aidlc/plans/"))).toEqual([]);
+  });
+});
+
+describe("a teammate's clone made before the planner's record reached the branch it cloned", () => {
+  const chat = (name: string): NodeJS.ProcessEnv => ({ ...ENV, AIDLC_SESSION_OVERRIDE: name });
+  const NOTHING_YET = "Tell me what to build and I'll start it.";
+  const ONE_UNIT = "# Unit dependencies\n\n```yaml\nunits:\n  - name: refunds\n    kind: service\n    depends_on: []\n" +
+    "  - name: reporting\n    kind: service\n    depends_on: [refunds]\n```\n";
+
+  // The planner's workspace on one repository whose main holds a README alone and takes pull requests only, so the
+  // planner's record stays out of it; teams chosen and the plan shared in that repository unless `share` is false,
+  // then `edit` applied to its plan.json. A teammate's clone of main holds no AI-DLC record.
+  function planBeforeRecord(share = true, edit?: (json: Record<string, unknown>) => Record<string, unknown>) {
+    const home = makeHome({ repos: {}, dependencies: ONE_UNIT });
+    mkdirSync(join(home.dir, "aidlc", "spaces", "default", "intents", HOME_RECORD, "audit"), { recursive: true });
+    asLeadsOwnCheckout(home.dir);
+    const seed = join(tempDir("seed"), "repo");
+    git(tempDir("seed-parent"), ["init", "-q", "-b", "main", seed]);
+    git(seed, ["config", "user.name", "lead"]);
+    git(seed, ["config", "user.email", "lead@example.test"]);
+    writeFileSync(join(seed, "README.md"), "# shop\n");
+    git(seed, ["add", "-A"]);
+    git(seed, ["commit", "-q", "-m", "seed"]);
+    git(seed, ["push", "-q", "--force", home.remote, "main"]);
+    const refuse = join(home.remote, "hooks", "pre-receive");
+    writeFileSync(refuse, "#!/bin/sh\nwhile read old new ref; do [ \"$ref\" = refs/heads/main ] && { echo 'main takes pull requests only' >&2; exit 1; }; done\nexit 0\n");
+    chmodSync(refuse, 0o755);
+    let id8 = "";
+    if (share) {
+      expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+      const plan = sharePlan(home);
+      id8 = plan.id8;
+      if (edit !== undefined) pushEditedPlan(plan, edit);
+    }
+    const bea = cloneOf(home.remote, "bea");
+    expect(readdirSync(bea).filter((name) => name !== ".git")).toEqual(["README.md"]);
+    return { home, bea, id8 };
+  }
+
+  // The step, and the git calls it made that read a remote.
+  function remoteReads(dir: string, env: NodeJS.ProcessEnv, args: string[] = []): { step: Record<string, unknown>; reads: string[] } {
+    const trace = join(tempDir("trace"), "trace.txt");
+    const step = next(dir, { ...env, GIT_TRACE: trace }, args);
+    const calls = existsSync(trace) ? readFileSync(trace, "utf-8").split(/\r?\n/) : [];
+    return { step, reads: calls.filter((line) => /trace: (built-in|run_command): git (fetch|ls-remote)/.test(line)) };
+  }
+
+  // What a person's git shows and keeps in the clone: refs, status, settings, and the files outside .git.
+  function kept(dir: string): { refs: string[]; status: string; config: string; files: string[] } {
+    const walk = (at: string): string[] => readdirSync(at, { withFileTypes: true }).flatMap((entry) =>
+      entry.name === ".git" && at === dir ? [] : entry.isDirectory() ? walk(join(at, entry.name)) : [join(at, entry.name).slice(dir.length + 1)]);
+    return {
+      refs: git(dir, ["for-each-ref", "--format=%(refname)"]).split("\n").filter(Boolean),
+      status: git(dir, ["status", "--porcelain", "--untracked-files=all"]),
+      config: readFileSync(join(dir, ".git", "config"), "utf-8"),
+      files: walk(dir).map((path) => path.replace(/\\/g, "/")),
+    };
+  }
+  const added = (before: string[], after: string[]): string[] => after.filter((entry) => !before.includes(entry));
+
+  test("a bare /aidlc offers the plan's Units as asking for a piece does, and taking one there works", () => {
+    const { home, bea } = planBeforeRecord();
+    const bare = next(bea, chat("bea-chat"));
+    const units = next(cloneOf(home.remote, "bob"), chat("bob-chat"), ["--units"]);
+    expect(bare.ask_type, JSON.stringify(bare).slice(0, 600)).toBe("unit-take");
+    expect(offerText(bare.question)).toBe(offerText(units.question));
+    const labels = (step: Record<string, unknown>) => (step.choices as Array<{ label: string }>).map((choice) => choice.label);
+    expect(labels(bare)).toEqual(labels(units));
+    const command = (bare.choices as Array<{ command: string }>)[0].command;
+    const took = run(UNIT, command.replace(/^bun \S+aidlc-unit\.ts /, "").split(" ").map((arg) => arg.replace(/^'|'$/g, "")), bea, chat("bea-chat"));
+    expect(took.status, took.out).toBe(0);
+    expect(took.json?.taken).toBe(true);
+  });
+
+  test("the clone's origin spelled as a file URL of the same repository: the bare look still finds the plan", () => {
+    const { home, bea } = planBeforeRecord();
+    git(bea, ["remote", "set-url", "origin", pathToFileURL(home.remote).href]);
+    expect(next(bea, chat("bea-chat")).ask_type).toBe("unit-take");
+  });
+
+  test("no plan there: one quiet look of the plans at its remote, the step of today, and nothing kept", () => {
+    const { bea } = planBeforeRecord(false);
+    const before = kept(bea);
+    const { step, reads } = remoteReads(bea, chat("bea-chat"));
+    expect(step.narration, JSON.stringify(step).slice(0, 600)).toBe(NOTHING_YET);
+    expect(reads, reads.join("\n")).toHaveLength(1);
+    expect(reads[0]).toContain("+refs/aidlc/plans/*:");
+    const after = kept(bea);
+    expect(after.refs).toEqual(before.refs);
+    expect(after.status).toBe("");
+    expect(after.config).toBe(before.config);
+    expect(added(before.files, after.files).every((path) => path.startsWith("aidlc/.aidlc-engine/")), after.files.join("\n")).toBe(true);
+  });
+
+  test("a plan there: the look keeps AI-DLC's copy of the plan ref as asking for a piece does, and nothing a person sees in git", () => {
+    const { home, bea, id8 } = planBeforeRecord();
+    const before = kept(bea);
+    const { step, reads } = remoteReads(bea, chat("bea-chat"));
+    expect(step.ask_type).toBe("unit-take");
+    expect(reads[0], reads.join("\n")).toContain("+refs/aidlc/plans/*:");
+    const after = kept(bea);
+    const copies = added(before.refs, after.refs);
+    expect(copies, copies.join("\n")).toEqual([`refs/aidlc/home/${id8}/${repoCopyKey(home.remote)}/plan`]);
+    expect(after.status).toBe("");
+    expect(after.config).toBe(before.config);
+    expect(added(before.files, after.files).every((path) => path.startsWith("aidlc/.aidlc-engine/")), after.files.join("\n")).toBe(true);
+    // Asking for a piece in a clone of its own keeps the same, with one read fewer: the look's own.
+    const bob = cloneOf(home.remote, "bob");
+    const bobBefore = kept(bob);
+    const asked = remoteReads(bob, chat("bob-chat"), ["--units"]);
+    expect(asked.step.ask_type).toBe("unit-take");
+    expect(added(bobBefore.refs, kept(bob).refs)).toEqual(copies);
+    expect(reads, reads.join("\n")).toHaveLength(asked.reads.length + 1);
+  });
+
+  // A sh script stands in for ssh, which git for Windows never runs as one; the quiet look is the same code on every
+  // platform.
+  test.skipIf(process.platform === "win32")("quiet: the look runs ssh so that it asks for no sign-in", () => {
+    const { bea } = planBeforeRecord(false);
+    const bin = tempDir("ssh");
+    const said = join(bin, "said.txt");
+    writeFileSync(join(bin, "ssh"), `#!/bin/sh\necho "$@" >> '${said}'\nexit 255\n`);
+    chmodSync(join(bin, "ssh"), 0o755);
+    git(bea, ["remote", "set-url", "origin", "ssh://git@shop.example.invalid/shop.git"]);
+    const step = next(bea, { ...chat("bea-chat"), GIT_SSH_COMMAND: join(bin, "ssh") });
+    expect(step.narration).toBe(NOTHING_YET);
+    expect(readFileSync(said, "utf-8")).toContain("-o BatchMode=yes");
+  });
+
+  // The same stand-in for ssh, here one that never answers.
+  test.skipIf(process.platform === "win32")("a remote that never answers: the look is given up after its five seconds and the step is the one of today", () => {
+    const { bea } = planBeforeRecord(false);
+    const bin = tempDir("ssh");
+    writeFileSync(join(bin, "ssh"), "#!/bin/sh\nsleep 60\n");
+    chmodSync(join(bin, "ssh"), 0o755);
+    git(bea, ["remote", "set-url", "origin", "ssh://git@silent.example.invalid/shop.git"]);
+    const started = Date.now();
+    const step = next(bea, { ...chat("bea-chat"), GIT_SSH_COMMAND: join(bin, "ssh") });
+    const took = Date.now() - started;
+    expect(step.narration).toBe(NOTHING_YET);
+    expect(took).toBeGreaterThanOrEqual(5_000);
+    expect(took).toBeLessThan(30_000);
+  });
+
+  test("no remote, or a folder inside a bigger repository: no look at all, and the step of today", () => {
+    const { home, bea } = planBeforeRecord();
+    git(bea, ["remote", "remove", "origin"]);
+    const lone = remoteReads(bea, chat("bea-chat"));
+    expect(lone.step.narration).toBe(NOTHING_YET);
+    expect(lone.reads).toEqual([]);
+    // A project in a folder of a clone of the plan's repository: workspaceHomeLocation reads no address there.
+    const outer = cloneOf(home.remote, "outer");
+    const inner = join(outer, "app");
+    mkdirSync(inner);
+    const nested = remoteReads(inner, chat("inner-chat"));
+    expect(nested.step.narration).toBe(NOTHING_YET);
+    expect(nested.reads).toEqual([]);
+  });
+
+  test("a plan whose only Unit open to start is being built by someone else: the line asking for a piece gives, never today's", () => {
+    const { home, bea, id8 } = planBeforeRecord();
+    const took = run(UNIT, ["take", "refunds", "--plan", id8, "--from", home.remote], cloneOf(home.remote, "kim"));
+    expect(took.status, took.out).toBe(0);
+    const bare = next(bea, chat("bea-chat"));
+    expect(offerText(bare.narration)).toBe(offerText(next(cloneOf(home.remote, "bob"), chat("bob-chat"), ["--units"]).narration));
+    expect(String(bare.narration)).toEndWith("reporting can start early once refunds is pushed. Nothing is ready to take yet.");
+  });
+
+  test("a closed plan, a plan of a newer format, or one whose every Unit is done: the step of today", () => {
+    const closed = (json: Record<string, unknown>) => ({ ...json, closed: { at: "2026-11-19T00:00:00Z" } });
+    const newer = (json: Record<string, unknown>) => ({ ...json, format: 99 });
+    const done = (json: Record<string, unknown>) => ({
+      ...json, units: (json.units as Array<Record<string, unknown>>).map((unit) => ({ ...unit, word: { ...(unit.word as object ?? {}), done: true } })),
+    });
+    for (const edit of [closed, newer, done]) {
+      const { bea } = planBeforeRecord(true, edit);
+      expect(next(bea, chat("bea-chat")).narration).toBe(NOTHING_YET);
+    }
+  });
+
+  test("a copy of the plan ref in another repository than the one its plan names: not offered", () => {
+    const { home, bea } = planBeforeRecord();
+    const mirror = tempDir("mirror-host");
+    git(mirror, ["init", "-q", "--bare", "-b", "main"]);
+    git(bea, ["push", "-q", mirror, "main"]);
+    git(home.remote, ["push", "-q", mirror, `+refs/aidlc/plans/*:refs/aidlc/plans/*`]);
+    const fan = cloneOf(mirror, "fan");
+    expect(next(fan, chat("fan-chat")).narration).toBe(NOTHING_YET);
   });
 });
 

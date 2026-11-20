@@ -834,6 +834,14 @@ so quiet and under its time limit). With an open plan of that work there that
 this AI-DLC reads, and no other work here to pick up, a plain `next` with
 nothing selected returns what `next --units` returns; a look that fails or
 finds none leaves the step as it was, the question to carry the work on.
+A clone that holds no record of any work in any space looks the same way at a
+bare `next`: `planSharedAtHome` with no work names the workspace's own remote
+(`workspaceHomeLocation`; none for a project with no remote or below the top of
+its repository) and every plan ref there, counting a plan only when its
+plan.json names that repository as its own; with an open one, the step is
+`unitsAskedStep`'s, quiet: its Units, or the line that nothing is ready to take
+yet, as `next --units` gives them, and the plain step back where it would ask
+for an address, say there is nothing to take, fail or refuse a write.
 
 A team's own workspace that holds nothing of the lead's reaches the plan by
 the address of the code repository it is shared in, said once: `next

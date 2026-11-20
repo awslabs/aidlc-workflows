@@ -687,7 +687,9 @@ reads **Yes, for this project, and offered to whoever takes a Unit**.
   the branch it pulled) looks once, quietly, where the lead's share puts the
   plan when the lead names no other repository for it, and offers its Units
   when it is there; otherwise it asks whether to carry the work on, as for
-  work one person builds. Even with the lead's
+  work one person builds. A clone with no AI-DLC work recorded in it at all
+  (made before the lead's record reached its branch) looks the same way, once
+  and quietly, at its own repository, and offers the Units of an open plan there. Even with the lead's
   work picked there, the lead's own questions (a sign-off, a builder's proposed
   change) are not put in such a clone, and the lead's own words given there
   (a sign-off, a Unit freed, the sign-off setting and the rest) are written only
