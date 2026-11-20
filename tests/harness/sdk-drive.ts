@@ -346,11 +346,13 @@ export function buildAnswers(
 export function separateWorkOptionIndex(options: AskUserQuestionItem["options"]): number {
   let at = options.findIndex((o) => /^yes\b/i.test(o.label));
   if (at < 0) at = options.findIndex((o) => /separate/i.test(o.label));
-  if (at < 0) {
-    at = options.findIndex((o) =>
-      /\bseparate\b/i.test(o.description ?? "") && !/\bnot (?:a |the )?separate\b/i.test(o.description ?? ""));
-  }
+  if (at < 0) at = options.findIndex((o) => offersSeparateWork(o.description ?? ""));
   return at;
+}
+
+/** Words that offer separate new work, never words that say it is not separate. */
+export function offersSeparateWork(text: string): boolean {
+  return /\bseparate\b/i.test(text) && !/\bnot (?:a |the )?separate\b/i.test(text);
 }
 
 // ---------------------------------------------------------------------------
