@@ -350,10 +350,8 @@ describe("no line about the team's record at a stopping point", () => {
     expect(parked.out).not.toMatch(CHECK_IN_SAID);
   });
 
-  // A live run (Kiro CLI, the lead's Build and Test): the step said '15 of 23'
-  // where status said '9/18 stages here': the step counted the Units' own
-  // stages, which run in each taker's build.
-  test("at the lead's project the approval's progress and status count the same stages, the Units' own left out", () => {
+  // The step and status read the plan's one list, so they say the same count.
+  test("at the lead's project the approval's progress and status count the same stages", () => {
     const home = homeWithTeams();
     const statePath = join(home.dir, "aidlc", "spaces", "default", "intents", HOME_RECORD, "aidlc-state.md");
     writeFileSync(statePath, readFileSync(statePath, "utf-8")
@@ -364,9 +362,47 @@ describe("no line about the team's record at a stopping point", () => {
     expect(approved.status, approved.out).toBe(0);
     const step = /Progress: (\d+) of (\d+) stages done\. Next: /.exec(String(approved.json?.narration));
     expect(step, approved.out).not.toBeNull();
-    const status = /^Completion: +(\d+)\/(\d+) stages here /m.exec(run(UTILITY, ["status"], home.dir, ENV).out);
+    const status = /^Completion: +(\d+)\/(\d+) stages /m.exec(run(UTILITY, ["status"], home.dir, ENV).out);
     expect(status).not.toBeNull();
     expect([step![1], step![2]]).toEqual([status![1], status![2]]);
+  });
+
+  // The lead approved a plan of N stages: choosing teams changes who builds
+  // each Unit, never how many stages the plan has, so every count line keeps
+  // the total the plan was offered with, as solo work does.
+  const statusCount = (dir: string) => /^Completion: {5}(\d+)\/(\d+) stages \(\d+%\)$/m.exec(run(UTILITY, ["status"], dir, ENV).out);
+
+  test("choosing teams leaves the stage count the plan was offered: the Units' own stages stay in it", () => {
+    const home = makeHome();
+    const offered = statusCount(home.dir);
+    expect(offered).not.toBeNull();
+    const chose = run(STATE, ["set-unit-ownership", "team"], home.dir);
+    expect(chose.status, chose.out).toBe(0);
+    const state = readFileSync(join(home.dir, "aidlc", "spaces", "default", "intents", HOME_RECORD, "aidlc-state.md"), "utf-8");
+    expect(state).toMatch(/^- \*\*Home Location\*\*: \S/m);
+    expect(statusCount(home.dir)?.[2]).toBe(offered![2]);
+  });
+
+  test("at the lead's project the Units' own stages count as done once their boxes are, in the step and in status", () => {
+    const home = makeHome();
+    const offered = statusCount(home.dir);
+    expect(offered).not.toBeNull();
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    git(home.dir, ["add", "-A"]);
+    git(home.dir, ["commit", "-q", "-m", "teams"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    sharePlan(home);
+    const statePath = join(home.dir, "aidlc", "spaces", "default", "intents", HOME_RECORD, "aidlc-state.md");
+    writeFileSync(statePath, readFileSync(statePath, "utf-8")
+      .replace(/^- \[[-? ]\] (functional-design|nfr-requirements|nfr-design|infrastructure-design|code-generation) /gm, "- [x] $1 ")
+      .replace(/^- \[ \] build-and-test /m, "- [?] build-and-test ")
+      .replace(/^- \*\*Current Stage\*\*: .*$/m, "- **Current Stage**: build-and-test"));
+    // The fixture's state has no Initialization rows, so every finished box is a stage the count names.
+    const finished = () => (readFileSync(statePath, "utf-8").match(/^- \[x\] /gm) ?? []).length;
+    expect(statusCount(home.dir)?.slice(1)).toEqual([String(finished()), offered![2]]);
+    const approved = run(ORCH, ["report", "--stage", "build-and-test", "--result", "approved", "--user-input", "Approve"], home.dir);
+    expect(approved.status, approved.out).toBe(0);
+    expect(approved.json?.narration).toBe(`Progress: ${finished()} of ${offered![2]} stages done. Next: CI Pipeline.`);
   });
 });
 

@@ -449,8 +449,8 @@ describe("the lead's project builds nothing it was not asked to", () => {
     expect(status).not.toContain("Next Stage:");
     expect(status).not.toMatch(/CONSTRUCTION .*Unit \d+ of \d+/);
     expect(status).toMatch(/- refunds, payments space: building since \d{1,2} [A-Z][a-z]{2}, taken by alice/);
-    // The Units' own stages run in each taker's build, never in this record: out of the count here.
-    expect(status).toMatch(/^Completion: {5}\d+\/\d+ stages here \(\d+%\); each Unit's own stages are on the board below$/m);
+    // The plan's own count, the Units' own stages in it, as solo work counts them.
+    expect(status).toMatch(/^Completion: {5}\d+\/\d+ stages \(\d+%\)$/m);
     // A taker's own build counts its stages as always.
     expect(run(UTILITY, ["status"], alice).out).toMatch(/^Completion: {5}\d+\/\d+ stages \(\d+%\)$/m);
     // Once the lead asks for a Unit here, its stage is said again.

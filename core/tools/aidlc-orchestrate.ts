@@ -387,6 +387,7 @@ import {
   messageFill,
   settingsBesideDecision,
   CONFIG_KEYS,
+  plannedStages,
   resolveGuardPolicy,
   guardPolicyAcceptsChanges,
   type GuardPolicy,
@@ -837,7 +838,6 @@ import {
   builtFromAnotherMachine,
   catchUpAsk,
   levelDue,
-  stagesCounted,
   lastCommittedByThisPerson,
   findUnitBuild,
   homeLocation,
@@ -25466,7 +25466,7 @@ function approvalProgressLine(
   const next = nextInScopeStage(approvedSlug, scope, stateContent);
   if (!approved || approved.phase === "initialization" || !next) return null;
   const boxes = parseCheckboxes(stateContent);
-  const planned = stagesCounted(stateContent, scope, work);
+  const planned = plannedStages(stateContent, scope, work);
   const done = planned.filter((stage) => checkboxStateOf(boxes, stage.slug) === "completed").length;
   return `Progress: ${done} of ${planned.length} stages done. Next: ${next.name}.`;
 }
@@ -25474,7 +25474,7 @@ function approvalProgressLine(
 // " (stage 3 of 9)" for a stage the plan runs, "" for one it does not.
 function stageOfPlan(slug: string, scope: string, stateContent: string | null, work: { projectDir: string } | null): string {
   if (!stateContent) return "";
-  const planned = stagesCounted(stateContent, scope, work);
+  const planned = plannedStages(stateContent, scope, work);
   const at = planned.findIndex((stage) => stage.slug === slug);
   return at < 0 ? "" : ` (stage ${at + 1} of ${planned.length})`;
 }

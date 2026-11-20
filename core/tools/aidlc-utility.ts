@@ -193,7 +193,6 @@ import {
 } from "./aidlc-unit.ts";
 import {
   arrivedAtLastPull,
-  stagesCounted,
   checkInApplies,
   checkInState,
   checkInStatus,
@@ -2353,11 +2352,7 @@ To get started:
   // below and stays out of the count.
   const checkboxes = parseCheckboxes(content);
   const work = selection.intent === null ? null : { projectDir, intent: selection.intent, space: selection.space };
-  // Where the record's Units are built as takes (the lead's project of work
-  // teams build), each Unit's own stages run in its taker's build, never in
-  // this record: they are out of both numbers here.
-  const takesBuildUnits = isTeamUnitOwnership(content) && homeLocation(content) !== null && unitBuildOf(content) === null;
-  const planned = new Set(stagesCounted(content, scope, work).map((s) => s.slug));
+  const planned = new Set(plannedStages(content, scope, work).map((s) => s.slug));
   const setup = new Set(graph.filter((s) => s.phase === "initialization").map((s) => s.slug));
   const scopedCheckboxes = checkboxes.filter((c) =>
     planned.has(c.slug) ||
@@ -2614,9 +2609,7 @@ Current Stage:  ${stageDisplay}
 ${currentStep}Status:         ${statusLine}
 ${agentLine}Guard Policy:   ${guardPolicyDisplay}
 ${fencesOffLine}${ceremonyDisplay}
-Completion:     ${completed}/${total} stages${takesBuildUnits ? " here" : ""} (${pct}%)${skippedNote}${
-    takesBuildUnits ? "; each Unit's own stages are on the board below" : ""
-  }
+Completion:     ${completed}/${total} stages (${pct}%)${skippedNote}
 
 Phase Progress:
 ${phaseProgress}

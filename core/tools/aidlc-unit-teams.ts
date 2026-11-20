@@ -30,8 +30,6 @@ import {
   SPACE_NAME_REGEX,
   LEARNINGS_CORRECTION_CHOICES,
   listIntentDirs,
-  plannedStages,
-  type StageEntry,
   unitMajorConstructionStageSlugs,
   loadScopeMapping,
   loadStageGraphAll,
@@ -837,23 +835,9 @@ export function unitBuildsHere(
   return found;
 }
 
-// The stages a record's counts name: every stage the plan runs after
-// Initialization, but at a lead's project that teams build for not the Units'
-// own stages, which run in each taker's build. Read by status's Completion
-// and by the step's progress and 'stage N of M' lines.
-export function stagesCounted(
-  stateContent: string,
-  scope: string,
-  work: { projectDir: string; intent?: string; space?: string } | null,
-): StageEntry[] {
-  const planned = plannedStages(stateContent, scope, work);
-  const unitStages = unitStagesOfTeams(stateContent, scope);
-  return unitStages === null ? planned : planned.filter((stage) => !unitStages.has(stage.slug));
-}
-
 // At a lead's project that teams build for, the Units' own stages, which run in
-// each taker's build: status's counts leave them out (stagesCounted), and the
-// check-in reads their boxes as the engine's (teamsReadOfState). Null elsewhere.
+// each taker's build: the check-in reads their boxes as the engine's
+// (teamsReadOfState). Null elsewhere.
 function unitStagesOfTeams(stateContent: string, scope: string): Set<string> | null {
   if (!isTeamUnitOwnership(stateContent) || homeLocation(stateContent) === null || unitBuildOf(stateContent) !== null) return null;
   return new Set(unitMajorConstructionStageSlugs(scope, stateContent, true));
