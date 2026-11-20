@@ -1273,6 +1273,19 @@ describe("a Unit on the workspace's own repository", () => {
     expect(String(pushed.json?.notice)).not.toContain("The practice you kept");
   });
 
+  test("a practice kept for the team during a build in the lead's space, in a clone made before the lead's record reached main: the record goes, the practice is not named, and its rules file stays there untracked with the practice in it", () => {
+    const { home, clone } = leadRecordOnItsOwnBranch(UNITS);
+    const record = builtInClone(clone, home, "refunds", "refunds.ts");
+    practiceKept(clone, record, "team", "Test pages without a real browser");
+    const pushed = run(UNIT, ["push"], clone);
+    expect(pushed.status, pushed.out).toBe(0);
+    const said = String(pushed.json?.notice);
+    expect(said).toContain(recordWent("refunds"));
+    expect(said).not.toContain("The practice you kept");
+    expect(git(clone, ["status", "--porcelain", "--", "aidlc/spaces/default/memory/team.md"])).toBe("?? aidlc/spaces/default/memory/team.md");
+    expect(readFileSync(join(clone, "aidlc", "spaces", "default", "memory", "team.md"), "utf-8")).toContain("Test pages without a real browser");
+  });
+
   const OTHER_CHANGES = "; your other changes are still yours, uncommitted.";
   // AI-DLC's install as each teammate's `aidlc config` leaves it in their clone: uncommitted.
   function configured(dir: string, harness: string): string {

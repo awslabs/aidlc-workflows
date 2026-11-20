@@ -13474,7 +13474,9 @@ function buildRecordMessage(unit: string, given: string | null): string {
 
 // A practice the person kept during this build, which learnings persist wrote in
 // the build's space's rules with this build's marker, that the record commit
-// leaves out (a space git already has): said once per content of that file.
+// leaves out of a rules file git already has (one git has none of yet is not
+// said: in the lead's space it is the lead's to bring): said once per content
+// of that file.
 function practicesLeftOut(pd: string, unit: string): string[] {
   const record = recordDir(pd);
   if (record === null) return [];
@@ -13490,7 +13492,8 @@ function practicesLeftOut(pd: string, unit: string): string[] {
       continue;
     }
     const committed = git(pd, ["show", `HEAD:${file}`]);
-    const held = new Set((committed.ok ? committed.stdout : "").replace(/\r\n/g, "\n").split("\n"));
+    if (!committed.ok) continue;
+    const held = new Set(committed.stdout.replace(/\r\n/g, "\n").split("\n"));
     if (!text.replace(/\r\n/g, "\n").split("\n").some((line) => line.includes(marker) && !held.has(line))) continue;
     const said = `unit-practice-left-${unit}-${createHash("sha256").update(text).digest("hex").slice(0, 12)}`;
     if (engineAskMark(pd, said) !== null) continue;
