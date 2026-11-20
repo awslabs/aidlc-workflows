@@ -85,6 +85,16 @@ function homeWith(env?: Record<string, string>): string {
   return home;
 }
 
+/** The whole line a stop throws (toThrow alone matches any part of it). */
+function stopLine(start: () => unknown): string {
+  try {
+    start();
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+  return "(no stop)";
+}
+
 function writeProjectSettings(projectDir: string, settings: Record<string, unknown>): void {
   const claudeDir = join(projectDir, ".claude");
   mkdirSync(claudeDir, { recursive: true });
@@ -108,9 +118,11 @@ describe("sdk-drive runs the Claude Code the run has installed", () => {
     });
   });
 
-  test.skipIf(process.platform !== "win32")("on Windows the PATH key is read in any case, and the child gets one", () => {
+  test.skipIf(process.platform !== "win32")("on Windows the PATH key is read in any case, and the last layer's wins", () => {
     withTempProject((projectDir) => {
+      const settingsBin = folderWith();
       const bin = folderWith();
+      writeProjectSettings(projectDir, { env: { PATH: settingsBin } });
       const resolved = resolveDriveSdkSettings(projectDir, { env: { Path: bin } }, homeWith());
       expect(resolved.executable).toBe(join(bin, CLAUDE_NAME));
       expect(Object.keys(resolved.env).filter((key) => key.toUpperCase() === "PATH")).toEqual(["Path"]);
@@ -120,7 +132,7 @@ describe("sdk-drive runs the Claude Code the run has installed", () => {
   test("with no claude on the run's PATH the drive stops before it starts, in one line", () => {
     withTempProject((projectDir) => {
       const empty = tempDir("aidlc-sdk-no-claude-");
-      expect(() => resolveDriveSdkSettings(projectDir, { env: { PATH: empty } }, homeWith())).toThrow(NO_CLAUDE_CODE_LINE);
+      expect(stopLine(() => resolveDriveSdkSettings(projectDir, { env: { PATH: empty } }, homeWith()))).toBe(NO_CLAUDE_CODE_LINE);
     });
   });
 
@@ -128,8 +140,8 @@ describe("sdk-drive runs the Claude Code the run has installed", () => {
     withTempProject((projectDir) => {
       const shims = folderWith("claude.cmd");
       const shim = join(shims, "claude.cmd");
-      expect(() => resolveDriveSdkSettings(projectDir, { env: { PATH: `${shims}${delimiter}${folderWith()}` } }, homeWith()))
-        .toThrow(
+      expect(stopLine(() => resolveDriveSdkSettings(projectDir, { env: { PATH: `${shims}${delimiter}${folderWith()}` } }, homeWith())))
+        .toBe(
           `Live SDK drive stopped before it started: the first claude on this run's PATH is ${shim}, a shim the Agent ` +
             "SDK cannot start. Put the folder that holds claude.exe before it on PATH, and run again.",
         );
@@ -220,7 +232,7 @@ describe("sdk-drive names no model of its own", () => {
   test("the installed Claude Code does not update itself under a drive, whatever a settings layer says", () => {
     withTempProject((projectDir) => {
       writeProjectSettings(projectDir, { env: { DISABLE_AUTOUPDATER: "0" } });
-      const { env } = resolveDriveSdkSettings(projectDir, { env: { PATH: folderWith() } }, homeWith());
+      const { env } = resolveDriveSdkSettings(projectDir, { env: { PATH: folderWith(), DISABLE_AUTOUPDATER: "0" } }, homeWith());
       expect(env.DISABLE_AUTOUPDATER).toBe("1");
     });
   });

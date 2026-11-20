@@ -402,7 +402,7 @@ export function driveInput(prompt: string): DriveInput {
 }
 
 /** Claude Code's own result when the person picks a picker's "Chat about
- *  this" instead of an option (the same in 2.1.158 and 2.1.329): no answer, and the agent
+ *  this" instead of an option: no answer, and the agent
  *  is told to ask what they want to clarify. */
 export function chatAboutThisResult(questions: AskUserQuestionItem[]): string {
   return `The user wants to clarify these questions.
@@ -482,7 +482,8 @@ export interface DriveOptions {
   /**
    * settingSources for the SDK. Default ['project'] so live harness runs load
    * the copied shipped .claude/settings.json/CLAUDE.md but do not inherit the
-   * developer's user-level hooks or settings. Pass [] for SDK isolation, or
+   * developer's user-level hooks or settings (only their model names, when the
+   * run names no model: resolveDriveSdkSettings). Pass [] for SDK isolation, or
    * opt into ['project','local','user'] from focused calibration tests.
    * (sdk.d.ts)
    */
@@ -630,8 +631,8 @@ function namesAModel(env: Record<string, string>): boolean {
 }
 
 /**
- * The box's own Claude Code settings, the file a person's Claude Code and the
- * pool read, give only their model names. The drive's child gets them; the
+ * The box's own Claude Code settings, the file a person's Claude Code reads,
+ * give only their model names. The drive's child gets them; the
  * suite's own environment never does. A file Claude Code itself could not read
  * names nothing here either.
  */
@@ -645,13 +646,19 @@ function boxModelNames(home: string): Record<string, string> {
   return Object.fromEntries(Object.entries(stringEnv(settings)).filter(([key]) => MODEL_NAME.test(key)));
 }
 
-/** Windows keys its environment in any case; the last layer's spelling of PATH is the one the child keeps. */
-function onePathKey(env: Record<string, string>): string {
-  if (process.platform !== "win32") return "PATH";
-  const keys = Object.keys(env).filter((key) => key.toUpperCase() === "PATH");
-  const kept = keys.at(-1) ?? "PATH";
-  for (const key of keys) if (key !== kept) delete env[key];
-  return kept;
+/** Windows keys its environment in any case: a layer's PATH, however spelled, replaces the one before it. */
+function layerEnv(env: Record<string, string>, layer: Record<string, string>): void {
+  for (const [key, value] of Object.entries(layer)) {
+    if (process.platform === "win32" && key.toUpperCase() === "PATH") {
+      for (const old of Object.keys(env)) if (old.toUpperCase() === "PATH") delete env[old];
+    }
+    env[key] = value;
+  }
+}
+
+function pathOf(env: Record<string, string>): string {
+  if (process.platform !== "win32") return env.PATH ?? "";
+  return Object.entries(env).find(([key]) => key.toUpperCase() === "PATH")?.[1] ?? "";
 }
 
 /**
@@ -698,9 +705,9 @@ export function resolveDriveSdkSettings(
 
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) if (typeof value === "string") env[key] = value;
-  Object.assign(env, stringEnv(project), stringEnv(shipped), opts.env ?? {});
+  for (const layer of [stringEnv(project), stringEnv(shipped), opts.env ?? {}]) layerEnv(env, layer);
   for (const name of LAUNCHING_SESSION_MARKERS) delete env[name];
-  const executable = installedClaudeCode(env[onePathKey(env)] ?? "");
+  const executable = installedClaudeCode(pathOf(env));
   // All or nothing: a box name never sits beside a model the run names itself.
   if (!namesAModel(env)) Object.assign(env, boxModelNames(home));
   env.DISABLE_AUTOUPDATER = "1";
