@@ -4075,6 +4075,10 @@ function worktreeChanges(projectDir: string, untracked: "no" | "all", label: str
 // reads them from what the project's harnesses ship.
 type OwnRootPart = { marker: string; legacy: string[] } | { entries: string };
 
+function partAsShipped(path: string, text: string, block: { shipped: string; marker: string; legacy: string[] }): boolean {
+  return mergeBlock(path, text, block.shipped, block.marker, block.legacy).currentBlockShipped === true;
+}
+
 // The changed paths that hold only AI-DLC's own write, which the session-start
 // hook adds in a checkout config never ran in and a release brings up to date:
 // in a shared root file, its marked part as a release shipped it with the
@@ -4083,8 +4087,8 @@ type OwnRootPart = { marker: string; legacy: string[] } | { entries: string };
 // part, or its entries merged in; no copy when HEAD has none). A change
 // of the person's in that file, inside the part too (the hook and config then
 // leave the part as theirs), a file they staged, or a part that does not read,
-// leaves it theirs.
-function aidlcOwnRootParts(projectDir: string, paths: readonly string[]): Map<string, OwnRootPart> {
+// leaves it theirs. `against` the index's copy while a merge waits (abortMerge).
+function aidlcOwnRootParts(projectDir: string, paths: readonly string[], against: "HEAD" | "index" = "HEAD"): Map<string, OwnRootPart> {
   const own = new Map<string, OwnRootPart>();
   if (paths.length === 0) return own;
   const { blocks, entries } = aidlcRootParts(projectDir);
@@ -4093,7 +4097,7 @@ function aidlcOwnRootParts(projectDir: string, paths: readonly string[]): Map<st
     const block = blocks.get(path);
     const shippedEntries = entriesAt.get(path);
     if (!block && shippedEntries === undefined) continue;
-    if (!git(projectDir, ["diff", "--cached", "--quiet", "--", path]).ok) continue;
+    if (against === "HEAD" && !git(projectDir, ["diff", "--cached", "--quiet", "--", path]).ok) continue;
     let text: string;
     try {
       if (!lstatSync(join(projectDir, path)).isFile()) continue;
@@ -4101,18 +4105,15 @@ function aidlcOwnRootParts(projectDir: string, paths: readonly string[]): Map<st
     } catch {
       continue;
     }
-    const committed = gitPathExistsAt(projectDir, "HEAD", path) ? gitTextAt(projectDir, "HEAD", path) : "";
+    const staged = against === "index" ? git(projectDir, ["show", `:${path}`]) : null;
+    if (staged !== null && !staged.ok) continue;
+    const committed = staged !== null ? staged.stdout : gitPathExistsAt(projectDir, "HEAD", path) ? gitTextAt(projectDir, "HEAD", path) : "";
     // Git's copy holds the line endings the repository stores, the file the
     // checkout's own (core.autocrlf on Windows), so they are left aside.
     const lf = (value: string) => value.replace(/\r\n/g, "\n");
     const written = block ? mergeBlock(path, committed, block.shipped, block.marker, block.legacy).value : undefined;
-    if (
-      block && (
-        (onlyMarkedPartChanged(path, text, committed, block.marker) &&
-          mergeBlock(path, text, block.shipped, block.marker, block.legacy).currentBlockShipped) ||
-        (written !== undefined && lf(written) === lf(text))
-      )
-    ) {
+    const beside = block !== undefined && onlyMarkedPartChanged(path, text, committed, block.marker) && partAsShipped(path, text, block);
+    if (block && (beside || (written !== undefined && lf(written) === lf(text)))) {
       own.set(path, { marker: block.marker, legacy: block.legacy });
     } else if (shippedEntries !== undefined) {
       const merged = mergeJsonEntries(committed, shippedEntries, { kind: "none" });
@@ -4133,14 +4134,17 @@ interface YieldedRootPart {
 // root file the candidate also changes is set aside: the file goes back to
 // HEAD's copy (or, AI-DLC's whole, away), and its bytes are kept in `yielded`
 // first, so a stop part way still gives each one back. They are kept in memory
-// only: a landing killed between the merge and its commit leaves the merge's
-// copy, and the next session start writes AI-DLC's part again.
-function yieldOwnRootParts(projectDir: string, candidatePaths: readonly string[], yielded: YieldedRootPart[]): void {
+// only: a process killed between the two leaves the file without AI-DLC's part,
+// which the next session start writes again only where config never ran
+// (addRootBlocks); `aidlc config` writes it again anywhere.
+function yieldOwnRootParts(projectDir: string, candidatePaths: readonly string[], yielded: YieldedRootPart[], against: "HEAD" | "index" = "HEAD"): void {
   const touched = worktreeChanges(projectDir, "all", "Cannot inspect main worktree")
     .filter((path) => candidatePaths.includes(path));
-  for (const [path, part] of aidlcOwnRootParts(projectDir, touched)) {
+  for (const [path, part] of aidlcOwnRootParts(projectDir, touched, against)) {
     yielded.push({ path, part, bytes: readFileSync(join(projectDir, path)) });
-    if (gitPathExistsAt(projectDir, "HEAD", path)) {
+    if (against === "index") {
+      if (!git(projectDir, ["checkout", "--", path]).ok) yielded.pop();
+    } else if (gitPathExistsAt(projectDir, "HEAD", path)) {
       const restored = git(projectDir, ["checkout", "HEAD", "--", path]);
       if (!restored.ok) fail(`Failed to restore ${path} before the Unit merge: ${restored.stderr.trim()}.`);
     } else {
@@ -4150,11 +4154,12 @@ function yieldOwnRootParts(projectDir: string, candidatePaths: readonly string[]
   }
 }
 
-// After the merge, what was set aside goes back onto the merged file, still
-// uncommitted: AI-DLC's marked part as the landing checkout had it, or its
+// After the step, what was set aside goes back onto the file as the step left
+// it, still uncommitted: AI-DLC's marked part as the checkout had it, or its
 // entries merged as the hook merges them, around the person's part as the
-// merge made it. When the landing stopped and rolled back, each file gets its
-// bytes back as they were.
+// step made it; alone where the step took the file away (a branch without it).
+// When the step stopped and rolled back, each file gets its bytes back as they
+// were.
 function returnOwnRootParts(projectDir: string, yielded: readonly YieldedRootPart[], landed: boolean): void {
   for (const { path, part, bytes } of yielded) {
     const file = join(projectDir, path);
@@ -4162,9 +4167,9 @@ function returnOwnRootParts(projectDir: string, yielded: readonly YieldedRootPar
       writeFileSync(file, bytes);
       continue;
     }
-    let merged: string;
+    let merged = "";
     try {
-      merged = readFileSync(file, "utf-8");
+      if (existsSync(file)) merged = readFileSync(file, "utf-8");
     } catch {
       continue;
     }
@@ -4186,6 +4191,67 @@ function returnOwnRootParts(projectDir: string, yielded: readonly YieldedRootPar
     }
     if (next !== undefined && next !== merged) writeFileSync(file, next);
   }
+}
+
+// AI-DLC's own git step toward `target` (a switch, the level step, a merge of
+// main) with AI-DLC's uncommitted part set aside around it, as the landing does:
+// git refuses a step over a local change to a file the step writes. `went`: the
+// step changed the file, so the part goes onto that copy, a merge left waiting
+// included; without the part AI-DLC's working files sit untracked for `git add -A`.
+function withOwnRootPartsAside<T extends { ok: boolean }>(dir: string, target: string, step: () => T, went = (result: T): boolean => result.ok): T {
+  const yielded = setOwnRootPartsAside(dir, target);
+  let result: T | undefined;
+  try {
+    result = step();
+    return result;
+  } finally {
+    returnOwnRootParts(dir, yielded, result !== undefined && went(result));
+  }
+}
+
+function setOwnRootPartsAside(dir: string, target: string): YieldedRootPart[] {
+  const yielded: YieldedRootPart[] = [];
+  const shared = sharedRootPaths(dir);
+  const changes = shared.size === 0 ? null : git(dir, ["diff", "-z", "--name-only", "--no-renames", "HEAD", target]);
+  const paths = changes?.ok ? changes.stdout.split("\0").filter((path) => shared.has(path)) : [];
+  try {
+    if (paths.length > 0) yieldOwnRootParts(dir, paths, yielded);
+  } catch {
+    // A file git would not put back stays as it is, for git to refuse the step over.
+  }
+  return yielded;
+}
+
+function sharedRootPaths(dir: string): Set<string> {
+  const { blocks, entries } = aidlcRootParts(dir);
+  return new Set([...blocks.keys(), ...[...entries.keys()].map((key) => rootIntegrationTarget(dir, key))]);
+}
+
+// AI-DLC's own abort of a merge of main it began: git refuses it over AI-DLC's
+// part on top of the merge's copy, so that file goes back to the index's copy
+// first; a file still in conflict has no index copy and the abort resets it
+// whole, so only its part is kept. Each goes back onto what the abort leaves.
+function abortMerge(dir: string): GitResult {
+  const yielded: YieldedRootPart[] = [];
+  const shared = sharedRootPaths(dir);
+  try {
+    yieldOwnRootParts(dir, [...shared], yielded, "index");
+  } catch {
+    // As in setOwnRootPartsAside.
+  }
+  const { blocks } = aidlcRootParts(dir);
+  for (const path of conflictFiles(dir).filter((each) => shared.has(each))) {
+    const block = blocks.get(path);
+    const bytes = block === undefined || !existsSync(join(dir, path)) ? null : readFileSync(join(dir, path));
+    if (block === undefined || bytes === null) continue;
+    const text = bytes.toString("utf-8");
+    if (markedPart(path, text, block.marker)?.block && partAsShipped(path, text, block)) {
+      yielded.push({ path, part: { marker: block.marker, legacy: block.legacy }, bytes });
+    }
+  }
+  const aborted = git(dir, ["merge", "--abort"]);
+  returnOwnRootParts(dir, yielded, aborted.ok);
+  return aborted;
 }
 
 function conflictFiles(projectDir: string): string[] {
@@ -6843,8 +6909,12 @@ function gitWords(said: string): string {
 // way AI-DLC brings a checkout level (the plan's way back, Build and Test's
 // catch-up, the take of a merged build).
 export type BranchLevelStep = "dry run" | "fetch" | "fast-forward" | "reset";
-export function bringBranchLevel(dir: string, remote: string, branch: string):
-  { ok: true; ran: BranchLevelStep; was?: string } | { ok: false; ran: BranchLevelStep; said: string; block?: LevelBlock } {
+type BranchLevel = { ok: true; ran: BranchLevelStep; was?: string } | { ok: false; ran: BranchLevelStep; said: string; block?: LevelBlock };
+export function bringBranchLevel(dir: string, remote: string, branch: string): BranchLevel {
+  return withOwnRootPartsAside(dir, `refs/remotes/${remote}/${branch}`, () => levelBranch(dir, remote, branch));
+}
+
+function levelBranch(dir: string, remote: string, branch: string): BranchLevel {
   const theirs = `refs/remotes/${remote}/${branch}`;
   const scratch = mkdtempSync(join(tmpdir(), "aidlc-level-"));
   try {
@@ -6908,7 +6978,8 @@ export const CHECKOUT_STEPS = {
   forward: { run: bringBranchLevel, via: (): string => `${aidlcInvocation()} unit share --back` },
   // git's own refusal keeps a change of theirs in the way; one it can carry rides along.
   switch: {
-    run: (dir: string, branch: string): GitResult => git(dir, ["switch", "-q", "--no-overwrite-ignore", branch]),
+    run: (dir: string, branch: string): GitResult =>
+      withOwnRootPartsAside(dir, branch, () => git(dir, ["switch", "-q", "--no-overwrite-ignore", branch])),
     undo: (from: string): string => `Switch back to ${from} any time.`,
   },
   // Main left ahead and behind with all of its work in the remote's copy: reset --keep behind levelByContent (bringBranchLevel).
@@ -6921,7 +6992,9 @@ export const CHECKOUT_STEPS = {
   // The branch a pushed Unit merges into, merged into its branch with their git on their yes (mergeMainIn); a clash is left
   // under way for them, and the undo takes that merge back out on their word.
   merge: {
-    run: (dir: string, into: string, message: readonly string[] = []): GitResult => git(dir, ["merge", "-q", "--no-edit", ...message, into]),
+    run: (dir: string, into: string, message: readonly string[] = []): GitResult =>
+      withOwnRootPartsAside(dir, into, () => git(dir, ["merge", "-q", "--no-edit", ...message, into]),
+        (made) => made.ok || gitOperationUnderWay(dir)?.what === "a merge"),
     via: (): string => `${aidlcInvocation()} unit push --merge-main`,
     undoVia: (): string => `${aidlcInvocation()} unit push --undo-merge`,
   },
@@ -11957,8 +12030,9 @@ function takeUnit(args: string[], projectDir?: string, rhythm?: UnitClaimPayload
       const clean = !ownChanges(pd, [{ repo: repo.repo, dir }]);
       // Without tracking: the dependency's branch is another team's, so a plain
       // git push before AI-DLC's own (which sets the Unit's upstream) never goes there.
-      if (clean && git(dir, ["switch", "-q", "--no-track", "-c", unit, start]).ok) earlyLines.push(`You are on branch ${unit} in ${name} now.`);
-      else if (git(dir, ["branch", "--no-track", unit, start]).ok) {
+      if (clean && withOwnRootPartsAside(dir, start, () => git(dir, ["switch", "-q", "--no-track", "-c", unit, start])).ok) {
+        earlyLines.push(`You are on branch ${unit} in ${name} now.`);
+      } else if (git(dir, ["branch", "--no-track", unit, start]).ok) {
         earlyLines.push(`Branch ${unit} in ${name} starts there; your uncommitted changes kept you on your branch, so switch when you are ready.`);
       }
     }
@@ -13017,7 +13091,7 @@ function startUnitBranch(
     git(dir, ["merge-base", "--is-ancestor", `refs/heads/${branch}`, integration]).ok;
   const exists = !leftover && git(dir, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]).ok;
   if (exists) {
-    const { ok, said } = switchOntoUnitBranch(dir, branch, [...paths]);
+    const { ok, said } = withOwnRootPartsAside(dir, `refs/heads/${branch}`, () => switchOntoUnitBranch(dir, branch, [...paths]));
     return { switched: ok, said, exists, fromHere: false };
   }
   const make = leftover ? "-C" : "-c";
@@ -13025,7 +13099,9 @@ function startUnitBranch(
   // Their own commits holding the Unit's files start where they are.
   const committedHere = paths.length > 0 && !git(dir, ["diff", "--quiet", integration, "HEAD", "--", ...paths]).ok;
   const fromIntegration = options.leavesNothing() && !committedHere
-    ? git(dir, ["switch", "-q", ...(options.track === false ? ["--no-track"] : []), make, branch, integration]) : null;
+    ? withOwnRootPartsAside(dir, integration, () =>
+      git(dir, ["switch", "-q", ...(options.track === false ? ["--no-track"] : []), make, branch, integration]))
+    : null;
   if (fromIntegration?.ok) return { switched: true, said: "", exists, fromHere: false };
   if (!options.fromHere) return { switched: false, said: fromIntegration?.stderr ?? "", exists, fromHere: false };
   const tried = git(dir, ["switch", "-q", make, branch]);
@@ -14118,7 +14194,7 @@ function mergeMainIn(pd: string, args: string[], unit: string, branch: string, u
       .map((entry) => repos.find((other) => other.dir === entry.dir && merging(other.dir, other.into)) ?? entry);
     const waiting = each.some((entry) => merging(entry.dir, entry.into)) ? each.filter((entry) => merging(entry.dir, entry.into)) : each;
     for (const { dir, name, into } of waiting) {
-      const aborted = merging(dir, into) ? git(dir, ["merge", "--abort"]) : null;
+      const aborted = merging(dir, into) ? abortMerge(dir) : null;
       if (aborted?.ok) lines.push(`I undid the merge of ${into} into ${unit} in ${name}; ${unit} is as it was there, and nothing was pushed.`);
       else if (aborted !== null) {
         lines.push(`The merge of ${into} into ${unit} in ${name} could not be undone: git says "${gitSaid(aborted.stderr || aborted.stdout)}". ` +
@@ -14175,8 +14251,10 @@ function mergeMainIn(pd: string, args: string[], unit: string, branch: string, u
     const mergeChanges = new Set(git(dir, ["diff", "-z", "--name-only", `${tip}...${into}`]).stdout.split("\0").filter(Boolean));
     // On the workspace's own repository the build's own record changes at every step and rides on its own commit.
     const buildOwn = entry.repo === "." ? buildRecordPaths(pd) : [];
-    const ownChanged = git(dir, ["diff", "-z", "--name-only", "HEAD"]).stdout.split("\0").filter(Boolean)
-      .filter((path) => !buildOwn.some((own) => path === own || path.startsWith(`${own}/`)));
+    // AI-DLC's own uncommitted part is set aside around the merge (CHECKOUT_STEPS.merge).
+    const changedHere = git(dir, ["diff", "-z", "--name-only", "HEAD"]).stdout.split("\0").filter(Boolean);
+    const aidlcOwn = entry.repo === "." ? aidlcOwnRootParts(dir, changedHere) : new Map<string, OwnRootPart>();
+    const ownChanged = changedHere.filter((path) => !aidlcOwn.has(path) && !buildOwn.some((own) => path === own || path.startsWith(`${own}/`)));
     const ownUnit = ownChanged.find((path) => entry.paths.some((own) => path === own || (own.endsWith("/") && path.startsWith(own))));
     // Bringing the host's branch in is the push's own yes: the Unit's change
     // here is committed first, as the push commits it, then the branch comes in.
@@ -14213,7 +14291,8 @@ function mergeMainIn(pd: string, args: string[], unit: string, branch: string, u
         `or put aside, I can bring ${into} in.`);
     }
     const added = git(dir, ["diff", "-z", "--name-only", "--diff-filter=A", `${tip}...${into}`]).stdout.split("\0").filter(Boolean);
-    const replaced = added.find((path) => existsSync(join(dir, ...path.split("/"))) && !git(dir, ["ls-files", "--error-unmatch", "--", path]).ok);
+    const replaced = added.find((path) => existsSync(join(dir, ...path.split("/"))) && !git(dir, ["ls-files", "--error-unmatch", "--", path]).ok &&
+      !(entry.repo === "." && aidlcOwnRootParts(dir, [path]).has(path)));
     if (replaced !== undefined) {
       stop(`${into} adds ${replaced} in ${name}, where you have a file of your own, so nothing was merged or pushed. Once it is moved ` +
         `or put aside, I can bring ${into} in.`);
@@ -14275,7 +14354,7 @@ function mergeMainIn(pd: string, args: string[], unit: string, branch: string, u
         }
         // A merge this step just began holds nothing of theirs: it is undone.
         if (gitOperationUnderWay(dir)?.what === "a merge") {
-          git(dir, ["merge", "--abort"]);
+          abortMerge(dir);
           if (byHook) {
             stop(`Your hook in ${name} did not take the merge of ${into} into ${unit} (${said}), so I undid it, and nothing was pushed. ` +
               "If it is the merge's message, tell me the one to use, and I will merge with that.");
