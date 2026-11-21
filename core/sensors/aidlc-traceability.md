@@ -53,8 +53,10 @@ opens, on the tables as they are then:
    target is another Unit of the plan, named on its own by directory or `U{n}`
    ID, is a hand-off (a reason's words are never read); that Unit must be on
    that story's (or FR's) row in `unit-of-work-story-map.md`, or it is reported
-   as an invalid target. A
-   Functional Design Unit
+   as an invalid target. With stories, a story whose row names only `library`,
+   `spec` or `packaging` Units says how it is reached (`existing: <where>` or
+   `interface`, on its row or once as a `Reached through:` line), or it is
+   reported as an invalid target. A Functional Design Unit
    whose kind writes no `rules.md` (a `ui` Unit) names one of its design files
    (`functional-spec.md`, `frontend-components.md`) on each row instead of a
    business rule.
