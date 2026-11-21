@@ -105,7 +105,7 @@ describe("a repo name the engine derives from a folder fits the repo-name rule",
 
 describe("Reverse Engineering's tools in a project folder named with a space or another character", () => {
   for (const [folder, repo] of [
-    ["portal app", "portal-app"],
+    ["portal app", "portal app"],
     [CAFE_NFC, "cafe"],
     [CAFE_NFD, "cafe"],
     ["R&D", "R-D"],
@@ -136,7 +136,7 @@ describe("Reverse Engineering's tools in a project folder named with a space or 
     });
   }
 
-  test("a scan of \"portal app\" publishes its store under portal-app, and the folder keeps its name", () => {
+  test("a scan of \"portal app\" publishes its store under \"portal app\", and the folder keeps its name", () => {
     const project = projectNamed("portal app");
     const paths = ["src/"];
     const snapshot = utility(project, ["codekb-snapshot", "--paths", paths.join(","), "--json"]);
@@ -187,8 +187,8 @@ describe("Reverse Engineering's tools in a project folder named with a space or 
     ]);
     expect(published.status, published.stdout + published.stderr).toBe(0);
     const store = join(project, "aidlc", "spaces", DEFAULT_SPACE, "codekb");
-    expect(readdirSync(store)).toEqual(["portal-app"]);
-    expect(readdirSync(join(store, "portal-app")).sort()).toEqual(ARTIFACT_NAMES);
+    expect(readdirSync(store)).toEqual(["portal app"]);
+    expect(readdirSync(join(store, "portal app")).sort()).toEqual(ARTIFACT_NAMES);
     expect(existsSync(project)).toBe(true);
   });
 
@@ -215,7 +215,7 @@ describe("Reverse Engineering's tools in a project folder named with a space or 
     const worktree = join(main, "..", "portal app fix");
     git(main, "worktree", "add", "-q", "-b", "fix", worktree);
     seedWorkspaceShell(worktree);
-    expect(codekbRepoName(toPortablePath(realpathSync(worktree)))).toBe("portal-app");
+    expect(codekbRepoName(toPortablePath(realpathSync(worktree)))).toBe("portal app");
   });
 });
 

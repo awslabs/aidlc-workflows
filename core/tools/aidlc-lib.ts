@@ -4228,8 +4228,13 @@ export function codekbRepoName(
   // Multi-repo (2+) keeps the project folder's own name; only the
   // NOTHING-RECORDED case consults git, where the project root is the repo and a
   // worktree basename is otherwise mistaken for the repository name.
-  if (repos.length > 1) return folderRepoName(basename(projectDir)) || "project";
-  const name = folderRepoName(mainCheckoutRepoName(projectDir) ?? basename(projectDir)) || "project";
+  const folder = repos.length > 1
+    ? basename(projectDir)
+    : mainCheckoutRepoName(projectDir) ?? basename(projectDir);
+  const name = repoNameProblem(folder) === null && /^[A-Za-z0-9][A-Za-z0-9 ._-]*$/.test(folder)
+    ? folder
+    : folderRepoName(folder) || "project";
+  if (repos.length > 1) return name;
   return movedFolderStoreName(projectDir, selection.space, selection.intent, name) ?? name;
 }
 
