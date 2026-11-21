@@ -326,6 +326,61 @@ describe("t10 session-start SessionStart hook (mechanism cli — spawned hook + 
     expect(ctx).not.toContain("breadcrumb");
   });
 
+  test("a compaction whose resume point claims a stage the state has not completed says so once, naming the engine's state", () => {
+    seedStateFile(proj, MID_IDEATION);
+    const stateFile = statePath(proj);
+    writeFileSync(
+      stateFile,
+      readFileSync(stateFile, "utf-8")
+        .replace("- **Last Completed Stage**: market-research", "- **Last Completed Stage**: scope-definition")
+        .replace(
+          "- **Status**: Running",
+          "- **Active Unit**: widget-checkout\n- **Unit Stage**: functional-design\n- **Unit State**: completed\n- **Status**: Running",
+        ),
+    );
+    const r = fire(
+      proj,
+      JSON.stringify({ hook_event_name: "SessionStart", source: "compact", session_id: "compact-session-0002" }),
+    );
+    const ctx = JSON.parse(r.stdout.trim()).additionalContext as string;
+    expect(ctx).toContain("SESSION RESUME POINT DISAGREES WITH THE PERSISTED STATE");
+    expect(ctx).toContain('"scope-definition"');
+    expect(ctx).toContain("records that stage as pending");
+    expect(ctx).toContain('Current Stage is "feasibility"');
+    expect(ctx).toContain("Active Unit widget-checkout (completed)");
+    expect(ctx).toContain('next action reads "Continue feasibility analysis"');
+    expect(ctx).toContain("Follow the engine's route");
+    expect(ctx.match(/SESSION RESUME POINT DISAGREES WITH THE PERSISTED STATE/g)?.length).toBe(1);
+    expect(ctx).toContain("Current Stage: feasibility");
+    expect(ctx).toContain("Last Completed: scope-definition");
+  });
+
+  test("a compaction whose resume point agrees with the state says nothing about it", () => {
+    seedStateFile(proj, MID_IDEATION);
+    const r = fire(
+      proj,
+      JSON.stringify({ hook_event_name: "SessionStart", source: "compact", session_id: "compact-session-0003" }),
+    );
+    const ctx = JSON.parse(r.stdout.trim()).additionalContext as string;
+    expect(ctx).toContain("Current Stage: feasibility");
+    expect(ctx).not.toContain("SESSION RESUME POINT DISAGREES");
+  });
+
+  test("a start that is not a compaction recovery carries no breadcrumb notice", () => {
+    seedStateFile(proj, MID_IDEATION);
+    const stateFile = statePath(proj);
+    writeFileSync(
+      stateFile,
+      readFileSync(stateFile, "utf-8").replace(
+        "- **Last Completed Stage**: market-research",
+        "- **Last Completed Stage**: scope-definition",
+      ),
+    );
+    const ctx = JSON.parse(fire(proj).stdout.trim()).additionalContext as string;
+    expect(ctx).toContain("Current Stage: feasibility");
+    expect(ctx).not.toContain("SESSION RESUME POINT DISAGREES");
+  });
+
   test("writes the session-start.last heartbeat when state exists [.sh test 10]", () => {
     seedStateFile(proj, MID_IDEATION);
     expect(existsSync(heartbeatPath(proj))).toBe(false);
