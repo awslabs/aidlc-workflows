@@ -387,6 +387,21 @@ describe("Claude Code: the memory the host loaded at the chat's last load", () =
     expect(pointerOnly(await next(proj, "claude", env))).toBe(true);
   });
 
+  // A clone's first chat: AI-DLC's root parts are committed, the copy is
+  // git-ignored, so the session start writes it after Claude read the imports
+  // and tells the chat only where the files are. That chat holds none of them:
+  // every step carries the text.
+  test("the first chat in a clone, whose session start wrote the copy: the text on every step", async () => {
+    const proj = await projectFor("claude");
+    rmSync(join(proj, "aidlc", "active-memory"), { recursive: true, force: true });
+    const sid = randomUUID();
+    const env = { AIDLC_SESSION_OVERRIDE: sid, CLAUDE_CODE_SESSION_ID: sid, CLAUDECODE: "1" };
+    await sessionStart(proj, "claude", sid, "startup");
+    expect(existsSync(join(proj, "aidlc", "active-memory", "team.md"))).toBe(true);
+    expect(sentInFull(await next(proj, "claude", env))).toBe(true);
+    expect(sentInFull(await next(proj, "claude", env))).toBe(true);
+  });
+
   test("a template the first /aidlc writes is not a rule of the step: no text every step, before or after a resume", async () => {
     let kept: Record<string, string> = {};
     const proj = configuredProject("claude", (dir) => {
