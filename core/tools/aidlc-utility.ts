@@ -4250,7 +4250,7 @@ export async function collectDoctorReport(
         }
       }
       const legacy = [...commands, ...personaCommands].filter((command) =>
-        /\bbun\s+[^\n]*(?:\/(?:tools|hooks)\/aidlc|\\?\.kiro\/tools\/)/.test(command)
+        /\bbun\s+[^\n]*(?:\/(?:tools|hooks)\/aidlc|\bhooks\/aidlc|\\?\.kiro\/tools\/)/.test(command)
       );
       let nativeHooks = commands.some((command) =>
         ["hook", "adapter", "statusline"].some((noun) =>
@@ -4290,6 +4290,8 @@ export async function collectDoctorReport(
           hashes.every((hash) => seedText.includes(`trusted_hash = "${hash}"`));
       } else if (currentHarnessDir === ".cursor") {
         nativePermission = commands.includes(cursorTrustedShell());
+      } else if (currentHarnessDir === ".agent") {
+        nativePermission = nativeHooks;
       } else if (currentHarnessName === "copilot") {
         // Copilot has no project command allowlist. Its folder-trust contract
         // is checked separately below; this row verifies native hook wiring.
@@ -4770,6 +4772,7 @@ export async function collectDoctorReport(
       );
     }
     if (harness === ".cursor") tsHooks.push("aidlc-cursor-adapter");
+    if (harness === ".agent") tsHooks.push("aidlc-antigravity-adapter");
     for (const h of tsHooks) {
       const hookPath = join(projectDir, harness, "hooks", `${h}.ts`);
       results.push({
@@ -4954,6 +4957,23 @@ export async function collectDoctorReport(
       label: "project is in a git repository (Cursor may skip project hooks outside one)",
       fix: "run `git init` in this project, then fully restart Cursor and trust the folder",
     });
+  } else if (harness === ".agent") {
+    // Antigravity: hooks.json (the hook wiring) and the standing + phase method
+    // rule pointers are all inside .agent/.
+    for (const [file, what] of [
+      ["hooks.json", "hook wiring"],
+      ["rules/aidlc.md", "standing method rule (always_on read instruction)"],
+      ["rules/phase-1-ideation.md", "Ideation phase rule (model_decision read instruction)"],
+      ["rules/phase-2-inception.md", "Inception phase rule (model_decision read instruction)"],
+      ["rules/phase-3-construction.md", "Construction phase rule (model_decision read instruction)"],
+      ["rules/phase-4-operation.md", "Operation phase rule (model_decision read instruction)"],
+    ] as const) {
+      results.push({
+        pass: existsSync(join(projectDir, harness, file)),
+        label: `${file} present (${what})`,
+        fix: projectedFileRepair("antigravity", `.agent/${file}`),
+      });
+    }
   } else if (harness === ".aidlc") {
     // opencode: the wiring config is the project-root opencode.json/jsonc
     // (permissions + the method-include instructions glob) plus the /aidlc
@@ -7490,6 +7510,7 @@ const SCAN_EXCLUDE = new Set([
   ".opencode",
   ".aidlc",
   ".cursor",
+  ".agent",
   "aidlc-docs",
   "node_modules",
   ".git",

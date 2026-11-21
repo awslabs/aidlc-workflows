@@ -870,6 +870,7 @@ function modelHarness(value: string): ModelHarness {
     value === "codex" ||
     value === "copilot" ||
     value === "cursor" ||
+    value === "antigravity" ||
     value === "kiro" ||
     value === "kiro-ide" ||
     value === "opencode"
@@ -8863,6 +8864,9 @@ function firstRunNextCommands(distribution: string): [string, string] {
   if (distribution === "cursor") {
     return ["cursor                         open Cursor in this repo", '/aidlc "what you want built"  describe your first intent'];
   }
+  if (distribution === "antigravity") {
+    return ["antigravity                    open Antigravity in this repo", '/aidlc "what you want built"  describe your first intent'];
+  }
   if (distribution === "kiro-ide") {
     return ["kiro                          open Kiro IDE (or kiro-cli --v3) in this repo", '/aidlc "what you want built"  describe your first intent'];
   }
@@ -11706,7 +11710,7 @@ function prepareModelsSection(
     // On Cursor and GitHub Copilot the session sets every agent's model and
     // effort, so a clean check names the session, as doctor does, not the
     // recorded policy.
-    const sessionSet = harness === "cursor" || harness === "copilot";
+    const sessionSet = harness === "cursor" || harness === "antigravity" || harness === "copilot";
     // On Kiro's row the agent files' models are checked against Kiro CLI's
     // list whether or not they match the record.
     const agentModels = harness === "kiro-ide" ? kiroAgentModelReport(kiroIdeAgentFileModels(selected.root)) : null;

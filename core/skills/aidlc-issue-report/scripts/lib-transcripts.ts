@@ -277,7 +277,7 @@ function subagent(s: Summary, name: string) {
 // may be given `--` before the words, and Cursor's adapter may take no route (`adapter cursor`). A copied tree may run
 // its adapter script itself (`aidlc-copilot-adapter.ts <route>`, `aidlc-cursor-adapter.ts <event>`).
 const AIDLC_HOOK_COMMAND =
-  /\b(?:aidlc(?:\.ts|\.exe|\.cmd)?(?:\\?["'])?\s+(?:--\s+)?engine\s+(?:hook\s+(?<hook>[a-z0-9-]+)|adapter\s+(?<harness>[a-z-]+)(?:\s+(?<route>[a-z][a-z0-9-]*))?)|aidlc-(?<script>copilot|cursor|codex|kiro)-adapter\.ts(?:\\?["'])?\s+(?<scriptRoute>[a-z][a-z0-9-]*))\b/i;
+  /\b(?:aidlc(?:\.ts|\.exe|\.cmd)?(?:\\?["'])?\s+(?:--\s+)?engine\s+(?:hook\s+(?<hook>[a-z0-9-]+)|adapter\s+(?<harness>[a-z-]+)(?:\s+(?<route>[a-z][a-z0-9-]*))?)|aidlc-(?<script>copilot|cursor|codex|kiro|antigravity)-adapter\.ts(?:\\?["'])?\s+(?<scriptRoute>[a-z][a-z0-9-]*))\b/i;
 // The hosts' own refusal records, each read only from a failed result (a file the agent read can quote any of
 // them). Claude Code starts a PreToolUse refusal with `PreToolUse:<tool> hook error: `, then the hook's command in
 // brackets when the hook only exited 2; a JSON deny, which AI-DLC prints on Claude, gives the reason alone, and an

@@ -90,6 +90,7 @@ guide in the table below. The complete walkthrough is in
 | Kiro CLI (V2) >= 2.6 | `aidlc config --harness kiro-v2` | `kiro-cli --v2` (Kiro CLI 2.21.4 or later; for an older one, see [Kiro CLI (V2) prerequisites](docs/guide/harnesses/kiro.md#kiro-cli-v2-prerequisites)) | `/aidlc` | [Kiro CLI (V2)](docs/guide/harnesses/kiro.md#kiro-cli-v2) |
 | Codex CLI >= 0.145.0 | `aidlc config --harness codex` | `codex` | `$aidlc` | [Codex CLI](docs/guide/harnesses/codex-cli.md) |
 | Cursor | `aidlc config --harness cursor` | Open Cursor or run `agent` | `/aidlc` | [Cursor](docs/guide/harnesses/cursor.md) |
+| Antigravity | `aidlc config --harness antigravity` | Open Antigravity or run `agy` | `/aidlc` | [Antigravity](docs/guide/harnesses/antigravity.md) |
 | opencode >= 1.18.29 / OpenCode 2 | `aidlc config --harness opencode` | `opencode` | `/aidlc` | [opencode](docs/guide/harnesses/opencode.md) |
 | GitHub Copilot CLI >= 1.0.74 / VS Code >= 1.130 | `aidlc config --harness copilot` | Copilot CLI or VS Code | `/aidlc` | [GitHub Copilot](docs/guide/harnesses/copilot.md) |
 

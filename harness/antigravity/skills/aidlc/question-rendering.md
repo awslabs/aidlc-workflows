@@ -1,0 +1,174 @@
+# Question Rendering — Antigravity harness annex
+
+This file defines how THIS harness renders the structured questions that
+`{{HARNESS_DIR}}/aidlc-common/protocols/stage-protocol.md` section "Structured questions" requires.
+The protocol and stage files are harness-neutral: they say *present a
+structured question* and carry a fenced ` ```question ` spec block. This annex
+is the one place that binds that contract to a concrete mechanism.
+
+## Never echo the spec (non-negotiable)
+
+A ` ```question ` fenced block is **INPUT to the `ask_question` tool, never
+output to render**. The orchestrator MUST translate every ` ```question ` spec
+into an actual `ask_question` tool call, and MUST NEVER echo, print, paste,
+or "quote back" the fenced block, or any of its field lines (`prompt:`,
+`header:`, `multiSelect:`, `options:`, `label:`, `description:`), into the chat
+transcript. The user must never see the raw fence; they see only the native
+`ask_question` prompt.
+
+Echoing the fence as literal text is a **protocol violation**, not a stylistic
+choice. It:
+
+- produces a non-interactive wall of text the user cannot click or select;
+- loses the built-in "Other" escape hatch that `ask_question` provides;
+- is inconsistent with every correct rendering elsewhere in the same session.
+
+If you find yourself about to write a triple-backtick `question` block into your
+reply, STOP: that content belongs inside an `ask_question` tool call, not in
+the message body.
+
+This applies to **every** structured-question site, including but not limited to:
+
+- approval gates (every stage completion);
+- the questions interaction-mode choice (Guide me / I'll edit the file / Chat),
+  when the step asks for it (otherwise say the step's notice and take the
+  questions the way it says; stage-protocol.md §3 Step 2);
+- the ladder prompt (autonomy mode after the walking skeleton);
+- halt-and-ask on Bolt failure (Retry / Skip / Abort);
+- consolidated-summary confirmation before artifact generation;
+- the section 13 learnings question after a correction (keep for this project, for the team, or not).
+
+(Literal ` ```question ` fences legitimately remain in framework documentation
+like THIS file and the stage-protocol because they are authoring specs, not chat
+output. In the stage-protocol those specs are normative prompt templates: when
+the surrounding instruction requires a question, their content MUST be rendered
+through this annex. This annex's mapping examples are illustrative. The
+prohibition is about echoing raw fences in live orchestration turns.)
+
+## Mechanism
+
+On Antigravity, every structured question renders via the **`ask_question` modal
+tool**: the fenced ` ```question ` spec is the input, the tool call is the
+output, never the other way around. Map the spec fields 1:1:
+
+| Spec field | ask_question field |
+|------------|----------------------|
+| `prompt` | `questions[0].question` |
+| `header` | `questions[0].header` |
+| `multiSelect` | `questions[0].multiSelect` |
+| `options[].label` | `questions[0].options[].label` |
+| `options[].description` | `questions[0].options[].description` |
+
+Example — this spec:
+
+```question
+prompt: "[Stage Name] complete. How would you like to proceed?"
+header: Approval
+multiSelect: false
+options:
+  - label: Approve
+    description: Continue to [next stage]
+  - label: Request Changes
+    description: Provide revision feedback
+```
+
+renders as:
+
+```
+ask_question({
+  questions: [{
+    question: "[Stage Name] complete. How would you like to proceed?",
+    header: "Approval",
+    multiSelect: false,
+    options: [
+      { label: "Approve", description: "Continue to [next stage]" },
+      { label: "Request Changes", description: "Provide revision feedback" }
+    ]
+  }]
+})
+```
+
+## Mandatory consolidated-summary checkpoint
+
+This checkpoint applies only when `directive.ceremony.summary_confirmation === "on"`. When it is `"off"`, generate directly from the answers: no summary-confirmation prompt, confirmation entry, or receipt. Required stage questions and other human decisions, including Plan Approval and the stage approval gate, are unchanged.
+
+After guided or chat file-backed Q&A (and whenever a stage definition requires
+it explicitly, such as Requirements Analysis), the stage protocol requires a
+separate confirmation before any stage artifact is generated. Append or update
+`## Consolidated Summary Confirmation` in the questions file with the summary,
+the prompt, both options without A/B file-letter prefixes, and a blank
+`[Answer]:` tag, then render the two semantic options through
+`ask_question`. The question's own text starts with the summary bullets, so
+the person reads what they confirm in the picker itself; the recorded decision
+stays the last line alone:
+
+```
+ask_question({
+  questions: [{
+    question: "- <each answer, as a summary bullet>\n\nDoes this all look correct before I generate the artifact?",
+    header: "Confirm",
+    multiSelect: false,
+    options: [
+      {
+        label: "Looks correct",
+        description: "Generate the artifact from these answers"
+      },
+      {
+        label: "Request changes",
+        description: "Revise one or more answers before generation"
+      }
+    ]
+  }]
+})
+```
+
+This is a mandatory human checkpoint, not the stage approval gate. Before
+rendering it, run the checkpoint-specific `aidlc-log.ts decision` command from
+`SKILL.md`, including the exact `--questions-file` and any `--unit` / `--single`
+identity. END THE TURN after presenting it and wait for the user's response.
+Then persist `[Answer]: Looks correct` or `[Answer]: Request changes` exactly
+and run the matching checkpoint-specific `aidlc-log.ts answer` command. Strip
+any source letter, punctuation, and option description before writing:
+`[Answer]: A. Looks correct`, `[Answer]: 1. Looks correct`, `[Answer]: A`, and
+a self-selected answer are invalid. On Request changes, when their reply
+already says what should change, those words are the feedback; otherwise ask
+**"What should change?"** and END THE TURN again, and do not update any answer
+until that feedback arrives. Then record the feedback, update the affected answers, reset this tag
+to blank, and present the consolidated summary again. Do not generate the
+artifact until the file contains the human's explicit `[Answer]: Looks correct`
+and the receipt command succeeds. Never merge this checkpoint with the later
+reviewer, learnings, or approval steps.
+
+## Harness-specific behaviors
+
+- **Approval gate `[next stage]`**: on an approval question, render the
+  `Continue to [next stage]` placeholder from the `next_stage` field verbatim
+  (e.g. `Continue to NFR Requirements`): the one on the reply that opened the
+  gate (`report --result awaiting-approval` or `revised`), which includes any
+  plan change made during the stage, else the run-stage directive's. Render
+  `Complete workflow` when `next_stage` is null. Never guess the next stage.
+- **Approval gate Accept as-is**: that reply, or the step that shows the gate
+  again, says whether the gate offers a third option. With
+  `accept_as_is: "offered"`, add `Accept as-is` third and
+  name the round from `revision_cycle`; with `"next-revision"`, keep two options
+  and add the note that it comes after one more revision. Never count the
+  rounds yourself.
+- **Batching limits**: max 4 questions per `ask_question` call, max 4
+  options per question, and **at least 2 options per question**. A question
+  from the questions file with more options is asked as a numbered list
+  instead (stage-protocol.md Step 3a; a multi-select ends "Reply with all
+  numbers that apply (e.g. 1, 3)."); the questions file retains the full
+  option set as the authoritative record. Never send a one-option call: the
+  tool rejects it before the user can answer.
+- **"Other" escape**: `ask_question` has a built-in "Other" option, always
+  available — do NOT add an explicit Other option to the spec's options list
+  for interactive batches. Claude Code labels that row "Type something", so
+  that is its name whenever you mention it to the person: "Pick "Type
+  something" on any question to answer in your own words or talk it through." (Questions *files* still end every question with
+  `X. Other (please specify)` per protocol §3 — the file format is
+  harness-neutral.)
+- **Answer capture**: the user's selection returns as the exact option label;
+  record it verbatim (protocol: never summarize User Input).
+- **Long prompts**: the question body renders at full terminal width and wraps
+  gracefully (multi-line wrap verified on macOS before each release) — see
+  `{{HARNESS_DIR}}/knowledge/aidlc-shared/worktree-info-schema.md` for the long-path fallback.

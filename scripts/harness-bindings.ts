@@ -13,6 +13,7 @@
 // renamed heading is caught at package time instead of shipping a gap.
 
 export const BINDING_HEADINGS: Readonly<Record<string, string>> = {
+  antigravity: "Antigravity",
   claude: "Claude Code",
   kiro: "Kiro CLI",
   "kiro-ide": "Kiro IDE",
