@@ -516,6 +516,17 @@ describe("a solo home looks for a teammate's take only once its Unit walk has be
     (spawnSync("ps", ["-eo", "args"], { encoding: "utf-8" }).stdout ?? "").split("\n").filter((line) => line.includes(`127.0.0.1:${port}`));
 
   test("a remote that does not answer holds the step a few seconds at most, nothing is said, and off Windows nothing of the look keeps running", async () => {
+    // The bound is the cost of the look, not the speed of the box: the same step against a remote that answers at
+    // once is the baseline, and the silent one may take the look's ceiling more, and a little. Its own home, since a
+    // second step at the same Unit boundary makes no look.
+    const LOOK_CEILING_MS = 5_000; // QUIET_LOOK_CEILING_MS in core/tools/aidlc-unit.ts
+    const timed = (dir: string) => {
+      const { env } = traced();
+      const started = Date.now();
+      const step = next(dir, { ...env, GIT_ALLOW_PROTOCOL: "file:http" });
+      return { step, ms: Date.now() - started };
+    };
+    const baseline = timed(betweenUnits().dir);
     const home = betweenUnits();
     const asked = join(tempDir("silent-host"), "asked.txt");
     const child = spawn(process.execPath, ["-e", `
@@ -528,12 +539,14 @@ describe("a solo home looks for a teammate's take only once its Unit walk has be
     servers.push(() => child.kill());
     const port = await new Promise<string>((resolve) => child.stdout!.once("data", (chunk: Buffer) => resolve(chunk.toString().trim())));
     git(home.dir, ["remote", "set-url", "origin", `http://127.0.0.1:${port}/org/ws.git`]);
-    const { env } = traced();
-    const started = Date.now();
-    const step = next(home.dir, { ...env, GIT_ALLOW_PROTOCOL: "file:http" });
-    expect(Date.now() - started, JSON.stringify(step)).toBeLessThan(8000);
+    const silent = timed(home.dir);
+    const times = `silent step ${silent.ms} ms, baseline step ${baseline.ms} ms`;
+    console.log(`look timing: ${times}`);
+    expect(silent.ms - baseline.ms, `${times}: ${JSON.stringify(silent.step)}`).toBeLessThan(LOOK_CEILING_MS + 2_000);
+    // A look with no limit at all fails here by itself, whatever the baseline.
+    expect(silent.ms, times).toBeLessThan(30_000);
     expect(existsSync(asked)).toBe(true);
-    expect(JSON.stringify(step.change_notices ?? [])).not.toContain("could not be reached");
+    expect(JSON.stringify(silent.step.change_notices ?? [])).not.toContain("could not be reached");
     // On Windows what the look started ends at its own limits (git() in aidlc-unit.ts).
     if (process.platform !== "win32") expect(runningFor(port)).toEqual([]);
   });
