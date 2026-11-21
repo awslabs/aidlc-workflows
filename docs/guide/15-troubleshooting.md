@@ -397,7 +397,12 @@ status line is not shipped there: each person turns it on for themselves with
 For a manual copy,
 replace the complete harness root from the same versioned
 `runtime/<harness>/` archive (a copy never replaces your `.gitignore` or
-`AGENTS.md`); do not patch one hook command in isolation. The manual archive is Bun-shaped and
+`AGENTS.md`); do not patch one hook command in isolation. On Kiro, follow the
+guide's manual-copy steps instead:
+[Kiro](harnesses/kiro.md#versioned-manual-copy-alternative) copies
+`runtime/kiro-ide/` and
+[Kiro CLI (V2)](harnesses/kiro.md#kiro-cli-v2-versioned-manual-copy-alternative)
+copies `runtime/kiro/`. The manual archive is Bun-shaped and
 does not require the native `aidlc` executable.
 
 ### Hooks disabled globally (`disableAllHooks`)

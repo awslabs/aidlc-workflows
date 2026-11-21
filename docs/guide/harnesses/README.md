@@ -67,7 +67,11 @@ For a manual copy, install Bun, download a specific release's
 `aidlc-copy-runtime-X.Y.Z.tar.gz`, extract it, copy the complete
 `runtime/<harness>/` directory, and run its own setup once (see
 [Copy Channel](../18-install-and-lifecycle.md#copy-channel)); the native `aidlc`
-executable is not required. A copy never replaces your `.gitignore` or
+executable is not required. On Kiro, follow the guide's manual-copy steps
+instead: [Kiro](kiro.md#versioned-manual-copy-alternative) copies
+`runtime/kiro-ide/` and
+[Kiro CLI (V2)](kiro.md#kiro-cli-v2-versioned-manual-copy-alternative) copies
+`runtime/kiro/`, and both say how to keep the project's own Kiro settings. A copy never replaces your `.gitignore` or
 `AGENTS.md`; AI-DLC adds its own lines to them.
 Do not copy generated trees from a repository checkout. Framework developers may instead run
 `bun scripts/package.ts` in a source checkout to materialize the ignored local

@@ -43,8 +43,13 @@ Prefer to manage the project files yourself, or cannot install a native
 executable? The manual-copy path is the one place Bun is needed: install
 [Bun](https://bun.sh/), download `aidlc-copy-runtime-X.Y.Z.tar.gz` from the
 [release](https://github.com/awslabs/aidlc-workflows/releases/latest), and copy
-the complete `runtime/<harness>/` directory into your project. This path does
-not require the native `aidlc` command.
+the complete `runtime/<harness>/` directory into your project. On Kiro, follow
+the guide's manual-copy steps instead:
+[Kiro](docs/guide/harnesses/kiro.md#versioned-manual-copy-alternative) copies
+`runtime/kiro-ide/` and
+[Kiro CLI (V2)](docs/guide/harnesses/kiro.md#kiro-cli-v2-versioned-manual-copy-alternative)
+copies `runtime/kiro/`, and both say how to keep the project's own Kiro settings. This path
+does not require the native `aidlc` command.
 
 ### 2. Configure a project
 
