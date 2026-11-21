@@ -1,0 +1,18 @@
+{
+  "name": "retrospective",
+  "version": "0.1.0",
+  "description": "Optional end-of-delivery retrospective stage. Lane 1 (primary): co-author durable, customer-owned code documentation (ADR, codebase orientation, known-limitations register, code lessons). Lane 2 (secondary): harvest AI-DLC process learnings from the stage diaries and promote kept candidates through the deterministic learnings path. Opt-in: ships its own scope, so a team turns it on and nobody else meets a new gate at the end of Operation.",
+  "author": {
+    "name": "AWS AIDLC"
+  },
+  "dependencies": [
+    "core"
+  ],
+  "aidlc": {
+    "contributes": {
+      "stages": "stages/",
+      "scopes": "scopes/",
+      "tools": "tools/"
+    }
+  }
+}
