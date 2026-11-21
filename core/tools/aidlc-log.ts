@@ -5099,6 +5099,9 @@ function handleReview(args: string[]): void {
         recordVerdict,
         dispatchAgent,
         [
+          // The request that made the review file's folder says so where it
+          // hands over the path; no persona or protocol repeats it.
+          ...(reviewFile === null ? [] : [`Your review file is ${reviewFile} (its folder already exists).`]),
           ...(otherWork.length > 0 ? [otherWorkNote(otherWork, "review")] : []),
           ...(planChange === null ? [] : [planChange]),
           ...(leadLine === null ? [] : [leadLine]),
