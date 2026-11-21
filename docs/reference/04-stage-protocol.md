@@ -1273,9 +1273,13 @@ change. See
    as a refused completion. It returns `reviewed_at` too, the UTC time this
    review is dated: the dispatch brief carries it as `Date for this review:`
    and the reviewer writes its `**Date:**` line from the brief, so no reviewer
-   runs a command of its own for the time. On a stage that builds in the
+   runs a command of its own for the time. Its `agent_note` gives first the
+   line the brief carries word for word that names the review file and says
+   its folder already exists (`Your review file is <reviewFile> (its folder
+   already exists).`): the request made that folder, so the review is one
+   plain file write. On a stage that builds in the
    workspace, when another open piece of work in this checkout claims files in
-   its Units' source manifests, its `agent_note` gives the line the brief
+   its Units' source manifests, its `agent_note` gives one more line the brief
    carries word for word: those files are that work's, not this work's to
    review (the same set `other_work_note` names to the build). On Code
    Generation, when the plan the person approved changed after that approval

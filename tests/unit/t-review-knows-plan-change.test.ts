@@ -10,8 +10,11 @@
 // the real `next`, human-turn hook, plan-approval guard, `testing-posture
 // brief` and `log review` over one Code Generation target and check:
 //
+//   - every review request's `agent_note` first carries the line for the
+//     reviewer's brief that names its review file and says its folder already
+//     exists, and the folder is there;
 //   - relaxed and off, one Unit or stage level: the review request's
-//     `agent_note` carries one line for the reviewer's brief, naming what
+//     `agent_note` carries one more line for the reviewer's brief, naming what
 //     changed in the change line's own words, that the person was not asked
 //     again, and that the earlier approval stays the record, with the record
 //     file named only while it is still that approval's;
@@ -19,15 +22,15 @@
 //     policy word: strict with the check switched off carries it, off with the
 //     check switched back on carries none;
 //   - strict after the person approved the changed plan, and any review with
-//     no change since the approval, are byte for byte what main hands over
-//     (pinned as literals of main's words, never through the function under
+//     no change since the approval, carry the folder line and nothing more,
+//     byte for byte (pinned as literals, never through the function under
 //     change), with the same JSON keys;
 //   - beside another open work's line, both lines are carried.
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join, relative } from "node:path";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join, relative } from "node:path";
 import {
   AIDLC_SRC,
   cleanupTestProject,
@@ -61,8 +64,8 @@ const STEPS = [
   "Step 4: Update the brief doc comment",
 ];
 const INSTRUCTIONS = "# Unit Test Instructions\n\nRun `bun test src/cart.test.ts`.\n";
-// The review request's JSON keys on main, for a first request with nothing
-// else to carry: nothing new is handed over beside the note.
+// The review request's JSON keys for a first request with only the folder
+// line to carry: nothing new is handed over beside the note.
 const MAIN_KEYS = ["agent_note", "emitted", "recordVerdict", "requestId", "reviewFile", "reviewed_at", "stage"];
 
 interface Request {
@@ -232,10 +235,18 @@ function requestReview(proj: string, unit: string | null = UNIT): Request {
   };
 }
 
-// main's note for a review request with nothing to carry, word for word.
-const mainNote = (request: Request): string =>
+// The dispatch sentence every review request's note opens with, word for word.
+const dispatchNote = (request: Request): string =>
   `Dispatch ${REVIEWER} as a subagent and have it write ${request.reviewFile}: that file is the reviewer's, so never ` +
   `write it yourself and never stand in for it. When its verdict is back, record it with \`${request.recordVerdict}\`.`;
+
+// The line every review request has the brief carry first, word for word.
+const folderLine = (request: Request): string =>
+  `Your review file is ${request.reviewFile} (its folder already exists).`;
+
+// The note of a review request whose brief carries the folder line and nothing more.
+const folderNote = (request: Request): string =>
+  `${dispatchNote(request)} Its brief carries this line word for word: ${folderLine(request)}`;
 
 const changeLine = (proj: string, unit: string | null = UNIT, record = true): string =>
   "The person approved this code plan, and what they approved changed after that: step 4 now says " +
@@ -254,7 +265,7 @@ describe("the review of an approved plan that changed and built without asking a
       build(proj);
       const request = requestReview(proj);
       expect(request.agent_note).toBe(
-        `${mainNote(request)} Its brief carries this line word for word: ${changeLine(proj)}`,
+        `${dispatchNote(request)} Its brief carries these lines word for word: ${folderLine(request)} ${changeLine(proj)}`,
       );
       expect(request.keys).toEqual(MAIN_KEYS);
     });
@@ -267,7 +278,7 @@ describe("the review of an approved plan that changed and built without asking a
     build(proj, null);
     const request = requestReview(proj, null);
     expect(request.agent_note).toBe(
-      `${mainNote(request)} Its brief carries this line word for word: ${changeLine(proj, null)}`,
+      `${dispatchNote(request)} Its brief carries these lines word for word: ${folderLine(request)} ${changeLine(proj, null)}`,
     );
   });
 
@@ -279,7 +290,7 @@ describe("the review of an approved plan that changed and built without asking a
     writeFileSync(questionsPath(proj), `${readFileSync(questionsPath(proj), "utf-8")}\nA note added later.\n`, "utf-8");
     const request = requestReview(proj);
     expect(request.agent_note).toBe(
-      `${mainNote(request)} Its brief carries this line word for word: ${changeLine(proj, UNIT, false)}`,
+      `${dispatchNote(request)} Its brief carries these lines word for word: ${folderLine(request)} ${changeLine(proj, UNIT, false)}`,
     );
   });
 
@@ -291,13 +302,13 @@ describe("the review of an approved plan that changed and built without asking a
     build(proj);
     const request = requestReview(proj);
     expect(request.agent_note).toBe(
-      `${mainNote(request)} Its brief carries this line word for word: ${changeLine(proj)}`,
+      `${dispatchNote(request)} Its brief carries these lines word for word: ${folderLine(request)} ${changeLine(proj)}`,
     );
   });
 });
 
-describe("every other review request is as main hands it over", () => {
-  test("strict, the person approved the changed plan when asked again: nothing is added", () => {
+describe("every other review request carries the folder line and nothing more", () => {
+  test("strict, the person approved the changed plan when asked again: only the folder line", () => {
     const proj = project("strict");
     approvedPlan(proj);
     addToPlan(proj);
@@ -305,21 +316,21 @@ describe("every other review request is as main hands it over", () => {
     expect(next(proj).plan_approval?.status).toBe("approved");
     build(proj);
     const request = requestReview(proj);
-    expect(request.agent_note).toBe(mainNote(request));
+    expect(request.agent_note).toBe(folderNote(request));
     expect(request.keys).toEqual(MAIN_KEYS);
   });
 
-  test("off, nothing changed since the approval but the ticked boxes: nothing is added", () => {
+  test("off, nothing changed since the approval but the ticked boxes: only the folder line", () => {
     const proj = project("off");
     approvedPlan(proj);
     build(proj);
     writeFileSync(planPath(proj), planText(proj, STEPS, true), "utf-8");
     const request = requestReview(proj);
-    expect(request.agent_note).toBe(mainNote(request));
+    expect(request.agent_note).toBe(folderNote(request));
     expect(request.keys).toEqual(MAIN_KEYS);
   });
 
-  test("off, built on the changed plan, then the check switched back on before the review: nothing is added", () => {
+  test("off, built on the changed plan, then the check switched back on before the review: only the folder line", () => {
     const proj = project("off");
     approvedPlan(proj);
     addToPlan(proj);
@@ -330,7 +341,24 @@ describe("every other review request is as main hands it over", () => {
       "- **Guard Policy**: off (set by you)\n- **Guards On**: plan-approval (set by you)",
     ), "utf-8");
     const request = requestReview(proj);
-    expect(request.agent_note).toBe(mainNote(request));
+    expect(request.agent_note).toBe(folderNote(request));
+  });
+});
+
+describe("every review request hands over its review file with the fact that its folder is made", () => {
+  test("the brief carries the review file and that its folder already exists, and the folder is there", () => {
+    const proj = project("off");
+    approvedPlan(proj);
+    build(proj);
+    writeFileSync(planPath(proj), planText(proj, STEPS, true), "utf-8");
+    const request = requestReview(proj);
+    expect(existsSync(dirname(join(proj, request.reviewFile))), request.reviewFile).toBe(true);
+    expect(request.agent_note).toBe(
+      `Dispatch ${REVIEWER} as a subagent and have it write ${request.reviewFile}: that file is the reviewer's, so ` +
+        `never write it yourself and never stand in for it. When its verdict is back, record it with ` +
+        `\`${request.recordVerdict}\`. Its brief carries this line word for word: Your review file is ` +
+        `${request.reviewFile} (its folder already exists).`,
+    );
   });
 });
 
