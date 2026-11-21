@@ -66,6 +66,7 @@ To reshape *how* AI-DLC behaves — add a stage or an agent, define a scope, aut
 | [Spaces and Intents](03-spaces-and-intents.md) | The workspace layout: running many pieces of work across spaces and intents |
 | [Phases and Stages](04-phases-and-stages.md) | The 5 phases and 33 stages explained |
 | [Scopes, Depth, and Test Strategy](05-scopes-and-depth.md) | How to choose and override scope/depth/test strategy |
+| [Interactive Composer](05-1-interactive-composer.md) | Generate the `/aidlc` command that starts a piece of work, for any scope, settings and stages |
 | [Agents](06-agents.md) | The 14-agent roster: 11 domain experts, 2 reviewers, and the composer |
 | [Agent deep dives](agents/README.md) | Per-agent reference pages: responsibilities, stages, knowledge |
 | [Interaction Modes](07-interaction-modes.md) | Guide Me / Edit File / Chat and approval gates |

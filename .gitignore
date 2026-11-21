@@ -20,6 +20,10 @@ build/
 /.cache/
 /.venv/
 
+# Interactive composer data, generated from core/ by scripts/docs-composer-data.ts
+# (run by .github/workflows/docs.yml before the build, never committed)
+/docs/assets/composer/composer-data.json
+
 # Test verbose logs
 tests/logs/
 
