@@ -26,11 +26,15 @@
 //      them) is told which files were written and that a stage step hands it
 //      the rules in full, never sent to read them before AI-DLC work: the
 //      shipped memory is too large to inline, and a shell read of seven files
-//      stops for the person.
+//      stops for the person. What only this team decided (a saved conversation
+//      language, scope overrides) is in team.md and project.md, so the note
+//      still carries their text when it was written just now: team.md first,
+//      as the rule chain reads them, project.md alone when the two do not fit.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
+  appendFileSync,
   cpSync,
   existsSync,
   mkdirSync,
@@ -599,6 +603,16 @@ describe("t-active-space-includes: the first chat in a clone is told where the m
     return root;
   }
 
+  const MEMORY = "aidlc/spaces/default/memory";
+
+  // A conversation-language switch the learnings step saved, as it saves one.
+  function saveLanguage(root: string, language: string): string {
+    const rule = `Conversation language: ${language}.`;
+    const path = join(root, MEMORY, "project.md");
+    writeFileSync(path, readFileSync(path, "utf-8").replace("## Corrections", `## Corrections\n\n- ${rule}`));
+    return rule;
+  }
+
   function startContext(root: string, harness: string): string {
     const env: Record<string, string | undefined> = { ...process.env };
     for (const key of HOST_ENV) delete env[key];
@@ -632,6 +646,49 @@ describe("t-active-space-includes: the first chat in a clone is told where the m
         // The next chat finds the copy current: nothing is said of the method files.
         expect(startContext(root, harness)).not.toContain("were written for space");
       });
+
+      test(`${harness}, ${withWork ? "with this machine's work selected" : "no work yet"}: a saved conversation language reaches the first chat in the note`, () => {
+        const root = clone(harness, withWork);
+        const rule = saveLanguage(root, "Japanese");
+        const context = startContext(root, harness);
+        expect(context).toContain(`- ${rule}`);
+        const team = context.indexOf(`<memory-file path="${MEMORY}/team.md">`);
+        const project = context.indexOf(`<memory-file path="${MEMORY}/project.md">`);
+        expect(team).toBeGreaterThan(-1);
+        expect(project).toBeGreaterThan(team);
+        expect(context).not.toContain(`<memory-file path="${MEMORY}/org.md">`);
+        expect(context).toContain("The text of team.md and project.md is below; the others are there for a question about the team's practices, and a stage step hands you the rules it needs in full.");
+        // The sentence says what the blocks are before them.
+        expect(context.indexOf("a stage step hands you the rules it needs in full")).toBeLessThan(team);
+        expect(context).not.toContain("before acting on AI-DLC work");
+      });
     }
   }
+
+  test("a grown team.md: the note carries project.md alone; both grown: the files are only named", () => {
+    const root = clone("claude", false);
+    const rule = saveLanguage(root, "Japanese");
+    appendFileSync(join(root, MEMORY, "team.md"), "\n- Every queue has a dead-letter alarm.\n".repeat(250));
+    const context = startContext(root, "claude");
+    expect(context).toContain(`- ${rule}`);
+    expect(context).toContain(`<memory-file path="${MEMORY}/project.md">`);
+    expect(context).not.toContain(`<memory-file path="${MEMORY}/team.md">`);
+    expect(context).toContain("The text of project.md is below; the others are there for a question about the team's practices, and a stage step hands you the rules it needs in full.");
+
+    const grown = clone("claude", false);
+    appendFileSync(join(grown, MEMORY, "team.md"), "\n- Every queue has a dead-letter alarm.\n".repeat(250));
+    appendFileSync(join(grown, MEMORY, "project.md"), "\n- Every endpoint has a contract test.\n".repeat(250));
+    const named = startContext(grown, "claude");
+    expect(named).not.toContain("<memory-file");
+    expect(named).toContain("They are there for a question about the team's practices; a stage step hands you the rules it needs in full.");
+  });
+
+  test("a file the chat already holds is not handed over again: only org.md was written", () => {
+    const root = clone("claude", false);
+    startContext(root, "claude");
+    appendFileSync(join(root, MEMORY, "org.md"), "\n- Every release names its owner.\n");
+    const context = startContext(root, "claude");
+    expect(context).toContain("just now, after the instructions were read: org.md.");
+    expect(context).not.toContain("<memory-file");
+  });
 });
