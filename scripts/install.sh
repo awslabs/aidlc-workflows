@@ -13,6 +13,8 @@ OFFLINE=0
 CA_BUNDLE=${AIDLC_CA_BUNDLE:-}
 MODE=human
 PROFILE=
+ASSUME_YES=0
+NO_MODIFY_PATH=0
 PROGRESS_ACTIVE=0
 ALLOW_ROOT=0
 case "${AIDLC_ALLOW_ROOT:-}" in 1|true) ALLOW_ROOT=1 ;; esac
@@ -84,7 +86,7 @@ fail() {
 }
 
 usage_text() {
-  echo "Usage: install.sh [--version <x.y.z|x.y.z-preview.YYYYMMDD.N>] [--from <dir>] [--offline] [--profile <startup-file>] [--json|--quiet] [--no-color] [--yes] [--allow-root]"
+  echo "Usage: install.sh [--version <x.y.z|x.y.z-preview.YYYYMMDD.N>] [--from <dir>] [--offline] [--profile <startup-file>] [--no-modify-path] [--json|--quiet] [--no-color] [--yes] [--allow-root]"
 }
 
 usage() {
@@ -117,7 +119,8 @@ while [ "$#" -gt 0 ]; do
     --json) MODE=json; shift ;;
     --quiet) [ "$MODE" = "json" ] || MODE=quiet; shift ;;
     --no-color) shift ;;
-    --yes) shift ;;
+    --no-modify-path) NO_MODIFY_PATH=1; shift ;;
+    --yes) ASSUME_YES=1; shift ;;
     --allow-root) ALLOW_ROOT=1; shift ;;
     -h|--help) usage_text; exit 0 ;;
     *) usage "unknown argument: $1" ;;
@@ -519,6 +522,16 @@ if [ -n "$PROFILE" ]; then
   profile_message=$(sed -n '1p' "$TMP/profile.out")
 fi
 
+startup_file() {
+  case "$(basename "${SHELL:-}")" in
+    zsh) printf '%s' "$HOME/.zshrc" ;;
+    bash)
+      if [ -f "$HOME/.bash_profile" ]; then printf '%s' "$HOME/.bash_profile"; else printf '%s' "$HOME/.bashrc"; fi
+      ;;
+    *) printf '' ;;
+  esac
+}
+
 path_command=
 case ":$PATH:" in
   *":$BIN_DIR:"*) ;;
@@ -526,6 +539,29 @@ case ":$PATH:" in
     PATH="$BIN_DIR:$PATH" command -v aidlc >/dev/null 2>&1 ||
       fail 4 failed "installed aidlc is not resolvable after applying the PATH update"
     path_command="export PATH=\"$BIN_DIR:\$PATH\""
+    if [ -z "$PROFILE" ] && [ "$NO_MODIFY_PATH" -eq 0 ] && [ "$MODE" = "human" ] && [ -t 0 ]; then
+      candidate=$(startup_file)
+      if [ -n "$candidate" ]; then
+        answer=
+        if [ "$ASSUME_YES" -eq 1 ]; then
+          answer=yes
+        else
+          printf '%s is not on PATH in new shells.\nAdd this block to %s?\n\n  # BEGIN AI-DLC:PATH\n  %s\n  # END AI-DLC:PATH\n\n' \
+            "$BIN_DIR" "$candidate" "$path_command"
+          printf 'Add it now? [y/N] '
+          read -r answer || answer=
+        fi
+        case "$answer" in
+          y|Y|yes|YES)
+            "$TMP/$BINARY" system lifecycle install-profile \
+              --profile "$candidate" --bin-dir "$BIN_DIR" --quiet >"$TMP/profile.out" ||
+              fail 4 failed "$(sed -n '1p' "$TMP/profile.out")"
+            PROFILE=$candidate
+            profile_message=$(sed -n '1p' "$TMP/profile.out")
+            ;;
+        esac
+      fi
+    fi
     ;;
 esac
 
