@@ -333,6 +333,10 @@ is still there (a write-fired check such as `type-check`). A check that could
 not run, or a pass recorded with a note (tool unavailable), evaluated nothing and
 does not clear an earlier failure; a Unit's own gate names that Unit's outputs
 and writes only; with Sensors off nothing is said.
+When the gate opens, the reply's agent-only `message` also names the detail
+file of every such failure ("The findings are in ..."), from the same reading
+(`failedCheckReport`), so the agent reads the findings there instead of
+listing the sensors folder; the narration and the gate box never carry the path.
 A `blocking` gate binding proceeds only on a verified pass. Reported findings,
 dispatcher exit/spawn/timeout failures, malformed or mismatched verdicts,
 `SENSOR_BUDGET_OVERRIDE`, `SENSOR_COULD_NOT_RUN`, and `SENSOR_PASSED` rows
