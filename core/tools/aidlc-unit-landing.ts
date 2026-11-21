@@ -76,9 +76,11 @@ export function completedUnits(state: string): Set<string> {
 // A landed Unit's claim is over: once this checkout holds the landing (a pull
 // of the main that merged it), it is no longer held to the Unit. Both facts
 // must say so: its own record has the Unit merged, and the claim commit main
-// merged is in its history. A merged cell alone (a hand edit, an adopter on
-// the claim branch) or a git that cannot answer keeps the checkout held. The
-// stamp file stays until the next claim here clears it.
+// merged is in its history, or, when it is not (a squash-merged records pull
+// request), HEAD records the landing of a candidate built on this claim
+// (landingRecorded). A merged cell alone (a hand edit, an adopter on the claim
+// branch) or a git that cannot answer keeps the checkout held. The stamp file
+// stays until the next claim here clears it.
 const LANDED_SCOPE_STAMPS = new Map<string, boolean>();
 export function scopeStampLanded(
   projectDir: string,
@@ -93,10 +95,89 @@ export function scopeStampLanded(
       "git",
       ["merge-base", "--is-ancestor", stamp.claim_oid, "HEAD"],
       { cwd: projectDir, stdio: "ignore" },
-    ).status === 0;
+    ).status === 0 || landingRecorded(projectDir, "HEAD", { unit: stamp.unit, claimOid: stamp.claim_oid });
     LANDED_SCOPE_STAMPS.set(key, landed);
   }
   return landed;
+}
+
+const GIT_OID = /^[0-9a-f]{40,64}$/;
+
+// A team Unit's landing, as much of it as the one asking knows: the lead's
+// landing transaction knows its merge commit, pinned candidate and attempt;
+// a claimed checkout knows its claim commit.
+export interface UnitLanding {
+  unit: string;
+  mergeOid?: string;
+  pinnedOid?: string;
+  generation?: number;
+  claimOid?: string;
+}
+
+// Whether `rev` records a team Unit's landing by its content: the fallback
+// every reader that asks whether a landing reached a branch runs after its
+// own ancestry check fails. A landing is one merge commit (land makes it, and
+// checks it, before anything is pushed); a merge of the records pull request
+// brings its commits, which the ancestry check sees, while a squash or a
+// rebase brings only its content, as new commits. That content carries the
+// UNIT_MERGED row land's state step writes in a tracked audit shard, naming
+// the Unit, the pinned candidate (the merge's second parent), the merge
+// commit and the attempt; an audit shard is append-only, so later commits
+// keep the row. The row counts when every fact the asker knows matches it,
+// and a claim commit counts only when the row's pinned candidate is built on
+// it. A merged cell in the Unit Progress table names no commit, so a hand edit
+// of the table alone never satisfies this; nor does the row of an earlier
+// attempt, whose candidate a reopened claim is not under. A git that cannot
+// answer reads as not there.
+export function landingRecorded(projectDir: string, rev: string, landing: UnitLanding): boolean {
+  return recordedLandings(projectDir, rev, landing.unit).some((row) =>
+    (landing.mergeOid === undefined || row.mergeOid === landing.mergeOid) &&
+    (landing.pinnedOid === undefined || row.pinnedOid === landing.pinnedOid) &&
+    (landing.generation === undefined || row.generation === landing.generation) &&
+    (landing.claimOid === undefined ||
+      (GIT_OID.test(landing.claimOid) && GIT_OID.test(row.pinnedOid) &&
+        isAncestor(projectDir, landing.claimOid, row.pinnedOid)))
+  );
+}
+
+function isAncestor(projectDir: string, oid: string, rev: string): boolean {
+  return spawnSync("git", ["merge-base", "--is-ancestor", oid, rev], { cwd: projectDir, stdio: "ignore" }).status === 0;
+}
+
+// The UNIT_MERGED rows for `unit` in the audit shards `rev` tracks. The rows
+// are read as aidlc-record-core's auditShardBlocks and auditBlockField read
+// them; this module loads before it and cannot import it.
+function recordedLandings(
+  projectDir: string,
+  rev: string,
+  unit: string,
+): Array<{ pinnedOid: string; mergeOid: string; generation: number }> {
+  const run = (args: string[]) => spawnSync("git", args, { cwd: projectDir, encoding: "utf-8", maxBuffer: 1 << 28 });
+  const listed = run(["grep", "-l", "-F", "-e", "UNIT_MERGED", rev, "--", ":(top,glob)**/audit/*.md"]);
+  if (listed.status !== 0) return [];
+  const field = (block: string, name: string): string | null => {
+    const prefix = `**${name}**:`;
+    for (const raw of block.split("\n")) {
+      const line = raw.startsWith("- ") ? raw.slice(2) : raw;
+      if (line.startsWith(prefix)) return line.slice(prefix.length).trim();
+    }
+    return null;
+  };
+  const rows: Array<{ pinnedOid: string; mergeOid: string; generation: number }> = [];
+  for (const path of listed.stdout.split(/\r?\n/).filter(Boolean)) {
+    // git grep names each file `<rev>:<path>`, the object show reads.
+    const shard = run(["show", path]);
+    if (shard.status !== 0) continue;
+    for (const block of shard.stdout.replace(/\r\n/g, "\n").split(/\n---\n/)) {
+      if (field(block, "Event") !== "UNIT_MERGED" || field(block, "Unit") !== unit) continue;
+      rows.push({
+        pinnedOid: field(block, "Pinned OID") ?? "",
+        mergeOid: field(block, "Merge commit OID") ?? "",
+        generation: Number(field(block, "Attempt Generation")),
+      });
+    }
+  }
+  return rows;
 }
 
 // The stages a checkout that claimed `claimedUnit` reopens itself: that
