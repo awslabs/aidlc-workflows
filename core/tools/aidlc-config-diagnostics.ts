@@ -48,7 +48,10 @@ import {
   jsonFileText,
   jsoncRootMembers,
   jsoncSettingValue,
+  kiroAllowChanged,
+  kiroUpgradeBackup,
   kiroUpgradedAgentFile,
+  kiroUpgradeIntact,
   managedBlockIsSafe,
   managedBlockMarkers,
   mergeBlock,
@@ -69,6 +72,8 @@ import {
   discoverProjectHarnesses,
   inHostShell,
   kiroTreeLayout,
+  packagedDistributionRoot,
+  quoteCommandArgument,
   typedHarnessName,
 } from "./aidlc-runtime-paths.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
@@ -84,6 +89,7 @@ import { installedExecutablePath } from "./aidlc-install-paths.ts";
 import { cmdScriptLaunch, isCmdScript, pathEntries, resolveExecutableOnPath } from "./aidlc-executable-path.ts";
 import { personaTwinRels } from "./aidlc-plugin.ts";
 import { readBoundedRegularFile } from "./aidlc-inline-context.ts";
+import { normalizeDriveLetter } from "./aidlc-lib.ts";
 import { KIRO_IDE_STEERING } from "./aidlc-includes.ts";
 import {
   HARNESS_PRODUCT_NAMES,
@@ -234,12 +240,26 @@ function invocationForHarness(harnessDir: string): string {
 // also carries `--download`, which fetches and verifies the copy runtime for the
 // project's release; the native runtime is the wrong source there, since
 // refreshing from it would swap the hooks and tools to the `aidlc` command.
+//
+// With `projectDir`, a command meant to be run from another folder names the
+// project (and, through the bun dispatcher, the project's own tool), the way
+// config's own follow-up commands do.
 export function workspaceShellRefreshCommand(
   harnessDir: string,
   distribution: string,
+  projectDir?: string,
 ): string {
-  const invoke = invocationForHarness(harnessDir);
-  return `${invoke} config --harness ${typedHarnessName(distribution)}${invoke === "aidlc" ? "" : " --download"}`;
+  const elsewhere = projectDir !== undefined &&
+      normalizeDriveLetter(resolve(projectDir)) !== normalizeDriveLetter(resolve(process.cwd()))
+    ? projectDir
+    : undefined;
+  const native = aidlcInvocation() === "aidlc";
+  const tool = elsewhere === undefined
+    ? `${harnessDir}/tools/aidlc.ts`
+    : quoteCommandArgument(join(elsewhere, harnessDir, "tools", "aidlc.ts"));
+  return `${native ? "aidlc" : `bun ${tool}`} config --harness ${typedHarnessName(distribution)}${
+    native ? "" : " --download"
+  }${elsewhere === undefined ? "" : ` --project-dir ${quoteCommandArgument(elsewhere)}`}`;
 }
 
 export type RuntimeBinaryProbe = {
@@ -4410,4 +4430,106 @@ function keepOrTakeShipped(paths: readonly string[], invoke: string): string {
       `to take the shipped version over it, run \`${invoke} config --force\``
     : `to keep your versions, move those files somewhere else, then run \`${invoke} config\`; ` +
       `to take the shipped versions over them, run \`${invoke} config --force\``;
+}
+
+// A refresh keeps an agent file Kiro upgraded for its 3.0 engine as Kiro left
+// it in most cases, so what this release's file allows does not reach it, and
+// the AI-DLC files row does not count it as changed. This row names the ones
+// whose source (the file Kiro upgraded from) allows other entries than this
+// release's file, in either direction (exact entries, as config compares them,
+// not what Kiro's current permissions let through), and the ones that no longer
+// hold Kiro's upgrade of that source (kiroUpgradeIntact: by Kiro's stamp, or by
+// the fields Kiro keeps when it did not stamp the file, which cannot see an
+// edit to the fields Kiro writes, `tools`, `hooks` and `permissions`). The
+// release's file is read from the installed runtime of the project's own
+// release and row; a copied project, or one pinned to another release, has
+// none here, so only the second part runs there.
+export function kiroUpgradedAgentsDoctorCheck(
+  projectDir: string,
+  harnessDirHint?: string,
+  releaseRoot?: string,
+): DiagnosticDoctorCheck | null {
+  const selected = selectedHarness(projectDir, harnessDirHint);
+  // Only the Kiro CLI V2 row ships agent JSON for Kiro to upgrade.
+  if (selected?.harness !== "kiro") return null;
+  const agentsDir = join(projectDir, selected.harnessDir, "agents");
+  let names: string[];
+  try {
+    names = readdirSync(agentsDir).filter((name) => name.endsWith(".json")).sort();
+  } catch {
+    return null;
+  }
+  let recorded: Record<string, unknown>;
+  try {
+    recorded = (readJsonFile(join(projectDir, selected.harnessDir, "tools", "data", "aidlc-manifest.json")) as {
+      files?: Record<string, unknown>;
+    }).files ?? {};
+  } catch {
+    // The instruction row reports a missing or unreadable record.
+    return null;
+  }
+  // Only the agent files AI-DLC wrote: a person's own agent has no release
+  // version for --force to bring.
+  const upgraded = names
+    .map((name) => `${selected.harnessDir}/agents/${name}`)
+    .filter((rel) => recorded[rel] !== undefined && kiroUpgradedAgentFile(projectDir, rel));
+  if (upgraded.length === 0) return null;
+  const root = releaseRoot ?? packagedDistributionRoot(selected.harnessDir, selected.harness);
+  let releaseStamp: { frameworkVersion?: unknown; distribution?: unknown } = {};
+  try {
+    releaseStamp = readJsonFile(join(root, selected.harnessDir, "tools", "data", "aidlc-stamp.json")) as typeof releaseStamp;
+  } catch {
+    releaseStamp = {};
+  }
+  const comparable = selected.frameworkVersion !== undefined &&
+    releaseStamp.frameworkVersion === selected.frameworkVersion && releaseStamp.distribution === selected.harness;
+  const parsed = (path: string): unknown => {
+    try {
+      return readJsonFile(path);
+    } catch {
+      return undefined;
+    }
+  };
+  const otherAllows: string[] = [];
+  const changed: string[] = [];
+  for (const rel of upgraded) {
+    const backup = kiroUpgradeBackup(projectDir, rel);
+    const was = backup === null ? undefined : parsed(backup);
+    // A backup that no longer reads as JSON is no longer Kiro's upgrade either.
+    if (was === undefined || !kiroUpgradeIntact(parsed(join(projectDir, rel)), was, true)) changed.push(rel);
+    const release = was !== undefined && comparable ? parsed(join(root, rel)) : undefined;
+    if (release !== undefined && (kiroAllowChanged(was, release) || kiroAllowChanged(release, was))) {
+      otherAllows.push(rel);
+    }
+  }
+  if (otherAllows.length === 0 && changed.length === 0) return null;
+  const listed = (paths: string[]): string =>
+    paths.slice(0, 10).join(", ") + (paths.length > 10 ? `, and ${paths.length - 10} more` : "");
+  const parts: string[] = [];
+  if (otherAllows.length > 0) {
+    const one = otherAllows.length === 1;
+    parts.push(
+      `Kiro upgraded ${otherAllows.length} agent ${one ? "file" : "files"} for its 3.0 engine from a version whose ` +
+        `allow and deny entries differ from this release's, so ${one ? "that agent" : "those agents"} may ask ` +
+        `where this release's would go ahead, or the other way round (${listed(otherAllows)})`,
+    );
+  }
+  if (changed.length > 0) {
+    const one = changed.length === 1;
+    parts.push(
+      `${changed.length} agent ${one ? "file" : "files"} Kiro upgraded ${one ? "was" : "were"} changed since, or ` +
+        `${one ? "its" : "their"} backup was, so a refresh never puts this release's ${
+          one ? "version over it" : "versions over them"
+        } (${listed(changed)})`,
+    );
+  }
+  return {
+    pass: false,
+    severity: "warn",
+    label: `Kiro agent files: ${parts.join("; ")}`,
+    fix: "if these are the agent files you want, you can leave them as they are; " +
+      `\`${workspaceShellRefreshCommand(selected.harnessDir, selected.harness, projectDir)} --force\` takes this release's ` +
+      "versions, and Kiro upgrades them again at its next 3.0 start when its auto-upgrade is on; it also replaces " +
+      "the other AI-DLC files you changed that config manages, so copy away what you want to keep first",
+  };
 }

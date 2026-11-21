@@ -1276,7 +1276,13 @@ Kiro said nothing about it on screen. After that, the hooks run on v3 too.
 `aidlc doctor --verbose` counts those agent JSON files as upgraded by Kiro, not as
 your changes, and a refresh keeps them as Kiro left them except where
 [Refresh Safety](../18-install-and-lifecycle.md#refresh-safety) says
-otherwise. To undo the upgrade, first run `kiro-cli settings
+otherwise. So a kept file can hold what an older release allowed: `aidlc
+doctor` names, in its `Kiro agent files` row, each one Kiro upgraded from a
+version whose allow and deny entries differ from this release's file, and each
+one changed since Kiro upgraded it (for a file Kiro did not stamp, an edit to
+its `tools`, `hooks` or `permissions` is not seen), with the command that
+takes this release's versions; if they are the files you want, you can leave
+them as they are. To undo the upgrade, first run `kiro-cli settings
 chat.enableAutoAgentUpgrade false`, or Kiro upgrades the files again at its
 next start on v3, then rename each agent JSON file's newest backup (the highest
 `.json.bak.N`, or `.json.bak` when there is no other) back to `.json`, and

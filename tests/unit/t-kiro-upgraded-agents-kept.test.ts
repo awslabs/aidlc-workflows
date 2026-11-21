@@ -1,4 +1,4 @@
-// covers: tool:aidlc-init, function:kiroUpgradedAgentFile, function:kiroUpgradeUntouched, function:kiroUpgradeStamp, function:kiroUpgradeIntact, function:frameworkFilesDoctorCheck
+// covers: tool:aidlc-init, function:kiroUpgradedAgentFile, function:kiroUpgradeUntouched, function:kiroUpgradeStamp, function:kiroUpgradeIntact, function:frameworkFilesDoctorCheck, function:kiroUpgradedAgentsDoctorCheck
 //
 // Kiro CLI's upgrade for its 3.0 engine (the picker `kiro-cli --v3` shows for
 // 2.0 agent files; Enter enables it; `kiro-cli agent upgrade <dir>`) rewrites
@@ -25,6 +25,9 @@
 // no agent JSON, removes each stamped, untouched upgrade with the rest of the
 // old row's files, keeps the backups and says so once; a file changed after the
 // upgrade, or one with no stamp, stops it as a conflict.
+// Doctor's Kiro agent files row names each upgraded file whose source allows
+// other entries than this release's file (a release that only adds allows does
+// not reach an upgraded copy), and each one changed since Kiro upgraded it.
 
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -35,8 +38,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { kiroUpgradeStamp, kiroUpgradeUntouched, sha256Bytes } from "../../core/tools/aidlc-distribution.ts";
-import { frameworkFilesDoctorCheck } from "../../core/tools/aidlc-config-diagnostics.ts";
-import { typedHarnessName } from "../../core/tools/aidlc-runtime-paths.ts";
+import { frameworkFilesDoctorCheck, kiroUpgradedAgentsDoctorCheck } from "../../core/tools/aidlc-config-diagnostics.ts";
+import { aidlcInvocation, quoteCommandArgument, typedHarnessName } from "../../core/tools/aidlc-runtime-paths.ts";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -431,5 +434,112 @@ describe("switching to the Kiro row removes the agent files Kiro upgraded from A
     expect(snapshot(project, kept)).toEqual(before);
     expect(refresh.out).toMatch(backupsKept(1));
     expect(refresh.out.match(/Kiro's backups of the/g)?.length).toBe(1);
+  });
+});
+
+describe("doctor names the agent files Kiro upgraded that this release's allows do not reach", () => {
+  const RELEASE = join(REPO_ROOT, "dist-release", "kiro");
+  type WriteAgent = { toolsSettings: { fs_write: { allowedPaths: string[] } } };
+  // An earlier release that did not yet let the agent write in swarm worktrees.
+  const fewerWritePaths = (agent: AgentJson) => {
+    const write = (agent as unknown as WriteAgent).toolsSettings.fs_write;
+    write.allowedPaths = write.allowedPaths.filter((path) => !path.startsWith(".aidlc/worktrees/*/[!.]"));
+  };
+
+  test("an upgrade of this release's own files gets no row", () => {
+    const project = configured();
+    for (const rel of agentJsons(project)) kiroUpgrade(project, rel);
+    expect(kiroUpgradedAgentsDoctorCheck(project, ".kiro", RELEASE)).toBeNull();
+  });
+
+  test("an upgraded file this release no longer ships is still named when it was changed since", () => {
+    const project = configured();
+    const retired = `${AGENTS}/aidlc-retired-agent.json`;
+    copyFileSync(join(project, DEVELOPER), join(project, retired));
+    const baseline = JSON.parse(readFileSync(record(project), "utf-8"));
+    baseline.files[retired] = sha256Bytes(readFileSync(join(project, retired)));
+    writeFileSync(record(project), `${JSON.stringify(baseline, null, 2)}\n`);
+    kiroUpgrade(project, retired);
+    const file = join(project, retired);
+    writeAgent(file, { ...JSON.parse(readFileSync(file, "utf-8")), prompt: "Edited." });
+
+    // The refresh stops on it, and the AI-DLC files row leaves out every file Kiro upgraded.
+    expect(kiroUpgradedAgentsDoctorCheck(project, ".kiro", RELEASE)?.label).toContain(retired);
+    expect(frameworkFilesDoctorCheck(project, ".kiro").pass).toBe(true);
+    const refresh = config(project, ["--yes"]);
+    expect(refresh.status, refresh.out).toBe(4);
+    expect(refresh.out).toContain(`${retired} (removed upstream but locally modified)`);
+  });
+
+  test("a kept upgrade of an earlier release that allowed less is named, while the AI-DLC files row still passes", () => {
+    const project = configured();
+    olderAgent(project, DEVELOPER, fewerWritePaths);
+    kiroUpgrade(project, DEVELOPER);
+    autoUpgrade(project, true);
+    const upgraded = snapshot(project, [DEVELOPER]);
+
+    const refresh = config(project, ["--yes"]);
+    expect(refresh.status, refresh.out).toBe(0);
+    expect(snapshot(project, [DEVELOPER])).toEqual(upgraded);
+    expect(frameworkFilesDoctorCheck(project, ".kiro").pass).toBe(true);
+
+    const row = kiroUpgradedAgentsDoctorCheck(project, ".kiro", RELEASE);
+    expect(row?.severity).toBe("warn");
+    expect(row?.label).toBe(
+      "Kiro agent files: Kiro upgraded 1 agent file for its 3.0 engine from a version whose allow and deny entries " +
+        `differ from this release's, so that agent may ask where this release's would go ahead, or the other way round (${DEVELOPER})`,
+    );
+    expect(row?.fix).toMatch(/^if these are the agent files you want, you can leave them as they are; `[^`]*config --harness kiro-v2[^`]* --force` takes this release's versions/);
+    // Doctor ran from another folder, so the command names the project it diagnosed;
+    // from the project's own folder it does not.
+    expect(row?.fix).toContain(` --project-dir ${quoteCommandArgument(project)} --force\``);
+    // Through the bun dispatcher it runs that project's own tool, not the current folder's.
+    if (aidlcInvocation() !== "aidlc") {
+      expect(row?.fix).toContain(`\`bun ${quoteCommandArgument(join(project, ".kiro", "tools", "aidlc.ts"))} config `);
+    }
+    const cwd = process.cwd();
+    try {
+      process.chdir(project);
+      expect(kiroUpgradedAgentsDoctorCheck(project, ".kiro", RELEASE)?.fix).not.toContain("--project-dir");
+    } finally {
+      process.chdir(cwd);
+    }
+
+    // Edited after the upgrade as well: the file is named in both parts.
+    const file = join(project, DEVELOPER);
+    writeAgent(file, { ...JSON.parse(readFileSync(file, "utf-8")), prompt: "My own line." });
+    const both = kiroUpgradedAgentsDoctorCheck(project, ".kiro", RELEASE)?.label ?? "";
+    expect(both).toContain(`or the other way round (${DEVELOPER})`);
+    expect(both).toContain(`over it (${DEVELOPER})`);
+  });
+
+  test("an upgraded file changed after Kiro upgraded it is named, with or without this release to compare", () => {
+    const project = configured();
+    for (const rel of agentJsons(project)) kiroUpgrade(project, rel);
+    const file = join(project, DEVELOPER);
+    const agent = JSON.parse(readFileSync(file, "utf-8"));
+    agent.permissions.rules.push({ capability: "fs_read", effect: "deny", match: ["src/**"] });
+    writeAgent(file, agent);
+
+    // An agent file the person made, upgraded and edited the same way, is theirs:
+    // there is no release version of it to take.
+    const own = join(project, AGENTS, "my-agent.json");
+    writeAgent(own, { name: "my-agent", description: "Mine.", prompt: "Help me.", tools: ["fs_read"] });
+    kiroUpgrade(project, `${AGENTS}/my-agent.json`);
+    writeAgent(own, { ...JSON.parse(readFileSync(own, "utf-8")), prompt: "Help me more." });
+
+    for (const release of [RELEASE, join(project, "no-installed-release")]) {
+      const row = kiroUpgradedAgentsDoctorCheck(project, ".kiro", release);
+      expect(row?.label, release).toBe(
+        `Kiro agent files: 1 agent file Kiro upgraded was changed since, or its backup was, so a refresh never puts this release's version over it (${DEVELOPER})`,
+      );
+    }
+
+    // A backup that no longer reads is named the same way.
+    writeFileSync(join(project, `${AGENTS}/aidlc.json.bak`), "{");
+    expect(kiroUpgradedAgentsDoctorCheck(project, ".kiro", RELEASE)?.label).toBe(
+      "Kiro agent files: 2 agent files Kiro upgraded were changed since, or their backup was, so a refresh never puts " +
+        `this release's versions over them (${DEVELOPER}, ${AGENTS}/aidlc.json)`,
+    );
   });
 });

@@ -67,6 +67,7 @@ import {
 import {
   flagsDoctorCheck,
   frameworkFilesDoctorCheck,
+  kiroUpgradedAgentsDoctorCheck,
   kiroCliWorkflowsDoctorCheck,
   kiroIdeWorkflowsDoctorCheck,
   kiroIdeTerminalDoctorCheck,
@@ -687,6 +688,8 @@ export async function main(argv: string[]): Promise<void> {
   const folderDepth = projectFolderDepthCheck(projectDir);
   if (folderDepth) checks.push(folderDepth);
   checks.push(frameworkFilesDoctorCheck(projectDir, harnessDir()));
+  const kiroUpgraded = kiroUpgradedAgentsDoctorCheck(projectDir, harnessDir());
+  if (kiroUpgraded) checks.push(kiroUpgraded);
   const requestCap = vscodeRequestCapDoctorCheck(projectDir, harnessDir());
   if (requestCap) checks.push(requestCap);
   const workspaceRequestCap = vscodeWorkspaceRequestCapDoctorCheck(projectDir, harnessDir());
