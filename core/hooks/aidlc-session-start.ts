@@ -308,9 +308,12 @@ try {
 // edit of a memory file, held the copy as it was before). When the copy was
 // written just now, this chat is told: with the text of the files written when
 // it fits in the hook's context (Claude Code keeps about 10 KB of it, measured:
-// 9 KB arrives whole and 15 KB is cut), else by name, to read before acting on
-// AI-DLC work. Nothing is added when the copy was current, and an AI-DLC step
-// carries its rules in full either way.
+// 9 KB arrives whole and 15 KB is cut), else by name, for a question about the
+// team's practices. Nothing is added when the copy was current. The chat is
+// never sent to read them before AI-DLC work: every stage step sends it its
+// rules in full (on Claude Code its load record is stale until it next loads;
+// on Copilot no copy is ever proven held), and an agent that read the shipped
+// seven in one shell line stopped for the person.
 const HANDOFF_MAX_BYTES = 8 * 1024;
 let memoryHandoff = "";
 if (copyBehind.length > 0) {
@@ -321,7 +324,8 @@ if (copyBehind.length > 0) {
       const inline = inlineMemoryFiles(projectDir, selection.space, copyBehind);
       memoryHandoff = inline !== null && inline.bytes <= HANDOFF_MAX_BYTES
         ? `\n\n${written}. This is their text now:\n\n${inline.parts.join("\n")}`
-        : `\n\n${written}: ${copyBehind.join(", ")}. Read them from that folder before acting on AI-DLC work or on a question about the team's practices.`;
+        : `\n\n${written}: ${copyBehind.join(", ")}. They are there for a question about the team's practices; ` +
+          "a stage step hands you the rules it needs in full.";
     }
   } catch {
     // The first step sends the rules in full.

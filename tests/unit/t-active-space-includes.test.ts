@@ -1,4 +1,4 @@
-// covers: function:refreshActiveMemory, function:refreshActiveMemoryCopy, function:activeMemoryCopyDrift, function:addRootBlocks, function:kiroIdeSteering
+// covers: function:refreshActiveMemory, function:refreshActiveMemoryCopy, function:activeMemoryCopyDrift, function:addRootBlocks, function:kiroIdeSteering, hook:aidlc-session-start
 //
 // t-active-space-includes: every harness's native rule include reads ONE fixed,
 // git-ignored location, aidlc/active-memory/ (ACTIVE_MEMORY_DIR), and
@@ -21,8 +21,15 @@
 //      session-start hook brings an edit of a memory file into the copy.
 //   5. Kiro IDE's steering file keeps carrying the memory text (it does not
 //      expand file references), written by the same refresh.
+//   6. The first chat in a clone (the copy is git-ignored, so Claude Code and
+//      Copilot read empty imports and the session start writes the copy after
+//      them) is told which files were written and that a stage step hands it
+//      the rules in full, never sent to read them before AI-DLC work: the
+//      shipped memory is too large to inline, and a shell read of seven files
+//      stops for the person.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import {
   cpSync,
   existsSync,
@@ -37,6 +44,7 @@ import {
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
+import { createTestProject, FIXTURES_DIR, seededStateFile } from "../harness/fixtures.ts";
 import { sha256Bytes, unionBlocks } from "../../core/tools/aidlc-distribution.ts";
 import {
   ACTIVE_MEMORY_DIR,
@@ -567,4 +575,63 @@ describe("t-active-space-includes: AI-DLC's part of the team's root files", () =
     expect(agents).not.toContain("@aidlc/spaces/");
     expect(copyFile(root, "org.md")).toBe(copied("team-b", "org.md", "# org team-b\n"));
   });
+});
+
+describe("t-active-space-includes: the first chat in a clone is told where the method is, not sent to read it first", () => {
+  const SURFACE: Record<string, string> = { claude: ".claude", copilot: ".aidlc" };
+  // Host identity variables a test inherits from the shell that runs it.
+  const HOST_ENV = [
+    "CLAUDECODE", "CLAUDE_CODE_SESSION_ID", "CLAUDE_PROJECT_DIR", "KIRO_SESSION_ID", "OPENCODE",
+    "CODEX_THREAD_ID", "CODEX_SESSION_ID", "AIDLC_SESSION_OVERRIDE", "AIDLC_SESSION_OVERRIDE_SOURCE",
+    "AIDLC_PROJECT_DIR", "AIDLC_RUNTIME_ROOT", "AIDLC_RUNTIME_HARNESS_ROOT",
+  ];
+
+  // A clone of a project whose aidlc/ is committed: the install and the
+  // method, no copy. With work, this machine has a workflow selected (the
+  // chat's other exit, as after an edit of a memory file too large to inline).
+  function clone(harness: string, withWork: boolean): string {
+    const root = withWork ? createTestProject() : freshRoot();
+    if (withWork) scratch.push(root);
+    cpSync(distSurface(harness, SURFACE[harness]), join(root, SURFACE[harness]), { recursive: true });
+    cpSync(distSurface(harness, "aidlc"), join(root, "aidlc"), { recursive: true });
+    if (withWork) writeFileSync(seededStateFile(root), readFileSync(join(FIXTURES_DIR, "state-brownfield-feature.md"), "utf-8"));
+    expect(existsSync(join(root, ...COPY.split("/")))).toBe(false);
+    return root;
+  }
+
+  function startContext(root: string, harness: string): string {
+    const env: Record<string, string | undefined> = { ...process.env };
+    for (const key of HOST_ENV) delete env[key];
+    const started = spawnSync(process.execPath, [join(root, SURFACE[harness], "hooks", "aidlc-session-start.ts")], {
+      cwd: root,
+      input: JSON.stringify({ hook_event_name: "SessionStart", session_id: randomUUID(), source: "startup", cwd: root }),
+      encoding: "utf-8",
+      env: {
+        ...env,
+        AIDLC_HARNESS_DIR: SURFACE[harness],
+        AIDLC_HARNESS_NAME: harness,
+        ...(harness === "claude" ? { CLAUDE_PROJECT_DIR: root } : {}),
+      },
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(started.status, `${started.stdout}${started.stderr}`).toBe(0);
+    const line = started.stdout.split("\n").find((entry) => entry.startsWith("{"));
+    expect(line, started.stdout).toBeDefined();
+    return String((JSON.parse(line as string) as { additionalContext?: unknown }).additionalContext ?? "");
+  }
+
+  for (const harness of ["claude", "copilot"]) {
+    for (const withWork of [false, true]) {
+      test(`${harness}, ${withWork ? "with this machine's work selected" : "no work yet"}: the files are named and the stage steps carry the rules`, () => {
+        const root = clone(harness, withWork);
+        const context = startContext(root, harness);
+        expect(context).toContain("were written for space `default` just now, after the instructions were read: ");
+        for (const rel of MEMORY_FILES) expect(context).toContain(rel);
+        expect(context).toContain("a stage step hands you the rules it needs in full.");
+        expect(context).not.toContain("before acting on AI-DLC work");
+        // The next chat finds the copy current: nothing is said of the method files.
+        expect(startContext(root, harness)).not.toContain("were written for space");
+      });
+    }
+  }
 });
