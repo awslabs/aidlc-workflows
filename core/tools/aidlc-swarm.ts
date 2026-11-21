@@ -2340,6 +2340,15 @@ function writeResumeJournal(pd: string, resume: SwarmResume): void {
   })));
 }
 
+/** A row recording that `unit`'s source landed in this batch and attempt. */
+function isSourceMergedRow(row: AuditShardEvent, unit: string, batch: string, attempt: SwarmAttemptStamp): boolean {
+  return row.event === "SWARM_SOURCE_MERGED" &&
+    auditBlockField(row.block, "Unit name") === unit &&
+    auditBlockField(row.block, "Batch number") === batch &&
+    auditBlockField(row.block, "Stage") === attempt.stage &&
+    auditBlockField(row.block, "Run floor") === attempt.floor;
+}
+
 function latestResumeRow(rows: readonly AuditShardEvent[]): AuditShardEvent | null {
   const latest = maximalAttemptEvents(rows);
   return latest.length === 1 ? latest[0] : null;
@@ -2503,11 +2512,7 @@ function validateSwarmResume(
   // Native source landing removes its child. A checkpoint revision may create a
   // new child only after that exact prior Unit source was durably landed.
   if (!existsSync(worktree)) {
-    const merged = latestResumeRow(rows.filter((row) => row.event === "SWARM_SOURCE_MERGED" &&
-      auditBlockField(row.block, "Unit name") === unit &&
-      auditBlockField(row.block, "Batch number") === batch &&
-      auditBlockField(row.block, "Stage") === attempt.stage &&
-      auditBlockField(row.block, "Run floor") === attempt.floor &&
+    const merged = latestResumeRow(rows.filter((row) => isSourceMergedRow(row, unit, batch, attempt) &&
       auditBlockField(row.block, "Repo") === (repoName ?? "-")));
     const converged = merged && latestResumeRow(rows.filter((row) =>
       row.event === "SWARM_UNIT_CONVERGED" &&
@@ -3385,6 +3390,33 @@ function handleFinalize(rest: string[]): void {
   const review = reviewerRequirement(projectDir);
   const currentAttempt = currentSwarmAttempt(projectDir);
 
+  const identities = new Map<string, BoltIdentity>();
+  for (const unit of allUnits) {
+    try {
+      identities.set(unit, resolveBoltIdentity(projectDir, swarmBoltSlug(unit), selection));
+    } catch (error) {
+      if (error instanceof BoltIdentityError) fail(error.message);
+      throw error;
+    }
+  }
+
+  // A claimed Unit whose source already landed in this attempt and whose
+  // worktree is gone has nothing to re-verify. Recording it as failed would
+  // contradict the landing, so refuse before the loop below runs checks or
+  // writes rows; the batch checkpoint's Request Changes rebuilds it instead.
+  const missing = allUnits.filter((unit) => claimedSet.has(unit) && !existsSync(identities.get(unit)!.dir));
+  if (currentAttempt && missing.length > 0) {
+    const rows = readAuditShardEvents(projectDir);
+    const landed = missing.filter((unit) => rows.some((row) => isSourceMergedRow(row, unit, batch, currentAttempt)));
+    if (landed.length > 0) {
+      fail(
+        `finalize: ${landed.join(", ")} already landed in batch ${batch} with worktrees removed, ` +
+        "so there is nothing to re-verify and nothing was recorded. Use the batch checkpoint instead: " +
+        `aidlc engine bolt swarm-checkpoint --action status --batch ${batch} --units "<batch units>".`,
+      );
+    }
+  }
+
   // Optional per-declined-unit typed reasons: `--reasons a=unsatisfiable,b=budget-exhausted`.
   // The conductor judged WHY each unclaimed unit gave up (knowledge → conductor,
   // D-I); the tool records that attribution faithfully (determinism → tool),
@@ -3421,13 +3453,7 @@ function handleFinalize(rest: string[]): void {
     process.env.AIDLC_SKIP_SOURCE_FRESHNESS === "1";
   const recoveryBudget = newGitlinkRecoveryBudget();
   for (const unit of allUnits) {
-    let identity: BoltIdentity;
-    try {
-      identity = resolveBoltIdentity(projectDir, swarmBoltSlug(unit), selection);
-    } catch (error) {
-      if (error instanceof BoltIdentityError) fail(error.message);
-      throw error;
-    }
+    const identity = identities.get(unit)!;
     if (claimedSet.has(unit)) {
       const verdict = verdictFor(unit, projectDir, identity, check.command, testFile, false, timeoutMs);
       const preparedAttempt = preparedSwarmAttempt(

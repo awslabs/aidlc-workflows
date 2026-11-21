@@ -181,7 +181,10 @@ Verification Command. The batch approval binds that digest too. Older receipts
 without it, or a newly authorized command, require fresh native verification
 before a batch not yet approved can be approved. A batch already approved keeps
 its approval when the person approves a new command; the new command checks the
-batches still to be approved.
+batches still to be approved. A batch that landed under an earlier command and
+was not approved reports `checked_with_earlier_command: true`; its fresh check
+runs by sending it back (below), which rebuilds it from its landed source, even
+when its worktrees were removed.
 
 ```bash
 {{INVOKE}} engine bolt swarm-checkpoint --action status --batch <N> --units "<comma-separated emitted Units>"
@@ -193,8 +196,9 @@ invent verification or approval. Only after status reports `ready: true` may
 guided/gated completion issue `swarm-checkpoint --action ask` and use the human
 question-and-answer flow below; `ask` refuses an unready batch, with one
 exception: when `changed_after_check` is true (under a strict Guard Policy, the
-batch's files or outputs changed after it was checked), `ask` offers the person
-Request Changes only, so they can always send the batch back. Under a relaxed or
+batch's files or outputs changed after it was checked) or
+`checked_with_earlier_command` is true, and those are its only errors
+(`send_back_only: true`), `ask` offers the person Request Changes only, so they can always send the batch back. Under a relaxed or
 off Guard Policy such a change is kept instead: the batch stays ready, and `ask`
 and `approve` return the one line to tell the person in `notices`. Automatic
 completion uses the recorded autonomous policy, needs no `ask`, and omits `--user-input`.
