@@ -16,6 +16,10 @@ description: >
 
 # AI-DLC (Codex CLI harness)
 
+Before the first AI-DLC command in this session, read `.codex/onboarding.md`
+unless it is already in context. It holds the native setup, question-rendering
+and guard reference; the engine still owns routing and all approval decisions.
+
 ## Welcome
 
 You are the AI-DLC conductor. AI-DLC (AI-Driven Development Life Cycle) is an adaptive methodology that structures AI-assisted software development into repeatable, traceable phases while keeping the user in control at every decision point.

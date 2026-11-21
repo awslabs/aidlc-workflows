@@ -102,17 +102,17 @@ function emitHooksJson(
   return JSON.stringify({ hooks }, null, 2) + "\n";
 }
 
-function emitConfigToml(onboarding: string): string {
-  if (onboarding.includes("'''")) {
-    throw new Error("Codex onboarding contains the TOML multiline literal delimiter (''').");
+function emitConfigToml(bootstrap: string): string {
+  if (bootstrap.includes("'''")) {
+    throw new Error("Codex bootstrap contains the TOML multiline literal delimiter (''').");
   }
   return `# dist/codex shipped config — project-scoped; copy into .codex/config.toml
 # of a trusted project. Do not merge this file into ~/.codex/config.toml:
-# developer_instructions carries this project's AI-DLC onboarding.
+# developer_instructions carries this project's bounded AI-DLC entry guidance.
 
-# AI-DLC Codex onboarding, injected into every session (same content as .codex/onboarding.md).
+# Full onboarding is read on demand from .codex/onboarding.md.
 developer_instructions = '''
-${onboarding}'''
+${bootstrap}'''
 
 # Model/provider: intentionally omitted. The project inherits the provider,
 # authentication, model, context window, and reasoning effort selected in the
@@ -446,6 +446,7 @@ export default function emit(ctx: EmitContext): void {
 
   const onboarding = readFileSync(join(CODEX_ROOT, "onboarding.md"), "utf-8")
     .replaceAll(`${harnessDir}/skills/`, ".agents/skills/");
+  const bootstrap = readFileSync(join(harnessRoot, "bootstrap.md"), "utf-8");
   const emissions: Array<{ path: string; content: () => string }> = [];
 
   // codex-only config + wiring + trust + native onboarding skills paths
@@ -456,7 +457,7 @@ export default function emit(ctx: EmitContext): void {
   });
   emissions.push({
     path: join(CODEX_ROOT, "config.toml"),
-    content: () => emitConfigToml(onboarding),
+    content: () => emitConfigToml(bootstrap),
   });
   emissions.push({
     path: join(CODEX_ROOT, "rules", "default.rules"),

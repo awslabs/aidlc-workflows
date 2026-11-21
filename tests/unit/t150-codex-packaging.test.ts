@@ -298,7 +298,8 @@ describe("t150 dist/codex packaging determinism + trust", () => {
     expect(graph).not.toContain('".claude/rules/');
   });
 
-  test("Codex config injects the native onboarding in both distribution channels", () => {
+  test("Codex config bounds startup guidance and defers full onboarding in both channels", () => {
+    const bootstrap = readFileSync(join(REPO_ROOT, "harness", "codex", "bootstrap.md"), "utf-8");
     for (const channel of ["dist", "dist-release"]) {
       const root = join(REPO_ROOT, channel, "codex", ".codex");
       const raw = readFileSync(join(root, "config.toml"), "utf-8");
@@ -317,20 +318,28 @@ describe("t150 dist/codex packaging determinism + trust", () => {
       expect(typeof config.developer_instructions).toBe("string");
       // Bun 1.3.14 incorrectly preserves the opening newline of a TOML literal string.
       const instructions = config.developer_instructions as string;
-      expect(instructions.replace(/^\n/, "")).toBe(onboarding);
+      expect(instructions.replace(/^\n/, "")).toBe(bootstrap);
       const standardConfig = parse(raw) as typeof config;
-      expect(standardConfig.developer_instructions).toBe(onboarding);
+      expect(standardConfig.developer_instructions).toBe(bootstrap);
+      expect(instructions.length).toBeLessThanOrEqual(1200);
+      expect(instructions.length).toBeLessThan(onboarding.length / 4);
+      expect(instructions).toContain("unrelated work does not require those reads");
+      expect(instructions).toContain(".codex/onboarding.md");
+      expect(instructions).not.toContain("## Prerequisites");
+      expect(readFileSync(join(REPO_ROOT, channel, "codex", ".agents", "skills", "aidlc", "SKILL.md"), "utf-8"))
+        .toContain("Before the first AI-DLC command in this session, read `.codex/onboarding.md`");
       expect(config.developer_instructions).toContain("# AI-DLC on Codex CLI");
       // AI-DLC's questions keep its words; the agent's own words are for the rest.
-      expect(config.developer_instructions).toContain("Show AI-DLC's questions and choices with their meaning unchanged, in the\nperson's language;");
-      expect(config.developer_instructions).toContain("are still named by path.");
-      expect(config.developer_instructions).toContain("When they ask about one, answer them.");
-      expect(config.developer_instructions).toContain("Plan Approval's choice labels stay exactly as AI-DLC gives\nthem.");
+      expect(onboarding).toContain("Show AI-DLC's questions and choices with their meaning unchanged, in the\nperson's language;");
+      expect(instructions).toContain("are still named by path.");
+      expect(instructions).toContain("When they ask about one, answer them.");
+      expect(instructions).toContain("Plan Approval's choice labels stay exactly as AI-DLC gives\nthem.");
+      expect(instructions).toContain("approval gates and recorded human");
       expect(config.developer_instructions).not.toContain("say it in your own words");
       expect(config.developer_instructions).toContain(".agents/skills/");
       expect(config.shell_environment_policy).toEqual({ set: { AIDLC_RULES_DIR: "" } });
       if (channel === "dist-release") {
-        expect(config.developer_instructions).toContain("- **Runtime**:");
+        expect(onboarding).toContain("- **Runtime**:");
         expect(config.developer_instructions).not.toMatch(/\bbun\b/);
       }
     }
