@@ -18340,7 +18340,7 @@ function walkStepUnit(step: UnitJumpStep): string | null {
   return step.kind === "paused" ? step.checkpoint.unit : step.kind === "covered" ? null : step.unit;
 }
 
-function unitStepOwedOnlyReceipt(
+function unitStepOwesOnlyRecords(
   projectDir: string,
   scope: string,
   stateContent: string,
@@ -18357,10 +18357,7 @@ function unitStepOwedOnlyReceipt(
     projectDir, target, unit, walk.context.recordPrefix, walk.context.codekbCtx,
     walk.context.kinds?.get(unit) ?? null, unitLedgerFor(projectDir, stageSlug), stateContent, scope, paused,
   );
-  // Paused with its files all written, a Unit owes only its records (its review
-  // or its completion): picking it up would leave no work to make the person's
-  // change in, so that counts too.
-  return paused ? owed !== null : owed?.receipt === true;
+  return owed !== null;
 }
 
 // The walk's step is that Unit's own pause on that stage.
@@ -18380,7 +18377,7 @@ function unitStepChangeReopen(
   const walk = unitJumpWalk(projectDir, scope, stateContent, true);
   if (
     walk === null ||
-    !(unitPausedOnStep(walk.step, stageSlug, unit) || unitStepOwedOnlyReceipt(projectDir, scope, stateContent, walk, stageSlug, unit))
+    !(unitPausedOnStep(walk.step, stageSlug, unit) || unitStepOwesOnlyRecords(projectDir, scope, stateContent, walk, stageSlug, unit))
   ) return null;
   const reopen = unitMajorReopen(projectDir, scope, stateContent, stageSlug, {
     stage: stageSlug, jumpUnit: unit, everyUnit: false, change: true,
@@ -18465,14 +18462,9 @@ function unitMajorReopen(
         message: `${outside.said} ${outside.nameOne} with \`${entrySkillInvocation()} --stage ${targetSlug} --unit <name>\`.`,
       };
     }
-    // The Unit in flight on the target itself: that is where the walk already is.
-    // Asked for by name with no change, it carries on there; only the person's
-    // change reopens it, once nothing but its completion is left (paused there,
-    // nothing but its records). Paused with work still to do, their change picks
-    // it up, and is made on the step as live.
     const onItsStep = named === inFlight && liveStage === targetSlug;
     const reopens = onItsStep && flags.change === true &&
-      unitStepOwedOnlyReceipt(projectDir, scope, stateContent, walk, targetSlug, named);
+      unitStepOwesOnlyRecords(projectDir, scope, stateContent, walk, targetSlug, named);
     const picksUp = onItsStep && flags.change === true && !reopens && unitPausedOnStep(step, targetSlug, named);
     if (onItsStep && !reopens && !picksUp) return "route";
     // A Unit set aside on the target is picked up where it stopped.
