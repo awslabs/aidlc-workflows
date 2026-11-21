@@ -199,6 +199,36 @@ the developer later reports an
 repeat the snapshot plus scan over the expanded path set; never widen verified
 coverage after the scan without a matching pre-scan source snapshot.
 
+#### Existing code-knowledge sources
+
+A team may already keep a code graph or inventory of the repo that a tool
+outside AI-DLC built. When one is registered for the repo, the developer
+reads it before it opens the code instead of rediscovering what it holds.
+For every repo selected for scanning, run the read-only check:
+
+```
+{{INVOKE}} engine workspace codekb-source --repo <repo> --json
+```
+
+It prints the registered sources with a verdict each. An empty `sources` list
+means nothing is registered: the scan runs as it does today, and nothing is
+said. Otherwise keep the output keyed by repo for the developer brief in
+Step 2:
+
+- **CURRENT** - the source was built from the commit checked out. The brief
+  says: read the source first, following its `guide` when it names one; open
+  code to confirm what the source says and to fill in what it does not say.
+- **STALE / UNKNOWN** - the source names another commit, or none the engine
+  can read. The brief says: use the source as a map of an older build to find
+  the way around; read the code for everything the scan records.
+- **MISSING** - the registered folder is not on this machine. Tell the person
+  once, in one line, that the source registered for `<repo>` at `<path>` is not
+  here and the code is scanned instead; leave it out of the brief.
+
+A source never replaces the developer's own coverage record or the store's
+freshness check: `analyzed.paths`, the snapshot and the publish below are
+unchanged, so a graph cannot make the store look fresher than the source is.
+
 Only after every repository decision has been resolved:
 
 - If every repo is reused on an ordinary workflow run, report the stage as
@@ -236,6 +266,16 @@ the brief) and require the scan results' Scan Coverage section (re-artifacts.md
 template) to list what was actually analyzed deeply, what was skimmed, and
 what was left out unopened. Include the repo's snapshot `paths`; the deeply
 analyzed result MUST stay within that set.
+
+When Step 1 found a registered code-knowledge source for the repo (any verdict
+but MISSING), the brief carries each source's `kind`, `dir`, `commit`, verdict
+and `guide` from the `codekb-source` output, the rule for that verdict from
+Step 1, and the reading method in
+`{{HARNESS_DIR}}/knowledge/aidlc-developer-agent/code-knowledge-sources.md`.
+The developer lists every source it read under **Sources read** in Scan
+Coverage, with its verdict, and cites it beside each finding it took from it;
+the Run Record of the ninth artifact then names the source and its build
+commit. With no source in the brief, the developer leaves the line out.
 
 For each repo selected for scanning, the developer scans `<repo>`'s codebase
 (the sibling dir `<workspace>/<repo>/`; for a single-repo intent this is the

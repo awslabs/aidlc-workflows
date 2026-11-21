@@ -25,6 +25,7 @@ All RE artifacts are created under `aidlc/spaces/<active-space>/codekb/<repo>/` 
 - **Analyzed deeply**: [repo-relative dirs/files actually read and understood, one per line]
 - **Skimmed only**: [areas noted at directory granularity without deep reading]
 - **Left out**: [folders not opened because "What to Skip" in code-analysis-guide.md skips them, such as build output, one per line]
+- **Sources read**: [only when the brief named a code-knowledge source: `<kind>` at `<dir>`, built at commit `<commit>`, `<verdict>`, one per line; see code-knowledge-sources.md]
 
 ### Packages Found
 - [package name] — [type] — [language] — [purpose]
@@ -102,7 +103,12 @@ below:
 
 - Date: [ISO-8601 date of this run]
 - Commit: [the commit the brief gives from the snapshot, or "unknown"]
+- Code knowledge source: [only when one was read: `<kind>` at `<dir>`, built at commit `<commit>`, `<verdict>`; one line per source, from the developer's Sources read]
 ```
+
+The source line is a record for people, like the Run Record itself: no tool
+reads it, and the Scope of Analysis block below is minted the same way with or
+without a source.
 
 ### Scope of Analysis Block (reverse-engineering-timestamp.md)
 
