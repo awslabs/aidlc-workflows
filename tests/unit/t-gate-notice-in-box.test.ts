@@ -22,8 +22,8 @@ setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const NO_GIT = "This project has no git, so AI-DLC can't undo the changes it makes to your files; " +
   "to get an undo, run `git init` and commit them.";
-const SAID = join("aidlc", ".aidlc-sessions", "no-git-said");
-const KEPT = join("aidlc", ".aidlc-sessions", `${SESSION}.person-lines`);
+const SAID = join("aidlc", ".aidlc-engine", "sessions", "no-git-said");
+const KEPT = join("aidlc", ".aidlc-engine", "sessions", `${SESSION}.person-lines`);
 const NOTE = "Say each notice listed beside this note to the person once";
 const CLI = { CLAUDE_CODE_ENTRYPOINT: "cli" };
 const QUESTION = "Requirements Analysis complete. How would you like to proceed?";
@@ -243,7 +243,7 @@ describe("t-gate-notice-in-box: the gate's own lines are said in Claude Code's q
       const failed = await atGate();
       await report(failed, "awaiting-approval", CLI);
       const shown = beforeBox(failed, gateBox())!;
-      const sessions = join(failed, "aidlc", ".aidlc-sessions");
+      const sessions = join(failed, "aidlc", ".aidlc-engine", "sessions");
       chmodSync(sessions, 0o555);
       try {
         answered(failed, shown, "Request Changes");

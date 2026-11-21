@@ -5,16 +5,20 @@
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
 
-/** The pending folder, under the project's sessions folder (sessionsDir: aidlc/.aidlc-sessions). */
-export const CLAUDE_TURNS_PENDING_DIR = join("aidlc", ".aidlc-sessions", "claude-turns");
+/** The pending folder, under the project's sessions folder (sessionsDir: aidlc/.aidlc-engine/sessions). */
+export const CLAUDE_TURNS_PENDING_DIR = join("aidlc", ".aidlc-engine", "sessions", "claude-turns");
+// Where an earlier release kept it; the first engine path moves it in.
+const EARLIER_PENDING_DIR = join("aidlc", ".aidlc-sessions", "claude-turns");
 
 /** Whether any chat of this project has a Claude Code turn waiting to be settled. */
 export function claudeTurnsPending(projectDir: string): boolean {
-  try {
-    return readdirSync(join(projectDir, CLAUDE_TURNS_PENDING_DIR)).some((name) => name.endsWith(".json"));
-  } catch {
-    return false;
-  }
+  return [CLAUDE_TURNS_PENDING_DIR, EARLIER_PENDING_DIR].some((dir) => {
+    try {
+      return readdirSync(join(projectDir, dir)).some((name) => name.endsWith(".json"));
+    } catch {
+      return false;
+    }
+  });
 }
 
 /** The `--project-dir` an engine tool's arguments name (`--project-dir <dir>` or `--project-dir=<dir>`), if any. */

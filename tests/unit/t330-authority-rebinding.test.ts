@@ -896,7 +896,7 @@ describe("t330 (5) the Plan Approval receipt path", () => {
       dir,
       receipt({ markerRevision: 99, directiveEpoch: `sha256:${"f".repeat(64)}` }),
     );
-    expect(readdirSync(join(dir, "aidlc", ".aidlc-sessions", "plan-approval"))
+    expect(readdirSync(join(dir, "aidlc", ".aidlc-engine", "sessions", "plan-approval"))
       .filter((name) => name.startsWith("receipt-")).length).toBe(1);
   });
 
@@ -968,7 +968,7 @@ describe("t330 (5) the Plan Approval receipt path", () => {
     const dir = project();
     writePlanApprovalReceipt(dir, receipt());
     const [name] = readdirSync(
-      join(dir, "aidlc", ".aidlc-sessions", "plan-approval"),
+      join(dir, "aidlc", ".aidlc-engine", "sessions", "plan-approval"),
     );
     expect(name).toMatch(/^receipt-[0-9a-f]{64}\.json$/);
     expect(name).toBe(

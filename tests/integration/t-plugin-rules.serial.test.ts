@@ -235,7 +235,7 @@ describe.each([...HARNESSES])("$name: a plugin's rules on a real install", (harn
     expect(team).toContain("### Test-first habits");
     expect(team.split("\n").filter((line) => line.startsWith("## ")).at(-1)).toBe(HEADING);
     // The chat's own copy of the rules follows at once.
-    expect(readFileSync(join(p.proj, "aidlc", "active-memory", "team.md"), "utf-8")).toContain(HEADING);
+    expect(readFileSync(join(p.proj, "aidlc", ".aidlc-engine", "active-memory", "team.md"), "utf-8")).toContain(HEADING);
     sizes(p, "default-level");
     const placed = snapshot(p);
     expect(sync(p)).not.toContain("rules are in");
@@ -247,7 +247,7 @@ describe.each([...HARNESSES])("$name: a plugin's rules on a real install", (harn
     expect(holding(p)).toEqual([]);
     expect(briefHolding(p)).toEqual([]);
     expect(snapshot(p)).toEqual(before);
-    expect(readFileSync(join(p.proj, "aidlc", "active-memory", "team.md"), "utf-8")).not.toContain(HEADING);
+    expect(readFileSync(join(p.proj, "aidlc", ".aidlc-engine", "active-memory", "team.md"), "utf-8")).not.toContain(HEADING);
     select(p, "aidlc,test-pro");
     expect(sync(p)).not.toContain("rules are in");
     expect(snapshot(p)).toEqual(placed);

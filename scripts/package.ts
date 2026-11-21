@@ -434,7 +434,7 @@ function transform(
       posixPath.includes("/agents/") &&
       posixPath.endsWith("-agent.md")
     ) {
-      s = s.replaceAll("aidlc/spaces/<active-space>/memory/", "aidlc/active-memory/");
+      s = s.replaceAll("aidlc/spaces/<active-space>/memory/", "aidlc/.aidlc-engine/active-memory/");
     }
     return Buffer.from(s, "utf-8");
   }

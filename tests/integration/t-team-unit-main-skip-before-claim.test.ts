@@ -87,7 +87,7 @@ describe("t-team-unit-main-skip-before-claim: a step skipped on main before any 
       publish: false,
       afterClaim: (checkout) => {
         const generation = Number(
-          JSON.parse(readFileSync(join(checkout, "aidlc", ".aidlc-unit-scope.json"), "utf-8")).generation,
+          JSON.parse(readFileSync(join(checkout, "aidlc", ".aidlc-engine", "units", "claimed.json"), "utf-8")).generation,
         );
         // Main's row for alpha, and the claim's own for its attempt; beta's
         // skip stays main's until a team claims beta.

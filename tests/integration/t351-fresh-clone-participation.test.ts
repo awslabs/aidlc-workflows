@@ -95,7 +95,7 @@ function seedClone(label: string): void {
   // runtime files.
   rmSync(join(proj, "aidlc", "spaces", "default", "intents", "active-intent"), { force: true });
   rmSync(join(recordDir(), ".aidlc-engine"), { recursive: true, force: true });
-  rmSync(join(proj, "aidlc", ".aidlc-sessions"), { recursive: true, force: true });
+  rmSync(join(proj, "aidlc", ".aidlc-engine", "sessions"), { recursive: true, force: true });
 }
 
 beforeEach(() => seedClone("teammate-work"));

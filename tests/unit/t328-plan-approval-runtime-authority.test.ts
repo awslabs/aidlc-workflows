@@ -1727,7 +1727,7 @@ describe("t328 decision refuses a challenge no answer could ever accept", () => 
     };
     expect(output.emitted).toBe("DECISION_RECORDED");
     expect(output.challengeId).toMatch(/^sha256:[0-9a-f]{64}$/);
-    expect(output.challengeFile).toBe(`aidlc/.aidlc-sessions/plan-approval/challenge-${session}.json`);
+    expect(output.challengeFile).toBe(`aidlc/.aidlc-engine/sessions/plan-approval/challenge-${session}.json`);
     const challenge = JSON.parse(readFileSync(join(project, output.challengeFile), "utf-8")) as {
       challengeId: string;
     };

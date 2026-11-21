@@ -243,7 +243,7 @@ describe("the lead's own finished Unit after a team claimed another", () => {
 // --- A redo for every Unit once a team has taken a Unit ---
 
 const LEFT = "alpha is finished, gamma is built by team-g and beta is not taken yet";
-const NOTHING_HERE = `Functional Design is not redone for every unit once a team has taken a unit: ${LEFT}.`;
+const NOTHING_HERE = `Functional Design is not redone for every unit once someone has taken a unit: ${LEFT}.`;
 const stageJumps = (lead: string) => readAuditShardEvents(lead).filter((row) => row.event === "STAGE_JUMPED").length;
 const rowOf = (checkout: string, unit: string) =>
   readFileSync(seededStateFile(checkout), "utf-8").split("\n").find((line) => line.startsWith(`| ${unit} |`));
@@ -323,7 +323,7 @@ describe("a redo for every Unit once a team has taken a Unit", () => {
     git(lead, ["fetch", "origin"]);
     const before = stageJumps(lead);
     expect(orch(lead, ["next", "--stage", "code-generation"])).toEqual(told(
-      "Code Generation is not redone for every unit once a team has taken a unit: " +
+      "Code Generation is not redone for every unit once someone has taken a unit: " +
         "gamma is built by team-g and alpha and beta are not taken yet.",
     ));
     expect(stageJumps(lead)).toBe(before);
@@ -356,7 +356,7 @@ describe("a redo for every Unit once a team has taken a Unit", () => {
     land("beta");
     const before = stageJumps(lead);
     expect(orch(lead, ["next", "--stage", FD])).toEqual(told(
-      "Functional Design is not redone for every unit once a team has taken a unit: alpha, beta and gamma are finished.",
+      "Functional Design is not redone for every unit once someone has taken a unit: alpha, beta and gamma are finished.",
     ));
     expect(stageJumps(lead)).toBe(before);
     let step = nextDirective(lead);
@@ -451,7 +451,7 @@ describe("a redo for every Unit once a team has taken a Unit", () => {
     const remote = git(lead, ["remote", "get-url", "origin"]);
     const teammate = clone(remote, "teammate");
     expect(orch(teammate, ["next", "--stage", FD])).toEqual(told(
-      "Functional Design is not redone for every unit once a team has taken a unit: " +
+      "Functional Design is not redone for every unit once someone has taken a unit: " +
         "alpha is finished and gamma is built by team-g.",
     ));
   });

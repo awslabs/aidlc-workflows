@@ -18,7 +18,7 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { lstatSync, readdirSync, readFileSync } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, join, relative, sep } from "node:path";
 import { holdsRecordedWrite, markedPart, onlyMarkedPartChanged } from "./aidlc-distribution.ts";
 import { isReadOnlyEngineProbe, readRegularFileNoFollowOrThrow } from "./aidlc-locks.ts";
 import { discoverProjectHarnesses } from "./aidlc-runtime-paths.ts";
@@ -50,6 +50,9 @@ import {
   workspaceSourceState,
   writeEngineFileNoFollow,
 } from "./aidlc-lib.ts";
+import { HARNESS_IDENTITY_KEYS, jsoncDocumentValue, jsonEntryHash, refreshedTablesRel, unbaselinedGenerated } from "./aidlc-distribution.ts";
+import { reposMoveToCommit } from "./aidlc-workspace-manifest.ts";
+import { earlyStartBrought } from "./aidlc-unit-teams.ts";
 
 const STAGE = "code-generation";
 // As many as the line, and the note for the build, name before "and N more".
@@ -72,6 +75,9 @@ interface BroughtFile {
 interface ChangedFile extends BroughtFile {
   // The commit holding that content, as the person types it; null when none does.
   ref: string | null;
+  // The repo's folder as the person types it from the workspace ("" for the
+  // workspace itself): where repos.json or repos.local.json puts it.
+  gitDir: string;
 }
 
 function git(dir: string, args: string[], input?: string): Buffer | null {
@@ -132,14 +138,19 @@ function olderCommit(dir: string, file: BroughtFile): string | null {
 // What the project's AI-DLC installs recorded writing (each harness's
 // `tools/data/aidlc-manifest.json`, kept by `aidlc config`): the files written
 // whole, and the shared files that hold AI-DLC's marked part, each with the
-// hash written. A record that cannot be read records nothing.
+// hash written; the settings files config merges with the project's own; the
+// files written by a JSON policy with no hash of the whole; and the harness
+// folders whose record was read. A record that cannot be read records nothing.
 interface InstallRecord {
   whole: Map<string, string[]>;
   parts: Map<string, Array<{ marker: string; hash: string }>>;
+  merged: Set<string>;
+  unhashed: Set<string>;
+  harnessDirs: string[];
 }
 
 function installRecord(projectDir: string): InstallRecord {
-  const record: InstallRecord = { whole: new Map(), parts: new Map() };
+  const record: InstallRecord = { whole: new Map(), parts: new Map(), merged: new Set(), unhashed: new Set(), harnessDirs: [] };
   const add = <T>(map: Map<string, T[]>, path: string, value: T): void => {
     map.set(path, [...(map.get(path) ?? []), value]);
   };
@@ -153,12 +164,17 @@ function installRecord(projectDir: string): InstallRecord {
       } catch {
         continue;
       }
+      record.harnessDirs.push(harness.harnessDir);
       for (const [path, hash] of Object.entries(object(manifest.files))) {
         if (typeof hash === "string") add(record.whole, path, hash);
       }
+      for (const path of Object.keys(object(manifest.entries))) record.merged.add(path);
       for (const [path, value] of Object.entries(object(manifest.rootContributions))) {
         const part = object(value);
-        if (typeof part.hash !== "string") continue;
+        if (typeof part.hash !== "string") {
+          record.unhashed.add(path);
+          continue;
+        }
         if (part.policy === "whole-file") add(record.whole, path, part.hash);
         if (part.policy === "managed-block") {
           add(record.parts, path, { marker: typeof part.marker === "string" && part.marker ? part.marker : basename(path), hash: part.hash });
@@ -193,16 +209,8 @@ function wholeAsInstalled(record: InstallRecord, path: string, bytes: Buffer): b
 function writtenByInstall(projectDir: string, record: InstallRecord, file: BroughtFile): boolean {
   if (!record.whole.has(file.path) && !record.parts.has(file.path)) return false;
   const bytes = bytesNow(projectDir, file.path);
-  if (bytes === null) return false;
-  if (wholeAsInstalled(record, file.path, bytes)) return true;
-  const text = bytes.toString("utf-8");
-  for (const { marker, hash } of record.parts.get(file.path) ?? []) {
-    const now = markedPart(file.path, text, marker);
-    if (now?.block == null || !holdsRecordedWrite(now.block, hash)) continue;
-    const copy = committedCopy(projectDir, file);
-    if (copy !== null && onlyMarkedPartChanged(file.path, text, copy.blob.toString("utf-8"), marker)) return true;
-  }
-  return false;
+  return bytes !== null &&
+    holdsInstallWrite(record, file.path, bytes, () => committedCopy(projectDir, file)?.blob.toString("utf-8") ?? null);
 }
 
 // A key of the source listing as the project's own file; null for a link's
@@ -384,11 +392,13 @@ export function broughtFilesChanged(
   if (current === null) return null;
   const greenfield = declaredProjectType(getField(stateContent, "Project Type") ?? undefined) === "Greenfield";
   const recorded = recordedSourceListingForCompare(projectDir, before, current);
+  // A file an early start's branch brought is not one this build changed.
+  const branch = earlyStartBrought(projectDir, sourceListingChangedKeys(recorded, current.listing));
   const files: BroughtFile[] = [];
   let install: InstallRecord | undefined;
   for (const key of sourceListingChangedKeys(recorded, current.listing)) {
     const entry = recorded.get(key);
-    if (entry === undefined || !brought.listing.has(key)) continue;
+    if (entry === undefined || !brought.listing.has(key) || branch.has(key)) continue;
     const parsed = listedFile(key);
     if (parsed === null) continue;
     const deleted = !current.listing.has(key);
@@ -481,17 +491,20 @@ function inLineOrder<T extends BroughtFile>(files: readonly T[]): T[] {
 
 // Each file with the commit that holds what the build replaced: HEAD for all of
 // them in one read per repo, then the history of the named ones HEAD does not hold.
-function withWayBack(projectDir: string, files: readonly BroughtFile[]): ChangedFile[] {
+export function withWayBack(projectDir: string, files: readonly BroughtFile[]): ChangedFile[] {
   const ordered = inLineOrder(files);
   const atHead = new Set<BroughtFile>();
   for (const repo of new Set(ordered.map((file) => file.repo))) {
     const dir = repo === "" ? projectDir : repoDir(projectDir, repo);
     for (const file of heldAtHead(dir, ordered.filter((one) => one.repo === repo))) atHead.add(file);
   }
+  const gitDirOf = (repo: string): string =>
+    repo === "" ? "" : relative(projectDir, repoDir(projectDir, repo)).split(sep).join("/") || ".";
   return ordered.map((file, index) => {
-    if (atHead.has(file)) return { ...file, ref: "HEAD" };
-    if (index >= NAMED_MAX) return { ...file, ref: null };
-    return { ...file, ref: olderCommit(file.repo === "" ? projectDir : repoDir(projectDir, file.repo), file) };
+    const gitDir = gitDirOf(file.repo);
+    if (atHead.has(file)) return { ...file, ref: "HEAD", gitDir };
+    if (index >= NAMED_MAX) return { ...file, ref: null, gitDir };
+    return { ...file, ref: olderCommit(file.repo === "" ? projectDir : repoDir(projectDir, file.repo), file), gitDir };
   });
 }
 
@@ -518,11 +531,6 @@ export function quoted(path: string): string | null {
   return `"${path}"`;
 }
 
-// The file's path quoted, or null when it or its repo's folder cannot be.
-function quotedIn(file: ChangedFile): string | null {
-  return file.repo && quoted(file.repo) === null ? null : quoted(file.path);
-}
-
 /** The line, the files in the order it names them (deleted, then top-level, then by path). */
 export function broughtFilesLine(ordered: readonly ChangedFile[]): string {
   const named = ordered.slice(0, NAMED_MAX);
@@ -540,15 +548,16 @@ export function broughtFilesLine(ordered: readonly ChangedFile[]): string {
   const groups = new Map<string, string[]>();
   const fromGit: ChangedFile[] = [];
   for (const file of ordered) {
-    const path = file.ref === null ? null : quotedIn(file);
-    if (file.ref === null || path === null) continue;
+    const path = file.ref === null ? null : quoted(file.path);
+    const dir = file.gitDir === "" ? "" : quoted(file.gitDir);
+    if (file.ref === null || path === null || dir === null) continue;
     fromGit.push(file);
-    const command = `git${file.repo ? ` -C ${quoted(file.repo)}` : ""} checkout ${file.ref} --`;
+    const command = `git${dir ? ` -C ${dir}` : ""} checkout ${file.ref} --`;
     groups.set(command, [...(groups.get(command) ?? []), path]);
   }
   const commands = andList([...groups].map(([command, paths]) => `\`${command} ${paths.join(" ")}\``));
   const noCopy = named.filter((file) => file.ref === null);
-  const noCommand = named.filter((file) => file.ref !== null && quotedIn(file) === null);
+  const noCommand = named.filter((file) => file.ref !== null && (quoted(file.path) === null || (file.gitDir !== "" && quoted(file.gitDir) === null)));
   // Past the named ones, only HEAD is read, so nothing is said of the rest
   // that git may hold further back.
   if (fromGit.length === 0 && noCommand.length === 0) {
@@ -601,4 +610,138 @@ export function unheardBroughtFilesLine(
     // A line the person may miss never stops the gate.
     return null;
   }
+}
+
+// Whether a file AI-DLC's install wrote holds that write now: the whole file,
+// or in a shared file its marked part, with the person's part as `before` has
+// it (git's copy of the file; null when there is none, and then which part
+// changed cannot be told). writtenByInstall and ownFilesToCommit both ask it.
+function holdsInstallWrite(record: InstallRecord, path: string, bytes: Buffer, before: () => string | null): boolean {
+  if (wholeAsInstalled(record, path, bytes)) return true;
+  const text = bytes.toString("utf-8");
+  for (const { marker, hash } of record.parts.get(path) ?? []) {
+    const now = markedPart(path, text, marker);
+    if (now?.block == null || !holdsRecordedWrite(now.block, hash)) continue;
+    const was = before();
+    if (was !== null && onlyMarkedPartChanged(path, text, was, marker)) return true;
+  }
+  return false;
+}
+
+// The top-level keys whose values differ between two JSON (or JSONC) texts;
+// null when either is not an object.
+function changedTopKeys(text: string, before: string): string[] | null {
+  const object = (value: unknown): value is Record<string, unknown> =>
+    typeof value === "object" && value !== null && !Array.isArray(value);
+  const now = jsoncDocumentValue(text);
+  const was = before === "" ? {} : jsoncDocumentValue(before);
+  if (!object(now) || !object(was)) return null;
+  const hash = (value: unknown): string => value === undefined ? "" : jsonEntryHash(value);
+  return [...new Set([...Object.keys(now), ...Object.keys(was)])].filter((key) => hash(now[key]) !== hash(was[key]));
+}
+
+/**
+ * What a yes to the offer after an update commits: AI-DLC's own files that git
+ * shows changed here (outside aidlc/, a new one only in a folder git already
+ * tracks), each still holding exactly what AI-DLC wrote with nothing of the
+ * person's changed since HEAD, and the repo list's move with them.
+ * `left` is the rest of AI-DLC's changed files, for the person to commit. Worked
+ * out from the install records and git each time, so nothing is kept and the
+ * person's work since the refresh counts.
+ *
+ * A settings file config merges with the project's own (the record's `entries`)
+ * keeps the person's uncommitted words in what it records as its write, so its
+ * hash cannot tell them apart: it goes in only when `changedBefore` says git
+ * showed it unchanged before the refresh (the session start lists git's changes
+ * before it refreshes), and with `changedBefore` null it is left. `held` names
+ * the ones left because they had changed before the refresh.
+ */
+export function ownFilesToCommit(
+  projectDir: string,
+  changedBefore: ((path: string) => boolean) | null,
+): { commit: string[]; left: string[]; held: string[] } {
+  const commit: string[] = [];
+  const left: string[] = [];
+  const held: string[] = [];
+  if (git(projectDir, ["rev-parse", "--verify", "--quiet", "HEAD"]) === null) return { commit, left, held };
+  const record = installRecord(projectDir);
+  const text = (out: Buffer | null): string[] => out?.toString("utf-8").split("\0").filter(Boolean) ?? [];
+  const status = new Map<string, string>();
+  const diff = text(git(projectDir, ["diff", "--name-status", "-z", "--no-renames", "--relative", "HEAD"]));
+  for (let at = 0; at + 1 < diff.length; at += 2) status.set(diff[at + 1], diff[at]);
+  const tracked = new Map<string, boolean>();
+  const folderTracked = (folder: string): boolean => {
+    if (!tracked.has(folder)) tracked.set(folder, (git(projectDir, ["ls-files", "--", folder])?.length ?? 0) > 0);
+    return tracked.get(folder) ?? false;
+  };
+  for (const path of text(git(projectDir, ["ls-files", "--others", "--exclude-standard", "-z"]))) {
+    const slash = path.indexOf("/");
+    if (slash > 0 && folderTracked(path.slice(0, slash))) status.set(path, "?");
+  }
+  const atHead = (path: string): string | null => git(projectDir, ["cat-file", "blob", `HEAD:./${path}`])?.toString("utf-8") ?? null;
+  const headRecords = new Map(record.harnessDirs.map((dir) => {
+    try {
+      const files = (JSON.parse(atHead(`${dir}/tools/data/aidlc-manifest.json`) ?? "{}") as { files?: Record<string, unknown> }).files;
+      return [dir, typeof files === "object" && files !== null ? files : {}] as const;
+    } catch {
+      return [dir, {}] as const;
+    }
+  }));
+  const generated = new Map<string, string>();
+  for (const dir of record.harnessDirs) {
+    for (const path of unbaselinedGenerated(dir)) generated.set(path, dir);
+    const tables = refreshedTablesRel(dir, (rel) => record.whole.has(rel));
+    if (tables !== undefined) generated.set(tables, dir);
+  }
+  // The graph, the grid and the tables are rendered from the person's own stage
+  // and scope files too; they wait while one of those is not in this commit.
+  const derived: string[] = [];
+  for (const [path, code] of [...status].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
+    if (path.startsWith("aidlc/")) continue;
+    const dir = generated.get(path);
+    const bytes = code === "D" ? null : bytesNow(projectDir, path);
+    const keysAsHead = (allowed: (key: string) => boolean): boolean => {
+      const changed = bytes === null ? null : changedTopKeys(bytes.toString("utf-8"), atHead(path) ?? "");
+      return changed?.every(allowed) === true;
+    };
+    let ours: boolean;
+    if (record.harnessDirs.some((harness) => path === `${harness}/tools/data/aidlc-manifest.json`)) {
+      ours = bytes !== null;
+    } else if (dir !== undefined && path.endsWith("/tools/data/harness.json")) {
+      // The keys a refresh takes from the release; the team's own (plugins, providers, trust) stay as HEAD has them.
+      // ponytail: no hash is kept of this file, so an identity key hand-edited after the refresh goes in with it.
+      ours = keysAsHead((key) => HARNESS_IDENTITY_KEYS.has(key));
+    } else if (dir !== undefined && (path.endsWith("/stage-graph.json") || path.endsWith("/scope-grid.json") || path.endsWith("/tables.md"))) {
+      derived.push(path);
+      continue;
+    } else if (record.whole.has(path) || record.parts.has(path)) {
+      const merged = record.merged.has(path);
+      if (merged && changedBefore?.(path) === true) held.push(path);
+      ours = bytes !== null && holdsInstallWrite(record, path, bytes, () => atHead(path) ?? "") &&
+        (!merged || changedBefore?.(path) === false);
+    } else if (record.unhashed.has(path) || dir !== undefined) {
+      ours = false;
+    } else if (code === "D") {
+      // A file a refresh removed: the last commit's record lists it, and HEAD holds what it wrote.
+      const harness = record.harnessDirs.find((name) => typeof headRecords.get(name)?.[path] === "string");
+      const hash = harness === undefined ? undefined : headRecords.get(harness)?.[path];
+      const blob = git(projectDir, ["cat-file", "blob", `HEAD:./${path}`]);
+      if (typeof hash !== "string" || blob === null) continue;
+      ours = holdsRecordedWrite(blob, hash);
+    } else {
+      continue;
+    }
+    (ours ? commit : left).push(path);
+  }
+  const sources = (harness: string): boolean =>
+    [...status.keys()].some((path) =>
+      (path.startsWith(`${harness}/aidlc-common/stages/`) || path.startsWith(`${harness}/scopes/`)) && !commit.includes(path)
+    ) || left.includes(`${harness}/tools/data/harness.json`);
+  const composed = (git(projectDir, ["status", "--porcelain", "-uall", "--", "aidlc/scopes"])?.length ?? 0) > 0;
+  for (const path of derived) {
+    const harness = generated.get(path) ?? "";
+    (composed || sources(harness) || bytesNow(projectDir, path) === null ? left : commit).push(path);
+  }
+  commit.push(...reposMoveToCommit(projectDir));
+  return { commit, left, held };
 }

@@ -52,11 +52,37 @@ export function workspaceRoot(projectDir: string): string {
   return join(projectDir, "aidlc");
 }
 
+// One piece of work a step acts on by name while the chat is on another (the
+// plan's end write for a lead's work on disk): while `work` runs, every reading
+// of the work here in this process (activeSpace, activeIntent and
+// resolveWorkflowSelection, each through pinnedWork) is that one, so its state,
+// record, marks and plan copy are its own; null reads as no scope. A scope
+// inside another restores the outer one when it ends. No cursor, binding or
+// file changes, and an explicit --space or --intent, or a delegated worktree's
+// own record, still wins.
+let workPinned: { space: string; intent: string } | null = null;
+
+export function pinnedWork(): { space: string; intent: string } | null {
+  return workPinned;
+}
+
+export function withWorkPinned<T>(work: { space: string; intent: string } | null, run: () => T): T {
+  const was = workPinned;
+  workPinned = work;
+  try {
+    return run();
+  } finally {
+    workPinned = was;
+  }
+}
+
 // The active space for this project. Reads the `aidlc/active-space` cursor; a
 // missing cursor, or one that does not name a space this project has, is
 // "default". NEVER throws: the default space is always valid even when
 // nothing is on disk yet (the resolver tolerates an absent space dir).
 export function activeSpace(projectDir: string): string {
+  const pinned = pinnedWork();
+  if (pinned !== null) return pinned.space;
   const ptr = join(workspaceRoot(projectDir), ACTIVE_SPACE_POINTER);
   try {
     return knownActiveSpace(workspaceRoot(projectDir), readFileSync(ptr, "utf-8"));
@@ -250,7 +276,10 @@ export const ACTIVE_DIRECTIVE_LOCK = "active-directive.lock";
 // both producers already fail safe on a non-zero engine exit: the Stop hook
 // allows the stop and records a drop, and the route check (readEngineUnitDirective)
 // surfaces the error from `unit start`, or lets the start-receipt guard stand
-// aside, instead of corrupting authority.
+// aside, instead of corrupting authority. One move is not a write and does not
+// come here: ensureWorkspaceEngineFolder (aidlc-runtime-paths.ts) relocates an
+// earlier release's engine files byte for byte in an observer too, so the
+// observer reads the same approval and open question as the next step.
 export class EngineModeViolationError extends Error {
   constructor(readonly primitive: string) {
     super(

@@ -232,7 +232,7 @@ describe("t-kiro-hooks-off: a hook the person switched off in Kiro is said once 
     expect(kiroHooksOffNotices(proj)).toHaveLength(1);
     markKiroHooksOffSaid(proj);
     expect(kiroHooksOffNotices(proj)).toHaveLength(0);
-    expect(existsSync(join(proj, "aidlc", ".aidlc-sessions", "kiro-hooks-off-said.json"))).toBe(true);
+    expect(existsSync(join(proj, "aidlc", ".aidlc-engine", "sessions", "kiro-hooks-off-said.json"))).toBe(true);
     switchOff(GUARD, new Date("2026-10-06T23:40:07.000Z"));
     expect(kiroHooksOffNotices(proj)).toHaveLength(1);
     expect(kiroReplyHookSwitchedOff(proj)).toBe(false);

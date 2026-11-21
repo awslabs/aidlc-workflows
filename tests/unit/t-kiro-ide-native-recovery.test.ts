@@ -115,7 +115,8 @@ function fixture(policy: "relaxed" | "strict" | "off" = "relaxed"): string {
   // Seed the record's audit ledger a real workflow always has by this point: a
   // guard that stands aside records its row best-effort, into a ledger that
   // exists. Pinning the clone id keeps the spawned binary on the same shard.
-  writeFileSync(join(project, "aidlc", ".aidlc-clone-id"), "nativerecoverytest\n", "utf-8");
+  mkdirSync(join(project, "aidlc", ".aidlc-engine"), { recursive: true });
+  writeFileSync(join(project, "aidlc", ".aidlc-engine", "clone-id"), "nativerecoverytest\n", "utf-8");
   const ledger = join(seededRecordDir(project), "audit", auditShardName(project));
   mkdirSync(dirname(ledger), { recursive: true });
   writeFileSync(ledger, "# AI-DLC Audit Log\n", "utf-8");

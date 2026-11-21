@@ -9,7 +9,7 @@ import {
   statSync,
 } from "node:fs";
 import { createRequire } from "node:module";
-import { knownActiveSpace } from "../tools/aidlc-runtime-paths.ts";
+import { knownActiveSpace, workspaceEnginePath } from "../tools/aidlc-runtime-paths.ts";
 import { validateUnitName } from "../tools/aidlc-unit-dag.ts";
 import { unitProgress } from "../tools/aidlc-unit-walk-view.ts";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -198,14 +198,7 @@ function readSessionBinding(
 ): StatuslineSelection | null {
   try {
     const parsed: unknown = JSON.parse(
-      readFileSync(
-        join(
-          workspaceRoot(projectDir),
-          ".aidlc-sessions",
-          `${sessionId}.binding.json`,
-        ),
-        "utf-8",
-      ),
+      readFileSync(join(workspaceEnginePath(projectDir, "sessions"), `${sessionId}.binding.json`), "utf-8"),
     );
     if (parsed === null || typeof parsed !== "object") return null;
     const record = parsed as Record<string, unknown>;
@@ -589,12 +582,7 @@ export function costSegment(
 ): string {
   try {
     if (!projectDir) return "";
-    const ledger = join(
-      projectDir,
-      "aidlc",
-      ".aidlc-sessions",
-      "usage-ledger.json",
-    );
+    const ledger = workspaceEnginePath(projectDir, "sessions", "usage-ledger.json");
     if (!existsSync(ledger)) return "";
     const require = createRequire(import.meta.url);
     const { sessionUsageAggregate } = require(

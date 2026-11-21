@@ -1218,7 +1218,7 @@ describe("t289 the trust anchor: a redirected CONTAINER is refused", () => {
     // The purity check greps a function's OWN body, so a helper could hide an fs
     // call one level down. Two pure-classified functions have non-trivial chains
     // into aidlc-record-core.ts: spaceAuditShardPath (-> auditShardName -> cloneId, which
-    // reads and writes aidlc/.aidlc-clone-id) and resolveIntentFlag (-> listIntents
+    // reads and writes aidlc/.aidlc-engine/clone-id) and resolveIntentFlag (-> listIntents
     // / activeIntent, which read spaces/<space>/intents/).
     //
     // Both are genuinely out of scope, but the reason is CONTAINMENT, not the

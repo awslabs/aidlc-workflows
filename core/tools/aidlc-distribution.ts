@@ -822,9 +822,10 @@ export function mergeBlock(
   // recorded from LF), so a refresh never rewrites the record for it. The
   // records are matched in order, this harness's own first, so another
   // harness's record of the same part in other line endings never stands in.
+  // A part no record matches is recorded in its LF form (sha256Lf).
   const firstMatching = (text: string, known: readonly (string | undefined)[]): string =>
     known.find((hash): hash is string => hash !== undefined && sha256Matching(text, [hash]) === hash) ??
-      sha256Bytes(text);
+      sha256Lf(text);
   const blockHash = firstMatching(block, recorded);
   if (beginAt >= 0) {
     if (endAt < beginAt) return { error: "managed end marker precedes its begin marker" };
@@ -951,7 +952,7 @@ export function sha256File(path: string): string {
 export function sha256Matching(value: string | Buffer, known: readonly (string | undefined)[]): string {
   const own = sha256Bytes(value);
   if (known.length === 0 || known.includes(own)) return own;
-  const lf = Buffer.from(value).toString("latin1").replaceAll("\r\n", "\n");
+  const lf = lfForm(value);
   for (const form of [lf, lf.replaceAll("\n", "\r\n")]) {
     const hash = sha256Bytes(Buffer.from(form, "latin1"));
     if (known.includes(hash)) return hash;
@@ -966,6 +967,19 @@ export function sha256Matching(value: string | Buffer, known: readonly (string |
 export function holdsRecordedWrite(content: string | Buffer, hash: string): boolean {
   const text = typeof content === "string" ? content : content.toString("utf-8");
   return sha256Matching(content, [hash]) === hash || sha256Matching(withSpace(text, "default"), [hash]) === hash;
+}
+
+// The bytes with every CRLF made LF (latin1 keeps each byte as it is).
+function lfForm(value: string | Buffer): string {
+  return Buffer.from(value).toString("latin1").replaceAll("\r\n", "\n");
+}
+
+// The hash config records for a file or part it writes: its LF form's, the
+// form git commits from a CRLF checkout and an LF one alike, so two machines
+// that refresh the same project write the same record. Readers match it
+// through sha256Matching.
+export function sha256Lf(value: string | Buffer): string {
+  return sha256Bytes(Buffer.from(lfForm(value), "latin1"));
 }
 
 export function sha256FileMatching(path: string, known: readonly (string | undefined)[]): string {
@@ -1591,6 +1605,7 @@ function entryAddress(id: string): { path: string[]; item?: string } | null {
 function aidlcOwnEntry(entry: Pick<JsonEntry, "path" | "item">): boolean {
   return [...entry.path, ...(entry.item === undefined ? [] : [entry.item])].some((part) =>
     part.includes(".aidlc/") || part.startsWith("aidlc/spaces/") || part.startsWith("aidlc/active-memory/") ||
+    part.startsWith("aidlc/.aidlc-engine/") ||
     part.startsWith("aidlc ")
   );
 }
@@ -1884,3 +1899,67 @@ export function missingJsonEntries(current: string, shippedText: string, under: 
     })
     .map((entry) => entry.id);
 }
+
+// The Kiro IDE steering file AI-DLC writes the active space's memory text into
+// (aidlc-includes.ts kiroIdeSteering).
+export const KIRO_IDE_STEERING = ".kiro/steering/aidlc-active-memory.md";
+
+// The folders outside the harness dir where a harness keeps the skills and
+// agents the engine generates and a plugin composes: Codex's `.agents/`, and
+// Copilot's `.github/` (its skills and agent files both live there).
+export const SHARED_SURFACE_DIRS = [".agents", ".github"] as const;
+
+// The skills folders a refresh looks in for the /aidlc skill, the harness's
+// own first.
+export function aidlcSkillsDirs(harnessDir: string): string[] {
+  return [`${harnessDir}/skills`, ...SHARED_SURFACE_DIRS.map((dir) => `${dir}/skills`)];
+}
+
+// Written by the engine from project state, so never recorded as shipped: a
+// refresh writes the staged copy over whatever is there, and never reports it
+// as a local change. Kiro IDE's steering file carries the project's memory text
+// (aidlc-includes.ts kiroIdeSteering).
+export function unbaselinedGenerated(harnessDir: string): string[] {
+  return [
+    ...["harness.json", "stage-graph.json", "scope-grid.json"].map((name) => `${harnessDir}/tools/data/${name}`),
+    ...(harnessDir === ".kiro" ? [KIRO_IDE_STEERING] : []),
+  ];
+}
+
+// The /aidlc skill: in the first skills folder that holds it. Config asks of
+// the staged tree; doctor asks of this install's record, so another harness's
+// skill folder in the project does not move its pick.
+export function aidlcSkillRel(harnessDir: string, present: (rel: string) => boolean): string {
+  const dirs = aidlcSkillsDirs(harnessDir);
+  return `${dirs.find((dir) => present(`${dir}/aidlc/SKILL.md`)) ?? dirs[0]}/aidlc/SKILL.md`;
+}
+
+// The scope and stage tables beside that skill, when they are there. They are
+// recorded as shipped, and a refresh renders them again from the compiled
+// graph, a plugin's rows included, so it stops on them only when they are not
+// a regular file.
+export function refreshedTablesRel(harnessDir: string, present: (rel: string) => boolean): string | undefined {
+  const rel = aidlcSkillRel(harnessDir, present).replace(/SKILL\.md$/, "tables.md");
+  return present(rel) ? rel : undefined;
+}
+
+// Keys the installed source owns: a refresh takes them from the new tree, not
+// the project's copy. `name` and `kiroLayout` belong here with `distribution`:
+// a project moved to another row that kept its old name or layout would still
+// read as the old row to every reader that keys on them.
+export const HARNESS_IDENTITY_KEYS = new Set([
+  "schemaVersion",
+  "distribution",
+  "name",
+  "kiroLayout",
+  "productName",
+  "configNextStep",
+  "hookActivation",
+  "newChatStep",
+  "directiveMaxBytes",
+  "harnessDir",
+  "rulesSubdir",
+  "statusLine",
+  "agentFinishRecorded",
+  "hostShell",
+]);

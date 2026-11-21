@@ -103,7 +103,8 @@ function makeProject(dir: string): string {
     `${JSON.stringify([{ uuid: "00000000-0000-7000-8000-000000000001", slug: DEFAULT_RECORD_DIR.replace(/-[0-9a-f]+$/, ""), status: "in-flight" }], null, 2)}\n`,
     "utf-8",
   );
-  writeFileSync(join(proj, "aidlc", ".aidlc-clone-id"), `${PINNED_CLONE_ID}\n`, "utf-8");
+  mkdirSync(join(proj, "aidlc", ".aidlc-engine"), { recursive: true });
+  writeFileSync(join(proj, "aidlc", ".aidlc-engine", "clone-id"), `${PINNED_CLONE_ID}\n`, "utf-8");
   mkdirSync(seededAuditDir(proj), { recursive: true });
   writeFileSync(pinnedShardPath(proj), "audit row 1\n", "utf-8");
   return proj;

@@ -251,7 +251,7 @@ describe("t240 dist/opencode packaging parity + shell shape", () => {
     };
     expect(cfg.skills?.paths).toContain(".aidlc/skills");
     // The method glob reads the engine's git-ignored copy of the active space's memory.
-    expect(cfg.instructions).toContain("aidlc/active-memory/**/*.md");
+    expect(cfg.instructions).toContain("aidlc/.aidlc-engine/active-memory/**/*.md");
     expect(cfg.permission?.bash?.["bun .aidlc/tools/*"]).toBe("allow");
     expect(cfg.permission?.edit?.[".aidlc/tools/**"]).toBe("ask");
     expect(cfg.permission?.edit?.[".aidlc/hooks/**"]).toBe("ask");

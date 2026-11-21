@@ -95,6 +95,8 @@ import {
 import { dirname, join } from "node:path";
 import {
   auditLockDir,
+  loadScopeMapping,
+  loadStageGraphAll,
   markHumanTurn,
   readAllAuditShards,
   reviewArtifactFingerprint,
@@ -116,6 +118,7 @@ import {
   seededRecordDir,
   seededStateFile,
   seedStateFile,
+  setupIntegrationProject,
 } from "../harness/fixtures.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
@@ -2267,5 +2270,52 @@ describe("t115 the gate and a skip say what the plan does next", () => {
     const told = ((next.directive?.change_notices ?? []) as string[]).join(" ");
     expect(told).toMatch(/^Feasibility[^.]* does not apply here, so I skipped it\.$/);
     expect(`${told} ${next.directive?.narration ?? ""}`).not.toContain("approve every gate");
+  });
+});
+
+// A work created to start at Code Generation (a composed plan or a skip list,
+// and every taken Unit whose plan starts there) starts that stage at its
+// creation: the row that starts it names where it started, the record the
+// creation wrote, as a jump's start row repeats its jump's. A work started at
+// a stage that reads no source names none.
+describe("t115 a work created to start at Code Generation records where that stage started", () => {
+  test("its Code Generation start row carries its creation's Source Baseline; a work started at Functional Design carries none", () => {
+    const env: Record<string, string | undefined> = { ...process.env };
+    for (const key of ["AIDLC_SCOPE_MAPPING", "AIDLC_SESSION_OVERRIDE", "AIDLC_SESSION_OVERRIDE_SOURCE", "CLAUDE_CODE_SESSION_ID", "CLAUDE_PID"]) {
+      delete env[key];
+    }
+    const grid = loadScopeMapping().feature;
+    const graph = loadStageGraphAll();
+    for (const first of ["code-generation", "functional-design"]) {
+      const proj = setupIntegrationProject({ noAidlcDocs: true, stripEnvScope: true });
+      tempDirs.push(proj);
+      const git = (...args: string[]) => expect(spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.test", ...args], { cwd: proj }).status).toBe(0);
+      writeFileSync(join(proj, "app.ts"), "export const app = 1;\n");
+      git("init", "-q");
+      git("add", "-A");
+      git("commit", "-qm", "before");
+      const at = graph.findIndex((stage) => stage.slug === first);
+      const skip = graph.filter((stage, index) => stage.phase !== "initialization" && index < at && grid.stages[stage.slug] === "EXECUTE").map((stage) => stage.slug);
+      const created = spawnSync(BUN, [join(proj, ".claude", "tools", "aidlc-utility.ts"), "intent-create", "--scope", "feature", "--label", "build",
+        "--arguments", "Build it", "--skip", skip.join(","), "--project-dir", proj], {
+        cwd: proj, encoding: "utf-8", env, timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      });
+      expect(created.status, `${created.stdout}${created.stderr}`).toBe(0);
+      const blocks = readAllAuditShards(proj).split(/\n---\n/);
+      const baseline = (block: string | undefined): string | undefined => block?.match(/^\*\*Source Baseline\*\*: (\S+)$/m)?.[1];
+      const workflow = baseline(blocks.find((block) => block.includes("**Event**: WORKFLOW_STARTED")));
+      const stage = blocks.find((block) => block.includes("**Event**: STAGE_STARTED") && block.includes(`**Stage**: ${first}`));
+      expect(stage, first).toBeDefined();
+      expect(workflow).toMatch(/^sha256:[0-9a-f]{64}$/);
+      if (first === "functional-design") {
+        expect(baseline(stage)).toBeUndefined();
+        continue;
+      }
+      expect(baseline(stage)).toBe(workflow);
+      const intents = join(proj, "aidlc", "spaces", "default", "intents");
+      const record = readdirSync(intents, { withFileTypes: true }).find((entry) => entry.isDirectory() && entry.name.endsWith("-build"))!.name;
+      const hash = workflow!.slice("sha256:".length);
+      expect(existsSync(join(intents, record, ".aidlc-engine", "source-review", "code-generation", `baseline-${hash.slice(0, 12)}.tsv`))).toBe(true);
+    }
   });
 });

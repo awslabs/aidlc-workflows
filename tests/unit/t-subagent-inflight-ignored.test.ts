@@ -66,7 +66,7 @@ function ledgerEntries(proj: string): Array<{ sessionId: string | null; startedA
 }
 
 describe("t-subagent-inflight-ignored: the background-helper ledger stays out of git", () => {
-  test("the ledger lives in aidlc/.aidlc-sessions/ and every harness's shipped ignore block keeps it out of git", () => {
+  test("the ledger lives in aidlc/.aidlc-engine/sessions/ and every harness's shipped ignore block keeps it out of git", () => {
     expect(HARNESS_MATRIX.length).toBeGreaterThanOrEqual(7);
     for (const { name: harness } of HARNESS_MATRIX) {
       const proj = project();

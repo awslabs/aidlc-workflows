@@ -136,7 +136,7 @@ describe.each(["off", "strict"] as const)("Guard Policy %s: a setting asked besi
   test("the code plan question: the setter run beside the plan answer, reading it half written, theirs", async () => {
     const proj = await at("code-plan", policy);
     const asked = await said(proj, ASKED);
-    const ask = join(proj, "aidlc", ".aidlc-sessions", "plan-approval");
+    const ask = join(proj, "aidlc", ".aidlc-engine", "sessions", "plan-approval");
     const files = (): string[] => [...new Bun.Glob("ask-*.json").scanSync(ask)];
     expect(files()).toHaveLength(1);
     const waiting = readFileSync(join(ask, files()[0]), "utf-8");

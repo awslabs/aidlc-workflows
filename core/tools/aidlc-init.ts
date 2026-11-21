@@ -48,6 +48,7 @@ import {
   aidlcHookRegistrations,
   aidlcHookTarget,
   assertProjectionPathHasNoSymlinks,
+  HARNESS_IDENTITY_KEYS,
   hostToolPath,
   emptyJsonObject,
   insertJsoncSetting,
@@ -78,6 +79,7 @@ import {
   sha256Bytes,
   sha256File,
   sha256FileMatching,
+  sha256Lf,
   sha256Matching,
   shippedRootIntegrationPath,
   unionBlocks,
@@ -163,8 +165,10 @@ import {
   resolveInvokingSessionId,
   resolveProjectDir,
   resumedLine,
+  runningWorkflows,
   sameFileIdentity,
   withAuditLock,
+  workflowDisplayName,
   writeFileAtomic,
 } from "./aidlc-lib.ts";
 import {
@@ -180,6 +184,7 @@ import { droppedPluginRegistrations } from "./aidlc-plugin-emit.ts";
 import { addPluginProducesKinds } from "./aidlc-plugin-produces-kinds.ts";
 import { regenerateRunnerSurfaces } from "./aidlc-runner-gen.ts";
 import { KIRO_IDE_STEERING, kiroIdeSteering, refreshActiveMemory } from "./aidlc-includes.ts";
+import { moveReposManifestIntoAidlc, reposMovedAtTerminalLine } from "./aidlc-workspace-manifest.ts";
 import {
   activeWorkflowPluginDependencies,
   canonicalScopeTableRegion,
@@ -5425,27 +5430,6 @@ function generatedOverlayCandidate(rel: string, harnessDir: string): boolean {
     rel.startsWith(".github/agents/");
 }
 
-// Keys the installed source owns: a refresh takes them from the new tree, not
-// the project's copy. `name` and `kiroLayout` belong here with `distribution`:
-// a project moved to another row that kept its old name or layout would still
-// read as the old row to every reader that keys on them.
-const HARNESS_IDENTITY_KEYS = new Set([
-  "schemaVersion",
-  "distribution",
-  "name",
-  "kiroLayout",
-  "productName",
-  "configNextStep",
-  "hookActivation",
-  "newChatStep",
-  "directiveMaxBytes",
-  "harnessDir",
-  "rulesSubdir",
-  "statusLine",
-  "agentFinishRecorded",
-  "hostShell",
-]);
-
 const CLAUDE_SHIPPED_KEYS = [
   "companyAnnouncements",
   "permissions",
@@ -10316,10 +10300,11 @@ function planManagedFiles(
           (priorHash !== undefined && modelStamped.has(rel) && composedRecords.has(rel));
         // A file staged from the project's own CRLF checkout (Codex's
         // config.toml, Kiro CLI's mcp.json) keeps the record it equals once
-        // line endings are set aside, so a clone's refresh leaves it as committed.
+        // line endings are set aside, so a clone's refresh leaves it as
+        // committed; any other is recorded in its LF form (sha256Lf).
         const recordHash = priorHash !== undefined && hash !== priorHash && sha256FileMatching(source, [priorHash]) === priorHash
           ? priorHash
-          : hash;
+          : sha256Lf(readFileSync(source));
         const nextHash = retainBaseline
           ? regenerated.has(rel) && targetRegular && unmodified ? composedRecords.get(rel) ?? recordHash : priorHash
           : composedRecords.get(rel) ?? recordHash;
@@ -12656,6 +12641,24 @@ function openWorkflowLine(
     : null;
 }
 
+// The running work here that is not this person's, by the name config prints:
+// another person's build a pull brought, or the lead's plan in a teammate's
+// clone (workOfAnother, status's Also open rule). The routing is loaded only
+// when work runs, by a dynamic import: a require of it is refused where a
+// module it loads has a top-level await (a compiled install). A read that
+// fails keeps every name.
+async function othersOpenWork(projectDir: string): Promise<Set<string>> {
+  const running = runningWorkflows(projectDir);
+  if (running.length === 0) return new Set();
+  try {
+    const { workOfAnother } = await import("./aidlc-orchestrate.ts");
+    return new Set(running.filter((run) => workOfAnother(projectDir, run))
+      .map(({ space, dirName, slug }) => workflowDisplayName(space, { dirName, slug })));
+  } catch {
+    return new Set();
+  }
+}
+
 // A refresh that brings in release files is done while work is open too: one
 // line says so, and when it moved the project to another release, how to go
 // back. Natively a pin brings the earlier release back; a copied project takes
@@ -12677,13 +12680,16 @@ function refreshDoneLines(
     // Open work that needs a plugin this change turned off, by plugin.
     pluginsOff: ReadonlyArray<{ plugin: string; workflow: string }>;
   },
+  // The open work that is not this person's (othersOpenWork), left unsaid.
+  theirs: ReadonlySet<string>,
 ): string[] {
-  const open = activeWorkflowDescriptions(projectDir);
+  const open = activeWorkflowDescriptions(projectDir).filter((name) => !theirs.has(name));
   if (open.length === 0) return [];
   const listed = (items: readonly string[]): string =>
     items.length <= 1 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
-  const stopped = [...new Set(change.pluginsOff.map((item) => item.workflow))].sort();
-  const plugins = [...new Set(change.pluginsOff.map((item) => item.plugin))].sort();
+  const pluginsOff = change.pluginsOff.filter((item) => !theirs.has(item.workflow));
+  const stopped = [...new Set(pluginsOff.map((item) => item.workflow))].sort();
+  const plugins = [...new Set(pluginsOff.map((item) => item.plugin))].sort();
   const going = open.filter((name) => !stopped.includes(name));
   const carriesOn = stopped.length === 0
     ? `Your open work (${open.join(", ")}) carries on.`
@@ -14926,6 +14932,11 @@ export async function main(
       : null;
     if (openLine) changes.push(openLine);
     if (!recordOnly) {
+      // The repo list moves into aidlc/ only while this release's own files go
+      // in: an earlier release's tools (a pin, a --from) read it only at the root.
+      if (stamp.frameworkVersion === AIDLC_VERSION && moveReposManifestIntoAidlc(projectDir).tracked) {
+        changes.push(reposMovedAtTerminalLine());
+      }
       changes.push(...refreshDoneLines(projectDir, {
         added: existing.distribution || switchingFrom ? undefined : descriptor.harnessDir,
         switched: switchingFrom !== undefined,
@@ -14936,7 +14947,7 @@ export async function main(
         releaseBaseUrl: releaseSettings.baseUrl,
         harness: descriptor.distribution,
         pluginsOff,
-      }));
+      }, await othersOpenWork(projectDir)));
       changes.push(...treesLeftBehindLines(
         projectDir,
         { distribution: stamp.distribution, harnessDir: descriptor.harnessDir, version: stamp.frameworkVersion },

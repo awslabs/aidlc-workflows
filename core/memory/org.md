@@ -27,10 +27,14 @@ Where a project runs several environments (staging, production), the default
 keeps one trunk and gates releases with tags or environment-specific deployment
 configs rather than long-lived release branches.
 
-Work that teams build Unit by Unit merges into the branch on this line;
-`team.md` or `project.md` names another the same way:
+Work whose Units others take merges into the branch on the first line
+below. The second line only sets which way AI-DLC offers first when you share
+a plan: by pull request, which is the default when no file
+says, or by direct push to that branch. A commit you ask for still goes where
+you already are. `team.md` or `project.md` says otherwise on lines of its own:
 
 - **Integration branch**: main
+- **Changes reach main**: by pull request
 
 ## Walking Skeleton
 

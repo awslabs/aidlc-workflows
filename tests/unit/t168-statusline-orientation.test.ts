@@ -182,7 +182,7 @@ describe("t168 statusline orientation prefix (mechanism cli — spawned hook + p
 
   test("a binding naming a record with a DEL or C1 control character is not displayed", () => {
     const intents = join(proj, "aidlc", "spaces", "default", "intents");
-    const sessions = join(proj, "aidlc", ".aidlc-sessions");
+    const sessions = join(proj, "aidlc", ".aidlc-engine", "sessions");
     mkdirSync(sessions, { recursive: true });
     const plain = createIntent(proj, "plain-work", "default", "feature");
     writeFileSync(

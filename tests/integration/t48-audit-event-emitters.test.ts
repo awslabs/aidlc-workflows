@@ -29,7 +29,7 @@
 // md-md catalog cross-check and the prose-append check use these
 // emission-pattern definitions:
 //   * emission helper call with the event literal on one line:
-//       (emitAudit|appendAuditEntry|appendAuditEntryUnlocked|appendAuditEvent)(...,"EVENT"...)
+//       (emitAudit|appendAuditEntry|appendAuditEntryUnlocked|appendAuditEvent|recordStandingTurnRow)(...,"EVENT"...)
 //   * the audit-logger ternary:   eventType = ... "EVENT"
 //   * a multi-line helper call where the event literal sits on its own line.
 //   * an appendAuditEntries batch member:   eventType: "EVENT"
@@ -50,7 +50,7 @@ const UTIL_TS = join(TOOLS_DIR, "aidlc-utility.ts");
 const AUDIT_FORMAT = join(AIDLC_SRC, "knowledge", "aidlc-shared", "audit-format.md");
 const SKILLS_DIR = join(AIDLC_SRC, "skills", "aidlc");
 
-const EMITTERS = "(emitAudit|appendAuditEntry|appendAuditEntryUnlocked|appendAuditEvent)";
+const EMITTERS = "(emitAudit|appendAuditEntry|appendAuditEntryUnlocked|appendAuditEvent|recordStandingTurnRow)";
 
 /** Strip line comments so a commented-out emission does not count.
  *  Drop //-prefixed lines and JSDoc *-lines. */

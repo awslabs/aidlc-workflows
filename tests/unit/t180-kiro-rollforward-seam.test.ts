@@ -4,12 +4,12 @@
 // dist/kiro/.kiro/hooks/aidlc-kiro-adapter.ts):
 //
 //   verb-intercept (userPromptSubmit) — bumps the per-turn counter
-//     aidlc/.aidlc-turn-counter EVERY turn, and on a TERMINAL command
-//     (read-only flag / workspace verb) stamps aidlc/.aidlc-readonly-latch
+//     aidlc/.aidlc-engine/sessions/kiro-turn-counter EVERY turn, and on a TERMINAL command
+//     (read-only flag / workspace verb) stamps aidlc/.aidlc-engine/sessions/kiro-readonly-latch
 //     {turn,flag,source,ts} + writes the dispatch relay to stdout.
 //     Unambiguous compose/routing invocations are pre-dispatched with the exact
 //     argv and their directive is injected; ambiguous freeform invocations
-//     stamp the exact argv in aidlc/.aidlc-sessions/.kiro-cli-forwarding-latch.json.
+//     stamp the exact argv in aidlc/.aidlc-engine/sessions/.kiro-cli-forwarding-latch.json.
 //   pretool-block (preToolUse) — the hard floor: a TRULY BARE advancing
 //     `aidlc engine orchestrate next` while the latch is fresh-for-this-turn
 //     (latch.turn === counter) → exit 2 (Kiro BLOCK). Any deliberate move
@@ -112,10 +112,10 @@ function promptWithNext(args: string): string {
   return `Step 1: run \`aidlc engine orchestrate next ${args}\` and relay the output.`;
 }
 
-const counterPath = (dir: string) => join(dir, "aidlc", ".aidlc-turn-counter");
-const latchPath = (dir: string) => join(dir, "aidlc", ".aidlc-readonly-latch");
+const counterPath = (dir: string) => join(dir, "aidlc", ".aidlc-engine", "sessions", "kiro-turn-counter");
+const latchPath = (dir: string) => join(dir, "aidlc", ".aidlc-engine", "sessions", "kiro-readonly-latch");
 const forwardingPath = (dir: string) =>
-  join(dir, "aidlc", ".aidlc-sessions", ".kiro-cli-forwarding-latch.json");
+  join(dir, "aidlc", ".aidlc-engine", "sessions", ".kiro-cli-forwarding-latch.json");
 
 describe("t180 verb-intercept turn-clock + read-only/nav latch", () => {
   test("native state-transition guard routes through the compiled hook ABI", () => {
@@ -640,6 +640,7 @@ describe("t180 verb-intercept turn-clock + read-only/nav latch", () => {
 describe("t180 pretool-block roll-forward backstop (exit-code contract)", () => {
   // Seed the counter + latch under aidlc/ directly; pretool-block reads them.
   function seedClock(dir: string, counter: number, latchTurn: number | null): void {
+    mkdirSync(dirname(counterPath(dir)), { recursive: true });
     writeFileSync(counterPath(dir), `${counter}\n`, "utf-8");
     if (latchTurn !== null) {
       writeFileSync(
@@ -657,6 +658,7 @@ describe("t180 pretool-block roll-forward backstop (exit-code contract)", () => 
     raw: string,
     args: string[],
   ): void {
+    mkdirSync(dirname(counterPath(dir)), { recursive: true });
     writeFileSync(counterPath(dir), `${counter}\n`, "utf-8");
     mkdirSync(dirname(forwardingPath(dir)), { recursive: true });
     writeFileSync(
@@ -817,7 +819,7 @@ describe("t180 verb-intercept relay says the lines waiting for this chat", () =>
   const chat = { AIDLC_UNATTENDED: "0" };
   const turn = (dir: string, args: string) =>
     runAdapter(dir, "verb-intercept", { session_id: SID, prompt: promptWithNext(args), cwd: dir }, chat);
-  const personLinesPath = (dir: string) => join(dir, "aidlc", ".aidlc-sessions", `${SID}.person-lines`);
+  const personLinesPath = (dir: string) => join(dir, "aidlc", ".aidlc-engine", "sessions", `${SID}.person-lines`);
   const waiting = (dir: string): string[] => existsSync(personLinesPath(dir))
     ? (JSON.parse(readFileSync(personLinesPath(dir), "utf-8")) as { lines: Array<{ line: string }> }).lines.map((l) => l.line)
     : [];

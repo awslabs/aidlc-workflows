@@ -1,4 +1,4 @@
-// covers: tool:aidlc-init, function:sha256Matching, function:mergeBlock, function:instructionFileDoctorCheck, function:frameworkFilesDoctorCheck
+// covers: tool:aidlc-init, function:sha256Matching, function:sha256Lf, function:mergeBlock, function:instructionFileDoctorCheck, function:frameworkFilesDoctorCheck
 //
 // #2057: Git for Windows checks text files out with CRLF line endings (its
 // default core.autocrlf=true), so a clone, branch switch, stash pop or new
@@ -284,8 +284,9 @@ describe("#2057 line endings Git rewrites are not the person's change", () => {
     expect(refreshed).toBe(current);
     const block = /# BEGIN AI-DLC:gitignore\r\n[\s\S]*?# END AI-DLC:gitignore/.exec(refreshed)?.[0] ?? "";
     const recorded = (JSON.parse(readFileSync(manifestPath, "utf-8")) as Manifest).rootContributions[".gitignore"].hash;
-    expect(recorded).toBe(sha256Bytes(block));
-    expect(sha256Matching(block.replaceAll("\r\n", "\n"), [recorded])).toBe(recorded);
+    // Recorded in its LF form, as git commits it, so an LF checkout writes the same record.
+    expect(recorded).toBe(sha256Bytes(block.replaceAll("\r\n", "\n")));
+    expect(sha256Matching(block, [recorded])).toBe(recorded);
   });
 
   test("claude: the refresh goes through, keeps an unchanged copy as it is, and doctor agrees", () => {

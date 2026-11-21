@@ -361,7 +361,7 @@ describe("t327 Code Generation authority publication", () => {
     const runtimeDir = join(
       installed.dir,
       "aidlc",
-      ".aidlc-sessions",
+      ".aidlc-engine", "sessions",
       "plan-approval",
     );
     const runtime = readdirSync(runtimeDir)

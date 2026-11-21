@@ -104,7 +104,7 @@ function heartbeats(dir: string, found: string[] = []): string[] {
 
 /** A day later: the message store has pruned, and every heartbeat is that old. */
 function aDayLater(proj: string): void {
-  rmSync(join(proj, "aidlc", ".aidlc-sessions", "messages"), { recursive: true, force: true });
+  rmSync(join(proj, "aidlc", ".aidlc-engine", "sessions", "messages"), { recursive: true, force: true });
   const old = new Date(Date.now() - 26 * 60 * 60 * 1000).toISOString().replace(/\.\d{3}Z$/, "Z");
   for (const path of heartbeats(join(proj, "aidlc"))) writeFileSync(path, old);
 }

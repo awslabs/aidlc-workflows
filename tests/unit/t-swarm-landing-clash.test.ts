@@ -335,7 +335,7 @@ describe("a parallel landing over changes not committed in the main checkout", (
     reviewRevisedSource(pd, "alpha", ["src/alpha.ts", ".gitignore"]);
     const finalized = swarm(pd, ["finalize", "--batch", "1", "--units", "alpha", "--claimed", "alpha"]);
     expect(finalized.code, `${finalized.out}\n${finalized.err}`).toBe(0);
-    const update = `${readFileSync(join(pd, ".gitignore"), "utf-8")}aidlc/active-memory/\n`;
+    const update = `${readFileSync(join(pd, ".gitignore"), "utf-8")}aidlc/.aidlc-engine/active-memory/\n`;
     writeFileSync(join(pd, ".gitignore"), update);
     const head = git(pd, ["rev-parse", "HEAD"]);
 

@@ -27,6 +27,7 @@ import {
   seedAidlcMemory, seedBoltDag, seededRecordDir, seededStateFile, seedStateFile,
 } from "../harness/fixtures.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import { keepIntentEntryInRecord } from "../../dist/claude/.claude/tools/aidlc-record-core.ts";
 import { loadGraph } from "../../dist/claude/.claude/tools/aidlc-graph.ts";
 import {
   artifactFilename, findStageBySlug, latestMainWorkflowStageRunFloorForProject, reviewArtifactFingerprint,
@@ -387,5 +388,23 @@ describe("t-crlf-clone-keeps-approvals: committed text checked out with CRLF", (
     expect(fingerprint(binary)).not.toBe(fingerprint(binary.replaceAll("\r\n", "\n")));
     expect(fingerprint("# Design\r\nA lone CR\rhere.\r\n")).not.toBe(fingerprint("# Design\nA lone CR\nhere.\n"));
     expect(fingerprint("# Design\r\nText.\r\n")).toBe(fingerprint("# Design\nText.\n"));
+  });
+
+  // A live run (Claude Code, Windows Server): a teammate's build record's row,
+  // checked out with CRLF, showed as changed after AI-DLC wrote its registry.
+  test("a record's own registry row checked out with CRLF is not rewritten when its content is the same", () => {
+    const p = createTestProject();
+    projects.push(p);
+    const entry = { uuid: "1b2c3d4e-5f6a-4b7c-8d9e-0f1a2b3c4d5e", slug: "checkout-ui", dirName: "261110-checkout-ui", status: "active" };
+    const folder = join(p, "aidlc", "spaces", "default", "intents", entry.dirName);
+    mkdirSync(folder, { recursive: true });
+    const row = join(folder, "aidlc-intent.json");
+    const crlf = `${JSON.stringify(entry, null, 2)}\n`.replaceAll("\n", "\r\n");
+    writeFileSync(row, crlf);
+    keepIntentEntryInRecord(p, entry, "default");
+    expect(readFileSync(row, "utf-8")).toBe(crlf);
+    // A real change is still written.
+    keepIntentEntryInRecord(p, { ...entry, status: "completed" }, "default");
+    expect(JSON.parse(readFileSync(row, "utf-8")).status).toBe("completed");
   });
 });

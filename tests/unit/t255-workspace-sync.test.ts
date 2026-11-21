@@ -723,9 +723,11 @@ describe("t255 workspace-sync - reconcile checkout against repos.json", () => {
   });
 
   test("fails clearly when a child dir exists but is not a git checkout", () => {
-    // Present dir with NO .git - a broken state sync must not silently accept.
+    // Present dir with files and NO .git - a broken state sync must not
+    // silently accept. (An empty folder is a place to clone into.)
     const ws = freshWorkspace(MANIFEST, []);
     mkdirSync(join(ws, "checkout-api"), { recursive: true });
+    writeFileSync(join(ws, "checkout-api", "notes.txt"), "not a repo\n", "utf-8");
     const r = runSync(ws);
     expect(r.status).not.toBe(0);
     expect(r.out).toContain("not a git checkout");
@@ -1432,6 +1434,26 @@ describe("t255 workspace-sync - reconcile checkout against repos.json", () => {
     expect(git(join(ws, "checkout-api"), "config", "--get", "remote.origin.url")).toBe(tokenUrl);
   });
 
+  // The org makes no address: a repo listed by name alone is not cloned, and
+  // git never hears of github.com under the org. The rewrite sends that address
+  // to a real repo, so a clone of it would go through.
+  test("a repo listed by name alone under an org is not cloned, and one line asks for its url", () => {
+    const sourceWs = freshRealWorkspace('{ "repos": [] }');
+    const remote = git(makeRepo(sourceWs, "source"), "remote", "get-url", "origin");
+    const ws = freshRealWorkspace(JSON.stringify({ org: "acme", repos: [{ name: "checkout-api" }] }));
+    const result = runSync(ws, [], {
+      ...GIT_ENV,
+      GIT_CONFIG_COUNT: "1",
+      GIT_CONFIG_KEY_0: `url.${remote}.insteadOf`,
+      GIT_CONFIG_VALUE_0: "git@github.com:acme/checkout-api.git",
+    });
+    expect(result.status, result.out).toBe(2);
+    expect(result.out).toContain('repos.json gives it no "url" to clone it from: add its "url" in repos.json, or in ');
+    expect(result.out).not.toContain('"org"');
+    expect(result.out).not.toContain("github.com");
+    expect(existsSync(join(ws, "checkout-api"))).toBe(false);
+  });
+
   test("clone-failure text from git hides userinfo; addresses without it print unchanged", () => {
     expect(
       maskUserinfo(
@@ -1781,9 +1803,10 @@ describe("t255 workspace-sync - reconcile checkout against repos.json", () => {
   });
 
   test("per-entry url override is accepted (validated, not derived from org)", () => {
-    // A non-empty "url" is valid and does not trip validation; an empty "url"
-    // is rejected before any git call. The clone path itself is covered with
-    // local bare remotes, so we only assert the validation contract here.
+    // A non-empty "url" is valid and does not trip validation; a blank "url"
+    // counts as not set, so the org default applies. The clone path itself is
+    // covered with local bare remotes, so we only assert the validation
+    // contract here.
     const GOOD = `{
   "org": "acme",
   "repos": [
@@ -1799,11 +1822,9 @@ describe("t255 workspace-sync - reconcile checkout against repos.json", () => {
     { "name": "checkout-api", "url": "" }
   ]
 }`;
-    const wsBad = freshWorkspace(BAD, ["checkout-api"]);
-    const r = runSync(wsBad);
-    expect(r.status).toBe(1);
-    expect(r.out).toContain("url");
-    expect(r.out).toContain("checkout-api");
+    const wsBlank = freshWorkspace(BAD, ["checkout-api"]);
+    expect(parseWorkspaceManifest(BAD).repos).toEqual([{ name: "checkout-api" }]);
+    expect(runSync(wsBlank).status).toBe(0);
   });
 });
 

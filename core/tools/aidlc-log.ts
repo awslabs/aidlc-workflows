@@ -9,9 +9,10 @@
 import { constructionPolicyRecovery } from "./aidlc-guard-operation.ts";
 import { projectDirFlag, settleClaudeTurnsFirst } from "./aidlc-claude-turn-pending.ts";
 import { CHANGE_NOTICES_NOTE, otherWorkNote, reviewRequestNote, reviewVerdictNote } from "./aidlc-directive.ts";
+import { kiroLeadRulesBrief, leadRulesBriefLine } from "./aidlc-steering.ts";
 import { spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmdirSync, rmSync } from "node:fs";
 import { dirname, isAbsolute, join, posix, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
@@ -79,6 +80,7 @@ import {
   readVerificationCommandFile,
   readAnswerTextFile,
   REQUEST_TEXT_DIR,
+  REQUEST_TEXT_DIRS,
   isReadOnlyEngineProbe,
   protectedQuestionRelativePath,
   mintProtectedQuestion,
@@ -2237,12 +2239,12 @@ export function readRequestFileResult(
 ): { text: string; spend(): void; restore(): void } | { refusal: string; overCap?: { spend(): void } } {
   const relativePath = file.replaceAll("\\", "/");
   const parts = relativePath.split("/");
-  const folder = REQUEST_TEXT_DIR.split("/");
   const name = parts[parts.length - 1];
-  if (
-    isAbsolute(file) || parts.length !== folder.length + 1 ||
-    folder.some((part, i) => parts[i] !== part) || name === "" || name === "." || name === ".."
-  ) {
+  const dir = REQUEST_TEXT_DIRS.find((candidate) => {
+    const folder = candidate.split("/");
+    return parts.length === folder.length + 1 && folder.every((part, i) => parts[i] === part);
+  });
+  if (isAbsolute(file) || dir === undefined || name === "" || name === "." || name === "..") {
     return { refusal: REQUEST_FILE_USAGE };
   }
   const unread = `AI-DLC could not read the request in ${relativePath}. Send your request again.`;
@@ -2252,6 +2254,14 @@ export function readRequestFileResult(
       removeRecordFileNoFollow(projectDir, relativePath);
     } catch {
       // Left in its gitignored folder; the next request replaces it.
+    }
+    // An earlier release's folder goes once its last request is read.
+    if (dir !== REQUEST_TEXT_DIR) {
+      try {
+        rmdirSync(join(projectDir, ...dir.split("/")));
+      } catch {
+        // Not empty, or already gone.
+      }
     }
   };
   let text: string;
@@ -5069,6 +5079,11 @@ function handleReview(args: string[]): void {
     // record beside the plan does not read as a missing approval.
     const planChange = flags.stage === "code-generation"
       ? approvedPlanChangeReviewLine(pd, { unit: flags.unit ?? null }) : null;
+    // On Kiro CLI (V2) the reviewer of a team's build that follows the lead's
+    // rules gets them only through its brief.
+    // A request is not a step: a brief handed out before may still name the file.
+    const leadBrief = kiroLeadRulesBrief(pd, { removeUnused: false });
+    const leadLine = leadBrief !== null && "file" in leadBrief ? leadRulesBriefLine(leadBrief.file) : null;
     console.log(JSON.stringify({
       emitted: "REVIEW_REQUESTED",
       stage: flags.stage,
@@ -5083,7 +5098,11 @@ function handleReview(args: string[]): void {
         reviewFile ?? "the review file this request opened",
         recordVerdict,
         dispatchAgent,
-        [...(otherWork.length > 0 ? [otherWorkNote(otherWork, "review")] : []), ...(planChange === null ? [] : [planChange])],
+        [
+          ...(otherWork.length > 0 ? [otherWorkNote(otherWork, "review")] : []),
+          ...(planChange === null ? [] : [planChange]),
+          ...(leadLine === null ? [] : [leadLine]),
+        ],
       ),
       ...(retried ? { retry: "pending-request" } : {}),
       ...(upgraded ? { upgrade: "legacy-request" } : {}),

@@ -997,18 +997,18 @@ describe("t242 state-transition ownership guard", () => {
 
   test("runtime integrity refuses shell mutations of session and Plan Approval records", () => {
     for (const command of [
-      "echo x > aidlc/.aidlc-sessions/foo.json",
-      "printf x | tee aidlc/.aidlc-sessions/foo.json",
-      "cp f aidlc/.aidlc-sessions/.aidlc-plan-approval/override-s.json",
-      "cp -t aidlc/.aidlc-sessions f",
-      "mv aidlc/.aidlc-sessions/foo.json /tmp/moved.json",
+      "echo x > aidlc/.aidlc-engine/sessions/foo.json",
+      "printf x | tee aidlc/.aidlc-engine/sessions/foo.json",
+      "cp f aidlc/.aidlc-engine/sessions/.aidlc-plan-approval/override-s.json",
+      "cp -t aidlc/.aidlc-engine/sessions f",
+      "mv aidlc/.aidlc-engine/sessions/foo.json /tmp/moved.json",
       "mv f .aidlc-plan-approval/override-s.json",
-      "rm -rf aidlc/.aidlc-sessions",
-      "mkdir -p aidlc/.aidlc-sessions/.aidlc-plan-approval",
-      "touch aidlc/.aidlc-sessions/presence-bypass-s",
-      "sed -i 's/strict/off/' aidlc/.aidlc-sessions/foo.json",
-      `python3 -c "open('aidlc/.aidlc-sessions/x','w')"`,
-      `node -e "require('node:fs').writeFileSync('aidlc/.aidlc-sessions/x', 'x')"`,
+      "rm -rf aidlc/.aidlc-engine/sessions",
+      "mkdir -p aidlc/.aidlc-engine/sessions/.aidlc-plan-approval",
+      "touch aidlc/.aidlc-engine/sessions/presence-bypass-s",
+      "sed -i 's/strict/off/' aidlc/.aidlc-engine/sessions/foo.json",
+      `python3 -c "open('aidlc/.aidlc-engine/sessions/x','w')"`,
+      `node -e "require('node:fs').writeFileSync('aidlc/.aidlc-engine/sessions/x', 'x')"`,
       `bun -e "Bun.write('.aidlc-plan-approval/x', 'x')"`,
       `python -c "print('.aidlc-sessions')"`,
     ]) {
@@ -1028,10 +1028,10 @@ describe("t242 state-transition ownership guard", () => {
 
   test("runtime integrity refuses file-write tools before the Bash-only lifecycle check", () => {
     for (const [tool_name, tool_input] of [
-      ["Write", { file_path: "aidlc/.aidlc-sessions/.aidlc-plan-approval/presence-bypass-s" }],
-      ["Edit", { file_path: "aidlc/.aidlc-sessions/foo.json" }],
+      ["Write", { file_path: "aidlc/.aidlc-engine/sessions/.aidlc-plan-approval/presence-bypass-s" }],
+      ["Edit", { file_path: "aidlc/.aidlc-engine/sessions/foo.json" }],
       ["MultiEdit", { edits: [{ file_path: "notes.md" }, { file_path: ".aidlc-plan-approval/override-s.json" }] }],
-      ["NotebookEdit", { notebook_path: "aidlc/.aidlc-sessions/records.ipynb" }],
+      ["NotebookEdit", { notebook_path: "aidlc/.aidlc-engine/sessions/records.ipynb" }],
       ["Write", { file_path: String.raw`C:\project\aidlc\.aidlc-sessions\foo.json` }],
     ] as const) {
       const r = spawnSync(process.execPath, [HOOK], {
@@ -1045,7 +1045,7 @@ describe("t242 state-transition ownership guard", () => {
     const relativeWrite = spawnSync(process.execPath, [HOOK], {
       input: JSON.stringify({
         hook_event_name: "PreToolUse",
-        cwd: "/tmp/aidlc/.aidlc-sessions",
+        cwd: "/tmp/aidlc/.aidlc-engine/sessions",
         tool_name: "Write",
         tool_input: { file_path: "foo.json" },
       }),
@@ -1241,7 +1241,7 @@ describe("t242 state-transition ownership guard", () => {
     };
     const runtime = "AIDLC runtime records and hooks belong to the harness";
     for (const [tool_name, tool_input, refusal] of [
-      ["fs_write", { path: join(project, "aidlc", ".aidlc-sessions", "foo.json"), text: "{}" }, runtime],
+      ["fs_write", { path: join(project, "aidlc", ".aidlc-engine", "sessions", "foo.json"), text: "{}" }, runtime],
       ["str_replace", { path: join(project, ".kiro", "hooks", "aidlc-kiro-adapter.ts"), oldStr: "a", newStr: "b" }, runtime],
       ["fs_append", { path: join(project, ".kiro", "hooks", "aidlc-review-freeze.json"), text: "{}" }, runtime],
       ["delete_file", { explanation: "remove it", targetFile: seededAuditShard(project) }, "The audit trail under aidlc/spaces/"],
@@ -2049,9 +2049,9 @@ describe("t242 state-transition ownership guard", () => {
       ["Bash", { command: "bun .claude/tools/aidlc-utility.ts config-change --guard-policy strict" }],
       ["Bash", { command: "echo > aidlc/.aidlc-compose-pending" }],
       ["Bash", { command: "git status" }],
-      ["Bash", { command: "cat aidlc/.aidlc-sessions/foo.json" }],
-      ["Bash", { command: "cp aidlc/.aidlc-sessions/foo.json /tmp/copy.json" }],
-      ["Bash", { command: "echo x > aidlc/.aidlc-sessions-backup/foo.json" }],
+      ["Bash", { command: "cat aidlc/.aidlc-engine/sessions/foo.json" }],
+      ["Bash", { command: "cp aidlc/.aidlc-engine/sessions/foo.json /tmp/copy.json" }],
+      ["Bash", { command: "echo x > aidlc/.aidlc-engine/sessions-backup/foo.json" }],
       ["Bash", { command: "MY_AIDLC_SESSION_OVERRIDE=abc git status" }],
       ["Write", { file_path: "aidlc/spaces/default/intents/x/.aidlc-engine/reviewer-dispatch.json" }],
       ["Edit", { file_path: "aidlc/spaces/default/intents/x/inception/requirements.md" }],
@@ -2094,7 +2094,7 @@ describe("t242 state-transition ownership guard", () => {
         : state);
       for (const [tool_name, tool_input] of [
         ["Bash", { command: "bun .claude/hooks/aidlc-record-human-turn.ts" }],
-        ["Write", { file_path: "aidlc/.aidlc-sessions/presence-bypass-s" }],
+        ["Write", { file_path: "aidlc/.aidlc-engine/sessions/presence-bypass-s" }],
         ["Write", { file_path: ".claude/hooks/aidlc-state-transition-guard.ts", content: "process.exit(0);" }],
       ] as const) {
         const r = spawnSync(process.execPath, [HOOK], {
@@ -2218,7 +2218,7 @@ describe("t242 state-transition ownership guard", () => {
     const install = mkdtempSync(join(tmpdir(), "t242-install-"));
     try {
       cpSync(join(REPO_ROOT, "dist", "claude"), install, { recursive: true });
-      const cloneId = join(install, "aidlc", ".aidlc-clone-id");
+      const cloneId = join(install, "aidlc", ".aidlc-engine", "clone-id");
       rmSync(cloneId, { force: true });
       const env = unownedEnv();
       delete env.CLAUDE_PROJECT_DIR;

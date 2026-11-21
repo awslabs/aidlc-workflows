@@ -85,7 +85,7 @@ import {
 // With no intent cursor seeded, doctor's appendAuditEvent resolves the BARE
 // space record root's per-clone audit SHARD (auditFilePath -> aidlc/spaces/
 // default/intents/audit/<host>-<clone>.md). Seeding it through auditFilePath
-// persists aidlc/.aidlc-clone-id first, so the doctor subprocess resolves the
+// persists aidlc/.aidlc-engine/clone-id first, so the doctor subprocess resolves the
 // same shard.
 const RECORD_REL = join("aidlc", "spaces", "default", "intents");
 function recordRoot(proj: string): string {

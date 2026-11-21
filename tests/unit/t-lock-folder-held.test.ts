@@ -673,7 +673,7 @@ describe("next meets a held lock folder", () => {
   test("where the turn's stops cannot be counted, the step carries its own bound", () => {
     const proj = guardProject("off");
     started(proj);
-    const record = join(proj, "aidlc", ".aidlc-sessions", `${SESSION}.person-lines`);
+    const record = join(proj, "aidlc", ".aidlc-engine", "sessions", `${SESSION}.person-lines`);
     rmSync(record, { recursive: true, force: true });
     mkdirSync(record, { recursive: true });
     for (let i = 0; i < 2; i++) {
@@ -687,12 +687,12 @@ describe("next meets a held lock folder", () => {
   test("a request read from a file is there again for the same command", () => {
     const proj = guardProject("off");
     started(proj);
-    const file = join(proj, "aidlc", ".aidlc-request-text", "request.txt");
+    const file = join(proj, "aidlc", ".aidlc-engine", "request-text", "request.txt");
     const request = "Fix the login & signup forms";
     mkdirSync(dirname(file), { recursive: true });
     writeFileSync(file, `${request}\n`);
     // A plan word with new words while work is in progress: the routing question, which the held folder stops.
-    const command = ["--scope", "bugfix", "--request-file", "aidlc/.aidlc-request-text/request.txt"];
+    const command = ["--scope", "bugfix", "--request-file", "aidlc/.aidlc-engine/request-text/request.txt"];
     expect(directiveOf(runNext(proj, command, { held: true, session: true }))).toEqual({ kind: "print", message: AGENT_STEP });
     expect(readFileSync(file, "utf8")).toBe(request);
     rmSync(lockDirOf(proj), { recursive: true, force: true });

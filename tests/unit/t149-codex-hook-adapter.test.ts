@@ -103,7 +103,7 @@ const FIXTURES = JSON.parse(
 // default record (so the cursor resolves) + the resolved audit SHARD (pinned
 // clone-id so audit reads are deterministic).
 // The Codex adapter's session heartbeat lives with the core session stamps at
-// aidlc/.aidlc-sessions/, independent of the active-intent cursor. That lets a
+// aidlc/.aidlc-engine/sessions/, independent of the active-intent cursor. That lets a
 // new session reconcile its predecessor after a second intent became active.
 const PINNED_CLONE_ID = "testcloneid149";
 function pinnedShardName(): string {
@@ -166,7 +166,8 @@ function scratchProject(withState: boolean): string {
       seededStateFile(dir),
       readFileSync(join(REPO_ROOT, "tests", "fixtures", "state-brownfield-feature.md"), "utf-8"),
     );
-    writeFileSync(join(dir, "aidlc", ".aidlc-clone-id"), `${PINNED_CLONE_ID}\n`, "utf-8");
+    mkdirSync(join(dir, "aidlc", ".aidlc-engine"), { recursive: true });
+    writeFileSync(join(dir, "aidlc", ".aidlc-engine", "clone-id"), `${PINNED_CLONE_ID}\n`, "utf-8");
     const auditDir = seededAuditDir(dir);
     mkdirSync(auditDir, { recursive: true });
     writeFileSync(join(auditDir, pinnedShardName()), "# AI-DLC Audit Log\n");
@@ -1581,7 +1582,7 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
     }
   });
 
-  test("9b: the replay cache lives in the project's own aidlc/.aidlc-sessions/, keeps at most 64 slots under 5 minutes old, and writes nothing in the OS temp folder", () => {
+  test("9b: the replay cache lives in the project's own aidlc/.aidlc-engine/sessions/, keeps at most 64 slots under 5 minutes old, and writes nothing in the OS temp folder", () => {
     const dir = scratchProject(true);
     const temp = realpathSync(mkdtempSync(join(tmpdir(), "t149-temp-")));
     try {
@@ -1858,7 +1859,7 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
     // `source`, so the core hook's P8 stamp/rebind path is reachable. Proof:
     // create an intent (so the live cursor resolves a uuid), fire startup with
     // the fixture session_id, and assert the per-session stamp file
-    // aidlc/.aidlc-sessions/<session_id> was WRITTEN with that uuid. Without
+    // aidlc/.aidlc-engine/sessions/<session_id> was WRITTEN with that uuid. Without
     // the forwarded session_id the core hook's `if (sessionId)` block is inert
     // and no stamp file appears.
     const dir = scratchProject(true);
@@ -1867,7 +1868,7 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
       const sid = String(FIXTURES.sessionStart.session_id);
       const r = runAdapter(dir, "session-start", withCwd(FIXTURES.sessionStart, dir));
       expect(r.code).toBe(0);
-      const stampPath = join(dir, "aidlc", ".aidlc-sessions", sid);
+      const stampPath = join(dir, "aidlc", ".aidlc-engine", "sessions", sid);
       expect(existsSync(stampPath)).toBe(true);
       expect(readFileSync(stampPath, "utf-8").trim()).toBe(created.uuid);
     } finally {
@@ -1887,7 +1888,7 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
       // Stamp the session to A via a startup fire (the core hook stamps the
       // live cursor's uuid — currently A).
       runAdapter(dir, "session-start", withCwd({ ...FIXTURES.sessionStart, source: "startup" }, dir));
-      const stampPath = join(dir, "aidlc", ".aidlc-sessions", sid);
+      const stampPath = join(dir, "aidlc", ".aidlc-engine", "sessions", sid);
       expect(readFileSync(stampPath, "utf-8").trim()).toBe(a.uuid);
       // Move the live cursor to B in another space (the drift the resume must
       // detect). Cross-space correction must remain two skill invocations;

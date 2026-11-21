@@ -130,8 +130,11 @@ import {
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { listMessages, saveMessage } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
 import { FILE_TOOLS_RULE } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
+import { driveCodeGeneration, teammateTakes } from "../harness/early-start.ts";
+import { cleanupTeamBuild, git } from "../harness/team-build.ts";
 
 setDefaultTimeout(120_000);
+afterEach(cleanupTeamBuild);
 
 const BUN = process.execPath;
 const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
@@ -751,7 +754,7 @@ describe("the engine asks for Plan Approval", () => {
       .toBe(0);
     // So does a person's request for `next --request-file`, directly inside the
     // project's request-text folder, the only place the engine reads it.
-    const requestText = join(proj, "aidlc", ".aidlc-request-text");
+    const requestText = join(proj, "aidlc", ".aidlc-engine", "request-text");
     expect(guardWrite(proj, join(requestText, "request.txt")).code).toBe(0);
     expect(guardWrite(proj, join(requestText, "nested", "request.txt")).code).toBe(2);
     expect(guardWrite(proj, join(requestText, "..", "aidlc-state.md")).code).toBe(2);
@@ -5633,5 +5636,19 @@ describe("the engine writes the plan's Testing Contract itself", () => {
       expect(readFileSync(join(codeGenerationRecordDir(pd, unit), "code-generation-plan.md"), "utf-8"))
         .toBe(`# Plan for ${unit}\n\n## Summary\n\n- Builds: ${unit}\n\n## Steps\n- [ ] Implement ${unit}\n\n${contract(pd)}`);
     }
+  });
+});
+
+// An early start the person switched onto after the take: what the
+// dependency's pushed branch brought is where the build started, so the code
+// plan question names only what the person changed since.
+describe("the code plan question of an early start", () => {
+  test("names the person's own file already changed, never what the dependency's branch brought", () => {
+    const build = teammateTakes({ early: true, uncommitted: true });
+    git(build.code, ["switch", "-q", build.unit]);
+    writeFileSync(join(build.code, "NOTES.md"), "mine\n");
+    const ran = driveCodeGeneration(build);
+    expect(ran.plans.length).toBeGreaterThan(0);
+    expect(ran.plans[0]).toContain("Already changed before you approved: NOTES.md.");
   });
 });

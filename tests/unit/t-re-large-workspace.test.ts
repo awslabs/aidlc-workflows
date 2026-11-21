@@ -20,6 +20,7 @@ import { join } from "node:path";
 import { cleanupTestProject, createTestProject, FIXTURES_DIR, REPO_ROOT, seededStateFile } from "../harness/fixtures.ts";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import { noteReposManifestOffered } from "../../dist/claude/.claude/tools/aidlc-workspace-repos.ts";
 import {
   auditBlockField,
   GATE_NOTE_SECONDS,
@@ -102,6 +103,8 @@ function workspace(tree: Tree, shape: Shape): { proj: string; repos: string[] } 
   // t-re-repo-scope's.
   rows[0].repos_named = true;
   writeFileSync(registry, `${JSON.stringify(rows, null, 2)}\n`);
+  // The one offer to write repos.json was made at an earlier step (t-repos-anywhere's).
+  noteReposManifestOffered(proj);
   for (const repo of repos) {
     mkdirSync(join(proj, repo, ".git"), { recursive: true });
     writeFileSync(join(proj, repo, "main.py"), "print('hello')\n");

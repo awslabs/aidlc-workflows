@@ -113,9 +113,9 @@ function makeSeed(): { seed: string; remote: string } {
   );
   writeFileSync(
     join(seed, ".gitignore"),
-    "aidlc/.aidlc-clone-id\naidlc/.aidlc-unit-scope.json\naidlc/.aidlc-unit-parked\n" +
-      "aidlc/.aidlc-claim-generations.json\naidlc/.aidlc-unit-participant\n" +
-      "aidlc/.aidlc-claim-registry.json\naidlc/.aidlc-unit-releases/\n",
+    "aidlc/.aidlc-engine/clone-id\naidlc/.aidlc-engine/units/claimed.json\naidlc/.aidlc-engine/units/parked\n" +
+      "aidlc/.aidlc-engine/units/claim-generations.json\naidlc/.aidlc-engine/units/participant\n" +
+      "aidlc/.aidlc-engine/units/claim-registry.json\naidlc/.aidlc-engine/units/releases/\n",
   );
   git(seed, ["init", "-b", "main"]);
   git(seed, ["config", "user.name", "seed"]);

@@ -169,7 +169,7 @@ describe("a second chat on the work the cursor names", () => {
     const registry = JSON.parse(readFileSync(join(intentsDirOf(proj), "intents.json"), "utf-8")) as Array<{ uuid: string; dirName: string }>;
     const uuid = registry.find((row) => row.dirName === DEFAULT_RECORD_DIR)?.uuid ?? "";
     expect(uuid).not.toBe("");
-    writeFileSync(join(proj, "aidlc", ".aidlc-unit-scope.json"), JSON.stringify({
+    writeFileSync(join(proj, "aidlc", ".aidlc-engine", "units", "claimed.json"), JSON.stringify({
       version: 1, space: "default", intent_uuid: uuid, intent_id8: uuid.slice(-8), unit: "u1",
       owner: "me", generation: 1, nonce: "n", claim_ref: "r", claim_oid: "o", claimed_from_oid: "f",
       integration_ref: "i", gate_rhythm: "per-stage",

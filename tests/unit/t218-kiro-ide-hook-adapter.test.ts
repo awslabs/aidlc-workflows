@@ -160,7 +160,8 @@ function scratchProject(withState: boolean): string {
       seededStateFile(dir),
       readFileSync(join(REPO_ROOT, "tests", "fixtures", "state-brownfield-feature.md"), "utf-8"),
     );
-    writeFileSync(join(dir, "aidlc", ".aidlc-clone-id"), `${PINNED_CLONE_ID}\n`, "utf-8");
+    mkdirSync(join(dir, "aidlc", ".aidlc-engine"), { recursive: true });
+    writeFileSync(join(dir, "aidlc", ".aidlc-engine", "clone-id"), `${PINNED_CLONE_ID}\n`, "utf-8");
     const auditDir = seededAuditDir(dir);
     mkdirSync(auditDir, { recursive: true });
     writeFileSync(join(auditDir, pinnedShardName()), "# AI-DLC Audit Log\n");
@@ -770,7 +771,7 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
       expect(start.code).toBe(0);
       expect(
         readFileSync(
-          join(dir, "aidlc", ".aidlc-sessions", ".kiro-ide-current-session"),
+          join(dir, "aidlc", ".aidlc-engine", "sessions", ".kiro-ide-current-session"),
           "utf-8",
         ).trim(),
       ).toBe(sessionId);
@@ -778,7 +779,7 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
       expect(originalUuid).toBeDefined();
       expect(
         readFileSync(
-          join(dir, "aidlc", ".aidlc-sessions", sessionId),
+          join(dir, "aidlc", ".aidlc-engine", "sessions", sessionId),
           "utf-8",
         ).trim(),
       ).toBe(originalUuid);
@@ -821,14 +822,14 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
       }
       expect(
         readFileSync(
-          join(dir, "aidlc", ".aidlc-sessions", sessionId),
+          join(dir, "aidlc", ".aidlc-engine", "sessions", sessionId),
           "utf-8",
         ).trim(),
       ).toBe(createdUuid);
       const handoffPath = join(
         dir,
         "aidlc",
-        ".aidlc-sessions",
+        ".aidlc-engine", "sessions",
         `${sessionId}.handoff.json`,
       );
       expect(JSON.parse(readFileSync(handoffPath, "utf-8"))).toMatchObject({
@@ -905,7 +906,7 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
       expect(createdUuid).toBeDefined();
       expect(
         readFileSync(
-          join(dir, "aidlc", ".aidlc-sessions", sessionId),
+          join(dir, "aidlc", ".aidlc-engine", "sessions", sessionId),
           "utf-8",
         ).trim(),
       ).toBe(createdUuid);
@@ -971,7 +972,7 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
         const handoffPath = join(
           dir,
           "aidlc",
-          ".aidlc-sessions",
+          ".aidlc-engine", "sessions",
           `${sessionOne}.handoff.json`,
         );
         expect(existsSync(handoffPath), entry.label).toBe(true);
@@ -986,7 +987,7 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
         ).toBe(0);
         expect(
           readFileSync(
-            join(dir, "aidlc", ".aidlc-sessions", ".kiro-ide-current-session"),
+            join(dir, "aidlc", ".aidlc-engine", "sessions", ".kiro-ide-current-session"),
             "utf-8",
           ).trim(),
           entry.label,
@@ -1034,7 +1035,7 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
       );
       expect(modern.code).toBe(0);
       expect(
-        readFileSync(join(dir, "aidlc", ".aidlc-sessions", "sess_t218"), "utf-8").trim(),
+        readFileSync(join(dir, "aidlc", ".aidlc-engine", "sessions", "sess_t218"), "utf-8").trim(),
       ).toBe("00000000-0000-7000-8000-000000000001");
 
       const dispatcherPayload = JSON.stringify({
@@ -1049,7 +1050,7 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
       expect(dispatcher.code).toBe(0);
       expect(
         readFileSync(
-          join(dir, "aidlc", ".aidlc-sessions", "sess_t218_dispatcher"),
+          join(dir, "aidlc", ".aidlc-engine", "sessions", "sess_t218_dispatcher"),
           "utf-8",
         ).trim(),
       ).toBe("00000000-0000-7000-8000-000000000001");
@@ -1062,14 +1063,14 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
       expect(legacy.code).toBe(0);
       expect(
         readFileSync(
-          join(dir, "aidlc", ".aidlc-sessions", legacySessionId(dir)),
+          join(dir, "aidlc", ".aidlc-engine", "sessions", legacySessionId(dir)),
           "utf-8",
         ).trim(),
       ).toBe("00000000-0000-7000-8000-000000000001");
       const legacyHostMarker = join(
         dir,
         "aidlc",
-        ".aidlc-sessions",
+        ".aidlc-engine", "sessions",
         `.kiro-ide-legacy-plan-approval-${legacySessionId(dir)}.json`,
       );
       expect(
@@ -3400,7 +3401,7 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
         join(
           dir,
           "aidlc",
-          ".aidlc-sessions",
+          ".aidlc-engine", "sessions",
           "plan-approval",
           `legacy-offer-${legacySessionId(dir, ownerHost.VSCODE_IPC_HOOK, ownerHost.VSCODE_PID)}.json`,
         ),
@@ -4550,7 +4551,7 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
         const offerPath = join(
           dir,
           "aidlc",
-          ".aidlc-sessions",
+          ".aidlc-engine", "sessions",
           "plan-approval",
           `legacy-offer-${legacySessionId(dir)}.json`,
         );
@@ -4648,7 +4649,7 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
       const offerPath = join(
         dir,
         "aidlc",
-        ".aidlc-sessions",
+        ".aidlc-engine", "sessions",
         "plan-approval",
         `legacy-offer-${legacySessionId(
           dir,
@@ -4756,7 +4757,7 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
         join(
           dir,
           "aidlc",
-          ".aidlc-sessions",
+          ".aidlc-engine", "sessions",
           "plan-approval",
           `legacy-offer-${legacySessionId(
             dir,
@@ -5519,7 +5520,7 @@ describe("t218 IDE 1.x stdin channel (snake_case payload, USER_PROMPT empty)", (
   ] as const)("N6c: %s retains real prompt session identities without a startup callback", (_name, invoke) => {
     // Budget five sequential real hook invocations plus fixture setup and cleanup.
     const dir = scratchProject(true);
-    const marker = join(dir, "aidlc", ".aidlc-sessions", ".kiro-ide-current-session");
+    const marker = join(dir, "aidlc", ".aidlc-engine", "sessions", ".kiro-ide-current-session");
     const prompt = (session: string | undefined) => JSON.stringify({
       hook_event_name: "UserPromptSubmit",
       session_id: session,
@@ -5562,7 +5563,7 @@ describe("t218 IDE 1.x stdin channel (snake_case payload, USER_PROMPT empty)", (
     ["dispatcher", runIdeDispatcherStdin],
   ] as const)("N6d: %s gives a chat's first prompt the Runtime Session line when no SessionStart ran", (_name, invoke) => {
     const dir = scratchProject(false);
-    const sessions = join(dir, "aidlc", ".aidlc-sessions");
+    const sessions = join(dir, "aidlc", ".aidlc-engine", "sessions");
     try {
       const first = invoke(dir, "record-human-turn", chatPrompt("sess_chat_one"));
       expect(first.code, first.stderr).toBe(0);
@@ -5615,7 +5616,7 @@ describe("t218 IDE 1.x stdin channel (snake_case payload, USER_PROMPT empty)", (
       expect(auditEvents(dir, "SESSION_RESUMED")).toBe(1);
       expect(auditEvents(dir, "SESSION_STARTED")).toBe(2);
       expect(
-        readFileSync(join(dir, "aidlc", ".aidlc-sessions", ".current-session"), "utf8").trim(),
+        readFileSync(join(dir, "aidlc", ".aidlc-engine", "sessions", ".current-session"), "utf8").trim(),
       ).toBe("sess_wf_one");
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -5624,7 +5625,7 @@ describe("t218 IDE 1.x stdin channel (snake_case payload, USER_PROMPT empty)", (
 
   test("N6f: a chat the retained marker already names, but never started, starts on its next prompt", () => {
     const dir = scratchProject(true);
-    const sessions = join(dir, "aidlc", ".aidlc-sessions");
+    const sessions = join(dir, "aidlc", ".aidlc-engine", "sessions");
     try {
       // Earlier adapters retained every prompt's session_id without starting it.
       mkdirSync(sessions, { recursive: true });
@@ -5650,7 +5651,7 @@ describe("t218 IDE 1.x stdin channel (snake_case payload, USER_PROMPT empty)", (
     const record = join(
       dir,
       "aidlc",
-      ".aidlc-sessions",
+      ".aidlc-engine", "sessions",
       "kiro-terminal",
       createHash("sha256").update("sess_started_before").digest("hex"),
       "session-started",
@@ -5674,7 +5675,7 @@ describe("t218 IDE 1.x stdin channel (snake_case payload, USER_PROMPT empty)", (
 
   test("N6i: a chat an older release stamped but never bound resumes its own intent after another chat moved the cursor", () => {
     const dir = scratchProject(true);
-    const sessions = join(dir, "aidlc", ".aidlc-sessions");
+    const sessions = join(dir, "aidlc", ".aidlc-engine", "sessions");
     const otherIntent = "other-8000000000000002";
     try {
       const otherRecord = join(intentsDirOf(dir, DEFAULT_SPACE), otherIntent);
@@ -5706,7 +5707,7 @@ describe("t218 IDE 1.x stdin channel (snake_case payload, USER_PROMPT empty)", (
     ["record-human-turn first", "space", ["record-human-turn", "verb-intercept"]],
   ] as const)("N6g: with %s, a new chat's first /aidlc %s command binds that chat, not the previous one", (_order, noun, targets) => {
     const dir = scratchProject(true);
-    const sessions = join(dir, "aidlc", ".aidlc-sessions");
+    const sessions = join(dir, "aidlc", ".aidlc-engine", "sessions");
     const otherIntent = "other-8000000000000002";
     const binding = (session: string) =>
       JSON.parse(readFileSync(join(sessions, `${session}.binding.json`), "utf8")) as unknown;
@@ -5913,7 +5914,7 @@ describe("t218 IDE 1.x stdin channel (snake_case payload, USER_PROMPT empty)", (
 
   // The text of every message record the hook kept (aidlc-message-store.ts).
   function messageTexts(dir: string): string[] {
-    const messages = join(dir, "aidlc", ".aidlc-sessions", "messages");
+    const messages = join(dir, "aidlc", ".aidlc-engine", "sessions", "messages");
     if (!existsSync(messages)) return [];
     return readdirSync(messages)
       .filter((name) => name.endsWith(".json"))
@@ -7439,8 +7440,8 @@ describe("t218 execute_pwsh aidlc values that cmd.exe would split", () => {
     const nextTextRefusal =
       "AIDLC stopped this command before it ran. Text after next holds characters that PowerShell or cmd.exe " +
       "(the aidlc command runs through aidlc.cmd) can change before AI-DLC sees it. Write the person's request, " +
-      "exactly as they typed it, with your file tool to aidlc/.aidlc-request-text/request.txt in this project, and " +
-      "run the same command with --request-file aidlc/.aidlc-request-text/request.txt in place of their words (and " +
+      "exactly as they typed it, with your file tool to aidlc/.aidlc-engine/request-text/request.txt in this project, and " +
+      "run the same command with --request-file aidlc/.aidlc-engine/request-text/request.txt in place of their words (and " +
       "the -- before them, if any), everything else on the line as it was. AI-DLC reads the file and removes it. " +
       "A flag's value cannot go through the file: the value of a next flag that takes any word (such as --report), " +
       "written before the request among the other flags, passes as one word holding & | < > ^ and no %, double or " +
@@ -7515,7 +7516,7 @@ describe("t218 execute_pwsh aidlc values that cmd.exe would split", () => {
       ["a quoted flag value after a value with one dash", `${next} --unit -x --report '"scan&review.json"'`],
       [
         "a quoted flag value after the request file",
-        `${next} --request-file aidlc/.aidlc-request-text/request.txt --report '"scan&review.json"'`,
+        `${next} --request-file aidlc/.aidlc-engine/request-text/request.txt --report '"scan&review.json"'`,
       ],
     ];
     const dir = scratchProject(false);
@@ -7963,7 +7964,7 @@ describe("t218 catch-up forgets a step reply the agent piped or captured away", 
   const SESSION = "sess_t218_piped";
   const BUNDLE = `sha256:${"a".repeat(64)}`;
   const PERSONA = { sha256: "b".repeat(64), at: "2026-10-10T00:00:00.000Z" };
-  const recordPath = (dir: string) => join(dir, "aidlc", ".aidlc-sessions", `${SESSION}.rules-delivered.json`);
+  const recordPath = (dir: string) => join(dir, "aidlc", ".aidlc-engine", "sessions", `${SESSION}.rules-delivered.json`);
   const seedRecord = (dir: string) => {
     mkdirSync(dirname(recordPath(dir)), { recursive: true });
     writeFileSync(recordPath(dir), `${JSON.stringify({ v: 2, last: BUNDLE, persona: PERSONA })}\n`);
@@ -8432,7 +8433,7 @@ describe("t218 a shell call on a turn whose terminal command already ran is refu
       const held = shell(dir, "aidlc next", "sess_bare_a");
       expect(held.code, held.stderr).toBe(2);
       const countPath = join(
-        dir, "aidlc", ".aidlc-sessions", "kiro-terminal",
+        dir, "aidlc", ".aidlc-engine", "sessions", "kiro-terminal",
         createHash("sha256").update("sess_bare_a").digest("hex"), "turn",
       );
       let countBefore = readFileSync(countPath, "utf-8");
@@ -8463,7 +8464,7 @@ describe("t218 a shell call on a turn whose terminal command already ran is refu
       // A marker left open past its age, one ahead of the clock (the clock went
       // back), or one that holds no time is a closed turn: the notice after it
       // is not held.
-      const marker = join(dir, "aidlc", ".aidlc-sessions", "sess_bare_a.turn-open");
+      const marker = join(dir, "aidlc", ".aidlc-engine", "sessions", "sess_bare_a.turn-open");
       for (const left of [
         `${new Date(Date.now() - 5 * 60 * 60 * 1000).toISOString()}\n`,
         `${new Date(Date.now() + 60 * 60 * 1000).toISOString()}\n`,
@@ -8506,7 +8507,7 @@ describe("t218 a shell call on a turn whose terminal command already ran is refu
     const dir = scratchProject(true);
     try {
       const sessionDir = join(
-        dir, "aidlc", ".aidlc-sessions", "kiro-terminal",
+        dir, "aidlc", ".aidlc-engine", "sessions", "kiro-terminal",
         createHash("sha256").update("sess_bare_a").digest("hex"),
       );
       // A terminal command the seam runs itself (a bare name that is no space
@@ -8574,7 +8575,7 @@ describe("t218 a shell call on a turn whose terminal command already ran is refu
       // A latch whose turn count is gone cannot say it is this turn's, on the
       // first call or on any call after it.
       const sessionDir = join(
-        dir, "aidlc", ".aidlc-sessions", "kiro-terminal",
+        dir, "aidlc", ".aidlc-engine", "sessions", "kiro-terminal",
         createHash("sha256").update("sess_bare_a").digest("hex"),
       );
       expect(existsSync(join(sessionDir, "latch.json"))).toBe(true);
@@ -8596,7 +8597,7 @@ describe("t218 a shell call on a turn whose terminal command already ran is refu
     const dir = scratchProject(true);
     try {
       const sessionDir = join(
-        dir, "aidlc", ".aidlc-sessions", "kiro-terminal",
+        dir, "aidlc", ".aidlc-engine", "sessions", "kiro-terminal",
         createHash("sha256").update("sess_bare_a").digest("hex"),
       );
       for (const leftover of [null, "x\n", "0x\n"]) {
@@ -8623,7 +8624,7 @@ describe("t218 a shell call on a turn whose terminal command already ran is refu
     () => {
       const dir = scratchProject(true);
       const sessionDir = join(
-        dir, "aidlc", ".aidlc-sessions", "kiro-terminal",
+        dir, "aidlc", ".aidlc-engine", "sessions", "kiro-terminal",
         createHash("sha256").update("sess_bare_a").digest("hex"),
       );
       const restore = () => {

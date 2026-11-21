@@ -15,6 +15,7 @@ import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
+import { isDraftStep } from "../harness/team-build.ts";
 import {
   AIDLC_SRC,
   createTestProject,
@@ -42,7 +43,7 @@ afterEach(cleanupTempDirs);
 
 const NO = "We do not build a thin end-to-end slice first: every Unit starts as soon as what it depends on is done.";
 const ALWAYS = "We always build a thin end-to-end slice first, before any other Unit.";
-const HELD_BACK = "The teams still see every Unit waiting on alpha, because your answer about building a " +
+const HELD_BACK = "The shared plan still has every Unit waiting on alpha, because your answer about building a " +
   "thin slice first hasn't been shared yet. I can share the plan when you say so, or you can run `";
 const CHAT = { AIDLC_SESSION_OVERRIDE: "01995000-7a11-7000-8000-000000003652", AIDLC_SESSION_OVERRIDE_SOURCE: "payload" };
 
@@ -115,16 +116,19 @@ function makeLead(answer: string | null): { lead: string; remote: string } {
   return { lead, remote };
 }
 
+// The agent's draft of a commit message, said to nobody, before the question that ends in the commit: passed as the agent leaves it.
 function next(dir: string): Directive {
-  let ran = runMergeTool(ORCH, ["next"], dir, false, CHAT);
-  expect(ran.status, ran.out).toBe(0);
-  let directive = JSON.parse(ran.stdout) as Directive;
-  while (directive.kind === "load-steering" && typeof directive.receipt === "string") {
-    ran = runMergeTool(ORCH, ["continue", directive.receipt], dir, false, CHAT);
+  for (let drafted = false; ; drafted = true) {
+    let ran = runMergeTool(ORCH, ["next"], dir, false, CHAT);
     expect(ran.status, ran.out).toBe(0);
-    directive = JSON.parse(ran.stdout) as Directive;
+    let directive = JSON.parse(ran.stdout) as Directive;
+    while (directive.kind === "load-steering" && typeof directive.receipt === "string") {
+      ran = runMergeTool(ORCH, ["continue", directive.receipt], dir, false, CHAT);
+      expect(ran.status, ran.out).toBe(0);
+      directive = JSON.parse(ran.stdout) as Directive;
+    }
+    if (drafted || !isDraftStep(directive as Record<string, unknown>)) return directive;
   }
-  return directive;
 }
 
 function share(dir: string): Record<string, unknown> {

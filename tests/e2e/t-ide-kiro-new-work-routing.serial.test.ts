@@ -476,7 +476,7 @@ describe("t-ide-kiro-new-work-routing (native unselected typed ask)", () => {
           primaryRoutingDirectiveCount(finalSnapshots);
         expect(initialDirectiveCount).toBeGreaterThan(0);
         const sessionPath = join(
-          project, "aidlc", ".aidlc-sessions", ".kiro-ide-current-session",
+          project, "aidlc", ".aidlc-engine", "sessions", ".kiro-ide-current-session",
         );
         if (DIAGNOSTICS_PATH) diagnostic("initial-routing-session", {
           chat_text: chatText,

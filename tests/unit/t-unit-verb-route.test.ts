@@ -106,9 +106,9 @@ describe("a Unit command typed after /aidlc reaches that command", () => {
     // The gate's words travel in a request file the gate reads (t-words-travel-in-a-file).
     expectUnitCommandStep(
       nextFrom(kiroIde, ['unit gate alpha --decision approve --user-input "ship it"']),
-      `${kiroIde.invoke} unit gate alpha --decision approve --request-file aidlc/.aidlc-request-text/gate-alpha.txt`,
+      `${kiroIde.invoke} unit gate alpha --decision approve --request-file aidlc/.aidlc-engine/request-text/gate-alpha.txt`,
     );
-    expect(readFileSync(join(projectWithWork(), "aidlc", ".aidlc-request-text", "gate-alpha.txt"), "utf-8")).toBe("ship it");
+    expect(readFileSync(join(projectWithWork(), "aidlc", ".aidlc-engine", "request-text", "gate-alpha.txt"), "utf-8")).toBe("ship it");
   });
 
   test("the entry word handed on as an argument is how they reached AI-DLC, not part of the command", () => {
@@ -205,8 +205,8 @@ describe("one list of Unit verbs", () => {
       const named = [...new Set([...grammar.usage.matchAll(/--([a-z][a-z-]*)/g)].map((match) => match[1]))];
       const switches = grammar.switches ?? [];
       expect(named.sort(), verb).toEqual([...grammar.options, ...switches].sort());
-      // A switch is shown with nothing after it to take, an option with its value.
-      for (const name of switches) expect(grammar.usage, `${verb} --${name}`).toMatch(new RegExp(`--${name}(?=$|[\\])]| --| \\[)`));
+      // A switch is shown with nothing after it to take (its alternative after a bar at most), an option with its value.
+      for (const name of switches) expect(grammar.usage, `${verb} --${name}`).toMatch(new RegExp(`--${name}(?=$|[\\])]| --| \\[| \\|)`));
       for (const name of grammar.options) expect(grammar.usage, `${verb} --${name}`).toMatch(new RegExp(`--${name} [^-\\[\\]|()]`));
     }
     expect(ROUTES.find((entry) => entry.id === "unit")?.all).toEqual(

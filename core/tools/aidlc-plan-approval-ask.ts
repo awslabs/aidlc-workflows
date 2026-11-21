@@ -18,10 +18,11 @@
 // (generation start, the worker brief, the swarm, team merge, worktree
 // delegation) reads this one unchanged. What changed is who writes them.
 
-import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, utimesSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import { appendAuditEntryUnlocked } from "./aidlc-audit.ts";
+import { earlyStartBrought } from "./aidlc-unit-teams.ts";
 import { personGitNameField } from "./aidlc-git-name.ts";
 import {
   activeIntentUuid,
@@ -65,6 +66,7 @@ import {
   sessionsDir,
   renderChangedPaths,
   sourceChangedOutsideAidlc,
+  sourceListingChangedKeys,
   stalePlanApprovalReceiptsForTarget,
   stateFilePath,
   steeringPayloadAuthenticAt,
@@ -125,6 +127,7 @@ import { QUESTION_ASKED_EVENTS, readMessage } from "./aidlc-message-store.ts";
 import {
   askedQuestionFields,
   boxQuestionId,
+  engineAskAnsweredSince,
   newQuestionId,
   openSlotQuestionId,
   QUESTION_TEXT_FIELD,
@@ -528,7 +531,12 @@ export function codeGenerationPlanReadiness(
         : null;
       if (written !== null) {
         if (contract === "count") return { ready: true };
+        // The plan keeps its own time: the block is the engine's, no revision
+        // of the plan (a redo after a turn-down reads that time to tell the
+        // first build's plan from one revised for the lead's words).
+        const before = statSync(join(dir, PLAN_FILE));
         writeFileAtomic(join(dir, PLAN_FILE), written);
+        utimesSync(join(dir, PLAN_FILE), before.atime, before.mtime);
         return { ready: true, written: true };
       }
     } catch {
@@ -663,7 +671,14 @@ function changedBeforeApprovalLine(projectDir: string): string | null {
     const theirBuild = (path: string): boolean =>
       named.some((entry) =>
         path === entry || path.startsWith(`${entry}/`) || (!entry.includes("/") && path.split("/").at(-1) === entry));
-    const changed = sourceChangedOutsideAidlc(projectDir, joined.listing, current.listing).filter((path) => !theirBuild(path));
+    // A file an early start's branch brought is where the build started: as it was then.
+    const now = new Map(current.listing);
+    for (const key of earlyStartBrought(projectDir, sourceListingChangedKeys(joined.listing, current.listing))) {
+      const was = joined.listing.get(key);
+      if (was === undefined) now.delete(key);
+      else now.set(key, was);
+    }
+    const changed = sourceChangedOutsideAidlc(projectDir, joined.listing, now).filter((path) => !theirBuild(path));
     if (changed.length === 0) return null;
     return changed.length === 1
       ? `Already changed before you approved: ${renderChangedPaths(changed)}.`
@@ -2496,7 +2511,10 @@ export function openEngineQuestion(projectDir: string): string | null {
     if (noted?.version !== 1 || noted.askType !== marker.ask_type || noted.stateSha256 !== marker.state_sha256) {
       return marker.ask_type;
     }
-    return askedAfter(projectDir, noted.askedAt) ? null : marker.ask_type;
+    // Asked over, or answered by the command it handed out: no longer on screen.
+    return askedAfter(projectDir, noted.askedAt) || engineAskAnsweredSince(projectDir, marker.ask_type, noted.askedAt)
+      ? null
+      : marker.ask_type;
   } catch {
     return null;
   }

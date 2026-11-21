@@ -237,7 +237,7 @@ function questionText(r: EmitResult): string {
   const id = (r.directive.message ?? "").match(/--request ([0-9a-f]{8})/)?.[1] ?? "";
   expect(id).toMatch(/^[0-9a-f]{8}$/);
   return JSON.parse(
-    readFileSync(join(r.proj ?? "", "aidlc", ".aidlc-sessions", "questions", `${id}.json`), "utf-8"),
+    readFileSync(join(r.proj ?? "", "aidlc", ".aidlc-engine", "sessions", "questions", `${id}.json`), "utf-8"),
   ).text;
 }
 
@@ -403,7 +403,7 @@ describe("t118 engine differential corpus — aidlc-orchestrate next (migrated f
         "persistence",
       );
       expect(r.directive.kind).toBe("print");
-      expect(r.directive.message ?? "").toContain('--scope bugfix --request-file aidlc/.aidlc-request-text/line-after-plan.txt` (the task: "Fix duplicate todo persistence")');
+      expect(r.directive.message ?? "").toContain('--scope bugfix --request-file aidlc/.aidlc-engine/request-text/line-after-plan.txt` (the task: "Fix duplicate todo persistence")');
       expect(r.directive.message ?? "").toContain('which keeps every word of theirs ("bugfix Fix duplicate todo persistence")');
       expect(r.directive.kind).not.toBe("ask");
     });

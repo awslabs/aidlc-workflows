@@ -83,6 +83,7 @@ import {
   stateFilePath,
   validSessionId,
 } from "../tools/aidlc-lib.ts";
+import { hookSessionProjectDir } from "../tools/aidlc-runtime-paths.ts";
 import { patchTargets } from "./review-freeze-command.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
@@ -288,9 +289,21 @@ if (!process.stdin.isTTY) {
 
 const projectDirRaw =
   process.env.AIDLC_PROJECT_DIR ?? codex.cwd ?? process.cwd();
-const projectDir = isAbsolute(projectDirRaw)
+const threadDir = isAbsolute(projectDirRaw)
   ? projectDirRaw
   : resolve(process.cwd(), projectDirRaw);
+// Codex runs these hooks from the project they are set up in, and the
+// payload's cwd is where the thread works: a helper working in a code repo
+// (beside the workspace, or one of its child folders) is the workspace's own,
+// so its records stay there, never in the person's repo. The project is the
+// host's, as for every hook (hookSessionProjectDir: a session in another git
+// worktree of it acts on that worktree); a host folder that is no AI-DLC
+// project leaves the thread's own folder, as before.
+const hostDir = process.cwd();
+const projectDir = process.env.AIDLC_PROJECT_DIR === undefined &&
+    existsSync(join(hostDir, ".codex")) && existsSync(join(hostDir, "aidlc"))
+  ? hookSessionProjectDir(hostDir, rawInput)
+  : threadDir;
 const payloadSessionId = validSessionId(codex.session_id);
 if (payloadSessionId) {
   process.env.AIDLC_SESSION_OVERRIDE = payloadSessionId;
@@ -330,7 +343,7 @@ const projectEnv = { ...process.env, ...projectPins };
 // is that the agent has spoken in between, so on that seam the key also
 // carries the number of assistant messages in the Codex rollout.
 // The cache lives in the project's own gitignored scratch folder
-// (aidlc/.aidlc-sessions/codex-dedupe), never in the OS temp folder, and every
+// (aidlc/.aidlc-engine/sessions/codex-dedupe), never in the OS temp folder, and every
 // delivery that uses it prunes it: a slot is kept for 5 minutes at most (the
 // duplicate waits 2 seconds; the bound outlasts any hook's run) and at most 64
 // slots stay, so a long session never piles up folders. Failure anywhere fails
@@ -646,7 +659,10 @@ function reconcilePriorSession(): void {
 
 // --- apply_patch envelope parsing --------------------------------------------
 
-const projectPath = (rel: string): string => isAbsolute(rel) ? rel : join(projectDir, rel);
+// A patch names its files from the folder the thread works in (threadDir),
+// which a helper in a code repo beside the workspace keeps apart from the
+// project its records go to.
+const projectPath = (rel: string): string => isAbsolute(rel) ? rel : join(threadDir, rel);
 
 function patchedFiles(command: string): Array<{ path: string; tool: "Write" | "Edit" }> {
   return patchTargets(command)

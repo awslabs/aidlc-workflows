@@ -68,7 +68,7 @@ function openWork(): string {
   writeFileSync(seededStateFile(proj), state, "utf-8");
   // The person's chat is the one this project last saw, as a live project has
   // it: a command run outside that chat must not read it as its own.
-  const sessions = join(proj, "aidlc", ".aidlc-sessions");
+  const sessions = join(proj, "aidlc", ".aidlc-engine", "sessions");
   mkdirSync(sessions, { recursive: true });
   writeFileSync(join(sessions, ".current-session"), `${SESSION}\n`, "utf-8");
   return proj;

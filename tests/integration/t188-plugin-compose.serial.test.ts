@@ -823,7 +823,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
 
     // In a non-default space the composed persona reinstalls with its
     // fragment instead of colliding. A space switch leaves the persona as it
-    // is: it reads the method from the fixed aidlc/active-memory/ copy.
+    // is: it reads the method from the fixed aidlc/.aidlc-engine/active-memory/ copy.
     const utilityEnv = { ...process.env, AIDLC_PROJECT_DIR: cursorProject, AIDLC_HARNESS_DIR: ".cursor", AIDLC_HARNESS_NAME: "cursor" };
     const utility = join(cursorProject, ".cursor", "tools", "aidlc-utility.ts");
     const composedPersona = join(cursorProject, ".cursor", "agents", "aidlc-quality-agent.md");
@@ -833,7 +833,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       expect(step.status, step.stderr).toBe(0);
     }
     expect(readFileSync(composedPersona, "utf-8")).toBe(personaBeforeSwitch);
-    expect(personaBeforeSwitch).toContain("aidlc/active-memory/");
+    expect(personaBeforeSwitch).toContain("aidlc/.aidlc-engine/active-memory/");
     const spaceReinstall = spawnSync(
       BUN,
       [join(upgradedDist, "install.ts"), cursorProject],
@@ -841,7 +841,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     );
     expect(spaceReinstall.status, spaceReinstall.stderr).toBe(0);
     const personaAfter = readFileSync(composedPersona, "utf-8");
-    expect(personaAfter).toContain("aidlc/active-memory/");
+    expect(personaAfter).toContain("aidlc/.aidlc-engine/active-memory/");
     expect(personaAfter).not.toContain("aidlc/spaces/engineering/memory/");
     expect(personaAfter).toContain("<!-- plugin:test-pro:after-preflight:90:");
   });
@@ -1200,7 +1200,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     expect(body).not.toMatch(/^disallowedTools:/m);
     expect(body).not.toMatch(/^model: sonnet$/m);
     expect(body).not.toContain(".aidlc/rules/");
-    expect(body).toContain("aidlc/active-memory/");
+    expect(body).toContain("aidlc/.aidlc-engine/active-memory/");
   });
 
   test("Copilot compose and selection use .github agent and skill surfaces", () => {
@@ -1231,7 +1231,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     const body = readFileSync(native, "utf-8");
     expect(body).toMatch(/^tools: \["read", "edit", "search", "execute", "web", "todo"\]$/m);
     expect(body).not.toMatch(/^(model|tier|effort|disallowedTools):/m);
-    expect(body).toContain("aidlc/active-memory/");
+    expect(body).toContain("aidlc/.aidlc-engine/active-memory/");
 
     const unsafePlugin = join(tmp, "plugin", "copilot-missing-disallowed-tools");
     cpSync(pluginCopilot, unsafePlugin, { recursive: true });

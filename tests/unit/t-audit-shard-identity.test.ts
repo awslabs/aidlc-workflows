@@ -3,7 +3,7 @@
 // t-audit-shard-identity - one audit shard per clone, and copied rows read once.
 //
 // 1. ONE SHARD PER CLONE. The shard name is `<host>-<token>.md`, and the host is
-//    recorded in aidlc/.aidlc-clone-id next to the token when the token is
+//    recorded in aidlc/.aidlc-engine/clone-id next to the token when the token is
 //    minted. A laptop whose host name changes (a new network, a VPN) or a folder
 //    copied to another machine keeps writing the SAME shard; before, every
 //    process computed the host from hostname(), so one clone grew a new shard
@@ -120,7 +120,7 @@ function project(): string {
 }
 
 function cloneFile(): string {
-  return join(proj, "aidlc", ".aidlc-clone-id");
+  return join(proj, "aidlc", ".aidlc-engine", "clone-id");
 }
 
 // One audit block in the shape the emitter writes (heading, Timestamp, Event,

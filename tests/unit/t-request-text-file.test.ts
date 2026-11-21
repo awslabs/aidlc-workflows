@@ -21,9 +21,11 @@ import {
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-const FILE = "aidlc/.aidlc-request-text/request.txt";
+const FILE = "aidlc/.aidlc-engine/request-text/request.txt";
+// Where an earlier release named it; a chat that loaded that text still writes there.
+const EARLIER_FILE = "aidlc/.aidlc-request-text/request.txt";
 const WORDS = 'Book rooms for the team\nat 50% of %TEMP% capacity, say "hi" & !T241! to C:\\dir\\';
-const USAGE = "--request-file needs a file directly inside aidlc/.aidlc-request-text/ in this project";
+const USAGE = "--request-file needs a file directly inside aidlc/.aidlc-engine/request-text/ in this project";
 const DIR_LINK = process.platform === "win32" ? "junction" : "dir";
 
 const projects: string[] = [];
@@ -72,13 +74,13 @@ function next(proj: string, args: string[], extra: Record<string, string> = {}):
 }
 
 function writeRequest(proj: string, text: string, file = FILE): void {
-  mkdirSync(join(proj, "aidlc", ".aidlc-request-text"), { recursive: true });
+  mkdirSync(join(proj, file, ".."), { recursive: true });
   writeFileSync(join(proj, file), text, "utf-8");
 }
 
 // The requests the engine kept for its questions, in the person's words.
 function keptRequests(proj: string): string[] {
-  const dir = join(proj, "aidlc", ".aidlc-sessions", "questions");
+  const dir = join(proj, "aidlc", ".aidlc-engine", "sessions", "questions");
   if (!existsSync(dir)) return [];
   return readdirSync(dir)
     .filter((name) => name.endsWith(".json"))
@@ -94,6 +96,17 @@ describe("next --request-file: the person's words arrive exactly, through no she
     // One request: the proposal step's question and the plan question derived from it hold the same words.
     expect(new Set(keptRequests(proj))).toEqual(new Set([WORDS]));
     expect(existsSync(join(proj, FILE))).toBe(false);
+  });
+
+  // A chat that loaded an earlier release's text writes the request where that
+  // release named it: read the same way, and its folder goes with the file.
+  test("a request in the earlier release's folder reaches AI-DLC, and the file and its folder go", () => {
+    const proj = installed();
+    writeRequest(proj, `${WORDS}\n`, EARLIER_FILE);
+    const directive = next(proj, ["--request-file", EARLIER_FILE]);
+    expect(directive.kind, JSON.stringify(directive)).toBe("ask");
+    expect(new Set(keptRequests(proj))).toEqual(new Set([WORDS]));
+    expect(existsSync(join(proj, "aidlc", ".aidlc-request-text"))).toBe(false);
   });
 
   // The Kiro CLI hook sends a compose request this way on Windows: the verb
@@ -123,10 +136,11 @@ describe("next --request-file: the person's words arrive exactly, through no she
     writeRequest(proj, WORDS);
     for (const file of [
       "README.md",
-      "aidlc/.aidlc-request-text/../../README.md",
+      "aidlc/.aidlc-engine/request-text/../../README.md",
       join(proj, "README.md"),
-      "aidlc/.aidlc-request-text",
-      "aidlc/.aidlc-request-text/",
+      "aidlc/.aidlc-engine/request-text",
+      "aidlc/.aidlc-engine/request-text/",
+      "aidlc/.aidlc-engine/request-text/sub/request.txt",
       "aidlc/.aidlc-request-text/sub/request.txt",
     ]) {
       const refused = next(proj, ["--request-file", file]);
@@ -178,8 +192,8 @@ describe("next --request-file: the person's words arrive exactly, through no she
     const outside = mkdtempSync(join(process.env.TMPDIR || tmpdir(), "aidlc-request-file-outside-"));
     outsides.push(outside);
     writeFileSync(join(outside, "request.txt"), WORDS, "utf-8");
-    mkdirSync(join(proj, "aidlc"), { recursive: true });
-    symlinkSync(outside, join(proj, "aidlc", ".aidlc-request-text"), DIR_LINK);
+    mkdirSync(join(proj, "aidlc", ".aidlc-engine"), { recursive: true });
+    symlinkSync(outside, join(proj, "aidlc", ".aidlc-engine", "request-text"), DIR_LINK);
     const refused = next(proj, ["--request-file", FILE]);
     expect(refused.kind).toBe("error");
     expect(refused.message ?? "").toContain("Send your request again.");

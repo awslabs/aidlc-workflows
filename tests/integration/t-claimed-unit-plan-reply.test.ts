@@ -28,6 +28,7 @@ import { readPlanApprovalAsk } from "../../dist/claude/.claude/tools/aidlc-plan-
 import { renderTestingContract, resolveTestingPosture } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 import { AIDLC_SRC, DEFAULT_INTENT_UUID, seededRecordDir, seededStateFile } from "../harness/fixtures.ts";
 import { cleanupTempDirs, makeSeed, parallelDependencyBody } from "../harness/team-unit-merge.ts";
+import { isDraftStep } from "../harness/team-build.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 afterEach(cleanupTempDirs);
@@ -54,13 +55,17 @@ function run(dir: string, tool: string, args: string[], chat = false) {
   return { status: result.status ?? -1, stdout: result.stdout ?? "", out: `${result.stdout ?? ""}${result.stderr ?? ""}` };
 }
 
+// The agent's draft of a commit message, said to nobody, before the question that ends in the commit: passed as the agent leaves it.
 function next(dir: string): Step {
   let result = run(dir, "aidlc-orchestrate.ts", ["next"]);
+  let drafted = false;
   for (;;) {
     expect(result.status, result.out).toBe(0);
     const step = JSON.parse(result.stdout.trim().split("\n").filter((line) => line.startsWith("{")).at(-1)!) as Step;
-    if (step.kind !== "load-steering" || typeof step.receipt !== "string") return step;
-    result = run(dir, "aidlc-orchestrate.ts", ["continue", step.receipt]);
+    const drafting: boolean = !drafted && isDraftStep(step as Record<string, unknown>);
+    if (!drafting && (step.kind !== "load-steering" || typeof step.receipt !== "string")) return step;
+    drafted ||= drafting;
+    result = run(dir, "aidlc-orchestrate.ts", drafting ? ["next"] : ["continue", String(step.receipt)]);
   }
 }
 
@@ -205,7 +210,7 @@ describe("the lead's plan approval after their checkout claims the Unit", () => 
     test(`a question shown on ${release} is answered once the claim has reset its shard`, () => {
       const lead = leadAtPlanQuestion("relaxed");
       // Both kept no time on the question's marks; the stable release kept no shownFrom either.
-      const dir = join(lead, "aidlc", ".aidlc-sessions", "plan-approval");
+      const dir = join(lead, "aidlc", ".aidlc-engine", "sessions", "plan-approval");
       const [ask] = readdirSync(dir).filter((name) => name.startsWith("ask-")).map((name) => join(dir, name));
       const record = JSON.parse(readFileSync(ask, "utf-8")) as { repliesFrom: AuditMark; shownFrom?: AuditMark };
       delete record.repliesFrom.at;

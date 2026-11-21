@@ -3,6 +3,7 @@ aidlc/active-space
 aidlc/spaces/*/intents/active-intent
 aidlc/.aidlc-clone-id
 aidlc.settings.local.json
+repos.local.json
 aidlc/.aidlc-unit-scope.json
 aidlc/.aidlc-unit-parked
 aidlc/.aidlc-claim-generations.json

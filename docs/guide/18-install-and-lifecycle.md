@@ -349,6 +349,20 @@ prompt or pass `--download`. It creates the selected harness
 tree, the `aidlc/` workspace shell, root integrations, a projection stamp, and
 an ownership baseline. It does not create a workflow intent.
 
+The workspace's repo list lives in `aidlc/repos.json`, checked in with the
+team's record. A refresh that puts this release's files in moves a `repos.json`
+at the project root that git does not track there, with its contents kept (only
+a file that reads as the repo list; any other `repos.json` stays the project's).
+One git tracks stays at the root, where it is still read, with nothing staged:
+in the next chat after an update, AI-DLC's question to commit its own files also
+offers to move it into `aidlc/` in that commit, and only that yes moves it, so a
+no leaves your index and files as they were. `aidlc config` at a terminal, a
+pinned project, the copy channel and a chat that puts no question (unattended,
+or on no branch) leave it at the root.
+Running config again changes nothing. A refresh to an earlier release's files (a
+pin, `--from`) leaves it at the root, where those releases read it; with a list
+in both places, `aidlc/repos.json` is read.
+
 Every harness runtime is installed, so outside a terminal a first setup or a
 preview names its harness with `--harness <name>`; at a terminal, config uses
 the one harness it detects or asks which one.
@@ -615,8 +629,8 @@ medium, `thorough` xhigh, or the model's next level down
 
 On upgrade, an install that recorded `preset: balanced` or `preset: minimal`
 picks up these efforts the next time its projections are regenerated. After
-`aidlc update`, run `aidlc config --yes` in each project to reapply the
-recorded policy (open work carries on), or explicitly select it with
+`aidlc update`, each project reapplies the recorded policy the next time it is
+opened (open work carries on), or explicitly select it with
 `aidlc config models --preset balanced --project --yes` (substitute `minimal`
 as needed). Update changes only the machine runtime; doctor and
 `aidlc config models --check` report issues without applying changes. Installs
@@ -1488,7 +1502,8 @@ step names Kiro CLI first: start `kiro-cli --v3` in this project, then run
 
 Human lifecycle output states each completed fact. Update reports the
 old-to-new version check, verified download, atomic switch, retained prior
-version, any pruned unprotected releases, and the project-refresh courtesy.
+version, any pruned unprotected releases, and ends with `Each project catches up
+the next time you open it.`
 A no-op says `You're on the latest version of aidlc (<version>).`; `--dry-run`
 says `Would update aidlc from <old> to <new>.`, or
 `You're on the latest version of aidlc (<version>); nothing to update.` when
@@ -1514,6 +1529,40 @@ registered project pin, then prunes older unprotected versions automatically.
 There is no separate rollback or retained-version management command; to go
 back, see [Go Back to an Earlier Version](#go-back-to-an-earlier-version).
 
+Nobody runs config after an update: each project catches up the next time it is
+opened. A native install's hooks run the machine's release, so the first chat's
+start in a project whose harness files an earlier release wrote runs the refresh
+`aidlc config` does, with no terminal and every recorded answer kept (it asks
+nothing, switches no harness and answers no Kiro question for you). When the refresh changed files git tracks, the first
+reply asks once, with each folder's count, for example "AI-DLC updated its own
+files in this project to 2.12.1: 120 files under .claude changed. Want me to
+commit them on main, as one commit of their own? Nothing is pushed.", with the
+commit message drafted in your repo's style after it (your own words replace
+it). A yes commits only AI-DLC's own files that still hold exactly what it
+wrote, with nothing of yours changed in them since your last commit, and
+the move of a `repos.json` git tracks at the root into `aidlc/` when the question
+named it, through
+your own git (hooks and signing), on your branch. The question names any file it
+leaves out, as it cannot be sure they hold only AI-DLC's changes: they are yours
+to look over and commit. A settings file the refresh merged that held your own
+uncommitted changes is one of them, and the rest is still offered. A no is not
+asked again for that release. Unattended, on no branch, or while a rebase, merge,
+cherry-pick or revert of yours is under way, it says the same line ending
+"AI-DLC did not commit them." instead; on no branch or with an operation under
+way it adds "Say when you want me to commit them.", and a yes once you are on a
+branch and the operation is over makes that commit, leaving out every settings
+file the refresh merged. opencode starts a chat without this
+context, so there the question comes with AI-DLC's next step in that chat, once a
+commit can run, and leaves out every settings file the refresh merged that git
+shows changed; the line comes with the next step too. Nothing is said when
+nothing git tracks changed (in a Unit's build, the move of a `repos.json` git
+tracks at the root is still offered on its own) or the project is not in git. A pinned
+project runs its pinned release and is left as it is. A refresh that cannot
+finish says nothing in the chat and is tried again when the next chat starts;
+`aidlc doctor` shows the project still on the earlier release, and
+`aidlc config` finishes it. A copied project (the copy channel) refreshes when you
+run config from the new release's files.
+
 ## Go Back to an Earlier Version
 
 To put this machine back on an earlier release, run `aidlc use <version>`, for
@@ -1534,6 +1583,11 @@ git add .aidlc-version
 The pin switches the project to 2.10.0; the refresh brings its files to that
 release and lists any file 2.10.0 does not ship. `aidlc config --unpin` makes
 the project follow the machine again ([Project Pins and CI](#project-pins-and-ci)).
+
+A release before 2.12 reads the repo list only from `repos.json` at the project
+root. When the list is in `aidlc/repos.json`, `aidlc use` and `aidlc config --pin`
+to such a release say so in one line, with the way to keep the list on it:
+`git mv aidlc/repos.json repos.json` (`mv` for a list git does not track).
 
 Releases before 2.8.0 have no native release, so `aidlc use` and
 `aidlc config --pin` cannot select them; they stop with `No published native

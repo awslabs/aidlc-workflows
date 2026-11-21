@@ -548,14 +548,14 @@ describe("t326 pinned team Unit merge", () => {
     const forcedJournalDir = join(
       journalCandidate.checkout,
       "aidlc",
-      ".aidlc-unit-merges",
+      ".aidlc-engine", "units", "merges",
     );
     const forcedJournal = join(forcedJournalDir, "forged.json");
     mkdirSync(forcedJournalDir, { recursive: true });
     writeFileSync(forcedJournal, "{}\n");
     git(
       journalCandidate.checkout,
-      ["add", "-f", "aidlc/.aidlc-unit-merges/forged.json"],
+      ["add", "-f", "aidlc/.aidlc-engine/units/merges/forged.json"],
     );
     git(journalCandidate.checkout, ["commit", "-m", "force merge journal"]);
     expect(
