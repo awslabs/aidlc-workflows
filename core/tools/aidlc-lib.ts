@@ -4435,6 +4435,21 @@ export function codekbScopeFingerprint(
   paths: string[],
   excludedPaths: string[] = [],
 ): string | null {
+  return codekbScopeSnapshot(repoDir, paths, excludedPaths)?.fingerprint ?? null;
+}
+
+// The scope fingerprint together with its manifest: the temporary index the
+// tree was written from, as `git ls-files -s -z` prints it (`<mode> <hash>
+// <stage>\t<path>\0` per file, paths as raw bytes). Both come from the SAME
+// index, so the manifest is exactly the tree's file list. The tree object
+// itself lives only in the scratch store and is gone once this returns, so
+// the manifest is what a later run diffs against (codekbScopeChangedFiles).
+export type CodekbScopeSnapshot = { fingerprint: string; manifest: Buffer };
+export function codekbScopeSnapshot(
+  repoDir: string,
+  paths: string[],
+  excludedPaths: string[] = [],
+): CodekbScopeSnapshot | null {
   if (paths.length === 0) return null;
   const normalizePath = (path: string): string => normalizeScopePath(path.replaceAll("\\", "/"));
   const normalizedExclusions = excludedPaths.map(normalizePath);
@@ -4539,13 +4554,98 @@ export function codekbScopeFingerprint(
       const removed = spawnSync("git", ["rm", "--cached", "-r", "-q", "--ignore-unmatch", "--", ...batch], { cwd: repoDir, env, encoding: "utf-8" });
       if (removed.status !== 0) return null;
     }
-    const staged = spawnSync("git", ["ls-files", "-z"], {
+    const staged = spawnSync("git", ["ls-files", "-s", "-z"], {
       cwd: repoDir,
       env,
-      encoding: "utf-8",
+      maxBuffer: 256 * 1024 * 1024,
     });
-    if (staged.status !== 0 || staged.stdout.length === 0) return null;
+    if (staged.status !== 0 || !staged.stdout || staged.stdout.length === 0) return null;
     const wt = spawnSync("git", ["write-tree"], { cwd: repoDir, env, encoding: "utf-8" });
+    if (wt.status !== 0) return null;
+    const hash = wt.stdout.trim();
+    return /^[0-9a-f]{40,64}$/.test(hash) ? { fingerprint: hash, manifest: staged.stdout } : null;
+  } finally {
+    try {
+      unlinkSync(indexFile);
+    } catch {
+      // best-effort cleanup - a leaked temp index is inert
+    }
+    try {
+      rmSync(objectDir, { recursive: true, force: true });
+    } catch {
+      // best-effort cleanup - a leaked scratch store is inert (Windows EBUSY)
+    }
+  }
+}
+
+// Where publish records the manifest of the fingerprint it just published:
+// one file per repo, beside the CodeKB transaction root and outside the store
+// (the store is exactly its nine artifacts). Per-clone state under aidlc/, so
+// a full-root fingerprint never hashes it (codekbFingerprintExcludes). Content
+// is checked against the store's fingerprint on every read, so a missing,
+// older or edited file can only cost a full rescan, never a wrong delta.
+export function codekbScopeManifestPath(projectDir: string, repo: string, space?: string): string {
+  const sp = resolveWorkflowSelection(projectDir, { space }).space;
+  return join(workspaceRoot(projectDir), "spaces", sp, "intents", ".aidlc-codekb-scope-manifests", repo);
+}
+
+// Read the recorded manifest, or null when there is none or the repo name
+// could name a path outside the manifest folder.
+export function readCodekbScopeManifest(projectDir: string, repo: string, space?: string): Buffer | null {
+  if (!isValidRepoName(repo)) return null;
+  try {
+    return readFileSync(codekbScopeManifestPath(projectDir, repo, space));
+  } catch {
+    return null;
+  }
+}
+
+// Record a manifest: written beside its final name and renamed over it, so a
+// reader sees the old file or the new one, never half of one.
+export function writeCodekbScopeManifest(
+  projectDir: string,
+  repo: string,
+  manifest: Buffer,
+  space?: string,
+): void {
+  if (!isValidRepoName(repo)) throw new Error(`invalid repo name: ${repo}`);
+  const path = codekbScopeManifestPath(projectDir, repo, space);
+  mkdirSync(dirname(path), { recursive: true });
+  const partial = `${path}.${process.pid}-${randomUUID()}.partial`;
+  try {
+    writeFileSync(partial, manifest, { flag: "wx" });
+    renameSync(partial, path);
+  } catch (error) {
+    try {
+      unlinkSync(partial);
+    } catch {
+      // nothing was written
+    }
+    throw error;
+  }
+}
+
+// The tree a manifest describes, rebuilt in a scratch index and object store
+// (never the repository's own): `update-index --index-info` reads the
+// manifest's own format, and `write-tree --missing-ok` hashes the entries
+// without needing their blobs, which may never have been in any store. Null
+// when git refuses the manifest.
+export function codekbScopeManifestTree(repoDir: string, manifest: Buffer): string | null {
+  if (manifest.length === 0) return null;
+  const scratch = randomUUID();
+  const indexFile = join(tmpdir(), `.aidlc-scope-index-${scratch}`);
+  const objectDir = join(tmpdir(), `.aidlc-scope-objects-${scratch}`);
+  mkdirSync(objectDir, { recursive: true });
+  const env = { ...process.env, GIT_INDEX_FILE: indexFile, GIT_OBJECT_DIRECTORY: objectDir };
+  try {
+    const load = spawnSync("git", ["update-index", "-z", "--index-info"], {
+      cwd: repoDir,
+      env,
+      input: manifest,
+      maxBuffer: 64 * 1024 * 1024,
+    });
+    if (load.status !== 0) return null;
+    const wt = spawnSync("git", ["write-tree", "--missing-ok"], { cwd: repoDir, env, encoding: "utf-8" });
     if (wt.status !== 0) return null;
     const hash = wt.stdout.trim();
     return /^[0-9a-f]{40,64}$/.test(hash) ? hash : null;
@@ -4560,6 +4660,76 @@ export function codekbScopeFingerprint(
     } catch {
       // best-effort cleanup - a leaked scratch store is inert (Windows EBUSY)
     }
+  }
+}
+
+// A manifest as path -> "<mode> <hash>", keyed by the path's raw bytes (latin1
+// keeps every byte as one code unit, so keys compare in git's byte order).
+// Null on any record that is not a stage-0 `<mode> <hash> 0\t<path>` entry, or
+// on a path listed twice.
+function parseScopeManifest(manifest: Buffer): Map<string, string> | null {
+  const entries = new Map<string, string>();
+  for (const record of manifest.toString("latin1").split("\0")) {
+    if (record === "") continue;
+    const match = /^([0-7]{6}) ([0-9a-f]{40,64}) 0\t(.+)$/s.exec(record);
+    if (match === null || entries.has(match[3])) return null;
+    entries.set(match[3], `${match[1]} ${match[2]}`);
+  }
+  return entries;
+}
+
+// The per-file delta behind a STALE scope verdict: the analyzed-scope files that
+// changed between the store's recorded fingerprint and the current working tree,
+// the warm-rescan signal that lets reverse-engineering re-derive only what moved
+// instead of re-scanning the whole tree.
+//
+// The fingerprint trees are written to a scratch store that is removed once
+// they are hashed, so neither tree exists to diff later. The delta compares
+// manifests instead: the stored one publish recorded for the store's
+// fingerprint, and the current one from the SAME snapshot the caller drew its
+// CURRENT/STALE verdict from (no second write-tree, no window where a file
+// reverts between the two and yields STALE with an empty delta). A path is in
+// the delta when it was added, removed, or its mode or content hash changed; a
+// rename lists BOTH its old and new path, since a rescan must revisit both.
+//
+// The stored manifest is trusted only when the tree rebuilt from it IS the
+// stored fingerprint (content addressing makes that exact). Returns null
+// (delta unknown - callers fall back to a full rescan, never a silent or wrong
+// delta) when either fingerprint is absent or not a well-formed hash, there is
+// no stored manifest (a store published before manifests were recorded), the
+// manifest does not rebuild the stored fingerprint (older, edited, or a
+// fingerprint that is a commit rather than a tree), a manifest does not parse,
+// a changed path is not valid UTF-8 (a non-UTF-8 filename would corrupt a
+// targeted rescan), or the fingerprints differ yet no path does. Returns []
+// only when the two fingerprints match (the CURRENT case, not STALE).
+export function codekbScopeChangedFiles(
+  repoDir: string,
+  storedFingerprint: string | null,
+  storedManifest: Buffer | null,
+  current: CodekbScopeSnapshot | null,
+): string[] | null {
+  const isHash = (fp: string | null): fp is string =>
+    fp !== null && /^[0-9a-f]{40,64}$/.test(fp);
+  if (current === null || !isHash(storedFingerprint) || !isHash(current.fingerprint)) return null;
+  if (storedFingerprint === current.fingerprint) return [];
+  if (storedManifest === null) return null;
+  if (codekbScopeManifestTree(repoDir, storedManifest) !== storedFingerprint) return null;
+  const before = parseScopeManifest(storedManifest);
+  const after = parseScopeManifest(current.manifest);
+  if (before === null || after === null) return null;
+  const changed = [...new Set([...before.keys(), ...after.keys()])]
+    .filter((path) => before.get(path) !== after.get(path))
+    .sort();
+  if (changed.length === 0) return null;
+  // git paths are bytes, not UTF-8. Decode strictly: a filename with invalid
+  // UTF-8 bytes (legal on Unix) must NOT be silently rewritten with replacement
+  // characters - a corrupted path would point a targeted rescan at a file that
+  // does not exist and leave the real change unscanned.
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  try {
+    return changed.map((path) => decoder.decode(Buffer.from(path, "latin1")));
+  } catch {
+    return null;
   }
 }
 

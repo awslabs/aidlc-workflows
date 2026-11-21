@@ -284,9 +284,13 @@ import {
   codekbFingerprintExcludes,
   codekbSourceRoot,
   codekbRepoName,
+  codekbScopeChangedFiles,
   codekbScopeFingerprint,
+  codekbScopeSnapshot,
   codekbSourceFingerprint,
   codekbStoreGeneration,
+  readCodekbScopeManifest,
+  writeCodekbScopeManifest,
   parseReScope,
   pipelineAttemptStartedAt,
   pipelineLinkEvidence,
@@ -11756,11 +11760,12 @@ function handleCodekbPublish(
           `Re-scan the affected source, re-synthesize all nine artifacts, take a fresh snapshot, and retry.`,
       );
     }
-    const currentCandidateFingerprint = codekbScopeFingerprint(
+    const currentCandidate = codekbScopeSnapshot(
       repoDir,
       candidate.scope.analyzedPaths,
       excludes,
     );
+    const currentCandidateFingerprint = currentCandidate?.fingerprint ?? null;
     const candidateStale =
       candidate.scope.fingerprint !== currentCandidateFingerprint &&
       !(candidate.scope.fingerprint === null && currentCandidateFingerprint === null);
@@ -11797,6 +11802,20 @@ function handleCodekbPublish(
         throw error;
       }
       rmSync(backup, { recursive: true, force: true });
+      // The published fingerprint's file list, for a later STALE verdict's
+      // delta. Only when the candidate's fingerprint is this very snapshot:
+      // code that moved during the scan has no manifest of what was scanned,
+      // and its next delta is the full rescan.
+      if (!candidateStale && currentCandidate !== null) {
+        try {
+          writeCodekbScopeManifest(projectDir, repo, currentCandidate.manifest, space);
+        } catch (error) {
+          process.stderr.write(
+            `codekb-publish: published, but could not record the scope manifest (${errorMessage(error)}); ` +
+              "the next STALE verdict asks for a full rescan\n",
+          );
+        }
+      }
       return {
         repo,
         published: `${relativeCodekbDir(projectDir, repo, space)}/`,
@@ -11836,7 +11855,11 @@ function handleCodekbPublish(
 // scope block and recompute the content fingerprint over its analyzed paths.
 //   NO_STORE       no store timestamp - first scan, nothing to guard
 //   CURRENT        fingerprint matches - the store's deep knowledge is exact
-//   STALE          analyzed paths changed since the store was built
+//   STALE          analyzed paths changed since the store was built. Carries a
+//                  `changed_files` list (the per-file delta between the stored
+//                  fingerprint and the current tree) so a warm rescan can
+//                  re-derive only what moved; `changed_files: null` means the
+//                  delta was not computable and the full scope should rescan.
 //   UNVERIFIED     scope parsed but no/uncomputable fingerprint (non-git)
 //   UNKNOWN_SCOPE  block absent (legacy store) or malformed
 //
@@ -12074,10 +12097,11 @@ function handleCodekbScopeDiff(projectDir: string, flags: Record<string, string>
     );
     return;
   }
-  const currentFingerprint =
+  const currentSnapshot =
     store.analyzedPaths.length > 0
-      ? codekbScopeFingerprint(repoDir, store.analyzedPaths, fingerprintExcludes)
+      ? codekbScopeSnapshot(repoDir, store.analyzedPaths, fingerprintExcludes)
       : null;
+  const currentFingerprint = currentSnapshot?.fingerprint ?? null;
   const scopeLines = store.analyzedPaths.map((p) => `  - ${p}`).join("\n");
   if (store.fingerprint === null || currentFingerprint === null) {
     emit(
@@ -12094,6 +12118,21 @@ function handleCodekbScopeDiff(projectDir: string, flags: Record<string, string>
     return;
   }
   const current = store.fingerprint === currentFingerprint;
+  const changedFiles = current
+    ? []
+    : codekbScopeChangedFiles(
+        repoDir,
+        store.fingerprint,
+        readCodekbScopeManifest(projectDir, repo, space),
+        currentSnapshot,
+      );
+  const changedFilesLines =
+    changedFiles && changedFiles.length > 0
+      ? `\nchanged files (${changedFiles.length}):\n` +
+        changedFiles.map((f) => `  - ${JSON.stringify(f)}`).join("\n")
+      : changedFiles === null
+        ? `\n(changed-file delta unavailable - re-scan the full analyzed scope)`
+        : "";
   emit(
     {
       verdict: current ? "CURRENT" : "STALE",
@@ -12102,10 +12141,11 @@ function handleCodekbScopeDiff(projectDir: string, flags: Record<string, string>
       analyzed_paths: store.analyzedPaths,
       store_fingerprint: store.fingerprint,
       current_fingerprint: currentFingerprint,
+      ...(current ? {} : { changed_files: changedFiles }),
     },
     current
       ? `CURRENT: the analyzed paths are unchanged since the store was built (intent: ${store.intent || "unrecorded"}, coverage: ${store.kind}):\n${scopeLines}`
-      : `STALE: the analyzed paths have changed since the store was built (intent: ${store.intent || "unrecorded"}):\n${scopeLines}`,
+      : `STALE: the analyzed paths have changed since the store was built (intent: ${store.intent || "unrecorded"}):\n${scopeLines}${changedFilesLines}`,
   );
 }
 
