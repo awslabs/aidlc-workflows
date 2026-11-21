@@ -1387,6 +1387,422 @@ describe("a Unit on the workspace's own repository", () => {
     expect(git(dana, ["branch", "--show-current"])).toBe("main");
   });
 
+  // An early start where a file of theirs that git does not track is where the
+  // pushed branch it starts on has one: git would replace an ignored one. The
+  // take keeps them where they are and says so in the maintainer's words; the
+  // early take again, once it is moved, makes the push's own switch.
+  const SCRATCH = "// dana's own scratch\n";
+  const keptLine = (here: string, files: string, them = false): string => `I've kept you on ${here} for now: switching to reporting ` +
+    `would overwrite your own ${files}. Move or rename ${them ? "them" : "it"}, then tell me and I'll switch you.`;
+  const SWITCHED = "Carrying on reporting, your build in the data space. You are on branch reporting in the repo now.";
+  // refunds pushed by alice with two files of its own; dana's clone, before her take.
+  function refundsPushedTwoFiles(): { home: ReturnType<typeof makeHome>; dana: string } {
+    const home = oneRepoTeams();
+    const alice = cloneOf(home.remote, "alice");
+    const record = builtHere(alice, "refunds", "refunds.ts");
+    writeFileSync(join(alice, "src", "refunds-total.ts"), "export const total = 0;\n");
+    writeFileSync(join(record, "construction", "refunds", "code-generation", "source-manifest.json"), `${JSON.stringify({
+      stage: "code-generation", unit: "refunds", version: 1, writes: [{ path: "src/refunds.ts" }, { path: "src/refunds-total.ts" }],
+    })}\n`);
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    return { home, dana: cloneOf(home.remote, "dana") };
+  }
+  // A file of dana's own at `path`, which her git ignores unless `ignored` is false.
+  function ownFile(dana: string, path: string, ignored = true): void {
+    if (ignored) {
+      mkdirSync(join(dana, ".git", "info"), { recursive: true });
+      writeFileSync(join(dana, ".git", "info", "exclude"), `${path}\n`, { flag: "a" });
+    }
+    mkdirSync(dirname(join(dana, ...path.split("/"))), { recursive: true });
+    writeFileSync(join(dana, ...path.split("/")), SCRATCH);
+  }
+  const moveAside = (dana: string, path: string): void => {
+    const from = join(dana, ...path.split("/"));
+    writeFileSync(`${from}.mine`, readFileSync(from));
+    rmSync(from);
+  };
+  const takeEarly = (dana: string, home: ReturnType<typeof makeHome>, early = true, env: NodeJS.ProcessEnv = ENV) =>
+    takeIn("data", ["reporting", ...fromHome(home), ...(early ? ["--early"] : [])], dana, env);
+  // Code Generation of reporting in dana's build: its manifest names `files`.
+  function reportingWrote(dana: string, files: string[]): void {
+    const intents = join(dana, "aidlc", "spaces", "data", "intents");
+    const stage = join(intents, readdirSync(intents).find((name) => name.endsWith("-reporting"))!, "construction", "reporting", "code-generation");
+    mkdirSync(stage, { recursive: true });
+    writeFileSync(join(stage, "source-manifest.json"), `${JSON.stringify({
+      stage: "code-generation", unit: "reporting", version: 1, writes: files.map((path) => ({ path })),
+    })}\n`);
+  }
+  // A teammate's commit of a new file on refunds' branch on the host (a team command, say).
+  function addedOnHost(host: string, path: string, text: string): void {
+    const dir = join(tempDir("teammate"), "repo");
+    git(tempDir("teammate-parent"), ["clone", "-q", "--branch", "refunds", host, dir]);
+    mkdirSync(dirname(join(dir, ...path.split("/"))), { recursive: true });
+    writeFileSync(join(dir, ...path.split("/")), text);
+    git(dir, ["add", "--", path]);
+    git(dir, ["-c", "user.name=teammate", "-c", "user.email=teammate@example.test", "commit", "-q", "-m", `add ${path}`]);
+    git(dir, ["push", "-q", "origin", "refunds"]);
+  }
+
+  test("an early start where a file of theirs that git ignores is where the pushed branch has one keeps them where they are, the file as it was, in the maintainer's words", () => {
+    const { home, dana } = refundsPushedTwoFiles();
+    ownFile(dana, "src/refunds.ts");
+    const took = takeEarly(dana, home);
+    expect(took.status, took.out).toBe(0);
+    expect(String(took.json?.notice)).toContain("It starts early on the pushed branch of refunds in the repo. It may still change before it merges. " +
+      keptLine("main", "file src/refunds.ts"));
+    expect(String(took.json?.notice)).not.toContain("your uncommitted changes kept you");
+    expect(took.json?.left_on_branch).toBeUndefined();
+    expect(git(dana, ["branch", "--show-current"])).toBe("main");
+    expect(readFileSync(join(dana, "src", "refunds.ts"), "utf-8")).toBe(SCRATCH);
+    expect(git(dana, ["rev-parse", "reporting"])).toBe(git(home.remote, ["rev-parse", "refunds"]));
+  });
+
+  test("an early start kept by two files of theirs, one ignored and one untracked, names both", () => {
+    const { home, dana } = refundsPushedTwoFiles();
+    ownFile(dana, "src/refunds.ts");
+    ownFile(dana, "src/refunds-total.ts", false);
+    const took = takeEarly(dana, home);
+    expect(took.status, took.out).toBe(0);
+    expect(String(took.json?.notice)).toContain(keptLine("main", "files src/refunds-total.ts and src/refunds.ts", true));
+    expect(git(dana, ["branch", "--show-current"])).toBe("main");
+    for (const file of ["refunds.ts", "refunds-total.ts"]) expect(readFileSync(join(dana, "src", file), "utf-8")).toBe(SCRATCH);
+  });
+
+  test("kept by a file of theirs: the early take again with it still there says so again and moves nothing; once it is moved, it puts them on the Unit's branch", () => {
+    const { home, dana } = refundsPushedTwoFiles();
+    ownFile(dana, "src/refunds.ts");
+    expect(takeEarly(dana, home).status).toBe(0);
+    const again = takeEarly(dana, home);
+    expect(again.status, again.out).toBe(0);
+    expect(String(again.json?.notice)).toBe(`Carrying on reporting, your build in the data space. ${keptLine("main", "file src/refunds.ts")}`);
+    expect(again.json?.left_on_branch).toBeUndefined();
+    expect(git(dana, ["branch", "--show-current"])).toBe("main");
+    expect(readFileSync(join(dana, "src", "refunds.ts"), "utf-8")).toBe(SCRATCH);
+    moveAside(dana, "src/refunds.ts");
+    const moved = takeEarly(dana, home);
+    expect(moved.status, moved.out).toBe(0);
+    expect(String(moved.json?.notice)).toBe(SWITCHED);
+    expect(moved.json?.left_on_branch).toBeUndefined();
+    expect(git(dana, ["branch", "--show-current"])).toBe("reporting");
+    expect(git(dana, ["rev-parse", "HEAD"])).toBe(git(home.remote, ["rev-parse", "refunds"]));
+    expect(readFileSync(join(dana, "src", "refunds.ts.mine"), "utf-8")).toBe(SCRATCH);
+  });
+
+  test("kept by a file of theirs, a plain take again of the build here never switches, on their branch or one of their own", () => {
+    const { home, dana } = refundsPushedTwoFiles();
+    ownFile(dana, "src/refunds.ts");
+    expect(takeEarly(dana, home).status).toBe(0);
+    moveAside(dana, "src/refunds.ts");
+    const plain = takeEarly(dana, home, false);
+    expect(plain.status, plain.out).toBe(0);
+    expect(String(plain.json?.notice)).toBe("Carrying on reporting, your build in the data space.");
+    expect(plain.json?.left_on_branch).toBeUndefined();
+    expect(git(dana, ["branch", "--show-current"])).toBe("main");
+    git(dana, ["switch", "-q", "-c", "dana-notes"]);
+    const ownBranch = takeEarly(dana, home, false);
+    expect(ownBranch.status, ownBranch.out).toBe(0);
+    expect(String(ownBranch.json?.notice)).toBe("Carrying on reporting, your build in the data space.");
+    expect(ownBranch.json?.left_on_branch).toBeUndefined();
+    expect(git(dana, ["branch", "--show-current"])).toBe("dana-notes");
+  });
+
+  test("kept by a file of theirs while on a branch of their own: the line names that branch, and the early take again switches them from there", () => {
+    const { home, dana } = refundsPushedTwoFiles();
+    git(dana, ["switch", "-q", "-c", "dana-notes"]);
+    ownFile(dana, "src/refunds.ts");
+    const took = takeEarly(dana, home);
+    expect(took.status, took.out).toBe(0);
+    expect(String(took.json?.notice)).toContain(keptLine("dana-notes", "file src/refunds.ts"));
+    expect(git(dana, ["branch", "--show-current"])).toBe("dana-notes");
+    moveAside(dana, "src/refunds.ts");
+    const moved = takeEarly(dana, home);
+    expect(moved.status, moved.out).toBe(0);
+    expect(String(moved.json?.notice)).toBe(SWITCHED);
+    expect(git(dana, ["branch", "--show-current"])).toBe("reporting");
+  });
+
+  test("kept by a change of theirs to a file the Unit's branch has another copy of: the early take again leaves branch, index and files as they were, and switches them once it is committed", () => {
+    const { home, dana } = refundsPushedTwoFiles();
+    writeFileSync(join(dana, "NOTES.md"), "my note\n");
+    git(dana, ["add", "NOTES.md"]);
+    git(dana, ["commit", "-q", "-m", "my notes"]);
+    writeFileSync(join(dana, "NOTES.md"), "my note, longer\n");
+    const took = takeEarly(dana, home);
+    expect(took.status, took.out).toBe(0);
+    expect(String(took.json?.notice)).toContain("Branch reporting in the repo starts there; your uncommitted changes kept you on your branch, so switch when you are ready.");
+    const before = { head: git(dana, ["rev-parse", "HEAD"]), index: git(dana, ["ls-files", "--stage", "--", ":!aidlc"]), status: git(dana, ["status", "--porcelain", "--", ":!aidlc"]) };
+    const again = takeEarly(dana, home);
+    expect(again.status, again.out).toBe(0);
+    expect(String(again.json?.notice)).toBe("Carrying on reporting, your build in the data space. Branch reporting in the repo starts there; " +
+      "your uncommitted changes kept you on your branch, so switch when you are ready.");
+    expect(again.json?.left_on_branch).toBeUndefined();
+    expect(git(dana, ["branch", "--show-current"])).toBe("main");
+    expect({ head: git(dana, ["rev-parse", "HEAD"]), index: git(dana, ["ls-files", "--stage", "--", ":!aidlc"]), status: git(dana, ["status", "--porcelain", "--", ":!aidlc"]) })
+      .toEqual(before);
+    expect(readFileSync(join(dana, "NOTES.md"), "utf-8")).toBe("my note, longer\n");
+    git(dana, ["add", "NOTES.md"]);
+    git(dana, ["commit", "-q", "-m", "my note"]);
+    const committed = takeEarly(dana, home);
+    expect(committed.status, committed.out).toBe(0);
+    expect(String(committed.json?.notice)).toBe(SWITCHED);
+    expect(git(dana, ["branch", "--show-current"])).toBe("reporting");
+  });
+
+  test("kept by a change of theirs to a file the Unit's branch has the same copy of: the early take again carries it onto the Unit's branch, and the push leaves it theirs", () => {
+    const home = oneRepoTeams();
+    leadCommits(home, "main", "README.md");
+    const alice = cloneOf(home.remote, "alice");
+    builtHere(alice, "refunds", "refunds.ts");
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    const dana = cloneOf(home.remote, "dana");
+    writeFileSync(join(dana, "README.md"), "README.md\nmy edit\n");
+    // The first early start, which nobody asked to switch them, keeps them for it, as it always has.
+    const took = takeEarly(dana, home);
+    expect(took.status, took.out).toBe(0);
+    expect(String(took.json?.notice)).toContain("Branch reporting in the repo starts there; your uncommitted changes kept you on your branch, so switch when you are ready.");
+    expect(git(dana, ["branch", "--show-current"])).toBe("main");
+    const again = takeEarly(dana, home);
+    expect(again.status, again.out).toBe(0);
+    expect(String(again.json?.notice)).toBe(SWITCHED);
+    expect(git(dana, ["branch", "--show-current"])).toBe("reporting");
+    expect(readFileSync(join(dana, "README.md"), "utf-8")).toBe("README.md\nmy edit\n");
+    expect(git(dana, ["status", "--porcelain", "--", "README.md"])).toBe("M README.md");
+    const intents = join(dana, "aidlc", "spaces", "data", "intents");
+    const record = join(intents, readdirSync(intents).find((name) => name.endsWith("-reporting"))!);
+    writeFileSync(join(dana, "src", "reporting.ts"), "export const report = 1;\n");
+    const stage = join(record, "construction", "reporting", "code-generation");
+    mkdirSync(stage, { recursive: true });
+    writeFileSync(join(stage, "source-manifest.json"), `${JSON.stringify({
+      stage: "code-generation", unit: "reporting", version: 1, writes: [{ path: "src/reporting.ts" }],
+    })}\n`);
+    const pushed = run(UNIT, ["push"], dana);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(git(home.remote, ["show", "reporting:README.md"])).toBe("README.md");
+    expect(git(home.remote, ["show", "reporting:src/reporting.ts"])).toBe("export const report = 1;");
+    expect(readFileSync(join(dana, "README.md"), "utf-8")).toBe("README.md\nmy edit\n");
+    expect(git(dana, ["status", "--porcelain", "--", "README.md"])).toBe("M README.md");
+    // Already on the Unit's branch, the push moves nothing, so it names no change of theirs (whereNowLine).
+    expect(String(pushed.json?.notice)).toBe("Pushed branch reporting in the repo. Get it merged your usual way. AI-DLC's record of reporting went with it, in a commit of its own.");
+  });
+
+  test("kept by a file of theirs with the Unit's files already written where they were kept: the early take again carries them onto the Unit's branch", () => {
+    const { home, dana } = refundsPushedTwoFiles();
+    ownFile(dana, "src/refunds-total.ts");
+    expect(takeEarly(dana, home).status).toBe(0);
+    const intents = join(dana, "aidlc", "spaces", "data", "intents");
+    const record = join(intents, readdirSync(intents).find((name) => name.endsWith("-reporting"))!);
+    // Code Generation where they were kept: a file of its own, and its change to one the pushed branch has too.
+    writeFileSync(join(dana, "src", "reporting.ts"), "export const report = 1;\n");
+    writeFileSync(join(dana, "src", "refunds.ts"), "export const built = \"refunds\"; // reported\n");
+    const stage = join(record, "construction", "reporting", "code-generation");
+    mkdirSync(stage, { recursive: true });
+    writeFileSync(join(stage, "source-manifest.json"), `${JSON.stringify({
+      stage: "code-generation", unit: "reporting", version: 1, writes: [{ path: "src/reporting.ts" }, { path: "src/refunds.ts" }],
+    })}\n`);
+    moveAside(dana, "src/refunds-total.ts");
+    const moved = takeEarly(dana, home);
+    expect(moved.status, moved.out).toBe(0);
+    expect(String(moved.json?.notice)).toBe(SWITCHED);
+    expect(git(dana, ["branch", "--show-current"])).toBe("reporting");
+    expect(readFileSync(join(dana, "src", "refunds.ts"), "utf-8")).toBe("export const built = \"refunds\"; // reported\n");
+    expect(readFileSync(join(dana, "src", "reporting.ts"), "utf-8")).toBe("export const report = 1;\n");
+    expect(git(dana, ["status", "--porcelain", "--", "src"])).toBe("M src/refunds.ts\n?? src/refunds-total.ts.mine\n?? src/reporting.ts");
+  });
+
+  test("kept by a file of theirs in a clone made before the lead's record reached main: the early take again switches them, AI-DLC's own memory files no stop", () => {
+    const { home, clone: kai, mergeLeadRecord } = leadRecordOnItsOwnBranch(UNITS);
+    mergeLeadRecord();
+    const lee = cloneOf(home.remote, "lee");
+    builtInClone(lee, home, "refunds", "refunds.ts");
+    const pushed = run(UNIT, ["push"], lee);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(git(home.remote, ["ls-tree", "-r", "--name-only", "refunds", "--", "aidlc/spaces/default/memory/org.md"])).toBe("aidlc/spaces/default/memory/org.md");
+    seedsAsLaid(kai);
+    ownFile(kai, "src/refunds.ts");
+    const took = takeEarly(kai, home);
+    expect(took.status, took.out).toBe(0);
+    expect(String(took.json?.notice)).toContain(keptLine("main", "file src/refunds.ts"));
+    moveAside(kai, "src/refunds.ts");
+    const moved = takeEarly(kai, home);
+    expect(moved.status, moved.out).toBe(0);
+    expect(String(moved.json?.notice)).toBe(SWITCHED);
+    expect(git(kai, ["branch", "--show-current"])).toBe("reporting");
+    expect(git(kai, ["status", "--porcelain", "--", "aidlc/spaces/default/memory"])).toBe("");
+  });
+
+  test("kept by a file of theirs while on a branch of their own that now holds the Unit's commit: the early take again leaves them there, the commit with them", () => {
+    const { home, dana } = refundsPushedTwoFiles();
+    git(dana, ["switch", "-q", "-c", "dana-work"]);
+    ownFile(dana, "src/refunds.ts");
+    expect(takeEarly(dana, home).status).toBe(0);
+    writeFileSync(join(dana, "src", "reporting.ts"), "export const report = 1;\n");
+    git(dana, ["add", "src/reporting.ts"]);
+    git(dana, ["commit", "-q", "-m", "reporting"]);
+    reportingWrote(dana, ["src/reporting.ts"]);
+    moveAside(dana, "src/refunds.ts");
+    const again = takeEarly(dana, home);
+    expect(again.status, again.out).toBe(0);
+    expect(String(again.json?.notice)).toBe("Carrying on reporting, your build in the data space.");
+    // Only the agent reads why: the reply's own key, nothing for the person.
+    expect(again.json?.left_on_branch).toBe("The person is still on dana-work in the repo: their own commits there change reporting's files, " +
+      "so they were not switched. If they asked to be switched, tell them so in one line.");
+    expect(git(dana, ["branch", "--show-current"])).toBe("dana-work");
+    expect(git(dana, ["log", "-1", "--format=%s"])).toBe("reporting");
+  });
+
+  test("kept by a file of theirs on main, then main pulled with a change to one of the Unit's files: the early take again switches them, the lead's commit never read as theirs", () => {
+    const home = oneRepoTeams();
+    leadCommits(home, "main", "README.md");
+    const alice = cloneOf(home.remote, "alice");
+    builtHere(alice, "refunds", "refunds.ts");
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    const dana = cloneOf(home.remote, "dana");
+    ownFile(dana, "src/refunds.ts");
+    expect(takeEarly(dana, home).status).toBe(0);
+    writeFileSync(join(home.dir, "README.md"), "README.md\nfrom the lead\n");
+    git(home.dir, ["commit", "-q", "-am", "lead: readme"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    git(dana, ["pull", "-q", "--ff-only", "origin", "main"]);
+    reportingWrote(dana, ["README.md", "src/reporting.ts"]);
+    writeFileSync(join(dana, "src", "reporting.ts"), "export const report = 1;\n");
+    moveAside(dana, "src/refunds.ts");
+    const moved = takeEarly(dana, home);
+    expect(moved.status, moved.out).toBe(0);
+    expect(String(moved.json?.notice)).toBe(SWITCHED);
+    expect(moved.json?.left_on_branch).toBeUndefined();
+    expect(git(dana, ["branch", "--show-current"])).toBe("reporting");
+  });
+
+  test("kept by a file of theirs while on a branch of their own with a commit of theirs that is not the Unit's: the early take again switches them, the commit staying on their branch", () => {
+    const { home, dana } = refundsPushedTwoFiles();
+    git(dana, ["switch", "-q", "-c", "dana-notes"]);
+    writeFileSync(join(dana, "NOTES.md"), "my note\n");
+    git(dana, ["add", "NOTES.md"]);
+    git(dana, ["commit", "-q", "-m", "my notes"]);
+    ownFile(dana, "src/refunds.ts");
+    const took = takeEarly(dana, home);
+    expect(took.status, took.out).toBe(0);
+    expect(String(took.json?.notice)).toContain(keptLine("dana-notes", "file src/refunds.ts"));
+    reportingWrote(dana, ["src/reporting.ts"]);
+    writeFileSync(join(dana, "src", "reporting.ts"), "export const report = 1;\n");
+    moveAside(dana, "src/refunds.ts");
+    const moved = takeEarly(dana, home);
+    expect(moved.status, moved.out).toBe(0);
+    expect(String(moved.json?.notice)).toBe(SWITCHED);
+    expect(git(dana, ["branch", "--show-current"])).toBe("reporting");
+    expect(git(dana, ["log", "-1", "--format=%s", "dana-notes"])).toBe("my notes");
+    expect(readFileSync(join(dana, "src", "reporting.ts"), "utf-8")).toBe("export const report = 1;\n");
+  });
+
+  test("kept by a file of theirs in a clone whose install left AI-DLC's part of the tracked .gitignore uncommitted, where the Unit's branch has another copy: the early take again switches them", () => {
+    const { home, dana } = refundsPushedTwoFiles();
+    const ignore = git(home.remote, ["show", "refunds:.gitignore"]);
+    commitOnHost(home.remote, "refunds", { ".gitignore": `${ignore}\ncoverage/\n` }, "ignore coverage");
+    configured(dana, "claude");
+    expect(git(dana, ["status", "--porcelain", "--", ".gitignore"])).toBe("M .gitignore");
+    ownFile(dana, "src/refunds.ts");
+    const took = takeEarly(dana, home);
+    expect(took.status, took.out).toBe(0);
+    expect(String(took.json?.notice)).toContain(keptLine("main", "file src/refunds.ts"));
+    moveAside(dana, "src/refunds.ts");
+    const moved = takeEarly(dana, home);
+    expect(moved.status, moved.out).toBe(0);
+    expect(String(moved.json?.notice)).toBe(SWITCHED);
+    expect(git(dana, ["branch", "--show-current"])).toBe("reporting");
+    expect(readFileSync(join(dana, ".gitignore"), "utf-8")).toContain("coverage/");
+  });
+
+  test("an ignored file of theirs in a harness folder, where the pushed branch has one, is named as theirs and never replaced", () => {
+    const { home, dana } = refundsPushedTwoFiles();
+    addedOnHost(home.remote, ".claude/commands/review.md", "the team's command\n");
+    ownFile(dana, ".claude/commands/review.md");
+    const took = takeEarly(dana, home);
+    expect(took.status, took.out).toBe(0);
+    expect(String(took.json?.notice)).toContain(keptLine("main", "file .claude/commands/review.md"));
+    expect(git(dana, ["branch", "--show-current"])).toBe("main");
+    expect(readFileSync(join(dana, ".claude", "commands", "review.md"), "utf-8")).toBe(SCRATCH);
+  });
+
+  test("kept by a file of theirs with another untracked file of theirs beside it: the line names the file in the way, and the early take again switches them", () => {
+    const { home, dana } = refundsPushedTwoFiles();
+    ownFile(dana, "src/refunds.ts");
+    writeFileSync(join(dana, "TODO.txt"), "my list\n");
+    const took = takeEarly(dana, home);
+    expect(took.status, took.out).toBe(0);
+    expect(String(took.json?.notice)).toContain(keptLine("main", "file src/refunds.ts"));
+    expect(String(took.json?.notice)).not.toContain("your uncommitted changes kept you");
+    moveAside(dana, "src/refunds.ts");
+    const moved = takeEarly(dana, home);
+    expect(moved.status, moved.out).toBe(0);
+    expect(String(moved.json?.notice)).toBe(SWITCHED);
+    expect(readFileSync(join(dana, "TODO.txt"), "utf-8")).toBe("my list\n");
+  });
+
+  test("an early start in the space its dependency was pushed from never names AI-DLC's record there as files of theirs", () => {
+    const { home, dana } = refundsPushedTwoFiles();
+    const took = takeIn("payments", ["reporting", ...fromHome(home), "--early"], dana);
+    expect(took.status, took.out).toBe(0);
+    expect(String(took.json?.notice)).not.toContain("your own file");
+    expect(String(took.json?.notice)).not.toContain("aidlc/spaces/payments");
+  });
+
+  test("kept by a file of theirs and built where they were kept, the push stops with git's words and keeps their file", () => {
+    const { home, dana } = refundsPushedTwoFiles();
+    ownFile(dana, "src/refunds-total.ts");
+    expect(takeEarly(dana, home).status).toBe(0);
+    const intents = join(dana, "aidlc", "spaces", "data", "intents");
+    const record = join(intents, readdirSync(intents).find((name) => name.endsWith("-reporting"))!);
+    writeFileSync(join(dana, "src", "reporting.ts"), "export const report = 1;\n");
+    const stage = join(record, "construction", "reporting", "code-generation");
+    mkdirSync(stage, { recursive: true });
+    writeFileSync(join(stage, "source-manifest.json"), `${JSON.stringify({
+      stage: "code-generation", unit: "reporting", version: 1, writes: [{ path: "src/reporting.ts" }],
+    })}\n`);
+    const pushed = run(UNIT, ["push"], dana);
+    expect(pushed.status, pushed.out).not.toBe(0);
+    expect(String(pushed.json?.error)).toBe("Branch reporting could not be checked out in the repo, so nothing was pushed. Git says: " +
+      '"The following untracked working tree files would be overwritten by checkout: src/refunds-total.ts". Your own changes there stay ' +
+      "as they are; once they are committed or put aside, I can push reporting.");
+    expect(readFileSync(join(dana, "src", "refunds-total.ts"), "utf-8")).toBe(SCRATCH);
+    expect(git(dana, ["branch", "--show-current"])).toBe("main");
+    expect(git(home.remote, ["branch", "--list", "reporting"])).toBe("");
+  });
+
+  test("an ignored file of theirs where the pushed branch has a folder is never replaced by the early start's switch", () => {
+    const { home, dana } = refundsPushedTwoFiles();
+    mkdirSync(join(dana, ".git", "info"), { recursive: true });
+    writeFileSync(join(dana, ".git", "info", "exclude"), "/src\n", { flag: "a" });
+    writeFileSync(join(dana, "src"), SCRATCH);
+    const took = takeEarly(dana, home);
+    expect(took.status, took.out).toBe(0);
+    expect(git(dana, ["branch", "--show-current"])).toBe("main");
+    expect(readFileSync(join(dana, "src"), "utf-8")).toBe(SCRATCH);
+  });
+
+  test("kept by a file of theirs in a chat: the agent's note hands over the early take again, and that command switches them once the file is moved", () => {
+    const { home, dana } = refundsPushedTwoFiles();
+    ownFile(dana, "src/refunds.ts");
+    const chat = { ...ENV, AIDLC_SESSION_OVERRIDE: "chat-1" };
+    const took = takeEarly(dana, home, true, chat);
+    expect(took.status, took.out).toBe(0);
+    const step = next(dana, chat);
+    expect(((step.change_notices ?? []) as string[]).some((line) => line.endsWith(keptLine("main", "file src/refunds.ts"))), JSON.stringify(step).slice(0, 800)).toBe(true);
+    const note = String(step.change_notices_note);
+    const command = /When the person says the file is moved, run `([^`]+)` and then `([^`]+)`, and follow what it returns\./.exec(note);
+    expect(command, note).not.toBeNull();
+    // As a POSIX shell reads the printed words: each single-quoted one is one word.
+    const words = command![1].replace(/^.*aidlc-unit\.ts /, "").split(" ").filter(Boolean).map((word) => word.replace(/^'(.*)'$/, "$1"));
+    expect(words).toEqual(["take", "reporting", "--plan", fixtureIntentId8(home.dir), "--from", home.remote, "--early"]);
+    expect(command![2]).toEndWith(" next");
+    moveAside(dana, "src/refunds.ts");
+    const ran = run(UNIT, words, dana, chat);
+    expect(ran.status, ran.out).toBe(0);
+    expect(git(dana, ["branch", "--show-current"])).toBe("reporting");
+    const after = next(dana, chat);
+    expect((after.change_notices ?? []) as string[], JSON.stringify(after).slice(0, 800)).toContain(SWITCHED);
+  });
+
   // A review on GitLab: a suggestion committed on the Unit's branch, then a
   // squash under GitLab's merge commit with the branch deleted, before the
   // lead's look. The team's own look reads the merge request's last head, as

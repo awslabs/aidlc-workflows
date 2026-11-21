@@ -1098,7 +1098,11 @@ pushed its branches, the offer also has **Start reporting early**: the build
 starts on that pushed branch in each repo it changed (checked out where you
 have no uncommitted work there, AI-DLC's own files aside; otherwise the branch
 is made and the line says to switch when you are ready), and the line says it
-may still change before it merges. Once that Unit is merged, AI-DLC asks once whether to move your build
+may still change before it merges. A file of yours that git does not track,
+where that branch has one, is never replaced: you stay where you are, the line
+names the file, and once you have moved or renamed it and said so, AI-DLC
+switches you, carrying your build's files with you (where commits of yours
+there already change your build's files, you stay with them). Once that Unit is merged, AI-DLC asks once whether to move your build
 onto the branch it merged into (only your build's own commits move, with your
 own git; for a build you already pushed, its next push asks you whether to replace
 the branch it went on or to push a new one). The line says where you are afterwards and the way back to

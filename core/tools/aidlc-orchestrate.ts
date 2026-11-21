@@ -758,6 +758,8 @@ import {
   leadsKeptPlan,
   teamHandoverMarkName,
   teamSharedHere,
+  SWITCH_WHEN_TOLD_CLAUSE,
+  switchWhenToldNote,
   unitBranchInTheWay,
   unitMergeToFinish,
   unitBuildOwnBranch,
@@ -1327,6 +1329,7 @@ function switchBackOnFollowUps(directive: Directive): string[] {
       ? [`When the person asks to sign off each taken Unit's result themselves, run \`${aidlcToolInvocation("unit")} lead-sign-off on ` +
         `${unitWordsArg("lead-sign-off")}\` and tell them in plain words what it reports. ${UNIT_WORDS_NOTE}`]
       : []),
+    ...(engineProjectDir && carried.some((line) => line.includes(SWITCH_WHEN_TOLD_CLAUSE)) ? switchWhenToldNote(engineProjectDir) : []),
   ];
 }
 

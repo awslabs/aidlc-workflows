@@ -93,6 +93,64 @@ function notices(step: Record<string, unknown>): string[] {
 }
 
 describe("starting early", () => {
+  // The own-rules row's take as a POSIX shell reads its printed words (each
+  // single-quoted one is one word), for `unit`, from dana's board in a space of
+  // her own: the lead shared practices, so the row is offered.
+  function ownRulesRowTake(): { dana: string; take: (unit: string) => ReturnType<typeof run> } {
+    const taken = refundsTakenInClone();
+    const practices = join(taken.home.dir, "aidlc", "spaces", "default", "memory", "team.md");
+    writeFileSync(practices, readFileSync(practices, "utf-8").replace("## Testing Posture\n", "## Testing Posture\nTest first for the refund amount.\n"));
+    git(taken.home.dir, ["add", "-A"]);
+    git(taken.home.dir, ["commit", "-q", "-m", "the lead's practices"]);
+    git(taken.home.dir, ["push", "-q", "origin", "main"]);
+    expect(run(UNIT, ["share", "--plan"], taken.home.dir).status).toBe(0);
+    codeGenerated(taken.alice, taken.record);
+    expect(run(UNIT, ["push"], taken.alice).status).toBe(0);
+    const dana = cloneOf(taken.home.remote, "dana");
+    cloneCode(taken.hosts.billing, dana, "billing", "dana");
+    inSpace(dana, "data");
+    const own = (next(dana).choices as Array<{ label: string; command: string }>)
+      .find((choice) => choice.label === "Start one under your team's own rules only");
+    expect(own).toBeDefined();
+    return {
+      dana,
+      take: (unit) => run(UNIT, own!.command.replace(/^.*aidlc-unit\.ts /, "").replace("'<the Unit>'", unit)
+        .split(" ").filter(Boolean).map((word) => word.replace(/^'(.*)'$/, "$1")), dana),
+    };
+  }
+
+  // The row prints its take with --early and asks which Unit; named a Unit
+  // already theirs and built here, off its branch, it is that Unit's early take
+  // again: carried on, and put on its branch.
+  test("the own-rules row's take, given a Unit already theirs that they left the branch of, carries it on and puts them on its branch", () => {
+    const { dana, take } = ownRulesRowTake();
+    expect(take("reporting").status).toBe(0);
+    const billing = join(dana, "billing");
+    expect(git(billing, ["branch", "--show-current"])).toBe("reporting");
+    git(billing, ["switch", "-q", "main"]);
+    const again = take("reporting");
+    expect(again.status, again.out).toBe(0);
+    expect(String(again.json?.notice)).toBe("Carrying on reporting, your build in the data space. You are on branch reporting in billing now.");
+    expect(git(billing, ["branch", "--show-current"])).toBe("reporting");
+  });
+
+  test("an early start in two repositories kept by a file of theirs in one names that repository there, and switches the other", () => {
+    const { dana, home } = refundsPushed(DEPENDENCIES.replace("repos: [billing]\n    depends_on: [refunds]", "repos: [checkout-api, billing]\n    depends_on: [refunds]"));
+    const billing = join(dana, "billing");
+    writeFileSync(join(billing, ".git", "info", "exclude"), "lib/refund.ts\n", { flag: "a" });
+    mkdirSync(join(billing, "lib"), { recursive: true });
+    writeFileSync(join(billing, "lib", "refund.ts"), "// dana's own scratch\n");
+    const took = takeIn("data", ["reporting", ...planFrom(home), "--early"], dana);
+    expect(took.status, took.out).toBe(0);
+    const notice = String(took.json?.notice);
+    expect(notice).toContain("You are on branch reporting in checkout-api now.");
+    expect(notice).toContain("I've kept you on main for now: switching to reporting in billing would overwrite your own file lib/refund.ts. " +
+      "Move or rename it, then tell me and I'll switch you.");
+    expect(git(billing, ["branch", "--show-current"])).toBe("main");
+    expect(readFileSync(join(billing, "lib", "refund.ts"), "utf-8")).toBe("// dana's own scratch\n");
+    expect(git(join(dana, "checkout-api"), ["branch", "--show-current"])).toBe("reporting");
+  });
+
   // A live run on Claude Code: a teammate whose Units could only start early
   // picked the own-rules row, then a Unit, and the take refused it as not
   // ready and asked whether to start it early: a third question.

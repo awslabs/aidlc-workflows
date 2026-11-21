@@ -4161,7 +4161,7 @@ function nothingAt(file: string): boolean {
 // a clone made before the lead's record reached main, main then tracks the same
 // path, and git refuses a step over it. A file changed by the person or the
 // learning loop, or laid by another release, is not the seed. Only the set-aside
-// (setOwnRootPartsAside) and the merge's "a file of your own" stop ask it.
+// (setOwnRootPartsAside) and ownFilesInTheWay ask it.
 function aidlcOwnSeed(dir: string, path: string): boolean {
   const seed = defaultMemorySeed(dir, path);
   if (seed === null) return false;
@@ -4173,6 +4173,16 @@ function aidlcOwnSeed(dir: string, path: string): boolean {
   } catch {
     return false;
   }
+}
+
+// Of `added` (paths a merge or a switch writes where HEAD has none), the files
+// of the person's own that git does not track, ignored ones too: git refuses to
+// replace one. AI-DLC's own copies on the workspace's own repository are not
+// theirs; the step sets those aside. The merge's "a file of your own" stop and
+// an early start's switch (earlySwitchKept) read it.
+function ownFilesInTheWay(dir: string, repo: string, added: readonly string[]): string[] {
+  return added.filter((path) => existsSync(join(dir, ...path.split("/"))) && !git(dir, ["ls-files", "--error-unmatch", "--", path]).ok &&
+    !(repo === "." && (aidlcOwnRootParts(dir, [path]).has(path) || aidlcOwnSeed(dir, path))));
 }
 
 // Git refuses to merge over a local change to a file the merge writes, the
@@ -11826,9 +11836,10 @@ function unitOwnChange(dir: string, path: string, taken: string, scratch: string
 // again on the branch the person went back to) gets the branch's copy in the
 // index first, and git keeps the newer file as it is, as it keeps a change to
 // any file the switch does not touch. Only a file whose index holds nothing its
-// working copy lacks. Anything else in the way stays theirs: git refuses, the
-// index is put back, and git's words come back. A dry run does it in a copy of
-// their index and moves nothing.
+// working copy lacks. Anything else in the way stays theirs, an ignored file of
+// theirs included (--no-overwrite-ignore): git refuses, the index is put back,
+// and git's words come back. A dry run does it in a copy of their index and
+// moves nothing; it passes over an ignored file the real switch refuses.
 function switchOntoUnitBranch(dir: string, unit: string, paths: string[], dryRun = false): { ok: boolean; said: string } {
   const branch = `refs/heads/${unit}`;
   const scratch = dryRun ? mkdtempSync(join(tmpdir(), "aidlc-unit-switch-")) : null;
@@ -11859,7 +11870,7 @@ function switchOntoUnitBranch(dir: string, unit: string, paths: string[], dryRun
       }
     };
     put(onBranch);
-    const tried = dryRun ? git(dir, ["read-tree", "-n", "-m", "-u", "HEAD", branch], env) : git(dir, ["switch", "-q", unit]);
+    const tried = dryRun ? git(dir, ["read-tree", "-n", "-m", "-u", "HEAD", branch], env) : git(dir, ["switch", "-q", "--no-overwrite-ignore", unit]);
     if (!tried.ok && !dryRun) put(before);
     return { ok: tried.ok, said: tried.stderr };
   } finally {
@@ -11876,6 +11887,111 @@ export function unitBranchInTheWay(projectDir: string, branch: string, byRepo: M
       git(dir, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]).ok &&
       !withOwnRootPartsAside(dir, `refs/heads/${branch}`, () => switchOntoUnitBranch(dir, branch, paths, true), () => false).ok;
   }).map(([repo]) => repo);
+}
+
+// The Unit's files (`paths`) that commits of the person's own hold: commits
+// HEAD has that neither the Unit's `branch` nor any remote has, as
+// comesAlongLine reads their own commits, so what a pulled main brought is
+// never counted as theirs.
+function ownCommitsOnUnitFiles(dir: string, branch: string, paths: readonly string[]): string[] {
+  if (paths.length === 0) return [];
+  const named = git(dir, ["log", "-z", "--format=", "--name-only", "--no-renames", "HEAD", "--not", branch, "--remotes", "--", ...paths]);
+  return named.ok ? [...new Set(named.stdout.split("\0").map((path) => path.trim()).filter(Boolean))] : [];
+}
+
+// What keeps an early start from putting `dir` on the Unit's branch at
+// `target` (the pushed head the first take starts it at, or the branch that
+// take made): files of theirs that git does not track where `target` has one
+// and HEAD has none, named first, since a switch by hand would replace an
+// ignored one (the Unit's own files at `paths` ride along instead, and
+// AI-DLC's record in aidlc/ is not theirs); else, at the first take, which
+// nobody asked to switch them, any other change of theirs uncommitted. The
+// early take again is the switch they asked for (`asked`): git carries their
+// other changes across, untracked files and the one they moved or renamed
+// included, so only a change to a tracked file the Unit's branch has another
+// copy of, which git refuses to carry, keeps them; AI-DLC's own part of a root
+// file is set aside around the switch instead (aidlcOwnRootParts). Null when
+// nothing of theirs keeps them.
+function earlySwitchKept(pd: string, repo: string, dir: string, target: string, paths: readonly string[], asked = false):
+  { files: string[] } | "changes" | null {
+  const added = git(dir, ["diff", "-z", "--name-only", "--no-renames", "--diff-filter=A", "HEAD", target, "--"]).stdout.split("\0")
+    .filter((path) => path !== "" && !underPaths(path, paths) && !(repo === "." && path.startsWith("aidlc/")));
+  const files = ownFilesInTheWay(dir, repo, added);
+  if (files.length > 0) return { files };
+  if (!asked) return ownChanges(pd, [{ repo, dir }]) ? "changes" : null;
+  const changed = diffNames(dir, ["HEAD"], []);
+  const differ = diffNames(dir, ["HEAD", target], []);
+  if (changed === null || differ === null) return null;
+  const refused = [...changed].filter((path) => differ.has(path) && !underPaths(path, paths));
+  const aside = repo === "." ? aidlcOwnRootParts(dir, refused) : new Map<string, OwnRootPart>();
+  return refused.some((path) => !aside.has(path)) ? "changes" : null;
+}
+
+// The end of the maintainer's line for an early start a file of theirs kept
+// where they are; the agent's note for it (switchWhenToldNote) hands over the
+// early take again, which keeps that promise.
+export const SWITCH_WHEN_TOLD_CLAUSE = "then tell me and I'll switch you.";
+
+// What an early start that kept them where they are says: a file of theirs in
+// the way named in the maintainer's words, the repository only where the early
+// start spans several (`named`); other changes of theirs, the line it always said.
+function earlyKeptLine(unit: string, dir: string, name: string, kept: { files: string[] } | "changes", named: boolean): string {
+  if (kept === "changes") return `Branch ${unit} in ${name} starts there; your uncommitted changes kept you on your branch, so switch when you are ready.`;
+  const here = git(dir, ["branch", "--show-current"]).stdout.trim() || "the commit you were on";
+  const many = kept.files.length > 1;
+  return `I've kept you on ${here} for now: switching to ${unit}${named ? ` in ${name}` : ""} would overwrite your own ` +
+    `${many ? "files" : "file"} ${joinNames(kept.files)}. Move or rename ${many ? "them" : "it"}, ${SWITCH_WHEN_TOLD_CLAUSE}`;
+}
+
+// The early take again, run on the person's word once a file of theirs is
+// moved: in each repo the build started early in (buildEarlyOn) where its
+// branch is and they are not on it, the push's own switch onto it from wherever
+// they stand (switchOntoUnitBranch, AI-DLC's own parts aside, the Unit's files
+// riding along), where earlySwitchKept finds nothing of theirs in the way.
+// Where commits of their own hold the Unit's files (ownCommitsOnUnitFiles), the
+// build is there, so they stay with it, and the take's reply tells the agent so
+// (left_on_branch; nothing for the person). What it says goes after the
+// carry-on line; a refusal no line fits says nothing.
+function earlyTakeAgain(pd: string, unit: string): { said: string; leftOnBranch?: string } {
+  const state = readStateFile(pd);
+  const build = unitBuildOf(state);
+  if (build === null) return { said: "" };
+  const repos = [...new Set(buildEarlyOn(pd, build).flatMap((dep) => dep.repos.map((repo) => repo.repo)))];
+  const manifest = readUnitSourceManifest(pd, "code-generation", unit);
+  const targets = manifest.ok ? unitWriteTargets(pd, manifest.manifest.writes) : new Map<string, { dir: string; paths: string[] }>();
+  const onto = unitBranchOf(state, unit);
+  const branch = `refs/heads/${onto}`;
+  const stayed: string[] = [];
+  const said = repos.flatMap((repo) => {
+    const dir = targets.get(repo)?.dir ?? (repo === "." ? pd : repoDir(pd, repo));
+    if (!isGitRepoDir(dir) || !git(dir, ["rev-parse", "--verify", "--quiet", branch]).ok ||
+      git(dir, ["branch", "--show-current"]).stdout.trim() === onto) return [];
+    const name = repo === "." ? "the repo" : repo;
+    const paths = targets.get(repo)?.paths ?? [];
+    if (ownCommitsOnUnitFiles(dir, branch, paths).length > 0) {
+      const here = git(dir, ["branch", "--show-current"]).stdout.trim() || "the commit they were on";
+      stayed.push(`The person is still on ${here} in ${name}: their own commits there change ${unit}'s files, so they were not switched.`);
+      return [];
+    }
+    const kept = earlySwitchKept(pd, repo, dir, branch, paths, true);
+    if (kept !== null) return [earlyKeptLine(onto, dir, name, kept, repos.length > 1)];
+    return withOwnRootPartsAside(dir, branch, () => switchOntoUnitBranch(dir, onto, paths)).ok ? [`You are on branch ${onto} in ${name} now.`] : [];
+  }).map((line) => ` ${line}`).join("");
+  return stayed.length === 0 ? { said }
+    : { said, leftOnBranch: `${stayed.join(" ")} If they asked to be switched, tell them so in one line.` };
+}
+
+// The agent's note for a line ending in SWITCH_WHEN_TOLD_CLAUSE: the early
+// take again, then the next step, which carries what it said.
+export function switchWhenToldNote(projectDir: string): string[] {
+  let build: UnitBuild | null = null;
+  try {
+    build = unitBuildOf(readStateFile(projectDir));
+  } catch {
+    return [];
+  }
+  return build === null ? [] : [`When the person says the file is moved, run \`${takeCommandOf(projectDir, build)} --early\` and then ` +
+    `\`${aidlcToolInvocation("orchestrate")} next\`, and follow what it returns.`];
 }
 
 // git's own words for a refusal: its first error line (past any progress
@@ -12137,26 +12253,32 @@ function takeUnit(args: string[], projectDir?: string, rhythm?: UnitClaimPayload
   if (home !== null) validateClaimRefUnit(home.id8, unit);
   // Taken here before (this clone or another of this workspace): carry it on.
   const existing = builtHere ?? (home === null ? null : findUnitBuild(pd, home.uuid, unit));
-  // Carried on, with what bringing it here said before and after the line.
-  const carryOn = (found: NonNullable<typeof existing>, before = "", after = ""): void => {
+  const askedEarly = bareFlags.has("early") || flags.early !== undefined;
+  // Carried on, with what bringing it here said before and after the line
+  // (`after` read once the build is the one selected, with what only the agent
+  // reads in the same reply).
+  const carryOn = (found: NonNullable<typeof existing>, before = "", after: string | (() => { said: string; leftOnBranch?: string }) = ""): void => {
     setActiveSpaceCursor(pd, found.space);
     selectIntentForSession(pd, found.dirName, found.space, resolveWorkflowSelection(pd).sessionId ?? undefined);
     // Whose build it is, said once, from its claim as this workspace last
     // fetched it, while it is taken: a claim given back or freed names nobody.
     const claim = buildClaimHere(pd, found);
     const whose = claim?.status !== "claimed" ? "its" : claimIsMine(pd, claim) ? "your" : `${builderOf(claim)}'s`;
-    const carrying = `${before}Carrying on ${unit}, ${whose} build${found.space === DEFAULT_SPACE ? " here" : spaceWords(found.space)}.${after}${rest ? ` ${rest}` : ""}`;
+    const then = typeof after === "string" ? { said: after } : after();
+    const carrying = `${before}Carrying on ${unit}, ${whose} build${found.space === DEFAULT_SPACE ? " here" : spaceWords(found.space)}.${then.said}${rest ? ` ${rest}` : ""}`;
     console.log(JSON.stringify({
       taken: true,
       resumed: true,
       unit,
       space: found.space,
       record: found.dirName,
+      ...(then.leftOnBranch === undefined ? {} : { left_on_branch: then.leftOnBranch }),
       ...(saidWithNextStep(pd, carrying) ? {} : { notice: carrying }),
     }));
   };
+  // Asked early again with the build here: the switch its first take left undone (earlyTakeAgain).
   if (existing !== null) {
-    carryOn(existing);
+    carryOn(existing, "", askedEarly ? () => earlyTakeAgain(pd, unit) : "");
     return;
   }
   if (home === null) fail(`${unit}'s build is not here.`);
@@ -12184,7 +12306,6 @@ function takeUnit(args: string[], projectDir?: string, rhythm?: UnitClaimPayload
   // A Unit the home marked done on its claim counts as done, pushed state or not.
   // A dependency's record stops the take when it cannot be read only where the
   // person asked to start early on it; otherwise it is read as last seen here.
-  const askedEarly = bareFlags.has("early") || flags.early !== undefined;
   const depRecord = (dep: string): UnitClaimView | null => {
     const at = recordPlaceOf(pd, home, dep);
     if (askedEarly) return typedRecordRead(pd, at, recordWork(home), dep, unit);
@@ -12271,8 +12392,9 @@ function takeUnit(args: string[], projectDir?: string, rhythm?: UnitClaimPayload
   if (fromPlan) dropSaidPlan(pd, home.location);
   setActiveSpaceCursor(pd, build.space);
   // Early: the Unit's branch starts at each dependency's pushed head, checked
-  // out where nothing of the person's is uncommitted.
+  // out where nothing of the person's is in the way (earlySwitchKept).
   const earlyLines: string[] = [];
+  const earlyRepos = new Set((earlyOn ?? []).flatMap((dep) => dep.repos.map((repo) => repo.repo)));
   for (const dep of earlyOn ?? []) {
     for (const repo of dep.repos) {
       const dir = repo.repo === "." ? pd : repoDir(pd, repo.repo);
@@ -12281,13 +12403,14 @@ function takeUnit(args: string[], projectDir?: string, rhythm?: UnitClaimPayload
       git(dir, ["fetch", "-q", remote, `+refs/heads/${repo.branch}:refs/remotes/${remote}/${repo.branch}`]);
       const start = `${remote}/${repo.branch}`;
       const name = repo.repo === "." ? "the repo" : repo.repo;
-      const clean = !ownChanges(pd, [{ repo: repo.repo, dir }]);
+      const kept = earlySwitchKept(pd, repo.repo, dir, start, []);
       // Without tracking: the dependency's branch is another team's, so a plain
       // git push before AI-DLC's own (which sets the Unit's upstream) never goes there.
-      if (clean && withOwnRootPartsAside(dir, start, () => git(dir, ["switch", "-q", "--no-track", "-c", unit, start])).ok) {
+      if (kept === null && withOwnRootPartsAside(dir, start, () =>
+        git(dir, ["switch", "-q", "--no-overwrite-ignore", "--no-track", "-c", unit, start])).ok) {
         earlyLines.push(`You are on branch ${unit} in ${name} now.`);
       } else if (git(dir, ["branch", "--no-track", unit, start]).ok) {
-        earlyLines.push(`Branch ${unit} in ${name} starts there; your uncommitted changes kept you on your branch, so switch when you are ready.`);
+        earlyLines.push(earlyKeptLine(unit, dir, name, kept ?? "changes", earlyRepos.size > 1));
       }
     }
   }
@@ -13168,6 +13291,11 @@ function ownChanges(pd: string, planned: ReadonlyArray<{ repo: string; dir: stri
     return git(dir, ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames"]).stdout.split("\0")
       .some((entry) => entry.length > 3 && !aidlcOwn(sourcePathKey("", entry.slice(3))));
   });
+}
+
+// `path` is one of `paths` or under one of them that ends in "/".
+function underPaths(path: string, paths: readonly string[]): boolean {
+  return paths.some((own) => path === own || (own.endsWith("/") && path.startsWith(own)));
 }
 
 function buildsHome(projectDir: string, build: UnitBuild): HomeWork {
@@ -14648,8 +14776,7 @@ function mergeMainIn(pd: string, args: string[], unit: string, branch: string, u
         `or put aside, I can bring ${into} in.`);
     }
     const added = git(dir, ["diff", "-z", "--name-only", "--diff-filter=A", `${tip}...${into}`]).stdout.split("\0").filter(Boolean);
-    const replaced = added.find((path) => existsSync(join(dir, ...path.split("/"))) && !git(dir, ["ls-files", "--error-unmatch", "--", path]).ok &&
-      !(entry.repo === "." && (aidlcOwnRootParts(dir, [path]).has(path) || aidlcOwnSeed(dir, path))));
+    const replaced = ownFilesInTheWay(dir, entry.repo, added)[0];
     if (replaced !== undefined) {
       stop(`${into} adds ${replaced} in ${name}, where you have a file of your own, so nothing was merged or pushed. Once it is moved ` +
         `or put aside, I can bring ${into} in.`);
