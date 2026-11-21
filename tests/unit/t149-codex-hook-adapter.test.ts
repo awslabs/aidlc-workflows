@@ -1523,6 +1523,37 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
     }
   });
 
+  test("5b: apply_patch ticking a Code Generation plan step forwards one progress line, once", () => {
+    const dir = scratchProject(true);
+    try {
+      const rel = "construction/u1/code-generation/code-generation-plan.md";
+      const plan = join(seededRecordDir(dir), rel);
+      mkdirSync(dirname(plan), { recursive: true });
+      writeFileSync(plan, "- [x] Step 1: Add the model\n- [ ] Step 2: Add the route\n", "utf-8");
+      const payload = withCwd(
+        {
+          hook_event_name: "PostToolUse",
+          tool_name: "apply_patch",
+          tool_use_id: "call_progress_1",
+          tool_input: {
+            command: `*** Begin Patch\n*** Update File: ${plan}\n@@\n-- [ ] Step 1: Add the model\n+- [x] Step 1: Add the model\n*** End Patch\n`,
+          },
+        },
+        dir,
+      );
+      const r = runAdapter(dir, "audit-and-sensors", payload);
+      expect(r.code).toBe(0);
+      expect(JSON.parse(r.stdout.trim())).toEqual({
+        systemMessage: 'Code generation for u1: 1 of 2 plan steps done, latest "Step 1: Add the model". Next: "Step 2: Add the route".',
+      });
+      expect(readAudit(dir)).toContain("ARTIFACT_UPDATED");
+      // Codex delivers a PostToolUse twice; the second says nothing.
+      expect(runAdapter(dir, "audit-and-sensors", payload).stdout).toBe("");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("6: update_plan in_progress step with [slug] suffix syncs the state file", () => {
     const dir = scratchProject(true);
     try {

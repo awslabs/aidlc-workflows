@@ -491,8 +491,12 @@ Include in the delegation prompt:
   and the plan marks none of its steps: check each step against the project,
   tick the box of each one that is done, and carry on from the first that is not
 - Project workspace details (languages, frameworks, conventions from aidlc-state.md)
-- Instructions to execute each plan step sequentially and mark checkboxes as
-  completed, starting where that progress section says when the output has one.
+- Instructions to execute each plan step sequentially and tick its checkbox
+  in the plan file as soon as that step is done, one step at a time, never
+  several together at the end, starting where that progress section says when
+  the output has one. Each tick is what the person sees of the build while it
+  runs: on Claude Code, Codex and opencode the engine shows them a line for it
+  ("3 of 9 plan steps done ... Next: ...").
   Task markers are excluded from the approval fingerprint, so ticking
   a box never changes the content binding; other edits follow Step 3's
   after-approval rules
