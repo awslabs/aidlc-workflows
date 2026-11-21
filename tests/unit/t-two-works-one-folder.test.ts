@@ -414,26 +414,32 @@ describe("this work's Code Generation step", () => {
 });
 
 describe("this work's Code Generation review", () => {
-  function request(setup: Setup): string {
+  function request(setup: Setup): { note: string; reviewFile: string } {
     manifest(setup.record, "alpha", ["app.ts"]);
     const r = cli(LOG, ["review", "--stage", "code-generation", "--reviewer", REVIEWER, "--unit", "alpha", "--iteration", "1"], setup.project);
     expect(r.rc, r.out).toBe(0);
     const line = r.out.split("\n").find((row) => row.includes('"emitted":"REVIEW_REQUESTED"'));
-    return String((JSON.parse(line as string) as { agent_note?: unknown }).agent_note ?? "");
+    const json = JSON.parse(line as string) as { agent_note?: unknown; reviewFile?: unknown };
+    return { note: String(json.agent_note ?? ""), reviewFile: String(json.reviewFile ?? "") };
   }
 
   test("the reviewer's brief names the other work's files, as not this work's to review", () => {
     const setup = project("strict");
     otherBuilds(setup);
-    expect(request(setup)).toContain(
-      "Its brief carries this line word for word: Another piece of work is under way in this same folder, and these " +
+    const { note, reviewFile } = request(setup);
+    expect(note).toEndWith(
+      `Its brief carries these lines word for word: Your review file is ${reviewFile} (its folder already exists). ` +
+        "Another piece of work is under way in this same folder, and these " +
         "files are its own: export-fix (`version.ts`). They are not this work's to review: raise no finding about one " +
         "unless this work's plan changes it.",
     );
   });
 
   test("with no other open work, the request says nothing of it", () => {
-    expect(request(project("strict"))).not.toContain("Its brief carries");
+    const { note, reviewFile } = request(project("strict"));
+    expect(note).toEndWith(
+      `Its brief carries this line word for word: Your review file is ${reviewFile} (its folder already exists).`,
+    );
   });
 });
 
