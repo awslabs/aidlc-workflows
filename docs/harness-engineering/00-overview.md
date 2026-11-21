@@ -202,6 +202,10 @@ Read it in order the first time:
     emitted as a real host plugin per harness. Design in the Developer
     Reference's single chapter
     ([18 mechanism](../reference/18-plugin-mechanism.md)).
+11. **[Driving the Engine from an Outside Host](11-driving-the-engine-from-a-host.md)**
+    — run AI-DLC's workflow from a program that is not a packed harness tree:
+    the routes to call, the hook events and payload each needs, the evidence a
+    gate stands on, and what the engine answers when a piece is missing.
 
 ## Next
 

@@ -85,6 +85,7 @@ nav = [
       "harness-engineering/08-construction-and-swarm.md",
       "harness-engineering/09-porting-to-a-new-harness.md",
       "harness-engineering/10-authoring-a-plugin.md",
+      "harness-engineering/11-driving-the-engine-from-a-host.md",
     ] },
   ] },
   { "Developer Reference" = [
