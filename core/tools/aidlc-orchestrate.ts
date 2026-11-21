@@ -996,6 +996,8 @@ import {
   completionChecksStep,
   engineSettlesLateGate,
   failedCheckNotices,
+  failedCheckReport,
+  findingsInSentence,
   guardPreflight as stateGuardPreflight,
   leftOutNotice,
   parkWorkflow,
@@ -26173,11 +26175,14 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       // with the gate, as the person's lines beside the question, never as a
       // change line.
       if (unitReply.kind === "print" && (flags.result === "awaiting-approval" || flags.result === "revised")) {
+        const checks = failedCheckReport(pd, node, unit);
         const lines = [
           leftOutNotice(pd, node, unit), broughtFilesGateLine(pd, node, loadStateFileIfPresent(pd), unit),
-          failedCheckNotices(pd, node, unit).join(" "),
+          checks.lines.join(" "),
         ].filter(Boolean);
         if (lines.length > 0) unitReply.narration = lines.join("\n");
+        // Where the findings are is the agent's, so it reads them instead of searching the sensors folder.
+        if (checks.details.length > 0) unitReply.message = `${unitReply.message} ${findingsInSentence(checks.details)}`;
         if (gateQuestionId !== null) unitReply.question_id = gateQuestionId;
       }
       const unitGate = withChangeNotices(unitReply, changeNotices);
@@ -26497,12 +26502,15 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         // after what the stage produced:
         // the narration is the person's line (the produced sentence stays
         // whole), and the change lines stay what changed.
+        const checks = failedCheckReport(pd, node, unit);
         const narration = [
           line, practicesRulesGateLine(pd, node), practicesBranchGateLine(pd, node), leftOutNotice(pd, node, unit),
           unitsWithoutInputsNotice(pd, node, unit),
-          broughtFilesGateLine(pd, node, gateState), failedCheckNotices(pd, node, unit).join(" "),
+          broughtFilesGateLine(pd, node, gateState), checks.lines.join(" "),
         ].filter(Boolean).join("\n");
         if (narration) gateReply.narration = narration;
+        // Where the findings are is the agent's, so it reads them instead of searching the sensors folder.
+        if (checks.details.length > 0) gateReply.message = `${gateReply.message} ${findingsInSentence(checks.details)}`;
         // On Windows, the Unit names Units Generation just wrote can deepen their
         // records past what config counted: config's line, said once, after the
         // stage's own lines, the first time this gate opens.

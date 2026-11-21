@@ -534,9 +534,17 @@ try {
 // edit of a memory file, held the copy as it was before). When the copy was
 // written just now, this chat is told: with the text of the files written when
 // it fits in the hook's context (Claude Code keeps about 10 KB of it, measured:
-// 9 KB arrives whole and 15 KB is cut), else by name, to read before acting on
-// AI-DLC work. Nothing is added when the copy was current, and an AI-DLC step
-// carries its rules in full either way.
+// 9 KB arrives whole and 15 KB is cut), else by name, for a question about the
+// team's practices. When they do not all fit, team.md and project.md, written
+// just now, still go in whole (project.md alone when the two do not fit):
+// what only this team decided, a saved conversation language or a scope
+// override, is there, and no step carries it before the first stage. team.md
+// comes first, as the rule chain reads them, after the sentence that says
+// what the blocks are. Nothing is added when the copy was current. The chat is never sent to read them before
+// AI-DLC work: every stage step sends it its rules in full (on Claude Code its
+// load record is stale until it next loads; on Copilot no copy is ever proven
+// held), and an agent that read the shipped seven in one shell line stopped
+// for the person.
 const HANDOFF_MAX_BYTES = 8 * 1024;
 let memoryHandoff = "";
 if (copyBehind.length > 0) {
@@ -544,10 +552,21 @@ if (copyBehind.length > 0) {
     if (["claude", "copilot"].includes(runtimeHarnessName(projectDir))) {
       const written = `The method files this chat's instructions import (${chatCopyDir}/) were written for space ` +
         `\`${selection.space}\` just now, after the instructions were read`;
-      const inline = inlineMemoryFiles(projectDir, selection.space, copyBehind);
-      memoryHandoff = inline !== null && inline.bytes <= HANDOFF_MAX_BYTES
-        ? `\n\n${written}. This is their text now:\n\n${inline.parts.join("\n")}`
-        : `\n\n${written}: ${copyBehind.join(", ")}. Read them from that folder before acting on AI-DLC work or on a question about the team's practices.`;
+      const fits = (only: string[]) => {
+        const text = only.length === 0 ? null : inlineMemoryFiles(projectDir, selection.space, only);
+        return text !== null && text.bytes <= HANDOFF_MAX_BYTES ? text : null;
+      };
+      const whole = fits(copyBehind);
+      const own = ["team.md", "project.md"].filter((rel) => copyBehind.includes(rel));
+      const carried = whole === null ? fits(own) ?? fits(own.filter((rel) => rel === "project.md")) : null;
+      const tail = "a stage step hands you the rules it needs in full.";
+      memoryHandoff = whole !== null
+        ? `\n\n${written}. This is their text now:\n\n${whole.parts.join("\n")}`
+        : carried !== null
+        ? `\n\n${written}: ${copyBehind.join(", ")}. The text of ` +
+          `${carried.inlined.map((path) => path.split("/").at(-1)).join(" and ")} is below; the others are there for a ` +
+          `question about the team's practices, and ${tail}\n\n${carried.parts.join("\n")}`
+        : `\n\n${written}: ${copyBehind.join(", ")}. They are there for a question about the team's practices; ${tail}`;
     }
   } catch {
     // The first step sends the rules in full.

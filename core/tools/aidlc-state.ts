@@ -7356,16 +7356,22 @@ function failedCheckWhere(stage: GateStage, rel: string, failedOutputs: string |
 
 // What the person hears when a gate opens, or is shown again, while a check
 // still fails on a declared output (#2201): one line per failing check, in
-// plain words (the agent corrects from the detail file the sensors protocol
-// module names), at most three lines and then a count; then one line, however
+// plain words, at most three lines and then a count; then one line, however
 // many, for the checks that could not run (their script crashed or did not
 // start, so they checked nothing). The orchestrator carries them in the gate
 // reply's `narration`, beside what the stage produced, which every harness's
-// agent says to the person with the approval question. Nothing is re-fired; a
-// check that passed later, or never ran, says nothing, and an unreadable record
-// says nothing about the checks. A team's Unit gate speaks for that Unit's
-// outputs and writes only.
-export function failedCheckNotices(pd: string, stage: GateStage, unit: string | null = null): string[] {
+// agent says to the person with the approval question. `details` are the
+// detail files of every failing check, for the agent alone: the sensors protocol has
+// it correct from them when the person asks, and without their names it listed
+// the sensors folder for the newest, a shell line that can stop for the
+// person. Nothing is re-fired; a check that passed later, or never ran, says
+// nothing, and an unreadable record says nothing about the checks. A team's
+// Unit gate speaks for that Unit's outputs and writes only.
+export function failedCheckReport(
+  pd: string,
+  stage: GateStage,
+  unit: string | null = null,
+): { lines: string[]; details: string[] } {
   let failed: LatestCheckResults["failed"];
   let couldNotRun: LatestCheckResults["couldNotRun"];
   try {
@@ -7375,12 +7381,15 @@ export function failedCheckNotices(pd: string, stage: GateStage, unit: string | 
     // empty environment, as plan approval reads its own switch): it stops
     // checks from running in that process, not the record from being read.
     const stateContent = readStateFile(pd);
-    if (resolveCeremony("sensors", getField(stateContent, "Scope"), stateContent, {}, pd).value === "off") return [];
+    if (resolveCeremony("sensors", getField(stateContent, "Scope"), stateContent, {}, pd).value === "off") {
+      return { lines: [], details: [] };
+    }
     ({ failed, couldNotRun } = latestCheckResults(pd, stage, unit));
   } catch {
-    return [];
+    return { lines: [], details: [] };
   }
   const lines = failedCheckLines(stage, failed);
+  const details = [...new Set(failed.flatMap((f) => f.detail === null ? [] : [f.detail]))];
   if (couldNotRun.length > 0) {
     const checks = [...new Set(couldNotRun.map(({ id }) => checkName(id)))];
     const files = [...new Set(couldNotRun.map(({ rel }) => rel))];
@@ -7393,7 +7402,16 @@ export function failedCheckNotices(pd: string, stage: GateStage, unit: string | 
     const where = `${failedCheckWhere(stage, files[0], null)}${others > 0 ? ` and ${others} other file${others === 1 ? "" : "s"}` : ""}`;
     lines.push(`${who} could not run on ${where}.`);
   }
-  return lines;
+  return { lines, details };
+}
+
+export function failedCheckNotices(pd: string, stage: GateStage, unit: string | null = null): string[] {
+  return failedCheckReport(pd, stage, unit).lines;
+}
+
+/** Where the findings of the failing checks are, for the agent: the review hand-off's words and the gate's. */
+export function findingsInSentence(files: readonly string[]): string {
+  return `The findings are in ${files.join(", ")}.`;
 }
 
 function checkName(id: string): string {
@@ -7514,7 +7532,7 @@ export function completionChecksStep(
     ? "it records the review request without checking again, and the gate checks again and says what is left."
     : "it opens the gate, which checks again and says what is left.";
   return `Before the ${handOff}, this stage's checks ran on its documents. ${failedCheckLines(stage, failed).join(" ")} ` +
-    `The findings are in ${details.join(", ")}. Fix what is yours in those documents, then run \`${again}\` again: ${next}`;
+    `${findingsInSentence(details)} Fix what is yours in those documents, then run \`${again}\` again: ${next}`;
 }
 
 // Whether every required output of the scope (the stage's, or one Unit's) is
