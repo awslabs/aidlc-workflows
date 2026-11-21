@@ -14,10 +14,11 @@
 //   - a route check makes nothing; a file where the folder goes, or a link out
 //     of the record, leaves the step as it was and makes nothing outside.
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import {
   AIDLC_SRC, cleanupTestProject, createOrchestrationTestProject, FIXTURES_DIR, runOrchestrateNext, seedBoltDag,
   seededRecordDir, seededStateFile,
@@ -197,5 +198,159 @@ describe("each record folder a step names is there before the agent writes into 
     } finally {
       rmSync(outside, { recursive: true, force: true });
     }
+  });
+});
+
+function codeGenerationUnitProject(...units: string[]): string {
+  const proj = createOrchestrationTestProject();
+  created.push(proj);
+  writeFileSync(seededStateFile(proj), `# AI-DLC State Tracking
+
+## Project Information
+- **Project**: Per-Unit build
+- **Project Type**: Greenfield
+- **Scope**: feature
+- **State Version**: 8
+- **Skeleton Stance**: off
+- **Guard Policy**: strict
+- **Construction Iteration**: unit-major
+- **Plan Approval**: on (set by you)
+
+## Scope Configuration
+- **Stages to Execute**: all
+- **Stages to Skip**: none
+- **Depth**: Standard
+- **Test Strategy**: Minimal
+
+## Stage Progress
+
+### CONSTRUCTION PHASE
+- [x] functional-design — EXECUTE
+- [x] nfr-requirements — EXECUTE
+- [x] nfr-design — EXECUTE
+- [x] infrastructure-design — EXECUTE
+- [-] code-generation — EXECUTE
+- [ ] build-and-test — EXECUTE
+
+## Current Status
+- **Lifecycle Phase**: CONSTRUCTION
+- **Current Stage**: code-generation
+- **Status**: Running
+`, "utf-8");
+  seedBoltDag(proj, units);
+  mkdirSync(join(proj, "src"), { recursive: true });
+  writeFileSync(join(proj, "src", "base.ts"), "export const base = true;\n", "utf-8");
+  return proj;
+}
+
+function withRulesInParts(proj: string): string {
+  const org = join(proj, "aidlc", "spaces", "default", "memory", "org.md");
+  writeFileSync(org, `${readFileSync(org, "utf-8")}${
+    Array.from({ length: 180 }, (_, i) => `\n## Team practice ${i}\n\n${"x".repeat(320)}\n`).join("")
+  }`, "utf-8");
+  return proj;
+}
+
+function planFolder(proj: string, unit: string | null): string {
+  return join(seededRecordDir(proj), "construction", ...(unit ? [unit] : []), "code-generation");
+}
+
+interface PlanStep extends Step {
+  plan_approval?: { status?: string };
+  part?: number;
+  receipt?: string;
+}
+
+function guardCodeWrite(proj: string, toolName: string, toolInput: Record<string, unknown>): { code: number; stderr: string } {
+  const result = spawnSync(process.execPath, [join(AIDLC_SRC, "hooks", "aidlc-plan-approval-guard.ts")], {
+    cwd: proj,
+    input: JSON.stringify({
+      hook_event_name: "PreToolUse",
+      session_id: "01995000-7a11-7000-8000-00000000f017",
+      cwd: proj,
+      tool_name: toolName,
+      tool_input: toolInput,
+    }),
+    env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj },
+    encoding: "utf-8",
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+  });
+  return { code: result.status ?? -1, stderr: result.stderr ?? "" };
+}
+
+function nextOnce(proj: string): PlanStep {
+  const result = spawnSync(process.execPath, [ORCH, "next", "--project-dir", proj], {
+    cwd: proj,
+    env: { ...process.env, AIDLC_UNATTENDED: "0" },
+    encoding: "utf-8",
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+  });
+  expect(result.status, result.stderr).toBe(0);
+  return JSON.parse(result.stdout.trim()) as PlanStep;
+}
+
+function continueStep(proj: string, receipt: string): PlanStep {
+  const result = spawnSync(process.execPath, [ORCH, "continue", receipt, "--project-dir", proj], {
+    cwd: proj,
+    env: { ...process.env, AIDLC_UNATTENDED: "0" },
+    encoding: "utf-8",
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+  });
+  expect(result.status, result.stderr).toBe(0);
+  return JSON.parse(result.stdout.trim()) as PlanStep;
+}
+
+describe("the folders are made wherever the step is handed out, not only where it is published", () => {
+  test("a Unit's plan step asked for again: its folder is made, and the plan is one plain file write", () => {
+    const proj = codeGenerationUnitProject("unit-2", "unit-4");
+    const folder = planFolder(proj, "unit-2");
+    expect(existsSync(folder)).toBe(false);
+    expect(next(proj)).toMatchObject({ kind: "run-stage", stage: "code-generation", unit: "unit-2", plan_approval: { status: "plan" } });
+    emptyFolder(folder);
+    rmSync(folder, { recursive: true, force: true });
+    expect(next(proj)).toMatchObject({ kind: "run-stage", stage: "code-generation", unit: "unit-2", plan_approval: { status: "plan" } });
+    emptyFolder(folder);
+    const plan = join(folder, "code-generation-plan.md");
+    writeFileSync(plan, "# Code Generation Plan\n\n## Summary\n\n- Builds: slugify for titles\n");
+    expect(readdirSync(folder)).toEqual(["code-generation-plan.md"]);
+    expect(existsSync(planFolder(proj, "unit-4"))).toBe(false);
+  });
+
+  test("a plan-less source write while the folder is there is still refused, with the plan named", () => {
+    const proj = codeGenerationUnitProject("unit-2");
+    expect(next(proj)).toMatchObject({ kind: "run-stage", stage: "code-generation", unit: "unit-2" });
+    rmSync(planFolder(proj, "unit-2"), { recursive: true, force: true });
+    expect(next(proj)).toMatchObject({ kind: "run-stage", stage: "code-generation", unit: "unit-2" });
+    const write = guardCodeWrite(proj, "Write", { file_path: join(proj, "src", "slugify.ts"), content: "export const slugify = 1;\n" });
+    expect(write.code).toBe(2);
+    expect(write.stderr).toContain("Reason: code-generation-plan.md is missing or empty.");
+    expect(write.stderr).toContain("Writes inside the selected code-generation record directory remain available for planning.");
+  });
+
+  test("a route check hands the step back making nothing, even when the folder is gone", () => {
+    const proj = codeGenerationUnitProject("unit-2");
+    expect(next(proj)).toMatchObject({ kind: "run-stage", stage: "code-generation", unit: "unit-2" });
+    rmSync(planFolder(proj, "unit-2"), { recursive: true, force: true });
+    expect(next(proj, { AIDLC_ROUTE_CHECK: "1" })).toMatchObject({ kind: "run-stage", stage: "code-generation", unit: "unit-2" });
+    expect(existsSync(planFolder(proj, "unit-2"))).toBe(false);
+  });
+
+  test("a continue that finishes the rules parts makes the folder before it hands the plan step over", () => {
+    const proj = withRulesInParts(codeGenerationUnitProject("unit-2"));
+    const folder = planFolder(proj, "unit-2");
+    expect(existsSync(folder)).toBe(false);
+    let step = nextOnce(proj);
+    expect(step).toMatchObject({ kind: "load-steering", stage: "code-generation", part: 1 });
+    emptyFolder(folder);
+    rmSync(folder, { recursive: true, force: true });
+    let parts = 0;
+    while (step.kind === "load-steering") {
+      step = continueStep(proj, String(step.receipt));
+      parts++;
+      expect(existsSync(folder), `after part ${parts}`).toBe(true);
+    }
+    expect(parts).toBeGreaterThan(1);
+    expect(step).toMatchObject({ kind: "run-stage", stage: "code-generation", unit: "unit-2", plan_approval: { status: "plan" } });
+    emptyFolder(folder);
   });
 });

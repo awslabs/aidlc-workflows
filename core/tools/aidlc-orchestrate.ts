@@ -3166,11 +3166,7 @@ function emit(requested: Directive): void {
         // From the step itself, not the part transported, so the folders are
         // there while the rules still arrive. Without them the step still goes
         // out: the agent can make a folder itself, as before.
-        try {
-          prepareRecordFolders(projectDir, directive);
-        } catch (e) {
-          recordHookDrop(projectDir, "record-folders", errorMessage(e));
-        }
+        makeStepRecordFolders(projectDir, directive);
         settleBuiltPlanReviews(projectDir, prepared.transported);
         // Asked where their words belong, the person said the work in
         // progress, which waits on its code plan question: the question is
@@ -3271,6 +3267,7 @@ function emit(requested: Directive): void {
       recordHookDrop(engineProjectDir, "active-directive", errorMessage(e));
     }
   }
+  if (retainedIssuedDirective) makeStepRecordFolders(prepared.projectDir, directive);
   recordQuestionStep(prepared);
   writePrepared(prepared);
 }
@@ -9052,6 +9049,15 @@ export function bootstrapDirectiveMemory(
     copyFileSync(template, target, fsConstants.COPYFILE_EXCL);
   } catch {
     // Diary bootstrap is best-effort; directive routing remains authoritative.
+  }
+}
+
+function makeStepRecordFolders(projectDir: string | undefined, directive: Directive): void {
+  if (!projectDir || isReadOnlyEngineProbe()) return;
+  try {
+    prepareRecordFolders(projectDir, directive);
+  } catch (e) {
+    recordHookDrop(projectDir, "record-folders", errorMessage(e));
   }
 }
 
@@ -23852,6 +23858,7 @@ function handleContinue(line: string[], projectDir: string | undefined): void {
     emit(routed);
     return;
   }
+  makeStepRecordFolders(pd, directive);
   const withLegacyOffer = attachLegacyKiroPlanApprovalChoices(
     prepareEmission(directive),
   );
