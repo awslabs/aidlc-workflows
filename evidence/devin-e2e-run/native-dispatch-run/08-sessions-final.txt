@@ -1,0 +1,40 @@
+=== find aidlc/.aidlc-sessions -type f | sort ===
+aidlc/.aidlc-sessions/.current-session
+aidlc/.aidlc-sessions/nettle-vicuna
+aidlc/.aidlc-sessions/nettle-vicuna.binding.json
+aidlc/.aidlc-sessions/pids/1108
+aidlc/.aidlc-sessions/pids/1109
+aidlc/.aidlc-sessions/pids/1110
+aidlc/.aidlc-sessions/pids/1608
+aidlc/.aidlc-sessions/pids/1642
+aidlc/.aidlc-sessions/pids/1718
+aidlc/.aidlc-sessions/plan-approval/receipt-ee30179f27cfc91e20f641c61dd81e0e3718a2b8b11b923e3a6f9d3d52113d2d.json
+
+=== cat nettle-vicuna.binding.json ===
+{"space":"default","intent":"260918-hello-ok-script","boundAt":"2026-09-18T11:03:15Z"}
+
+=== pids/ ===
+--- aidlc/.aidlc-sessions/pids/1108 ---
+{"sessionId":"nettle-vicuna","startTime":"6400"}
+
+--- aidlc/.aidlc-sessions/pids/1109 ---
+{"sessionId":"nettle-vicuna","startTime":"6400"}
+
+--- aidlc/.aidlc-sessions/pids/1110 ---
+{"sessionId":"nettle-vicuna","startTime":"6401"}
+
+--- aidlc/.aidlc-sessions/pids/1608 ---
+{"sessionId":"nettle-vicuna","startTime":"7766"}
+
+--- aidlc/.aidlc-sessions/pids/1642 ---
+{"sessionId":"nettle-vicuna","startTime":"7779"}
+
+--- aidlc/.aidlc-sessions/pids/1718 ---
+{"sessionId":"nettle-vicuna","startTime":"8453"}
+
+=== other files ===
+--- aidlc/.aidlc-sessions/.current-session ---
+nettle-vicuna
+
+--- aidlc/.aidlc-sessions/nettle-vicuna ---
+01a0b218-56a1-718b-a879-b67afde8d360

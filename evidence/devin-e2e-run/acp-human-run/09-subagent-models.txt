@@ -1,0 +1,24 @@
+=== inspect.ts <journey-root>/proj (sessions.db, working_directory match) ===
+
+session petite-cord parent model=fusion-claude-opus-5-5-high-sidekick-swe-2-high
+  main chain models: claude-opus-5-5-high
+  dispatch profile=aidlc-developer-agent agent=?
+  dispatch profile=undefined agent=?
+  dispatch profile=undefined agent=?
+  dispatch profile=undefined agent=?
+  dispatch profile=undefined agent=?
+  dispatch profile=undefined agent=?
+  dispatch profile=undefined agent=?
+  dispatch profile=undefined agent=?
+  dispatch profile=undefined agent=?
+  dispatch profile=undefined agent=?
+  dispatch profile=undefined agent=?
+  dispatch profile=undefined agent=?
+  dispatch profile=undefined agent=?
+  dispatch profile=undefined agent=?
+  dispatch profile=undefined agent=?
+  dispatch profile=undefined agent=?
+  subagent 0c04a2c2: reply="## Subagent Summary: Code Generation I built the habit trac" generation_model=claude-opus-5-5-high
+
+=== profile model: lines ===
+     14 model: inherit

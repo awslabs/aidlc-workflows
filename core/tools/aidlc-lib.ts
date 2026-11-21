@@ -514,6 +514,11 @@ import {
 } from "./aidlc-subagent-inflight.ts";
 export {
   type AuthorityCover,
+  annotateSubagentInflight,
+  discardSubagentInflight,
+  findSubagentInflight,
+  hasSubagentInflight,
+  type SubagentInflightEntry,
   backgroundAgentOutSince,
   completeSubagentInflight,
   inspectSubagentInflight,
@@ -733,7 +738,7 @@ export const PHASE_NUMBERS: Record<string, Phase> = {
 // dev-repo CWD rung, where more than one harness dir can coexist and the Claude
 // tree is canonical (".claude" must win). A real single-harness install never
 // reaches the probe; it resolves by script path.
-export const KNOWN_HARNESS_DIRS = [".claude", ".kiro", ".codex", ".aidlc", ".cursor"] as const;
+export const KNOWN_HARNESS_DIRS = [".claude", ".kiro", ".codex", ".aidlc", ".cursor", ".devin"] as const;
 
 // True for a plausible harness dir name: a dot-prefixed segment, e.g. ".claude"
 // / ".kiro" / ".gemini". Guards the script-path derivation so an unexpected

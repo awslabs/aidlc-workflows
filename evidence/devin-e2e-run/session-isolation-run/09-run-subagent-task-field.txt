@@ -1,0 +1,24 @@
+run_subagent tool_input as recorded in the session C (lively-voyage) export, devin-session-c.json.
+Devin's native field set is {title, profile, is_background, task}; the conductor DID place the
+AIDLC-STAGE and AIDLC-TESTING-CONTRACT markers at the top of `task`. The adapter's plan-approval-guard
+arm reads tool_input.prompt (absent), so the core guard received an empty brief -> '(missing marker)'.
+
+step 15: keys=['is_background', 'profile', 'task', 'title']
+  title='Code Generation — hello.py' profile='aidlc-developer-agent' is_background=False
+  task (first 3 lines):
+    AIDLC-STAGE: code-generation
+    AIDLC-TESTING-CONTRACT: sha256:87961b10de39c82b940231619501569dab05fb4d0ab228bedefaade334d20743
+
+
+step 21: keys=['is_background', 'profile', 'task', 'title']
+  title='Code Generation — hello.py' profile='aidlc-developer-agent' is_background=False
+  task (first 3 lines):
+    AIDLC-STAGE: code-generation
+    AIDLC-TESTING-CONTRACT: sha256:87961b10de39c82b940231619501569dab05fb4d0ab228bedefaade334d20743
+
+
+step 26: keys=['is_background', 'profile', 'task', 'title']
+  title='Code Generation — hello.py' profile='aidlc-developer-agent' is_background=False
+  task (first 3 lines):
+    AIDLC-STAGE: code-generation
+    AIDLC-TESTING-CONTRACT: sha256:87961b10de39c82b940231619501569dab05fb4d0ab228bedefaade334d20743

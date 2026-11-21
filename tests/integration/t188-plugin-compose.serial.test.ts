@@ -536,6 +536,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     delete env.CLAUDE_PLUGIN_ROOT;
     delete env.CLAUDE_PROJECT_DIR;
     delete env.PLUGIN_ROOT;
+    delete env.DEVIN_PLUGIN_ROOT;
     for (const plugin of [PLUGIN, "acme-standards"]) {
       const registration = JSON.parse(
         readFileSync(join(kiroProject, ".kiro", "hooks", `aidlc-${plugin}-compose.json`), "utf-8"),
@@ -1032,6 +1033,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     delete env.CLAUDE_PLUGIN_ROOT;
     delete env.PLUGIN_ROOT;
     delete env.AIDLC_PLUGIN_ROOT;
+    delete env.DEVIN_PLUGIN_ROOT;
     delete env.CLAUDE_PROJECT_DIR;
     delete env.CURSOR_PROJECT_DIR;
     delete env.AIDLC_PROJECT_DIR;

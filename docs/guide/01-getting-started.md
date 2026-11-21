@@ -306,7 +306,7 @@ Without `--harness`, it stops before writing anything:
 
 ```text
 $ aidlc config < /dev/null
-error: multiple harnesses are installed; pass --harness <claude|codex|copilot|cursor|kiro-v2|kiro|opencode>
+error: multiple harnesses are installed; pass --harness <claude|codex|copilot|cursor|devin|kiro-v2|kiro|opencode>
 fix: aidlc config --harness <name>
 ```
 

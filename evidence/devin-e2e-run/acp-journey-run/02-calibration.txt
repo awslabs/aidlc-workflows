@@ -1,0 +1,43 @@
+Verbose mode: logging to <home>/sources/aidlc-workflows/tests/logs/2026-10-22T23-07-16Z-p15908
+Debug driver traces: <home>/sources/aidlc-workflows/tests/logs/2026-10-22T23-07-16Z-p15908/{sdk,tui,kiro-acp,devin-acp}-drive-*.ndjson
+WARNING: claude CLI not found -- live integration/e2e tests may fail or skip
+AI-DLC Testing Harness
+======================
+Guard profile: fixture (synthetic guard skips and direct audit authority enabled)
+
+## E2E Tests (full lifecycle)
+
+=== START t-acp-devin-calibration.serial.test.ts ===
+Debug artifacts for t-acp-devin-calibration.serial.test.ts:
+  log: logs/2026-10-22T23-07-16Z-p15908/t-acp-devin-calibration.serial.log
+  driver traces: logs/2026-10-22T23-07-16Z-p15908/{sdk,tui,kiro-acp,devin-acp}-drive-*.ndjson
+Test budget: {"caseDefaultMs":600000,"fileAllowanceMs":7200000,"fileDeadlineMs":1792717637325,"cleanupReserveMs":300000,"runDeadlineMs":null}
+bun test v1.3.14 (0d9b296a)
+
+tests/e2e/t-acp-devin-calibration.serial.test.ts:
+(pass) t-acp-devin-calibration (known-answer ACP self-checks) > 1. doctor stdout arrives byte-faithful through tool_call_update after wrap-code cleaning [14397.36ms]
+(pass) t-acp-devin-calibration (known-answer ACP self-checks) > 2. negative guard: a never-run probe is not found (no vacuous pass) [16892.69ms]
+(pass) t-acp-devin-calibration (known-answer ACP self-checks) > 3. ask_user_question reaches the client as elicitation/create and the reply round-trips [12122.46ms]
+
+ 3 pass
+ 0 fail
+ 43 expect() calls
+Ran 3 tests across 1 file. [43.54s]
+--- PASS: t-acp-devin-calibration.serial.test.ts ---
+=== DONE t-acp-devin-calibration.serial.test.ts (PASS) ===
+
+==============================
+SUMMARY
+==============================
+Guard profile: fixture (synthetic guard skips and direct audit authority enabled)
+Test files: 1
+Failed files: 0
+Total assertions: 3
+Failed assertions: 0
+Coverage: COMPLETE
+Executed test cases: 3
+Skipped test cases: 0
+Skipped files: 0
+Log directory: logs/2026-10-22T23-07-16Z-p15908
+==============================
+RESULT: PASS

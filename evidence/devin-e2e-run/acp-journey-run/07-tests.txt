@@ -1,0 +1,56 @@
+test runner: unittest
+/usr/bin/python3: No module named pytest
+test_add_strips_category_and_note_whitespace (tests.test_cli.AddCommandTests) ... ok
+test_add_then_list_shows_the_expense (tests.test_cli.AddCommandTests) ... ok
+test_add_without_date_uses_today (tests.test_cli.AddCommandTests) ... ok
+test_add_without_note_records_empty_note (tests.test_cli.AddCommandTests) ... ok
+test_file_option_writes_and_reads_named_file (tests.test_cli.FileOptionTests) ... ok
+test_unwritable_path_is_reported (tests.test_cli.FileOptionTests) ... ok
+test_empty_category_is_rejected (tests.test_cli.InvalidAddTests) ... ok
+test_invalid_add_does_not_create_missing_file (tests.test_cli.InvalidAddTests) ... ok
+test_invalid_amount_is_rejected (tests.test_cli.InvalidAddTests) ... ok
+test_invalid_date_is_rejected (tests.test_cli.InvalidAddTests) ... ok
+test_corrupted_row_is_reported_with_line_number (tests.test_cli.ListAndTotalsTests) ... ok
+test_empty_month_and_missing_file_print_no_expenses (tests.test_cli.ListAndTotalsTests) ... ok
+test_invalid_month_is_rejected (tests.test_cli.ListAndTotalsTests) ... ok
+test_list_shows_month_oldest_first (tests.test_cli.ListAndTotalsTests) ... ok
+test_totals_prints_one_line_per_category (tests.test_cli.ListAndTotalsTests) ... ok
+test_usage_errors_exit_with_status_2 (tests.test_cli.UsageTests) ... ok
+test_category_whitespace_is_stripped (tests.test_models.CleanTextTests) ... ok
+test_empty_or_whitespace_only_category_is_rejected (tests.test_models.CleanTextTests) ... ok
+test_note_whitespace_is_stripped_and_empty_allowed (tests.test_models.CleanTextTests) ... ok
+test_expense_is_immutable (tests.test_models.ExpenseTests) ... ok
+test_amount_is_formatted_with_two_decimal_places (tests.test_models.FormatAmountTests) ... ok
+test_error_message_names_field_and_value (tests.test_models.ParseAmountTests) ... ok
+test_invalid_amounts_are_rejected (tests.test_models.ParseAmountTests) ... ok
+test_valid_amounts_are_parsed_exactly (tests.test_models.ParseAmountTests) ... ok
+test_bad_format_is_rejected (tests.test_models.ParseDateTests) ... ok
+test_impossible_calendar_date_is_rejected (tests.test_models.ParseDateTests) ... ok
+test_valid_date_is_parsed (tests.test_models.ParseDateTests) ... ok
+test_invalid_months_are_rejected (tests.test_models.ParseMonthTests) ... ok
+test_valid_month_is_parsed (tests.test_models.ParseMonthTests) ... ok
+test_empty_month_gives_empty_list (tests.test_reports.ExpensesForMonthTests) ... ok
+test_only_expenses_in_the_month_are_kept (tests.test_reports.ExpensesForMonthTests) ... ok
+test_ordered_oldest_first_with_stable_same_day_order (tests.test_reports.ExpensesForMonthTests) ... ok
+test_categories_grouped_regardless_of_case (tests.test_reports.TotalsByCategoryTests) ... ok
+test_empty_month_gives_no_totals (tests.test_reports.TotalsByCategoryTests) ... ok
+test_totals_are_exact_decimals (tests.test_reports.TotalsByCategoryTests) ... ok
+test_totals_ordered_alphabetically_and_limited_to_month (tests.test_reports.TotalsByCategoryTests) ... ok
+test_append_to_file_without_trailing_newline_starts_new_line (tests.test_storage.AppendExpenseTests) ... ok
+test_new_file_gets_header_and_row (tests.test_storage.AppendExpenseTests) ... ok
+test_second_add_appends_without_second_header (tests.test_storage.AppendExpenseTests) ... ok
+test_special_characters_round_trip_exactly (tests.test_storage.AppendExpenseTests) ... ok
+test_bad_amount_on_line_3_is_reported (tests.test_storage.ReadExpensesTests) ... ok
+test_bad_date_is_reported (tests.test_storage.ReadExpensesTests) ... ok
+test_blank_lines_are_ignored (tests.test_storage.ReadExpensesTests) ... ok
+test_empty_file_raises_missing_header (tests.test_storage.ReadExpensesTests) ... ok
+test_line_number_counts_multiline_records (tests.test_storage.ReadExpensesTests) ... ok
+test_missing_file_reads_as_empty (tests.test_storage.ReadExpensesTests) ... ok
+test_rows_are_read_in_file_order_with_exact_amounts (tests.test_storage.ReadExpensesTests) ... ok
+test_wrong_column_count_is_reported (tests.test_storage.ReadExpensesTests) ... ok
+test_wrong_header_raises_with_line_1 (tests.test_storage.ReadExpensesTests) ... ok
+
+----------------------------------------------------------------------
+Ran 49 tests in 0.150s
+
+OK

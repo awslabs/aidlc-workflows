@@ -1,0 +1,44 @@
+# Baseline reconciliation — pristine PR base 3c54ec1a (/tmp/aidlc-main-check) vs branch 2b6ea4b6
+# Branch failures come from 04-unit-tier.txt / 05-integration-e2e-tier.txt; baseline runs below use 'bun test <file>' on 3c54ec1a.
+
+== baseline HEAD: 3c54ec1ac5d856e2bedb73434b8c403562030b3f
+
+==== BASELINE tests/unit/t240-opencode-packaging.test.ts ====
+(fail) t240 dist/opencode packaging parity + shell shape > 5: opencode resolves a projected persona with task disabled [198.19ms]
+ 9 pass
+ 1 fail
+Ran 10 tests across 1 file. [4.88s]
+
+==== BASELINE tests/unit/t332-preview-release-pipeline.test.ts ====
+(fail) t332 preview publication pipeline > stable release evidence: preview [412.49ms]
+(fail) t332 preview publication pipeline > stable release evidence: renewal [247.76ms]
+(fail) t332 preview publication pipeline > a queued older checkout can skip its already-published source but cannot become a new publication candidate [173.81ms]
+(fail) t332 preview publication pipeline > stable release evidence: preview [412.49ms]
+(fail) t332 preview publication pipeline > stable release evidence: renewal [247.76ms]
+(fail) t332 preview publication pipeline > a queued older checkout can skip its already-published source but cannot become a new publication candidate [173.81ms]
+ 21 pass
+ 3 fail
+Ran 24 tests across 1 file. [2.23s]
+
+==== BASELINE tests/unit/t83-doctor-orphan-worktree.test.ts ====
+(fail) t83 doctor parked attempts > legacy same-slug same-stamp attempts report only the owning repository as restored [945.28ms]
+(fail) t83 doctor parked attempts > legacy same-slug same-stamp attempts report only the owning repository as restored [945.28ms]
+ 29 pass
+ 1 fail
+Ran 30 tests across 1 file. [15.38s]
+
+==== BASELINE tests/integration/t78-bolt-worktree-lifecycle.test.ts ====
+(fail) t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-worktree-lifecycle.sh, plan 13) > Recoverable discard > AUTO-recorded symlink abort hints and doctor commands restore saved bytes and purge refs [589.25ms]
+(fail) t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-worktree-lifecycle.sh, plan 13) > Recoverable discard > AUTO-recorded symlink abort hints and doctor commands restore saved bytes and purge refs [589.25ms]
+ 65 pass
+ 1 fail
+Ran 66 tests across 1 file. [38.79s]
+
+==== RECONCILIATION TABLE ====
+| File | Branch 2b6ea4b6 (tier run) | Baseline 3c54ec1a (bun test) | Same failing case(s)? |
+|------|----------------------------|------------------------------|-----------------------|
+| tests/unit/t240-opencode-packaging.test.ts | 1 fail (case 5: opencode resolves a projected persona with task disabled) | 9 pass / 1 fail, same case | YES |
+| tests/unit/t332-preview-release-pipeline.test.ts | 3 fail (stable release evidence: preview; renewal; queued older checkout) | 21 pass / 3 fail, same cases | YES |
+| tests/unit/t83-doctor-orphan-worktree.test.ts | 1 fail (legacy same-slug same-stamp attempts) | 29 pass / 1 fail, same case | YES |
+| tests/integration/t78-bolt-worktree-lifecycle.test.ts | 1 fail (AUTO-recorded symlink abort hints ...) | 65 pass / 1 fail, same case | YES |
+Verdict: every branch failure reproduces on the pristine PR base with the identical failing case -> pre-existing host/environment failures, no regression attributable to 2b6ea4b6.

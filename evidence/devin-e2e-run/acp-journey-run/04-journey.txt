@@ -1,0 +1,72 @@
+Verbose mode: logging to <home>/sources/aidlc-workflows/tests/logs/2026-10-22T23-10-20Z-p22091
+Debug driver traces: <home>/sources/aidlc-workflows/tests/logs/2026-10-22T23-10-20Z-p22091/{sdk,tui,kiro-acp,devin-acp}-drive-*.ndjson
+WARNING: claude CLI not found -- live integration/e2e tests may fail or skip
+AI-DLC Testing Harness
+======================
+Guard profile: fixture (synthetic guard skips and direct audit authority enabled)
+
+## E2E Tests (full lifecycle)
+
+=== START t-acp-devin-journey.serial.test.ts ===
+Debug artifacts for t-acp-devin-journey.serial.test.ts:
+  log: logs/2026-10-22T23-10-20Z-p22091/t-acp-devin-journey.serial.log
+  driver traces: logs/2026-10-22T23-10-20Z-p22091/{sdk,tui,kiro-acp,devin-acp}-drive-*.ndjson
+Test budget: {"caseDefaultMs":600000,"fileAllowanceMs":7200000,"fileDeadlineMs":1792717820848,"cleanupReserveMs":300000,"runDeadlineMs":null}
+bun test v1.3.14 (0d9b296a)
+
+tests/e2e/t-acp-devin-journey.serial.test.ts:
+turn 1: stopReason=end_turn tools=331 elicits=answered(Plan), answered(Plan gate), answered(Edit plan), answered(Plan gate), answered(Answer mode), answered(Q1 Users+Q2 Problem+Q3 Success), answered(Q4 Out (1/2)+Q4 Out (2/2)), answered(Confirm), answered(Confirm), answered(Assumption), answered(Keep notes+Add a note), answered(Approval), answered(Confirm), answered(Approval), answered(Q1 Categories+Q2 CSV file+Q3 Formats+Q4 Python), answered(Confirm), answered(Keep notes+Add a note), answered(Approval), answered(Code plan), answered(Keep notes+Add a note), declined(Approval)
+turn 1 assistant tail: es are in. Let me get them checked over again before you look.Progress: 1 of 4 stages done. Next: Requirements Analysis.Answering the way you chose earlier: Guide me. Say if you'd rather edit the file or chat.Let me have the product lead check this over before you see it.Progress: 2 of 4 stages done. Next: Code Generation.Generating code for 13 plan steps. This may take several minutes depending on project complexity. I'll show a summary when complete.Let me bring in the developer on building the tool from the approved plan.Let me have the architecture reviewer check this over before you see it.The code is built and all 49 tests pass. The reviewer found 5 minor issues, listed above, and the Code Generation approval is still waiting for your answer. What would you like to clarify or change?
+turn 2: stopReason=end_turn tools=38 elicits=answered(Keep notes+Add a note), cancelled(Approval)
+turn 2 assistant tail: Progress: 3 of 4 stages done. Next: Build and Test.Now working on Build and Test (stage 4 of 4), wearing the quality engineer hat.Writing the Build and Test documents from those results.Build and Test is finished: all 49 tests pass and every requirement is covered. The approval is still open, and approving it completes the workflow.
+
+How do you want to answer: approve, or request changes?
+turn 3: stopReason=end_turn tools=1 elicits=none
+turn 3 assistant tail: /intents/261022-expense-tracker/`.
+
+**Still open** (minor review findings you accepted at Code Generation):
+- An amount longer than about 28 digits crashes the tool with a Python error instead of a clean error message.
+- `add` doesn't check that an existing file is an expense CSV before writing to it, so `--file README.md` would add a row to the README.
+- The code comment and plan say a failed write can never leave half a row in the file, which overstates what the code guarantees.
+- `.gitignore` doesn't exclude `__pycache__/`, so running the tests leaves `.pyc` files that could end up in a commit.
+- The traceability record doesn't list the small extras that weren't in the plan, such as the `--version` flag.
+
+Nothing has been committed. I can fix any of these or commit the work if you want.
+default answers used (10):
+  header="Q1 Users" q="Q1. Who will use the tool, and who decides what it should do? (The request says " opts=["Just me","Me + household, I decide","Me + household, together","Not yet defined"] → "Just me"
+  header="Q2 Problem" q="Q2. What problem should the tool solve for you, and why build it now?" opts=["See where money goes","Faster than spreadsheet","Learning project","Not identified"] → "See where money goes"
+  header="Q3 Success" q="Q3. How will you know the first version is a success?" opts=["One command each","One command each + tests","Not yet defined"] → "One command each"
+  header="Q4 Out (1/2)" q="Q4 (part 1 of 2). What should this first version of the tool leave out? Select a" opts=["Editing or deleting","Budgets / alerts","Multiple currencies"] → "Editing or deleting"
+  header="Q4 Out (2/2)" q="Q4 (part 2 of 2). What should this first version of the tool leave out? Select a" opts=["Charts / exports","None"] → "None of these, my answer is in part 1"
+  header="Assumption" q="The stakeholder map carries one assumption I didn't ask you about directly:\n\n- T" opts=["Accept assumptions","Convert to follow-up questions"] → "Accept assumptions"
+  header="Q1 Categories" q="Q1. How should expense categories work? (Totals are grouped by category, so this" opts=["Free text, ignore case","Free text, exact","Fixed list","Not yet defined"] → "Free text, ignore case"
+  header="Q2 CSV file" q="Q2. Where should the CSV file live? (Every command reads or writes it, so the de" opts=["./expenses.csv + --file","~/.expenses.csv + --file","Always pass the path","Not yet defined"] → "./expenses.csv + --file"
+  header="Q3 Formats" q="Q3. What formats should dates, months and amounts use, and what happens with bad" opts=["ISO dates, today default","As A, date required","As A, negatives allowed","Not yet defined"] → "ISO dates, today default"
+  header="Q4 Python" q="Q4. Which Python version and test tooling should the tool use?" opts=["3.10+, unittest","3.10+, pytest for tests","3.8+, unittest","Not yet defined"] → "3.10+, unittest"
+audit tail: ["DECISION_RECORDED","DECISION_RECORDED","HUMAN_TURN","QUESTION_REPLIED","QUESTION_REPLIED","QUESTION_ANSWERED","ARTIFACT_CREATED","SENSOR_FIRED","SENSOR_PASSED","SENSOR_FIRED","SENSOR_PASSED","SENSOR_FIRED","SENSOR_PASSED","SENSOR_FIRED","SENSOR_PASSED","SENSOR_FIRED","SENSOR_PASSED","SENSOR_FIRED","SENSOR_PASSED","SENSOR_FIRED","SENSOR_PASSED","SENSOR_FIRED","SENSOR_PASSED","STAGE_AWAITING_APPROVAL","HUMAN_TURN","GATE_APPROVED","STAGE_COMPLETED","PHASE_COMPLETED","PHASE_VERIFIED","WORKFLOW_COMPLETED"]
+PLAN_APPROVAL_BLOCKED=0 subagents=6
+[t-acp-devin-journey] AIDLC_KEEP_TEMP=1 — preserved <journey-root>
+(pass) t-acp-devin-journey — a full intent through devin acp > the person's words survive every question kind to WORKFLOW_COMPLETED [2438305.10ms]
+
+ 1 pass
+ 0 fail
+ 94 expect() calls
+Ran 1 test across 1 file. [2438.42s]
+--- PASS: t-acp-devin-journey.serial.test.ts ---
+=== DONE t-acp-devin-journey.serial.test.ts (PASS) ===
+
+==============================
+SUMMARY
+==============================
+Guard profile: fixture (synthetic guard skips and direct audit authority enabled)
+Test files: 1
+Failed files: 0
+Total assertions: 1
+Failed assertions: 0
+Coverage: COMPLETE
+Executed test cases: 1
+Skipped test cases: 0
+Skipped files: 0
+Log directory: logs/2026-10-22T23-10-20Z-p22091
+==============================
+RESULT: PASS

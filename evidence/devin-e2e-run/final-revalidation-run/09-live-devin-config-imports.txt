@@ -1,0 +1,42 @@
+Verbose mode: logging to <home>/sources/aidlc-workflows/tests/logs/2026-09-23T00-03-24Z-p1406
+Debug driver traces: <home>/sources/aidlc-workflows/tests/logs/2026-09-23T00-03-24Z-p1406/{sdk,tui,kiro-acp}-drive-*.ndjson
+WARNING: claude CLI not found -- live integration/e2e tests may fail or skip
+AI-DLC Testing Harness
+======================
+Guard profile: fixture (synthetic guard skips and direct audit authority enabled)
+
+## E2E Tests (full lifecycle)
+
+=== START t-exec-devin-config-imports.serial.test.ts ===
+Debug artifacts for t-exec-devin-config-imports.serial.test.ts:
+  log: logs/2026-09-23T00-03-24Z-p1406/t-exec-devin-config-imports.serial.log
+  driver traces: logs/2026-09-23T00-03-24Z-p1406/{sdk,tui,kiro-acp}-drive-*.ndjson
+bun test v1.3.14 (0d9b296a)
+
+tests/e2e/t-exec-devin-config-imports.serial.test.ts:
+(pass) t-exec-devin read_config_from import isolation via devin skills/mcp list > shipped config: no sibling skill or MCP imports; /aidlc stays unprefixed [542.51ms]
+(pass) t-exec-devin read_config_from import isolation via devin skills/mcp list > positive control: vendor defaults import Copilot skills and OpenCode/Zed MCP — if this fails, Devin changed its import defaults (revisit D1) [399.17ms]
+
+ 2 pass
+ 0 fail
+ 17 expect() calls
+Ran 2 tests across 1 file. [981.00ms]
+--- PASS: t-exec-devin-config-imports.serial.test.ts ---
+=== DONE t-exec-devin-config-imports.serial.test.ts (PASS) ===
+
+==============================
+SUMMARY
+==============================
+Guard profile: fixture (synthetic guard skips and direct audit authority enabled)
+Test files: 1
+Failed files: 0
+Total assertions: 2
+Failed assertions: 0
+Coverage: COMPLETE
+Executed test cases: 2
+Skipped test cases: 0
+Skipped files: 0
+Log directory: logs/2026-09-23T00-03-24Z-p1406
+==============================
+RESULT: PASS
+EXIT=0

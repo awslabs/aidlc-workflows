@@ -1,0 +1,1 @@
+package --check: deterministic across two independent build(s) for claude, codex, copilot, cursor, devin, kiro, kiro-ide, opencode.

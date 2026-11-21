@@ -1,0 +1,19 @@
+== date -u: Wed Sep 23 00:03:38 UTC 2026
+== PR 996
+{"base":"3c54ec1ac5d856e2bedb73434b8c403562030b3f","base_ref":"main","commits":4,"head":"2b6ea4b64e326fd02cb8e21a693f33fef51d8e39","mergeable":false,"merged":false,"pr_state":"open","state":"dirty"}
+== upstream main tip
+eaf8e991deb5ce45967e20f8198d25e64d25e218
+== latest review
+{"commit_id":"10b71cb5c4725decf5b0e63c6a982a5b4f89524f","state":"CHANGES_REQUESTED","submitted_at":"2026-09-18T14:09:19Z"}
+== reply comment 5784752683
+{"created_at":"2026-09-22T21:50:14Z","first_line":"Thanks for the detailed review — and for checking the findings against a real repro. One important note up front: this review examined `10b71cb5`, a pre-squash head. The pushed branch is now `2b6ea4b6` — a squash-transplant of all work through `41d43efd` onto current `main` (`3c54ec1a`), plus three commits that landed *in response to this review*. GitHub reports the PR MERGEABLE. Per-finding dispositions:","id":5784752683,"url":"https://github.com/awslabs/aidlc-workflows/pull/996#issuecomment-5784752683"}
+== workflow runs for head 2b6ea4b6
+{"conclusion":"action_required","name":"Adversarial AI PR Review","status":"completed"}
+{"conclusion":"success","name":"Pull Request Validation","status":"completed"}
+{"conclusion":"action_required","name":"Security Scanners","status":"completed"}
+{"conclusion":"action_required","name":"Markdownlint","status":"completed"}
+{"conclusion":"action_required","name":"Adversarial AI PR Review","status":"completed"}
+{"conclusion":"action_required","name":"CI","status":"completed"}
+{"conclusion":"action_required","name":"Deploy Documentation","status":"completed"}
+{"conclusion":"success","name":"Pull Request Validation","status":"completed"}
+EXIT=0

@@ -1,0 +1,96 @@
+{
+  "$schema": "devin-native-hook-contracts/v1",
+  "cliVersion": "devin 3000.11.3 (9c803229faa4)",
+  "events": {
+    "foregroundDispatchPre": {
+      "hook_event_name": "PreToolUse",
+      "tool_name": "run_subagent",
+      "tool_input": {
+        "profile": "subagent_explore",
+        "title": "probe foreground dispatch",
+        "task": "<task>"
+      },
+      "tool_use_id": "<tool-use-id-parent>",
+      "session_id": "<session>",
+      "prompt_id": "<prompt-id>"
+    },
+    "foregroundChildStop": {
+      "hook_event_name": "Stop",
+      "stop_hook_active": false,
+      "last_assistant_message": "<child-report>",
+      "session_id": "<session>",
+      "prompt_id": "<prompt-id>"
+    },
+    "foregroundCompletionPost": {
+      "hook_event_name": "PostToolUse",
+      "tool_name": "run_subagent",
+      "tool_input": {
+        "profile": "subagent_explore",
+        "title": "probe foreground dispatch",
+        "task": "<task>"
+      },
+      "tool_use_id": "<tool-use-id-parent>",
+      "tool_response": {
+        "success": true,
+        "output": "Subagent agent_id=<agent-id> completed successfully:\n\n<child-report>",
+        "error": null
+      },
+      "session_id": "<session>",
+      "prompt_id": "<prompt-id>"
+    },
+    "parentStop": {
+      "hook_event_name": "Stop",
+      "stop_hook_active": false,
+      "last_assistant_message": "<parent-report>",
+      "session_id": "<session>",
+      "prompt_id": "<prompt-id>"
+    },
+    "foregroundStartFailurePost": {
+      "hook_event_name": "PostToolUse",
+      "tool_name": "run_subagent",
+      "tool_input": {
+        "profile": "no_such_profile_probe",
+        "title": "probe unknown profile",
+        "task": "<task>"
+      },
+      "tool_use_id": "<tool-use-id-parent>",
+      "tool_response": {
+        "success": false,
+        "output": null,
+        "error": "Subagent failed to start."
+      },
+      "session_id": "<session>",
+      "prompt_id": "<prompt-id>"
+    },
+    "backgroundStartFailurePost": {
+      "hook_event_name": "PostToolUse",
+      "tool_name": "run_subagent",
+      "tool_input": {
+        "profile": "no_such_profile_probe",
+        "title": "probe unknown profile",
+        "is_background": true,
+        "task": "<task>"
+      },
+      "tool_use_id": "<tool-use-id-parent>",
+      "tool_response": {
+        "success": false,
+        "output": null,
+        "error": "Subagent failed to start."
+      },
+      "session_id": "<session>",
+      "prompt_id": "<prompt-id>"
+    },
+    "hookDeniedDispatchPre": {
+      "hook_event_name": "PreToolUse",
+      "tool_name": "run_subagent",
+      "tool_input": {
+        "profile": "subagent_explore",
+        "title": "probe hook-denied dispatch",
+        "task": "<task>"
+      },
+      "tool_use_id": "<tool-use-id-parent>",
+      "session_id": "<session>",
+      "prompt_id": "<prompt-id>"
+    }
+  }
+}

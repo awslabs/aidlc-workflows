@@ -1,0 +1,100 @@
+=== source: aidlc/spaces/default/intents/261023-habit-tracker/aidlc-state.md (selected lines) ===
+- **Scope**: express
+- **Start Date**: 2026-10-23T01:04:08Z
+- **State Version**: 8
+- **Stages to Execute**: 0.1, 0.2, 0.3, 2.3, 3.5, 3.6, 4.1, 4.3, 4.4
+- **Depth**: Minimal
+- **Test Strategy**: Minimal
+- **Guard Policy**: off (from scope express)
+- **Sensors**: off (from scope express)
+- **Learnings**: off (from scope express)
+- **Summary Confirmation**: on (set by you)
+- **Plan Approval**: on (set by a command)
+- **Total Stages**: 9
+- **Completed**: 6
+- **In Progress**: none
+
+=== source: the intent's audit shard (galaxybook-f52cd81d4547.md) — event counts ===
+     25 ARTIFACT_UPDATED
+     11 QUESTION_REPLIED
+     11 ARTIFACT_CREATED
+      9 STAGE_STARTED
+      8 HUMAN_TURN
+      6 STAGE_COMPLETED
+      4 STAGE_AWAITING_APPROVAL
+      4 PHASE_VERIFIED
+      4 PHASE_STARTED
+      4 PHASE_COMPLETED
+      3 STAGE_SKIPPED
+      3 GATE_APPROVED
+      3 DECISION_RECORDED
+      2 QUESTION_ANSWERED
+      2 HEALTH_CHECKED
+      2 GUARDRAIL_LOADED
+      1 WORKSPACE_SCANNED
+      1 WORKSPACE_SCAFFOLDED
+      1 WORKSPACE_INITIALISED
+      1 WORKFLOW_STARTED
+      1 WORKFLOW_COMPLETED
+      1 SUMMARY_CONFIRMATION_RECORDED
+      1 SUBAGENT_COMPLETED
+      1 STAGE_REVISING
+      1 PLAN_APPROVAL_RECORDED
+      1 PHASE_SKIPPED
+      1 GATE_REJECTED
+
+=== audit excerpts referenced by SUMMARY.md (whole entries; Directive Epoch/Intent lines omitted) ===
+## Summary Confirmation Recorded
+**Timestamp**: 2026-10-23T01:07:12Z
+**Event**: SUMMARY_CONFIRMATION_RECORDED
+**Stage**: requirements-analysis
+**Details**: Looks correct
+**Checkpoint**: Consolidated Summary Confirmation
+**Questions File**: aidlc/spaces/default/intents/261023-habit-tracker/inception/requirements-analysis/requirements-analysis-questions.md
+**Questions SHA-256**: b0bea8adb217222fb2f2d2b88726efcc591c104a4e09a59f87d80076ee41627b
+**Hash Scope**: confirmed-content-v2
+**Person Reply**: Looks correct
+**Summary Authorization Id**: df62fd4d815af3f03d6fa3f5b3357111e1ceb6e43636adbb89199ac26e479ae9
+
+## Gate Rejected
+**Timestamp**: 2026-10-23T01:08:10Z
+**Event**: GATE_REJECTED
+**Stage**: requirements-analysis
+**Feedback**: Request changes: habit names should not be case-sensitive. If I add "Read" and later type "read", it should be the same habit, and adding "read" when "Read" exists should be refused as a duplicate.
+
+## Stage Revising
+**Timestamp**: 2026-10-23T01:08:10Z
+**Event**: STAGE_REVISING
+**Stage**: requirements-analysis
+**Revision count**: 1
+**Feedback**: Request changes: habit names should not be case-sensitive. If I add "Read" and later type "read", it should be the same habit, and adding "read" when "Read" exists should be refused as a duplicate.
+
+## Plan Approval Recorded
+**Timestamp**: 2026-10-23T01:11:02Z
+**Event**: PLAN_APPROVAL_RECORDED
+**Stage**: code-generation
+**Details**: Approve Plan
+**Checkpoint**: plan-approval
+**Plan Target**: stage:code-generation
+**Run floor**: STAGE_STARTED:2026-10-23T01:08:57Z#1
+**Approval Fingerprint**: sha256:v3:b3314aa2a15214414aed34aac2d95ed516f82875abbb628013c751193436e239
+**Questions File**: aidlc/spaces/default/intents/261023-habit-tracker/construction/code-generation/code-generation-questions.md
+**Questions SHA-256**: d64ab808ffaaa1c00e600fa1ce960c2a0927014f736c87bb6f6a98c75ca85d72
+**Prompt SHA-256**: 33c0a5b1add0028a9b4fffa3374f6a6e360f4c52d6990fdf800daff115d7f4f5
+**Session**: petite-cord
+**Asked By**: engine
+**Person Reply**: Approve Plan
+
+## Subagent Completed
+**Timestamp**: 2026-10-23T01:17:50Z
+**Event**: SUBAGENT_COMPLETED
+**Agent Type**: aidlc-developer-agent
+**Agent ID**: 0c04a2c2
+**Message**: ## Subagent Summary: Code Generation\n\nI built the habit tracker CLI following the approved plan, Steps 1 to 9, and ticked every box in the plan file. The final full test run passed all 28 tests.\n\n###
+
+## Workflow Completion
+**Timestamp**: 2026-10-23T01:23:55Z
+**Event**: WORKFLOW_COMPLETED
+**Scope**: express
+**Details**: Scope: express, final stage observability-setup skipped
+**Reason**: No deployed target exists: the habit tracker is a local single-user command-line tool with no service to monitor, and Deployment Execution was skipped. Errors are reported directly to the user on stderr with a non-zero exit code.

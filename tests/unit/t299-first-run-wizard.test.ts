@@ -975,7 +975,7 @@ describe("t299 first-run setup wizard", () => {
   test("Kiro IDE's row elsewhere asks for Kiro CLI's model with Enter keeping Kiro auto, and saves no effort", () => {
     const kept = kiroSeam({});
     // Kiro IDE from the harness list, recommended defaults, Enter at the model list.
-    const keep = runWizard("6\n\n\n", {
+    const keep = runWizard("7\n\n\n", {
       harnesses: { claude: { found: false } },
       env: kept.env,
       probed: ["kiro", "kiro-ide"],
@@ -990,7 +990,7 @@ describe("t299 first-run setup wizard", () => {
     expect(kiroWrites(kept.writes)).toEqual([]);
 
     const chosen = kiroSeam({});
-    const choose = runWizard("6\n\n2\n", {
+    const choose = runWizard("7\n\n2\n", {
       harnesses: { claude: { found: false } },
       env: chosen.env,
       probed: ["kiro", "kiro-ide"],
@@ -1002,7 +1002,7 @@ describe("t299 first-run setup wizard", () => {
 
     // A write Kiro refuses names the command that saves the chosen model again.
     const refused = kiroSeam({}, { failWrite: "chat.defaultModel" });
-    const failed = runWizard("6\n\n2\n", {
+    const failed = runWizard("7\n\n2\n", {
       harnesses: { claude: { found: false } },
       env: refused.env,
       probed: ["kiro", "kiro-ide"],
@@ -1332,7 +1332,7 @@ describe("t299 first-run setup wizard", () => {
 
     // Below the kiro row's own 2.6 floor neither Kiro row is detected, so
     // setup asks instead of taking one; the person still can choose Kiro CLI.
-    const unsupported = runWizard("5\n\n", {
+    const unsupported = runWizard("6\n\n", {
       harnesses: { claude: { found: false }, kiro: { found: true, version: "kiro-cli 2.5.9" } },
       probed: ["kiro", "kiro-ide"],
     });
@@ -1357,11 +1357,11 @@ describe("t299 first-run setup wizard", () => {
     });
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.stdout).toContain("Choose the harness for this project first.");
-    expect(result.stdout).toContain("    5. Kiro CLI (V2)   (detected)\n");
+    expect(result.stdout).toContain("    6. Kiro CLI (V2)   (detected)\n");
     expect(result.stdout).toContain(
-      `    6. Kiro${" ".repeat(12)}(detected, default)  Kiro IDE and Kiro CLI on its v3 engine\n`,
+      `    7. Kiro${" ".repeat(12)}(detected, default)  Kiro IDE and Kiro CLI on its v3 engine\n`,
     );
-    expect(result.stdout).toContain("  Harness [6]:");
+    expect(result.stdout).toContain("  Harness [7]:");
     expect(result.stdout).toContain("Using Kiro.");
     const kiroDir = join(result.project, ".kiro");
     expect(existsSync(join(kiroDir, "agents", "aidlc-aidlc.md"))).toBe(true);
@@ -1374,9 +1374,9 @@ describe("t299 first-run setup wizard", () => {
       kiro: { found: true, version: "kiro-cli 2.28.0" },
       "kiro-ide": { found: true, version: "kiro-cli 2.28.0" },
     };
-    // Kiro auto: 6 at the picker, then Enter at the defaults and the model list keeps it.
+    // Kiro auto: 7 at the picker, then Enter at the defaults and the model list keeps it.
     const auto = kiroSeam({});
-    const onAuto = runWizard("6\n\n\n", { harnesses: bothKiro, env: auto.env });
+    const onAuto = runWizard("7\n\n\n", { harnesses: bothKiro, env: auto.env });
     expect(onAuto.status, onAuto.stdout + onAuto.stderr).toBe(0);
     expect(onAuto.stdout).toContain("Using Kiro.");
     expect(onAuto.stdout).toContain("Choose the Kiro CLI session model (Enter keeps Kiro auto):");
@@ -1385,7 +1385,7 @@ describe("t299 first-run setup wizard", () => {
 
     // A saved model is kept, and no preset effort is written for it.
     const saved = kiroSeam({ "chat.defaultModel": "claude-opus-5" });
-    const kept = runWizard("6\n\n", { harnesses: bothKiro, env: saved.env });
+    const kept = runWizard("7\n\n", { harnesses: bothKiro, env: saved.env });
     expect(kept.status, kept.stdout + kept.stderr).toBe(0);
     expect(kept.stdout).toContain("Using Kiro.");
     // Neither the keep-or-choose question nor the model list.
@@ -1394,7 +1394,7 @@ describe("t299 first-run setup wizard", () => {
     expect(kiroWrites(saved.writes)).toEqual([]);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("an earlier detected harness stays the default over both Kiro trees, a later one does not, and 5 takes Kiro CLI (V2)", () => {
+  test("an earlier detected harness stays the default over both Kiro trees, a later one does not, and 6 takes Kiro CLI (V2)", () => {
     const bothKiro = {
       kiro: { found: true, version: "kiro-cli 2.28.0" },
       "kiro-ide": { found: true, version: "kiro-cli 2.28.0" },
@@ -1404,9 +1404,9 @@ describe("t299 first-run setup wizard", () => {
     });
     expect(withClaude.status, withClaude.stdout + withClaude.stderr).toBe(0);
     expect(withClaude.stdout).toContain(`    1. Claude Code     (detected, default)\n`);
-    expect(withClaude.stdout).toContain("    5. Kiro CLI (V2)   (detected)\n");
+    expect(withClaude.stdout).toContain("    6. Kiro CLI (V2)   (detected)\n");
     expect(withClaude.stdout).toContain(
-      `    6. Kiro${" ".repeat(12)}(detected)  Kiro IDE and Kiro CLI on its v3 engine\n`,
+      `    7. Kiro${" ".repeat(12)}(detected)  Kiro IDE and Kiro CLI on its v3 engine\n`,
     );
     expect(withClaude.stdout).toContain("Using Claude Code.");
     expect(existsSync(join(withClaude.project, ".kiro"))).toBe(false);
@@ -1416,11 +1416,11 @@ describe("t299 first-run setup wizard", () => {
       harnesses: { claude: { found: false }, opencode: { found: true, version: "opencode 1.17.0" }, ...bothKiro },
     });
     expect(withOpencode.status, withOpencode.stdout + withOpencode.stderr).toBe(0);
-    expect(withOpencode.stdout).toContain("    5. Kiro CLI (V2)   (detected)\n");
+    expect(withOpencode.stdout).toContain("    6. Kiro CLI (V2)   (detected)\n");
     expect(withOpencode.stdout).toContain(
-      `    6. Kiro${" ".repeat(12)}(detected, default)  Kiro IDE and Kiro CLI on its v3 engine\n`,
+      `    7. Kiro${" ".repeat(12)}(detected, default)  Kiro IDE and Kiro CLI on its v3 engine\n`,
     );
-    expect(withOpencode.stdout).toContain("    7. opencode        (detected)\n");
+    expect(withOpencode.stdout).toContain("    8. opencode        (detected)\n");
     expect(withOpencode.stdout).toContain("Using Kiro.");
 
     // Kiro is the default, so its v3 pin is on the line in .kiro/settings/cli.json.
@@ -1434,10 +1434,10 @@ describe("t299 first-run setup wizard", () => {
     expect(cli["chat.agentEngine"]).toBe("v3");
 
     // Someone who wants Kiro CLI (V2) types its number.
-    const v2 = runWizard("5\n\n", { harnesses: { claude: { found: false }, ...bothKiro } });
+    const v2 = runWizard("6\n\n", { harnesses: { claude: { found: false }, ...bothKiro } });
     expect(v2.status, v2.stdout + v2.stderr).toBe(0);
     expect(v2.stdout).toContain(
-      `    6. Kiro${" ".repeat(12)}(detected, default)  Kiro IDE and Kiro CLI on its v3 engine\n`,
+      `    7. Kiro${" ".repeat(12)}(detected, default)  Kiro IDE and Kiro CLI on its v3 engine\n`,
     );
     expect(v2.stdout).toContain("Using Kiro CLI (V2).");
     expect(existsSync(join(v2.project, ".kiro", "agents", "aidlc.json"))).toBe(true);
@@ -1557,7 +1557,7 @@ describe("t299 first-run setup wizard", () => {
   // The ending checks kiro-cli itself, a shell-script stand-in here.
   test.skipIf(process.platform === "win32")("Kiro chosen where only Kiro CLI is found ends with Kiro CLI's start step, then Kiro IDE's", () => {
     const saved = kiroSeam({ "chat.defaultModel": "claude-opus-5" });
-    const result = runWizard("6\n\n", { harnesses: kiroCliOnly, env: saved.env });
+    const result = runWizard("7\n\n", { harnesses: kiroCliOnly, env: saved.env });
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.stdout).toContain("Using Kiro.");
     expect(result.stdout).toContain(kiroCliSteps);

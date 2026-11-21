@@ -1,0 +1,55 @@
+# Final audit counters (session cosmic-minnow, intent 260919-hello-script, 2026-09-19)
+SUBAGENT_COMPLETED         2
+SUBAGENT_STARTED           0
+PLAN_APPROVAL_BLOCKED      0
+PLAN_APPROVAL_RECORDED     1
+PLAN_APPROVAL_PRESENTED    0
+WORKFLOW_COMPLETED         1
+STAGE_STARTED              11
+STAGE_COMPLETED            6
+
+## Both SUBAGENT_COMPLETED rows verbatim
+---
+
+## Subagent Completed
+**Timestamp**: 2026-09-19T17:11:35Z
+**Event**: SUBAGENT_COMPLETED
+**Agent Type**: subagent_explore
+**Agent ID**: 3e9497b8
+**Message**: Subagent 3e9497b8 completed. Its full report is delivered in the <subagent_completion_notification> message; you do not need to read it again.
+
+---
+
+## Artifact Updated
+**Timestamp**: 2026-09-19T17:11:55Z
+**Event**: ARTIFACT_UPDATED
+--
+---
+
+## Subagent Completed
+**Timestamp**: 2026-09-19T17:45:15Z
+**Event**: SUBAGENT_COMPLETED
+**Agent Type**: aidlc-developer-agent
+**Agent ID**: c1804c13
+**Message**: ## Subagent Summary: Code Generation\n\n### Produced\n- `<project-dir>/hello.py` — single-file script containing exactly one top-level statement, `print("ok")` (no `main()`,
+
+---
+
+## Artifact Created
+**Timestamp**: 2026-09-19T17:45:45Z
+**Event**: ARTIFACT_CREATED
+
+## continue-workflow.drops (verbatim)
+2026-09-19T17:11:21Z	a background subagent is still in flight for this session; allowing the stop (pending-subagent carve-out)
+2026-09-19T17:45:14Z	current stage code-generation has an unanswered logged decision; allowing the stop (pending-decision carve-out)
+
+## Ledger after run
+ls: cannot access 'aidlc/.aidlc-subagent-inflight': No such file or directory
+
+## Runtime files
+print("ok")
+ok
+----------------------------------------------------------------------
+Ran 4 tests in 0.050s
+
+OK

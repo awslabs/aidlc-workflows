@@ -1,0 +1,22 @@
+== date -u ==
+Thu Oct  8 21:27:23 UTC 2026
+== git rev-parse HEAD ==
+dafdaa99c1e4ef8242af4913dadee877d63c584e
+== git branch --show-current ==
+feat/devin-harness
+== git rev-parse upstream/main ==
+b4985f72535e788096cc03ef5f9a472d867b5e85
+== git status --short ==
+(empty at capture time — only this evidence dir was added afterwards)
+== bun --version ==
+1.3.14
+== devin --version ==
+devin 3000.11.3 (9c803229faa4)
+== uname -a ==
+Linux <host> 5.15.167.4-microsoft-standard-WSL2 #1 SMP Tue Nov 5 00:21:55 UTC 2024 x86_64 x86_64 x86_64 GNU/Linux
+== BIN ==
+/tmp/aidlc-inv/binaries/native/aidlc  (98420864 bytes, -rwxr-xr-x)
+== $BIN --version ==
+aidlc 2.10.0 (runtime 2.10.0)
+== repo ==
+<home>/sources/aidlc-workflows (no tracked files modified by this investigation)

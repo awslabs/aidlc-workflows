@@ -1,0 +1,31 @@
+{
+  "$schema": "devin-native-hook-contract-provenance/v1",
+  "cliVersion": "devin 3000.11.3 (9c803229faa4)",
+  "captureDate": "2026-10-10",
+  "platformClass": "linux-wsl2",
+  "captureMethod": "Capture-only scratch project; SessionStart, SessionEnd, UserPromptSubmit, PreToolUse, PostToolUse, Stop, and PostCompaction wired with blank matchers to a logger that wrote one JSON stdin event per file plus the names (never values) of DEVIN_/CLAUDE_/AIDLC_ environment variables, and emitted no stdout.",
+  "sanitization": [
+    "Replace project paths and host identity with semantic placeholders.",
+    "Replace session, prompt, tool-use, agent, and shell identifiers with stable semantic placeholders while preserving correlation.",
+    "Remove timestamps and non-load-bearing task, report, prompt, tool-schema, reasoning, and generated-workflow content.",
+    "Preserve native field names, nesting, booleans, missing-versus-null distinctions, response status, and classifier strings used by deterministic tests."
+  ],
+  "events": {
+    "foregroundDispatchPre": "C0-fg-control events[2]",
+    "foregroundChildStop": "C0-fg-control events[3]",
+    "foregroundCompletionPost": "C0-fg-control events[4]",
+    "parentStop": "C0-fg-control events[5]",
+    "foregroundStartFailurePost": "R1-unknown-profile events[3]",
+    "backgroundStartFailurePost": "R1b-bg-unknown-profile events[3]",
+    "hookDeniedDispatchPre": "R3-hook-denied events[2]"
+  },
+  "limits": [
+    "Print mode (`devin -p`) only; no attended-session capture on this build.",
+    "No AI-DLC workflow was installed in the scratch projects; captures describe the bare host contract.",
+    "Model-pinned profiles (a bogus model and `opus`) were NOT refused on this account — both dispatches ran; no failed-start event exists for that cause.",
+    "A foreground child's own Stop (identical session_id/prompt_id, stop_hook_active=false) sits between the parent's run_subagent Pre and Post; a `decision:block` on it steers the child (S3) — recorded as narrative, the block is not replayed.",
+    "Every PreToolUse hook entry still runs after an earlier entry denies the call (R3b); hook ordering and short-circuit cannot be relied on — recorded as narrative.",
+    "A hook-denied run_subagent emits no PostToolUse (R3); the background child's own Stop arrives after the launch ack (C1) and is not replayed — it is covered by the core pending-background carve-out."
+  ],
+  "sourceCommits": []
+}

@@ -276,6 +276,8 @@ Verifies the orchestrator's structural correctness without invoking the LLM. If 
 - Scope-host runs: one classic journey on every harness tree (Claude, Codex, Copilot CLI, Kiro CLI, Kiro IDE, Cursor, opencode), through each tree's own hooks (integration, `tests/integration/t-scope-host-*`; see below)
 - Guard matrix: what the person meets when files change under approved work, per Guard Policy, review cap and plan approval (integration, `tests/integration/t-guard-matrix-*`; see below)
 
+No test in the deterministic tiers may depend on a harness CLI being installed on the machine that runs it — a host binary is shimmed on `PATH` in the test (the t150 `codex` and t331 `devin` shims) or reached only behind an `AIDLC_*_LIVE` gate that skips cleanly without it.
+
 **Run:** `bun tests/run-tests.ts --no-llm`. The default profile includes the
 integration level, so the run needs the LLM and opens the live-model gate
 whenever the `claude` CLI is on PATH. `--no-llm` closes that gate and keeps this
@@ -1121,6 +1123,16 @@ To add artifact assertions to an existing e2e workflow test under `tests/e2e/`:
 - **Graceful degradation** — Use `skip` when an assertion depends on non-deterministic LLM output
 - **Structure over content** — Check for markdown headings (`^#`), file existence, directory creation before checking content
 
+## Live-run evidence hygiene
+
+Evidence committed to the repository is minimal by policy:
+
+- **Commit:** deterministic fixtures containing only the fields tests consume; compact provenance (build, date, capture method, sanitization, case mapping, limits); result/limits summaries; rerun recipes.
+- **Do not commit:** raw conversation exports (e.g. ATIF `--export` files), session databases or WAL/SHM excerpts, generated audit or state trees, host logs, hook-health directories, filesystem snapshots, complete vendor/system prompts, unredacted identifiers or local paths, or exploratory transcripts. If an owner needs forensic retention, the raw artifact goes only to an approved private store with an access/retention policy and a recorded checksum — never a PR comment or repository branch.
+- **A skip is not a live PASS** — a gated test that did not run records a gap, not a result.
+- **Deleting a path does not purge history** — "removed from the tracked tree" and "purged from Git history" are different claims; full-history sanitation is a separate, explicitly approved operation.
+- **Pre-policy exceptions** — a raw run tree that predates or is explicitly exempted from this policy must be inventoried in the findings with provenance and limits (e.g. the retained Devin attended-run directories under `evidence/devin-e2e-run/`); an existing exception grants no permission to add another raw run.
+
 ## Environment Variables
 
 | Variable | Default | Description |
@@ -1151,7 +1163,29 @@ To add artifact assertions to an existing e2e workflow test under `tests/e2e/`:
 | `AIDLC_INPUT_REPORT_DIR` | `tests/logs/aidlc-input-live` | Where the live input check writes its report (a score per category and every miss with its transcript excerpt). |
 | `AIDLC_INPUT_ONLY` | unset | Comma list of corpus item ids that narrows the unit input check (`tests/unit/t-aidlc-input-corpus.test.ts`). |
 | `AIDLC_INPUT_PARALLEL` | `6` | Fixture pool size of the unit input check. |
+| `AIDLC_DEVIN_ACP_LIVE` | unset | Set to `1` to run the live Devin ACP tier (`tests/e2e/t-acp-devin-calibration.serial.test.ts` known-answer driver self-checks, `tests/e2e/t-acp-devin-questions.serial.test.ts` elicitation-channel checks, `tests/e2e/t-acp-devin-journey.serial.test.ts` full-intent journey). These drive the person's signed-in Devin CLI (`devin acp`) and spend Devin credits; the journey takes about 30 minutes (28 minutes on 3000.11.92). `AIDLC_DEVIN_BIN` overrides the binary. |
 | `AIDLC_KIRO_IDE_LIVE` | unset | Set to `1` to run the signed-in Kiro IDE desktop journey on macOS or Windows. |
+
+**Driving a Devin intent as a person.** `tests/harness/devin-acp-drive.ts` is
+scripted by default, but its `human` CLI mode is the explicit
+person-in-the-loop path (owner decision 2026-10-22): run it directly, not
+through `run-tests.ts` — it applies the **production** guard profile (no
+`AIDLC_SKIP_*`/`AIDLC_DISABLE_*` bypasses), answers host permission prompts
+only through the person, spends Devin credits on the signed-in CLI, and
+leaves the project in place when it ends. `human start [--io DIR] [--project
+DIR]` spawns `devin acp` and exposes the session as files in the io dir —
+without `--io`, every human verb drives the **newest**
+`tests/logs/devin-acp-human-*` directory by modification time (a hand-named
+directory can sort past a fresh timestamped one by name, so name order is
+never used); `human next [--wait-s N]` blocks until the person is needed (an
+unanswered `question-N.json` or `permission-N.json`, or a finished turn
+awaiting a prompt) and prints the new chat; `human answer
+<question-N|permission-N> <value>` writes the answer file — a question takes
+a `DevinAnswer` JSON (`{"action":"accept","answers":{"q0":"<option label or
+your own words>","q1":["<label>"]}}`, `{"action":"decline"}`, or
+`{"action":"cancel"}`; the wire to Devin uses `content`, the file takes
+`answers`), a permission takes an offered optionId; `human say "<text>"`
+writes the next prompt and `human stop` ends the session.
 | `AIDLC_KIRO_IDE_BIN` | platform default | Override the Kiro IDE executable. Defaults to `/Applications/Kiro.app/Contents/MacOS/Electron` on macOS and `%LOCALAPPDATA%\Programs\Kiro\Kiro.exe` on Windows. |
 | `AIDLC_KIRO_IDE_SEED` | generated seed | Optional Kiro user-data directory. The test copies it to a disposable temp directory before launch and never mutates the source profile. |
 | `AIDLC_KIRO_IDE_DIAGNOSTICS` | unset | Optional per-file NDJSON diagnostic path. Includes up to 64 lifecycle records per IDE launch: owned PID, timestamps, browser-close protocol events, child exit/close and fallback signals. Records exclude endpoints, profile contents, raw error text and environment values; diagnostic I/O failures do not replace test failures. |
@@ -1349,7 +1383,7 @@ All 8 parallel calls observed `cache_read=73789`. This historical help-command p
 
 **What stays serial.** The smoke tier ignores `--parallel` and runs serially within one checkout. So does the unit tier, except in a `--shard` run on a platform that `tests/unit-shard-weights.json` caps (macOS; see [Unit Sharding](#unit-sharding)). Unit CI reduces wall-clock time with isolated shards: each shared-workflow call owns a fresh checkout. PR CI uses ten weighted unit shards on Linux and eight workers for integration, which start the longest integration files first. Manual Full Suite `full_verification` uses sixteen shards on each of Linux, macOS, and Windows; smoke runs once per OS, and deterministic integration and isolated E2E run in separate jobs with eight workers each. Adding `-P 8` to a combined smoke/unit command alone does not parallelize those tiers. The preflight gate (`tests/integration/t19.test.ts`) also runs serially because the LLM tiers depend on its exit status.
 
-**Output under parallelism.** `START` markers stream live; several can appear before the first `DONE`. In normal/verbose mode, the TypeScript coordinator buffers each test's TAP body and writes it as one block when that file finishes. In `--debug` mode, Bun stdout/stderr streams live while still being written to each per-test log; parallel debug output is prefixed by file basename so overlapping workers remain attributable. SDK/TUI/Kiro-ACP driver traces are written beside the logs as `$LOG_DIR/sdk-drive-*.ndjson`, `$LOG_DIR/tui-drive-*.ndjson`, and `$LOG_DIR/kiro-acp-drive-*.ndjson`; isolated E2E places them under the file's artifact directory. The runner prints their paths at startup and at each test start. Kiro-ACP traces include tool calls and updates, output previews, permission answers, process stderr, and result/timeout/end events so a timeout can be investigated from retained evidence.
+**Output under parallelism.** `START` markers stream live; several can appear before the first `DONE`. In normal/verbose mode, the TypeScript coordinator buffers each test's TAP body and writes it as one block when that file finishes. In `--debug` mode, Bun stdout/stderr streams live while still being written to each per-test log; parallel debug output is prefixed by file basename so overlapping workers remain attributable. SDK/TUI/Kiro-ACP/Devin-ACP driver traces are written beside the logs as `$LOG_DIR/sdk-drive-*.ndjson`, `$LOG_DIR/tui-drive-*.ndjson`, `$LOG_DIR/kiro-acp-drive-*.ndjson`, and `$LOG_DIR/devin-acp-drive-*.ndjson`; isolated E2E places them under the file's artifact directory. The runner prints their paths at startup and at each test start. Kiro-ACP traces include tool calls and updates, output previews, permission answers, process stderr, and result/timeout/end events so a timeout can be investigated from retained evidence.
 
 **Worker coordination.** The TypeScript runner starts one Bun test subprocess per file and tracks active promises. It waits for a file to finish before admitting another when the parallel limit is reached. Each completed file gets a `.meta` sidecar in `$LOG_DIR/_results/`; the runner reads those records to populate the summary tables. The shell wrapper delegates to this runner on every platform.
 

@@ -1,0 +1,90 @@
+=== step4 before: BUILD=<home>/sources/aidlc-workflows ===
+=== git: dafdaa99 ===
+--- project: /tmp/aidlc-e2e-before-ffeJ ---
+
+===== A1: aidlc-plugin.ts sync --json =====
+
++ bun /tmp/aidlc-e2e-before-ffeJ/.devin/tools/aidlc-plugin.ts sync --json --project-dir /tmp/aidlc-e2e-before-ffeJ
+[stdout]
+{"schemaVersion":1,"ok":false,"code":1,"status":"failed","message":"plugin sync refused: <home>/sources/aidlc-workflows/dist/plugins/test-pro/devin/.claude-plugin/plugin.json: installed plugin manifest is missing","data":null}
+[stderr]
+[exit=1]
+
+===== A2: aidlc-plugin.ts list --json =====
+
++ bun /tmp/aidlc-e2e-before-ffeJ/.devin/tools/aidlc-plugin.ts list --json --project-dir /tmp/aidlc-e2e-before-ffeJ
+[stdout]
+{"schemaVersion":1,"ok":true,"code":0,"status":"ok","message":"1 plugin state(s)","data":{"inventory":{"capability":"current-root-only","harness":"claude","installed":[],"invalid":[{"paths":["<home>/sources/aidlc-workflows/dist/plugins/test-pro/devin"],"message":"<home>/sources/aidlc-workflows/dist/plugins/test-pro/devin/.claude-plugin/plugin.json: installed plugin manifest is missing"}]},"statuses":[{"key":null,"installedVersion":null,"composedVersion":null,"state":"inventory-unavailable","action":"attention","message":"host inventory unavailable; run sync through the host SessionStart adapter"}]}}
+[stderr]
+[exit=0]
+
+===== A3: aidlc.ts engine plugin list --json =====
+
++ bun /tmp/aidlc-e2e-before-ffeJ/.devin/tools/aidlc.ts engine plugin list --json --project-dir /tmp/aidlc-e2e-before-ffeJ
+[stdout]
+{"schemaVersion":1,"ok":true,"code":0,"status":"ok","message":"1 plugin state(s)","data":{"inventory":{"capability":"current-root-only","harness":"claude","installed":[],"invalid":[{"paths":["<home>/sources/aidlc-workflows/dist/plugins/test-pro/devin"],"message":"<home>/sources/aidlc-workflows/dist/plugins/test-pro/devin/.claude-plugin/plugin.json: installed plugin manifest is missing"}]},"statuses":[{"key":null,"installedVersion":null,"composedVersion":null,"state":"inventory-unavailable","action":"attention","message":"host inventory unavailable; run sync through the host SessionStart adapter"}]}}
+[stderr]
+[exit=0]
+
+===== A4: aidlc.ts doctor --json =====
+
++ bun /tmp/aidlc-e2e-before-ffeJ/.devin/tools/aidlc.ts doctor --json --project-dir /tmp/aidlc-e2e-before-ffeJ
+[stdout]
+{"schemaVersion":1,"ok":false,"code":1,"status":"failed","message":"58 passed, 5 warnings, 1 failed","data":{"checks":[{"pass":false,"severity":"warn","label":"Runtime hook PATH: bun is interactive-only at <home>/.bun/bin/bun","fix":"This project is a copy-channel projection, so its hooks run through Bun; a native install runs them through the aidlc command instead. Install Bun, then add ~/.bun/bin to the login-independent PATH the harness inherits (the PATH line in /etc/environment, ENV_PATH in /etc/login.defs, or a PATH= line in ~/.config/environment.d/*.conf), not only .zshrc or .bash_profile."},{"pass":true,"label":"Runtime hook PATH: aidlc is not required by the selected projection"},{"pass":true,"label":"Harness CLI: devin devin 3000.11.3 (9c803229faa4) at <home>/.local/bin/devin"},{"pass":true,"label":"Instruction file: framework-owned file intact"},{"pass":true,"label":"Execution mode: source checkout (no machine runtime expected)"},{"pass":true,"label":"Transaction staging: no abandoned directories","fix":"finish any active AI-DLC command, then rerun the command to trigger the safe staging sweep"},{"pass":true,"label":"Transaction recovery: no quarantined directories","fix":"inspect each listed directory, recover any needed files, then remove the directory manually"},{"pass":true,"label":"Project runtime stamp: 2.10.0 (devin)","fix":"run `bun .devin/tools/aidlc.ts config` or select the machine release with `bun .devin/tools/aidlc.ts use 2.10.0`"},{"pass":true,"label":"aidlc-write-audit-log.ts present","fix":"verify file exists in .devin/hooks/"},{"pass":true,"label":"aidlc-sync-workflow-state.ts present","fix":"verify file exists in .devin/hooks/"},{"pass":true,"label":"aidlc-validate-state.ts present","fix":"verify file exists in .devin/hooks/"},{"pass":true,"label":"aidlc-log-subagent.ts present","fix":"verify file exists in .devin/hooks/"},{"pass":true,"label":"aidlc-session-start.ts present","fix":"verify file exists in .devin/hooks/"},{"pass":true,"label":"aidlc-session-end.ts present","fix":"verify file exists in .devin/hooks/"},{"pass":true,"label":"aidlc-statusline.ts present","fix":"verify file exists in .devin/hooks/"},{"pass":true,"label":"aidlc-devin-adapter.ts present","fix":"verify file exists in .devin/hooks/"},{"pass":true,"label":"hooks.v1.json present (hook wiring)","fix":"copy from `dist/devin/.devin/hooks.v1.json`"},{"pass":true,"label":"config.json present (permissions + read_config_from)","fix":"copy from `dist/devin/.devin/config.json`"},{"pass":true,"label":"mcp_config.json present (MCP servers)","fix":"copy from `dist/devin/.devin/mcp_config.json`"},{"pass":true,"label":"rules/aidlc.md present (standing method rule (auto-loaded pointer))","fix":"copy from `dist/devin/.devin/rules/aidlc.md`"},{"pass":true,"label":"Devin compatibility imports: all 7 documented sources explicitly decided in .devin/config.json"},{"pass":true,"label":"Devin compatibility imports: no user-level read_config_from override"},{"pass":true,"label":"Devin host availability: standalone CLI found"},{"pass":true,"label":"devin CLI version 3000.11.3 >= 3000.10.21"},{"pass":false,"severity":"warn","label":"Devin Desktop installation: not found (checked OS-appropriate application paths; CLI-only use remains supported)","fix":"Install Devin Desktop if this project is intended for Desktop use; CLI-only Devin projects can ignore this warning."},{"pass":false,"severity":"warn","label":"Devin subagent model: shipped AI-DLC custom profiles omit model: and use the default subagent model, not automatic parent-model inheritance (documented router default: SWE-1.6; effective organization setting/model not inspected)","fix":"Ask an organization/enterprise admin to review \"Default subagent model\" and select the desired model (select your primary model there to align unpinned profiles); None disables subagents. Custom profile model: overrides follow Devin configuration, not the parent model picker."},{"pass":false,"label":"Devin hook execution evidence: no valid SessionStart marker; hook approval/execution is unverified","fix":"inspect /hooks for the project's AI-DLC hooks and approve them if prompted, then fully restart Devin CLI (/clear is not enough) and rerun /aidlc --doctor; if evidence is still missing, check .devin/hooks.v1.json, the hook runtime, and .devin write permissions"},{"pass":true,"label":"AWS_AIDLC_DEFAULT_SCOPE (unset - no project default)"},{"pass":true,"label":"Enabled plugins: all enabled (no selection); enabled stage counts: aidlc=30, bootstrap=3"},{"pass":true,"label":"Plugin selection flags: harness.json agrees with stage-graph.json"},{"pass":true,"label":"Enabled stage compile coverage: every enabled stage file is in the full graph"},{"pass":true,"label":"Composed plugin surface: all enabled plugin stages and recorded contributions are present"},{"pass":true,"label":"workspace shell ready (.devin/ + aidlc/spaces/default/memory/)","fix":"run `bun .devin/tools/aidlc.ts config --harness devin --download` in the project root to recreate the harness tree and workspace shell"},{"pass":true,"label":"Agent filename/name consistency: all agent files match declared names"},{"pass":true,"label":"Scope filename/name consistency: all scope files match declared names"},{"pass":true,"label":"Submodules: no .gitmodules at workspace root"},{"pass":true,"label":"Hook heartbeats: not yet fired (first workflow stage will populate)"},{"pass":true,"label":"Hook drops: none recorded"},{"pass":true,"label":"Runtime locks: none leaked"},{"pass":true,"label":"Orphan worktrees: 0 observed"},{"pass":true,"label":"Stale branches: 0 observed (not a git repo)"},{"pass":true,"label":"Orphan state files: 0 observed"},{"pass":true,"label":"Orphan audit: 0 observed"},{"pass":true,"label":"Practices staleness: state file absent (informational)"},{"pass":true,"label":"MERGE_DISPATCH: 0 orphan INVOKED (0 bracketed)"},{"pass":true,"label":"Cycle detection: 0 cycles"},{"pass":true,"label":"Orphan stage files: 33 graph entries all have files"},{"pass":true,"label":"Uncompiled stage files: 0 stage files missing from the compiled graph"},{"pass":true,"label":"Scope validation: 11 scopes valid (47 advisories)"},{"pass":true,"label":"Composed scope durability: no composed scopes"},{"pass":true,"label":"Schema validation: 33/33 stages validated"},{"pass":true,"label":"Graph references: 122 artifacts + edges resolved"},{"pass":true,"label":"Duplicate producers: every consumed artifact has a single producer"},{"pass":true,"label":"Keyword overlap: no conflicts"},{"pass":true,"label":"Rule drift: no team/project rule overlaps org policy"},{"pass":true,"label":"Paired sensor coverage: no sensor-bound rules (0 feedforward-only)"},{"pass":true,"label":"Intent registry: all rows match their record dirs"},{"pass":true,"label":"Workspace records: not a git repo - nothing to commit"},{"pass":false,"severity":"warn","label":"Update: update cache is absent","fix":"run `bun .devin/tools/aidlc.ts update --check`"},{"pass":false,"severity":"warn","label":"Plugins: 1 need attention","fix":"host inventory unavailable; run sync through the host SessionStart adapter"},{"pass":true,"label":"Models: recorded policy is expressible"},{"pass":true,"label":"Flags: no recorded project answers"},{"pass":true,"label":"Providers: using shipped fallback; no recorded answers"},{"pass":true,"label":"Workspace siblings: complete projection is present"}],"passed":58,"warnings":5,"failed":1,"parked_attempts":[]}}
+[stderr]
+[exit=1]
+
+===== A5: composition stamp / evidence =====
+--- /tmp/aidlc-e2e-before-ffeJ/.devin/tools/data plugin-compose files:
+-rw-r--r-- 1 <user> <user>  1265 Oct  8 18:34 plugin-authoring-context.json
+drwxr-xr-x 2 <user> <user>  4096 Oct  8 18:34 plugin-hooks-template
+-rw-r--r-- 1 <user> <user>  1949 Oct  8 18:34 plugin-targets.json
+--- /tmp/aidlc-e2e-before-ffeJ/aidlc plugin-compose markers:
+--- composed plugin stages under .devin:
+--- stage-graph plugin stages:
+
+===== B: vendored compose.ts fallback =====
+--- project: /tmp/aidlc-e2e-fb-before-3bPI ---
++ env -u CLAUDE_PLUGIN_ROOT -u CLAUDE_PROJECT_DIR -u AIDLC_PLUGIN_ROOT PLUGIN_ROOT=<home>/sources/aidlc-workflows/dist/plugins/test-pro/devin AIDLC_PROJECT_DIR=/tmp/aidlc-e2e-fb-before-3bPI AIDLC_HARNESS_DIR=.devin AIDLC_HARNESS_NAME=devin bun <home>/sources/aidlc-workflows/dist/plugins/test-pro/devin/hooks/compose.ts
+[exit=0]
+[stdout]
+[stderr]
+--- markers keyed by plugin name (retry marker, drops):
+--- hooks-health dir contents:
+--- stamp files under .devin/tools/data:
+plugin-authoring-context.json
+plugin-contrib-test-pro.json
+plugin-files-test-pro.json
+plugin-hooks-template
+plugin-targets.json
+--- composed plugin stages under .devin:
+/tmp/aidlc-e2e-fb-before-3bPI/.devin/agents/test-pro-metrics-agent.md
+/tmp/aidlc-e2e-fb-before-3bPI/.devin/aidlc-common/stages/construction/test-pro-integration.md
+/tmp/aidlc-e2e-fb-before-3bPI/.devin/aidlc-common/stages/operation/test-pro-full-suite.md
+/tmp/aidlc-e2e-fb-before-3bPI/.devin/knowledge/test-pro-metrics-agent
+/tmp/aidlc-e2e-fb-before-3bPI/.devin/scopes/test-pro-validation.md
+/tmp/aidlc-e2e-fb-before-3bPI/.devin/skills/test-pro-full-suite
+/tmp/aidlc-e2e-fb-before-3bPI/.devin/skills/test-pro-integration
+/tmp/aidlc-e2e-fb-before-3bPI/.devin/skills/test-pro-validation
+/tmp/aidlc-e2e-fb-before-3bPI/.devin/tools/test-pro-doctor.ts
+--- stage-graph plugin stages:
+"test-pro"
+"test-pro-api-contract-instructions"
+"test-pro-branch-coverage-instructions"
+"test-pro-cross-unit-contract-matrix"
+"test-pro-edge-api-report"
+"test-pro-edge-case-instructions"
+"test-pro-full-suite"
+"test-pro-full-suite-results"
+"test-pro-full-suite-results.md, test-pro-edge-api-report.md (under this stage's record dir, engine-resolved)"
+"test-pro-integration"
+"test-pro-integration-test-plan"
+"test-pro-integration-test-plan.md, test-pro-integration-test-results.md, test-pro-cross-unit-contract-matrix.md (under this stage's record dir, engine-resolved)"
+"test-pro-integration-test-results"
+"test-pro-load-regression-matrix"
+"test-pro-metrics-agent"
+"test-pro-regression-suite"
+"test-pro-requirement-traceability-matrix"
+"test-pro-test-harness-design"
+"test-pro-testability-requirements"
+"test-pro-validation"

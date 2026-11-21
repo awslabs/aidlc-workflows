@@ -1,0 +1,20 @@
+--- a/.devin/hooks/aidlc-devin-adapter.ts
++++ b/.devin/hooks/aidlc-devin-adapter-old.ts
+@@ -411,7 +411,7 @@
+   const command = executable
+     ? authorityToken
+       ? [executable, "--internal-aidlc-record-human-turn", join(HOOKS_DIR, hookFile)]
+-      : [executable, "engine", "hook", hook]
++      : [executable, "hook", hook]
+     : authorityToken
+       ? [
+           process.execPath,
+@@ -446,7 +446,7 @@
+   const command = executable
+     ? authorityToken
+       ? [executable, "--internal-aidlc-record-human-turn", join(HOOKS_DIR, hookFile)]
+-      : [executable, "engine", "hook", hook]
++      : [executable, "hook", hook]
+     : authorityToken
+       ? [
+           process.execPath,

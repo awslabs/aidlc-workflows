@@ -12,6 +12,7 @@ type ReviewerScopeRegistration =
   | "codex-hooks"
   | "copilot-hooks"
   | "cursor-hooks"
+  | "devin-hooks"
   | "kiro-agent-json"
   | "opencode-plugin"
   | "unsupported";
@@ -37,6 +38,7 @@ type HarnessCapabilities = {
     | "codex-engine"
     | "copilot-agents-md"
     | "cursor-rule"
+    | "devin-rules"
     | "kiro-resources"
     | "kiro-steering"
     | "opencode-instructions";
@@ -132,6 +134,27 @@ const HARNESS_CAPABILITIES = {
     kiroAgentJson: false,
     ideAgentTools: false,
     reviewerScopeRegistration: "cursor-hooks",
+  },
+  devin: {
+    harnessDir: ".devin",
+    onboarding: {
+      mode: "manifest",
+      fills: "onboarding.fills.ts",
+      dist: "AGENTS.md",
+      harnessDist: ".devin/rules/aidlc-onboarding.md",
+    },
+    rootFiles: [".gitignore", "AGENTS.md"],
+    skillsRoot: ".devin/skills",
+    plugin: {
+      kind: "store",
+      manifestDir: ".devin-plugin",
+      marketplaceDir: ".devin-plugin",
+      wiringFile: "hooks/hooks.json",
+    },
+    memoryInclude: "devin-rules",
+    kiroAgentJson: false,
+    ideAgentTools: false,
+    reviewerScopeRegistration: "devin-hooks",
   },
   "kiro-ide": {
     harnessDir: ".kiro",
@@ -293,7 +316,8 @@ function validateManifest(
       manifest.harnessFiles.some(
         (file) => file.dst === "steering/aidlc-active-memory.md",
       ) ||
-    (capabilities.memoryInclude === "claude-import") !==
+    (capabilities.memoryInclude === "claude-import" ||
+      capabilities.memoryInclude === "devin-rules") !==
       manifest.harnessFiles.some((file) => file.dst === "rules/aidlc.md") ||
     (capabilities.memoryInclude === "codex-engine") !==
       (manifest.orchestratorSkillPath === ".agents/skills/aidlc/SKILL.md") ||

@@ -1,0 +1,32 @@
+# Host permission prompts and the person's choices
+
+ 1. [exec] python3 --version
+    offered: allow_once, allow_session, allow_always, allow_always_global, switch_bypass, reject_once -> chose: allow_once
+ 2. [exec] python3 -m unittest tests.test_storage -v
+    offered: allow_once, allow_session, allow_always, allow_always_global, switch_bypass, reject_once -> chose: allow_once
+ 3. [exec] python3 -m unittest tests.test_core -v
+    offered: allow_once, allow_session, allow_always, allow_always_global, switch_bypass, reject_once -> chose: allow_once
+ 4. [exec] python3 -m habit_tracker --help
+    offered: allow_once, allow_session, allow_always, allow_always_global, switch_bypass, reject_once -> chose: allow_once
+ 5. [exec] python3 -m unittest tests.test_cli -v
+    offered: allow_once, allow_session, allow_always, allow_always_global, switch_bypass, reject_once -> chose: allow_once
+ 6. [exec] python3 -m unittest tests.test_cli -v
+    offered: allow_once, allow_session, allow_always, allow_always_global, switch_bypass, reject_once -> chose: allow_once
+ 7. [exec] python3 -m unittest tests.test_storage tests.test_core tests.test_cli -v
+    offered: allow_once, allow_session, allow_always, allow_always_global, switch_bypass, reject_once -> chose: allow_once
+ 8. [exec] python3 -m unittest tests.test_storage tests.test_core tests.test_cli
+    offered: allow_once, allow_session, allow_always, allow_always_global, switch_bypass, reject_once -> chose: allow_once
+ 9. [exec] python3 -m unittest tests.test_storage tests.test_core tests.test_cli -v
+    offered: allow_once, allow_session, allow_always, allow_always_global, switch_bypass, reject_once -> chose: allow_once
+10. [exec] python3 -m compileall -q habit_tracker tests
+    offered: allow_once, allow_session, allow_always, allow_always_global, switch_bypass, reject_once -> chose: allow_once
+11. [exec] python3 -m habit_tracker check READ --file aidlc/spaces/default/intents/261023-habit-tracker/construction/build-and-test/smoke-habits.json
+    offered: allow_once, allow_session, allow_always, allow_always_global, switch_bypass, reject_once -> chose: allow_once
+12. [exec] python3 -m habit_tracker --file aidlc/spaces/default/intents/261023-habit-tracker/construction/build-and-test/smoke-habits.json add Read
+    offered: allow_once, allow_session, allow_always, allow_always_global, switch_bypass, reject_once -> chose: allow_once
+13. [exec] python3 -m habit_tracker check read --file aidlc/spaces/default/intents/261023-habit-tracker/construction/build-and-test/smoke-habits.json
+    offered: allow_once, allow_session, allow_always, allow_always_global, switch_bypass, reject_once -> chose: allow_once
+14. [exec] python3 -m habit_tracker streaks --file aidlc/spaces/default/intents/261023-habit-tracker/construction/build-and-test/smoke-habits.json
+    offered: allow_once, allow_session, allow_always, allow_always_global, switch_bypass, reject_once -> chose: allow_once
+15. [exec] python3 -m habit_tracker add read --file aidlc/spaces/default/intents/261023-habit-tracker/construction/build-and-test/smoke-habits.json
+    offered: allow_once, allow_session, allow_always, allow_always_global, switch_bypass, reject_once -> chose: allow_once

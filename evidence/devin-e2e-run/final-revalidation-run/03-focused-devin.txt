@@ -1,0 +1,320 @@
+WARNING: claude CLI not found -- live integration/e2e tests may fail or skip
+AI-DLC Testing Harness
+======================
+Guard profile: fixture (synthetic guard skips and direct audit authority enabled)
+
+## Unit Tests (single-component isolation)
+
+=== START t226-detector-corpus.test.ts ===
+bun test v1.3.14 (0d9b296a)
+
+tests/unit/t226-detector-corpus.test.ts:
+(pass) detector corpus > full corpus matches both-shape detector labels [8.96ms]
+(pass) detector corpus > old-shape labels remain current detector behavior [0.78ms]
+(pass) detector corpus > negatives stay negative except documented false positives [0.32ms]
+(pass) detector corpus > explicit regression guards [0.10ms]
+(pass) detector corpus > new top-level park is intentional engagement [0.03ms]
+(pass) detector corpus > workspace navigation through next is terminal in native and source forms [6.12ms]
+(pass) detector corpus > read-only next argv is one rule for the transcript classifier [1.30ms]
+(pass) detector corpus > team-board through next is terminal; park through next is engagement [0.69ms]
+(pass) detector corpus > observed workspace navigation through next is terminal [0.08ms]
+(pass) detector corpus > workspace next uses the leading workspace grammar across command forms [0.90ms]
+(pass) detector corpus > workspace navigation never exempts actual workflow engagement [0.27ms]
+(pass) detector corpus > workspace classification follows runtime global-argument normalization [0.34ms]
+(pass) detector corpus > uncertain shell syntax cannot hide workflow calls behind workspace navigation [0.12ms]
+(pass) detector corpus > opaque script arguments are never selected as the engine executable [0.30ms]
+(pass) detector corpus > unquoted glob and brace expansion cannot turn a workspace name into a verb [0.10ms]
+(pass) detector corpus > redirection and expansion cannot change workspace argv before classification [0.11ms]
+(pass) detector corpus > adjacent redirections keep legacy workflow commands engaged [0.10ms]
+(pass) detector corpus > every --config form is terminal: the engine returns before workflow inspection [0.18ms]
+(pass) detector corpus > conditional configuration needs its exact authoritative dispatch output [2.97ms]
+(pass) detector corpus > one absolute literal cd preserves only the exact terminal config proof [1.84ms]
+(pass) detector corpus > terminal configuration proof is bound to the active project directory [1.58ms]
+(pass) detector corpus > explicit --project-dir binds terminal configuration proof to the active project [2.47ms]
+(pass) detector corpus > literal shell parsing preserves native paths and shell word boundaries [0.28ms]
+(pass) detector corpus > ordinary escaped engine names can only add conservative engagement [0.19ms]
+(pass) detector corpus > observed unified Bun report has native and legacy transition classifications [0.17ms]
+(pass) detector corpus > unified Bun transport preserves every native engine corpus label [1.26ms]
+(pass) detector corpus > source dispatcher paths preserve quoting and transition wrappers [2.16ms]
+(pass) detector corpus > every shipped harness dir classifies transition, read-only, and recursion commands identically [0.90ms]
+(pass) detector corpus > unified runtime recursion wins in composites but not quoted argument text [0.22ms]
+(pass) detector corpus > unrelated executables and non-dispatcher paths remain outside normalization [0.18ms]
+
+ 30 pass
+ 0 fail
+ 1154 expect() calls
+Ran 30 tests across 1 file. [98.00ms]
+--- PASS: t226-detector-corpus.test.ts ---
+=== DONE t226-detector-corpus.test.ts (PASS) ===
+
+=== START t241-opencode-adapter.test.ts ===
+bun test v1.3.14 (0d9b296a)
+
+tests/unit/t241-opencode-adapter.test.ts:
+(pass) t241 OpenCode adapter command boundary and transition filter > rejects compound aidlc commands but leaves one invocation and unrelated bash alone [235.97ms]
+(pass) t241 OpenCode adapter command boundary and transition filter > an OpenCode state transition passes the real runtime hook command gate [60.63ms]
+(pass) t241 OpenCode adapter command boundary and transition filter > post-shell creation forwards the invoking session and result [28.54ms]
+(pass) t241 OpenCode adapter reviewer scope > blocks a sibling-unit read and allows the dispatched unit [182.85ms]
+(pass) t241 OpenCode adapter state-transition guard > blocks direct lifecycle verbs and allows read-only state queries [252.73ms]
+(pass) t241 OpenCode adapter state-transition guard > blocks lifecycle routing from a named AIDLC worker while preserving the main conductor [156.42ms]
+(pass) t241 OpenCode adapter dispatch rules > task input is rewritten with exact active-stage rules [161.91ms]
+(pass) t241 OpenCode native plan-approval payloads > write, bash, and developer task paths block before a human-owned receipt [574.93ms]
+(pass) t241 OpenCode adapter write and session lifecycle > apply_patch emits audit then sensor calls for every affected path [116.07ms]
+(pass) t241 OpenCode adapter write and session lifecycle > relative apply_patch paths pass the real audit hook's absolute record gate [148.10ms]
+(pass) t241 OpenCode adapter write and session lifecycle > session-start retries until an active workflow is available, then stops retrying [127.05ms]
+(pass) t241 OpenCode adapter write and session lifecycle > concurrent idle events inject one nudge for a session [186.34ms]
+(pass) t241 OpenCode adapter write and session lifecycle > session idle forwards the session id to the Stop hook [86.90ms]
+(pass) t241 OpenCode adapter write and session lifecycle > turn-one idle reaches the real Stop hook when workflow state is created during the turn [514.73ms]
+(pass) t241 OpenCode adapter write and session lifecycle > idle suppresses its nudge for an open logged question and restores it after the answer [1125.64ms]
+(pass) t241 OpenCode adapter write and session lifecycle > a transient child lookup failure is not cached as a main session [1.06ms]
+(pass) t241 OpenCode adapter write and session lifecycle > idle serialization is released before a nudge prompt delivers the next idle [110.59ms]
+
+ 17 pass
+ 0 fail
+ 45 expect() calls
+Ran 17 tests across 1 file. [4.13s]
+--- PASS: t241-opencode-adapter.test.ts ---
+=== DONE t241-opencode-adapter.test.ts (PASS) ===
+
+=== START t331-devin-packaging.test.ts ===
+bun test v1.3.14 (0d9b296a)
+
+tests/unit/t331-devin-packaging.test.ts:
+(pass) t331 dist/devin packaging parity + shell shape > 1: committed dist/devin matches the packaging script (drift guard) [2111.88ms]
+(pass) t331 dist/devin packaging parity + shell shape > 2: engine .ts files are byte-identical to the dist/claude sources [13.80ms]
+(pass) t331 dist/devin packaging parity + shell shape > 3: hooks.v1.json is the whole hooks object with the 7 Devin events and expected targets [0.57ms]
+(pass) t331 dist/devin packaging parity + shell shape > 4: config.json has allow-only framework permissions in copy and native projections [0.47ms]
+(pass) t331 dist/devin packaging parity + shell shape > 5: mcp_config.json shape — 5 servers, context7 HTTP, 4 AWS via uvx [0.19ms]
+(pass) t331 dist/devin packaging parity + shell shape > 5b: MCP defaults survive copy and release packaging and match Kiro [0.71ms]
+(pass) t331 dist/devin packaging parity + shell shape > 6: rules/aidlc.md — no @-import, mentions the memory dir, has always_on trigger [0.11ms]
+(pass) t331 dist/devin packaging parity + shell shape > 7: onboarding — neutral AGENTS.md plus the Devin always-on rule [0.13ms]
+(pass) t331 dist/devin packaging parity + shell shape > 7b: Devin onboarding rule size <= 16KiB (16384 bytes) UTF-8 [8.44ms]
+(pass) t331 dist/devin packaging parity + shell shape > 7c: onboarding has no duplicate DocumentKB section [0.27ms]
+(pass) t331 dist/devin packaging parity + shell shape > 7d: onboarding does not overstate guarantees (no 'identical on every harness') [0.08ms]
+(pass) t331 dist/devin packaging parity + shell shape > 7e: MCP onboarding explains default-off and per-server activation [0.10ms]
+(pass) t331 dist/devin packaging parity + shell shape > 7f: Devin onboarding describes scoped permissions without blanket MCP approval [0.14ms]
+(pass) t331 dist/devin packaging parity + shell shape > 8: harness.json identity — name === devin, harnessDir === .devin [0.04ms]
+(pass) t331 dist/devin packaging parity + shell shape > 9: doctor gates on Devin hook execution evidence (absent marker fails; adapter run passes; invalid marker fails) [1461.67ms]
+(pass) t331 dist/devin packaging parity + shell shape > 9b: shipped devin trees carry no marker and ignore it via the shipped .gitignore [5.94ms]
+(pass) t331 dist/devin packaging parity + shell shape > 9d: the Devin CLI version row is decided by a PATH shim, not the machine [422.63ms]
+(pass) t331 dist/devin packaging parity + shell shape > 10: SKILL.md freshness — no leftover tokens, triggers, Harness notes section [0.35ms]
+(pass) t331 dist/devin packaging parity + shell shape > 11: Devin agents retain authored frontmatter fields (display_name, examples, disallowedTools, maxTurns) [1.63ms]
+(pass) t331 dist/devin packaging parity + shell shape > 12: Claude agents retain unsupported-by-Devin fields (no projection leakage) [0.17ms]
+(pass) t331 dist/devin packaging parity + shell shape > 13: Devin developer agent retains frontmatter examples and body content [0.05ms]
+(pass) t331 dist/devin packaging parity + shell shape > 14: generated stage runners carry triggers: [user] (Devin invocation metadata) [0.10ms]
+(pass) t331 dist/devin packaging parity + shell shape > 15: standalone skills (knowledge, outcomes-pack) carry triggers: [user] [0.06ms]
+(pass) t331 dist/devin packaging parity + shell shape > 16: read-only skills (replay, session-cost) do NOT carry triggers: (preserved as-is) [0.07ms]
+(pass) t331 dist/devin packaging parity + shell shape > 17: harness.json carries runnerFrontmatterAdditions with triggers: [user] [0.06ms]
+(pass) t331 dist/devin packaging parity + shell shape > 18: rules/aidlc.md is a pointer, not an import (no memory file contents inlined) [0.07ms]
+(pass) t331 dist/devin packaging parity + shell shape > 9c: a Claude install gets no Devin subagent-model advisory [235.06ms]
+(pass) t331 dist/devin packaging parity + shell shape > 19: the twelve delegation profiles carry the full native allowlist; the two review-only profiles carry exactly [read, write, edit, grep, glob, exec] [18.74ms]
+(pass) t331 dist/devin packaging parity + shell shape > 20: no other harness's agent tree carries the Devin allowlist [4.11ms]
+(pass) t331 dist/devin packaging parity + shell shape > 21: Devin onboarding explains the subagent model policy and native allowlist [0.25ms]
+(pass) t331 dist/devin packaging parity + shell shape > 22: model-policy honesty names the default subagent model, not session inheritance [0.04ms]
+
+ 31 pass
+ 0 fail
+ 862 expect() calls
+Ran 31 tests across 1 file. [4.32s]
+--- PASS: t331-devin-packaging.test.ts ---
+=== DONE t331-devin-packaging.test.ts (PASS) ===
+
+=== START t332-devin-adapter.test.ts ===
+bun test v1.3.14 (0d9b296a)
+
+tests/unit/t332-devin-adapter.test.ts:
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > 1: session-start emits the Devin hookSpecificOutput wrapper with workflow context [248.69ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > 2: session-start with no active workflow is exit 0 (no workflow context injected) [144.00ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > 2a: session-start refreshes a pre-existing marker to the current run [149.21ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > 2b: session-start marker-write failure warns on stderr but still forwards context (exit 0) [151.44ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > 2c: no marker for malformed stdin, a non-SessionStart payload, or a non-session-start target [321.43ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > 2d: no marker when the core session-start hook exits non-zero [94.99ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > 2e: session-start marker is written to DEVIN_PROJECT_DIR, not the payload cwd [165.39ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > 3: continue-workflow blocks with a reason while the workflow has pending work (verbatim passthrough) [395.63ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > 4: continue-workflow is silent (no block) when no workflow state exists [140.77ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > 5: audit-and-sensors edit on aidlc-docs lands ARTIFACT_* in the audit [204.38ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > 6: audit-and-sensors edit on a non-aidlc file is a clean audit no-op [194.72ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > 7: audit-and-sensors write on aidlc-docs lands ARTIFACT_* in the audit [195.48ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > 8: audit-and-sensors apply_patch on aidlc-docs lands ARTIFACT_* (envelope parsed + fanned out) [204.90ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > 9: audit-and-sensors apply_patch on a non-aidlc file is a clean audit no-op [192.79ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > 10: sync-workflow-state with todo_write in_progress step dispatches (exit 0) [154.19ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > 11: log-subagent with run_subagent PostToolUse lands SUBAGENT_COMPLETED in the audit with the dispatch profile as Agent Type [136.32ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > 12: record-human-turn with UserPromptSubmit is advisory (exit 0) [436.51ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > 13: record-human-turn with ask_user_question PostToolUse is advisory (exit 0) [139.83ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > 13a: record-human-turn with object-format tool_response ({success,output,error}) records a HUMAN_TURN audit event [460.52ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > 13b: record-human-turn with Devin native shape (selected option) records a HUMAN_TURN audit event [439.21ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > 13c: record-human-turn with Devin Other free-text shape records a HUMAN_TURN audit event [433.99ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > 13e: record-human-turn with unrecognized answer shape but success:true mints a HUMAN_TURN [140.04ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > 13f: record-human-turn with cancelled ask_user_question (success:false) does NOT mint a HUMAN_TURN [76.14ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > 13g: record-human-turn with Devin 3000.6.14 native shape (unwrapped) mints a HUMAN_TURN and recognizes the selection [437.91ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > 13h: record-human-turn with Devin 3000.6.14 native shape (wrapped) mints a HUMAN_TURN and recognizes the selection [438.15ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > 13d: record-human-turn with Devin native shape writes a Plan Approval response when a challenge is seeded [144.09ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > 13i: session-start publishes the exact runtime session with and without an active workflow [284.80ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > 13j: a session-tagged picked answer certifies only its own session through the real decision and answer commands [1939.83ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > 13j: a session-tagged typed answer certifies only its own session through the real decision and answer commands [1920.59ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > 13k: an answer event for an unknown session or an intent UUID never redirects to the pending challenge [2927.93ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > 13l: an answer event with no session writes no protected approval records [467.74ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > 14: rebuild-stage-graph with exec PostToolUse is advisory (exit 0) [128.55ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > 14a: rebuild-stage-graph fires for .devin engine commands and compiles runtime-graph.json [468.26ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > 15: validate-state with PostCompaction is advisory (exit 0) [136.57ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > 16: malformed stdin fails open (exit 0, no output) on every advisory target [633.92ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > 16a: malformed stdin fails open (exit 0) on guard targets too [319.50ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > 17: state-transition-guard with exec (plain command) does not crash — tool-name exec→Bash translation [182.04ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > 17a: state-transition-guard blocks an exec that attempts a direct state transition (exec→Bash reaches guard) [133.35ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > 17b: plan-approval-guard exec with tool_input.workdir lifts workdir into cwd (framework-tool exemption fails from subdir) [151.27ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > 17c: plan-approval-guard exec with no workdir does not regress (cwd stays as-is, framework-tool exemption succeeds) [145.39ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > 18: session-end is advisory (exit 0) [133.85ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > 19: session-start dispatches even when the child PATH has no bun (respawn uses process.execPath) [293.60ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > 20: shipped devin adapter source respawns via process.execPath, never a bare 'bun' argv[0] [0.33ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > 21: DEVIN_PROJECT_DIR takes precedence over payload cwd and process cwd [411.39ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > 22: DEVIN_PROJECT_DIR takes precedence when payload has no cwd [415.70ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > 23: payload cwd is used when DEVIN_PROJECT_DIR is absent (synthetic compatibility) [413.60ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > 24: process.cwd() is the fallback when neither DEVIN_PROJECT_DIR nor payload cwd is set [420.15ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > 25: project path with spaces resolves correctly (no shell splitting) [395.75ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > 26: two invocations for different workspace roots each affect only their own fixture [801.36ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > Item 2 case 1: plan-approval-guard allows the approved stage-level developer dispatch carried in native task [868.98ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > Item 2 case 2: plan-approval-guard blocks the same native dispatch while approval is absent (stage Unit row) [150.02ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > Item 2 case 3: plan-approval-guard blocks a developer dispatch whose native task carries no target marker [144.64ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > Item 2 case 4: plan-approval-guard early-allows a non-developer profile dispatch [80.56ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > Item 2 case 5: plan-approval-guard ignores legacy agent/prompt fields (no profile/task) [80.10ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > Item 2 case 6: deliver-stage-rules returns the active-stage bundle inside a Devin-native updatedInput.task [138.16ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > Item 2 case 7: deliver-stage-rules emits only updatedInput.task for a background dispatch (is_background) [140.34ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > Item 2 case 8: deliver-stage-rules passes a built-in profile through silently [128.91ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > Item 2 case 9: deliver-stage-rules passes the exempt composer profile through silently [134.29ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > Item 2 case 10: deliver-stage-rules is idempotent — a task already carrying the exact bundle gets no rewrite [252.62ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > Item 2 case 11: deliver-stage-rules forwards a core block (unresolvable rule bundle) as exit 2 + stderr, no stdout [135.95ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > Item 2 case 12: malformed stdin fails open (exit 0) on both dispatch arms [139.92ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > Item 3 case 1: a background launch annotates the in-flight ledger entry and writes no audit row [203.19ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > Item 3 case 2: a terminal read_subagent completes the annotated entry and lands one SUBAGENT_COMPLETED naming profile and agent id [339.73ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > Item 3 case 3: a repeated read_subagent after completion adds nothing (C06 dedup) [387.30ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > Item 3 case 4: a read_subagent reporting 'still running' keeps the entry pending and writes no row [260.06ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > Item 3 case 5: a read_subagent error terminal completes the entry and lands one row whose Message is the error text [325.18ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > Item 3 case 6: a foreground run_subagent completion lands its own row and never consumes the annotated background entry [321.15ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > Item 3 case 7: two background agents complete independently in read order with no double decrement [628.92ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > Item 3 case 8: a terminal read_subagent for another session's agent id is a cross-session no-op [600.84ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > Item 3 case 9: Stop is allowed by the pending-subagent carve-out only while the background entry is pending [1090.45ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > Item 3 case 10: a resume:<id> foreground completion completes the unread background entry by exact id [319.25ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > Item 3 case 11: an unclassifiable read_subagent output is a no-op plus one log-subagent drop line [256.72ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > Item 3 case 12: malformed stdin on log-subagent fails open (exit 0) [78.12ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > Item 3 case 13: an unclassifiable background run_subagent output drops with a log-subagent line and mints no completion [195.22ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > Item 4 case 1: attributed child read of the current unit is allowed [199.54ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > Item 4 case 2: attributed child read of a sibling unit blocks with a scope reason and a REVIEWER_SCOPE_BLOCKED row [210.06ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > Item 4 case 3: attributed child read of the exempt sibling file is allowed [206.37ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > Item 4 case 4: attributed grep whose content pattern names a sibling but whose path stays in-unit is allowed [195.64ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > Item 4 case 5: attributed grep with a cross-unit glob_pattern blocks (glob_pattern -> glob) [200.98ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > Item 4 case 6: attributed grep rooted at bare construction/ blocks, and an implied-root grep blocks with the defaulted reason [326.88ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > Item 4 case 7: attributed glob over a sibling subtree blocks, pattern-rooted and path-rooted [329.81ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > Item 4 case 8: attributed notebook_read and notebook_edit on a sibling notebook block [327.72ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > Item 4 case 9: attributed edit/write/apply_patch on a sibling block; current-unit edits pass [695.20ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > Item 4 case 10: attributed exec blocks on sibling paths, resolves workdir-relative traversal, and allows an in-unit rg [444.52ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > Item 4 case 11: with no window the same sibling read/grep/exec payloads pass unattributed (conductor) [363.08ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > Item 4 case 12: the parent run_subagent PostToolUse (log-subagent arm) closes the window [318.05ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > Item 4 case 13: a child's Stop does not end attribution; UserPromptSubmit, SessionEnd, SessionStart, and a read_subagent PreToolUse each close the window [2016.96ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > Item 4 case 14: task-text forgery cannot open a window — a developer profile claiming reviewer identity writes nothing [196.36ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > Item 4 case 15: a reviewer dispatch whose profile differs from the record's reviewer writes no window and stays unenforced [201.65ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > Item 4 case 16: a window is session-scoped — events under another session are unaffected [319.32ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > Item 4 case 17: a window older than the freshness TTL is ignored, unlinked, and drop-logged [135.81ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > Item 4 case 18: a malformed window fails open with a drop line, and a fresh dispatch rewrites it [326.15ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > Item 4 case 19: a reviewer dispatched with is_background is refused with the foreground reason and writes no window [81.27ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > Item 4 case 20: a reviewer dispatch while a background subagent is pending for the session is refused; another session's pending entry does not block [154.89ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > Item 4 case 21: while attributed, exec/read naming the reviewer-window state are refused (protected state) [206.33ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > Item 4 case 22: a run_subagent denial in deliver-stage-rules unlinks the window the reviewer-scope arm just opened [212.32ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > Item 4 case 23: a reviewer dispatch with no record writes no window; an attributed call after the record is gone lands the core missing-record advisory [267.72ms]
+(pass) t332 devin adapter — stdin shim normalizes Devin payloads to core hooks > Item 4 case 24: AIDLC_DISABLE_REVIEWER_SCOPE_HOOK=1 disables every blocking path (scope denials and dispatch refusals) [1243.39ms]
+(pass) t332 devin-hook-payloads fixture hygiene > the fixture directory holds exactly the retained allowlist [0.28ms]
+(pass) t332 devin-hook-payloads fixture hygiene > the native-contract fixture and provenance each stay below 32 KiB [0.15ms]
+(pass) t332 devin-hook-payloads fixture hygiene > the contract fixture exposes exactly the six retained event shapes [0.15ms]
+(pass) t332 devin-hook-payloads fixture hygiene > the native files carry no machine identity, capture paths, or ATIF export body [0.21ms]
+(pass) t332 devin-hook-payloads fixture hygiene > the contract fixture keeps semantic placeholders, not raw identifiers [0.15ms]
+
+ 103 pass
+ 0 fail
+ 454 expect() calls
+Ran 103 tests across 1 file. [36.02s]
+--- PASS: t332-devin-adapter.test.ts ---
+=== DONE t332-devin-adapter.test.ts (PASS) ===
+
+=== START t334-devin-version.test.ts ===
+bun test v1.3.14 (0d9b296a)
+
+tests/unit/t334-devin-version.test.ts:
+(pass) t334 devin version — checkDevinVersion with injectable seams > 1: missing binary — neither PATH nor Desktop found [0.24ms]
+(pass) t334 devin version — checkDevinVersion with injectable seams > 2: PATH binary found, version above floor [0.26ms]
+(pass) t334 devin version — checkDevinVersion with injectable seams > 3: Desktop bundle found (macOS path), version above floor [0.05ms]
+(pass) t334 devin version — checkDevinVersion with injectable seams > 4: broken preferred binary — nonzero exit code [0.03ms]
+(pass) t334 devin version — checkDevinVersion with injectable seams > 5: malformed version output (exit 0 but no parseable triple) [0.03ms]
+(pass) t334 devin version — checkDevinVersion with injectable seams > 6: below floor — version 3000.10.20 [0.04ms]
+(pass) t334 devin version — checkDevinVersion with injectable seams > 7: exact shared floor [0.03ms]
+(pass) t334 devin version — checkDevinVersion with injectable seams > 8: newer than floor — version 3000.10.22 [0.02ms]
+(pass) t334 devin version — checkDevinVersion with injectable seams > 9: unknown version — exit 0, empty stdout [0.02ms]
+(pass) t334 devin version — checkDevinVersion with injectable seams > 10: warning despite exit code 0 — stdout has text but no version triple [0.02ms]
+(pass) t334 devin version — checkDevinVersion with injectable seams > 11: timeout — binary hangs on --version [0.02ms]
+(pass) t334 devin version — checkDevinVersion with injectable seams > 12: PATH takes precedence over Desktop [0.03ms]
+(pass) t334 devin version — checkDevinVersion with injectable seams > 13: parseVersionTriple extracts numeric triple [0.02ms]
+(pass) t334 devin version — checkDevinVersion with injectable seams > 14: compareTriples lexicographic ordering [0.04ms]
+(pass) t334 devin version — checkDevinVersion with injectable seams > 15: DEVIN_MIN_VERSION is 3000.10.21 [0.01ms]
+
+ 15 pass
+ 0 fail
+ 57 expect() calls
+Ran 15 tests across 1 file. [20.00ms]
+--- PASS: t334-devin-version.test.ts ---
+=== DONE t334-devin-version.test.ts (PASS) ===
+
+=== START t345-doctor-devin-import-isolation.test.ts ===
+bun test v1.3.14 (0d9b296a)
+
+tests/unit/t345-doctor-devin-import-isolation.test.ts:
+(pass) t345 doctor Devin read_config_from import-isolation rows > shipped seven-key block: project row passes, user row passes (no user file) [164.45ms]
+(pass) t345 doctor Devin read_config_from import-isolation rows > old three-key block: project row warns naming exactly copilot, opencode, zed [160.80ms]
+(pass) t345 doctor Devin read_config_from import-isolation rows > a null value reads as enabled: copilot:null warns naming copilot [166.22ms]
+(pass) t345 doctor Devin read_config_from import-isolation rows > unreadable project config.json emits no project row (presence row covers it) [158.94ms]
+(pass) t345 doctor Devin read_config_from import-isolation rows > user config with zed:true warns naming zed (user layer overrides project) [159.60ms]
+(pass) t345 doctor Devin read_config_from import-isolation rows > user config that sets nothing import-related passes as 'no user-level override' [164.02ms]
+(pass) t345 userDevinConfigPath (per-platform user config resolution) > linux honours XDG_CONFIG_HOME [0.17ms]
+(pass) t345 userDevinConfigPath (per-platform user config resolution) > linux falls back to ~/.config [0.04ms]
+(pass) t345 userDevinConfigPath (per-platform user config resolution) > win32 uses APPDATA [0.02ms]
+
+ 9 pass
+ 0 fail
+ 28 expect() calls
+Ran 9 tests across 1 file. [998.00ms]
+--- PASS: t345-doctor-devin-import-isolation.test.ts ---
+=== DONE t345-doctor-devin-import-isolation.test.ts (PASS) ===
+
+=== START t68-version-changelog-sync.test.ts ===
+bun test v1.3.14 (0d9b296a)
+
+tests/unit/t68-version-changelog-sync.test.ts:
+(pass) t68 version/CHANGELOG/README sync (migrated from t68-version-changelog-sync.sh, plan 6) > version.ts declares exactly one AIDLC_VERSION assignment [.sh test 1] [0.35ms]
+(pass) t68 version/CHANGELOG/README sync (migrated from t68-version-changelog-sync.sh, plan 6) > AIDLC_VERSION matches the latest CHANGELOG heading [.sh test 2] [44.26ms]
+(pass) t68 version/CHANGELOG/README sync (migrated from t68-version-changelog-sync.sh, plan 6) > the latest AIDLC_VERSION appears as a CHANGELOG heading [.sh test 3, superseded] [1.50ms]
+(pass) t68 version/CHANGELOG/README sync (migrated from t68-version-changelog-sync.sh, plan 6) > ## [N.N.N] headings are unique — no duplicate version block [.sh test 4, repurposed] [1.54ms]
+(pass) t68 version/CHANGELOG/README sync (migrated from t68-version-changelog-sync.sh, plan 6) > wired CLI `version` subcommand prints 'aidlc <CHANGELOG version>' [.sh test 5] [69.78ms]
+(pass) t68 version/CHANGELOG/README sync (migrated from t68-version-changelog-sync.sh, plan 6) > README.md version badge matches aidlc-version.ts [.sh test 6] [8.86ms]
+(pass) t68 version/CHANGELOG/README sync (migrated from t68-version-changelog-sync.sh, plan 6) > CHANGELOG carries no version link references and no repository host URL [3.09ms]
+
+ 7 pass
+ 0 fail
+ 13 expect() calls
+Ran 7 tests across 1 file. [152.00ms]
+--- PASS: t68-version-changelog-sync.test.ts ---
+=== DONE t68-version-changelog-sync.test.ts (PASS) ===
+
+## Integration Tests (Claude CLI end-to-end)
+
+==============================
+SUMMARY
+==============================
+Guard profile: fixture (synthetic guard skips and direct audit authority enabled)
+Test files: 7
+Failed files: 0
+Total assertions: 212
+Failed assertions: 0
+Coverage: COMPLETE
+Executed test cases: 212
+Skipped test cases: 0
+Skipped files: 0
+==============================
+RESULT: PASS
+EXIT=0

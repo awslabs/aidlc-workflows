@@ -1,0 +1,71 @@
+{
+  "version": 1,
+  "methodology": "tdd",
+  "source": "team",
+  "ordering": "tests first.",
+  "scope": "feature",
+  "test_strategy": "standard",
+  "project_type": "greenfield",
+  "applicable_notes": [
+    {
+      "layer": "org",
+      "text": "- **Methodology**: test-after\n- **Ordering**: implement each layer, then test it."
+    },
+    {
+      "layer": "team",
+      "text": "- **Methodology**: tdd\n- **Ordering**: tests first."
+    },
+    {
+      "layer": "project",
+      "text": "line\rreturn\ttab\nnewline \"quoted\" \\path"
+    }
+  ],
+  "obligations": {
+    "strategy": "standard",
+    "strategy_volume": [
+      "Five to eight tests per component.",
+      "Unit tests plus integration tests for key boundaries.",
+      "Add E2E, performance, or security tests when requirements demand them."
+    ],
+    "scope_floor": [
+      "Meet an 80% line-coverage floor.",
+      "Run the selected tests in CI before merge."
+    ],
+    "combination_rule": "Apply every selected-strategy obligation and every scope-floor obligation; neither replaces the other, and a targeted scope regression may add the narrowest necessary test type beyond the strategy default."
+  },
+  "plan_profile": {
+    "methodology": "tdd",
+    "runner_step": "Bootstrap the minimal test runner/configuration and record the exact unit-scoped command.",
+    "runner_ready_before_first_test": true,
+    "testable_layers": [
+      "Data model / database behavior",
+      "Repository / data access",
+      "Business logic",
+      "API / endpoint",
+      "Frontend behavior"
+    ],
+    "steps": [
+      "Project structure and production configuration skeleton.",
+      "Bootstrap the minimal test runner/configuration and record the exact unit-scoped command.",
+      "Data model / database behavior - Red: write the failing tests and record the failing command output.",
+      "Data model / database behavior - Green: implement only enough behavior to pass.",
+      "Data model / database behavior - Refactor: improve the implementation while tests stay green.",
+      "Repository / data access - Red: write the failing tests and record the failing command output.",
+      "Repository / data access - Green: implement only enough behavior to pass.",
+      "Repository / data access - Refactor: improve the implementation while tests stay green.",
+      "Business logic - Red: write the failing tests and record the failing command output.",
+      "Business logic - Green: implement only enough behavior to pass.",
+      "Business logic - Refactor: improve the implementation while tests stay green.",
+      "API / endpoint - Red: write the failing tests and record the failing command output.",
+      "API / endpoint - Green: implement only enough behavior to pass.",
+      "API / endpoint - Refactor: improve the implementation while tests stay green.",
+      "Frontend behavior - Red: write the failing tests and record the failing command output.",
+      "Frontend behavior - Green: implement only enough behavior to pass.",
+      "Frontend behavior - Refactor: improve the implementation while tests stay green.",
+      "Environment/build configuration.",
+      "Documentation and traceability."
+    ]
+  },
+  "input_sha256": "sha256:8b621933ada01e3c310061d6becef7ca159174d94d579bcc3eee45d9b578b0f0",
+  "contract_sha256": "sha256:bcf7077a6541aa3fe355476b464402f3ab76f45827550b2729b173f80a2dd5de"
+}

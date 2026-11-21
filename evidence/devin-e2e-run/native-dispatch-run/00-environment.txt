@@ -1,0 +1,31 @@
+=== devin --version ===
+devin 3000.10.31 (b98cc431)
+
+=== bun --version ===
+1.3.14
+
+=== which devin bun ===
+/home/wiley/.local/bin/devin
+/home/wiley/.bun/bin/bun
+
+=== source repo HEAD ===
+3baf4d540c93f919a6025a4bfb8ee3af15ff4268
+
+=== source repo status --short (head) ===
+ M core/hooks/aidlc-plan-approval-guard.ts
+ M docs/reference/research/devin/07-subagent-lifecycle-and-ensemble.md
+ M docs/reference/research/devin/14-regression-and-evidence.md
+ M docs/reference/research/devin/index.md
+ M harness/devin/hooks/aidlc-devin-adapter.ts
+ M tests/unit/t265-plan-approval-guard.test.ts
+ M tests/unit/t332-devin-adapter.test.ts
+?? docs/reference/research/devin/pr-996-item-2-native-dispatch-translation-plan.md
+?? evidence/devin-e2e-run/native-dispatch-run/
+
+=== sha256 of installed Item 2 files (~/devin-e2e-native-dispatch) ===
+4438c10d60eb0e276e78df7a889fbdbb0b7d1a8255ba6ab700fc77c7a9cab95f  .devin/hooks/aidlc-devin-adapter.ts
+4056f429045c65d4911d016ef5f347d96532b058391d567aea12f13a82a115ba  .devin/hooks/aidlc-plan-approval-guard.ts
+
+=== project install commit ===
+fc6c870 install aidlc devin tree (3baf4d54 + Item 2 fix)
+fc6c870c823bde28c8eed55a621aca17115f591c
