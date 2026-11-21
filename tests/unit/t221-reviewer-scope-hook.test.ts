@@ -422,6 +422,24 @@ describe("t221 (a) evaluateReviewerScope decision table", () => {
     expect(defaulted).toContain("implicit recursive search");
   });
 
+  test("blockReason names the roots a refused search may use, and they pass the matcher", () => {
+    const full: ReviewerDispatch = { reviewer: "aidlc-architecture-reviewer-agent", stage: "s", ...DISPATCH };
+    const artifactsRoot = join(RECORD_ROOT, "construction", "U03-scoring");
+    const reason = blockReason(".", full, true, SCOPE_CONTEXT);
+
+    expect(reason).toContain(artifactsRoot);
+    expect(reason).toContain("this unit's artifacts");
+    expect(reason).toContain(REPO_ROOT);
+    expect(reason).toContain("source-manifest.json");
+    expect(reason).toContain(`Glob {pattern: "**/*.md", path: "${artifactsRoot}"}`);
+    expect(reason).toContain("no path searches from the session folder through every unit, so it is refused");
+
+    expect(
+      evaluateReviewerScope("Glob", { pattern: "**/*.md", path: artifactsRoot }, DISPATCH, SCOPE_CONTEXT).block,
+    ).toBe(false);
+    expect(evaluateReviewerScope("Glob", { pattern: "**/*.md" }, DISPATCH, SCOPE_CONTEXT).block).toBe(true);
+  });
+
   test("parseDispatchRecord accepts the documented shape and rejects malformed records", () => {
     const good = parseDispatchRecord(
       '{"reviewer":"aidlc-architecture-reviewer-agent","stage":"nfr-requirements","unit":"U03","exempt":["a.md"]}',

@@ -802,16 +802,32 @@ export function parseDispatchRecord(raw: string): ReviewerDispatch | null {
 // PreToolUse error channel. Self-explaining and redirecting: it names the
 // scope, the offending target, and the sanctioned alternative, so the
 // reviewer self-corrects without retrying the same call.
-export function blockReason(target: string, dispatch: ReviewerDispatch, defaulted = false): string {
+export function blockReason(
+  target: string,
+  dispatch: ReviewerDispatch,
+  defaulted = false,
+  context?: ScopeContext,
+): string {
   const defaultNote = defaulted
     ? ` (this command names no path, so "${target}" is the implicit recursive search ` +
       `root it falls back to - not a path you typed; give it an explicit in-scope path)`
     : "";
+  const artifactsRoot = context?.recordRoot
+    ? `${toPosix(resolve(context.recordRoot))}/construction/${dispatch.unit}`
+    : `construction/${dispatch.unit}`;
+  const sourceRoot = context?.cwd
+    ? `${toPosix(resolve(context.cwd))} (the checkout this review runs in)`
+    : `the checkout this review runs in`;
   return (
     `This review cannot open "${target}"${defaultNote} because it belongs to another unit; the current ` +
     `review covers ${dispatch.unit}. Use the files supplied with the review and the files ` +
-    `under this unit's construction path. If the design depends on another unit, note that ` +
-    `integration point in the findings instead of opening its files. Write ${dispatch.unit} ` +
+    `under this unit's construction path. Search only two roots, and name the root in every call: ` +
+    `${artifactsRoot} (this unit's artifacts) and ${sourceRoot}, whose claimed source paths are the ` +
+    `ones ${dispatch.unit}'s source-manifest.json names. For example ` +
+    `Glob {pattern: "**/*.md", path: "${artifactsRoot}"} or ` +
+    `Grep {pattern: "TODO", path: "${artifactsRoot}"}. A Glob or Grep with no path searches from the ` +
+    `session folder through every unit, so it is refused. If the design depends on another unit, note ` +
+    `that integration point in the findings instead of opening its files. Write ${dispatch.unit} ` +
     `literally in shell paths because variables cannot be checked, and keep searches inside ` +
     `the current unit.`
   );
@@ -1120,12 +1136,13 @@ async function checkScope(input: string, projectDir: string, outside: boolean, b
   if (!isDispatchedReviewer) return 0;
 
   let verdict: ScopeVerdict;
+  const cwdField = (parsed as { cwd?: unknown }).cwd;
+  const scopeContext: ScopeContext = {
+    recordRoot: dirname(dirname(recordPath)),
+    cwd: typeof cwdField === "string" && cwdField.length > 0 ? cwdField : projectDir,
+  };
   try {
-    const cwdField = (parsed as { cwd?: unknown }).cwd;
-    verdict = evaluateReviewerScope(toolName, toolInput, dispatch, {
-      recordRoot: dirname(dirname(recordPath)),
-      cwd: typeof cwdField === "string" && cwdField.length > 0 ? cwdField : projectDir,
-    });
+    verdict = evaluateReviewerScope(toolName, toolInput, dispatch, scopeContext);
   } catch (e) {
     recordHookDrop(projectDir, HOOK_NAME, errorMessage(e));
     return 0; // matcher failure - fail open
@@ -1136,7 +1153,7 @@ async function checkScope(input: string, projectDir: string, outside: boolean, b
     return 0;
   }
   process.stderr.write(
-    `${blockReason(verdict.target ?? "", dispatch, verdict.defaulted)}\n`,
+    `${blockReason(verdict.target ?? "", dispatch, verdict.defaulted, scopeContext)}\n`,
   );
   emitReviewerScopeBlocked(
     projectDir,
