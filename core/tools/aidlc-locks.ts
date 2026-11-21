@@ -14,7 +14,7 @@ import { closeSync, constants as fsConstants, existsSync, fstatSync, lstatSync, 
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve as resolvePath, sep, win32 } from "node:path";
 import { dlopen, FFIType, type Pointer } from "bun:ffi";
-import { knownActiveSpace } from "./aidlc-runtime-paths.ts";
+import { namedKnownSpace, SPACE_NAME_REGEX } from "./aidlc-runtime-paths.ts";
 
 export const ENGINE_DIR = ".aidlc-engine";
 // Debris the pre-lock (#749-era) marker writer could leave at the record root.
@@ -57,24 +57,47 @@ export function workspaceRoot(projectDir: string): string {
 // "default". NEVER throws: the default space is always valid even when
 // nothing is on disk yet (the resolver tolerates an absent space dir).
 export function activeSpace(projectDir: string): string {
-  const ptr = join(workspaceRoot(projectDir), ACTIVE_SPACE_POINTER);
+  return namedActiveSpace(projectDir) ?? DEFAULT_SPACE;
+}
+
+export function spaceHoldingTheWork(projectDir: string): string {
+  const named = namedActiveSpace(projectDir);
+  if (named !== null) return named;
+  if (listIntentDirs(projectDir, DEFAULT_SPACE).length > 0) return DEFAULT_SPACE;
+  return soleSpaceWithRecords(projectDir) ?? DEFAULT_SPACE;
+}
+
+function soleSpaceWithRecords(projectDir: string): string | null {
+  const root = join(workspaceRoot(projectDir), "spaces");
+  let entries: string[];
   try {
-    return knownActiveSpace(workspaceRoot(projectDir), readFileSync(ptr, "utf-8"));
+    entries = readdirSync(root);
   } catch {
-    // no cursor → the main checkout's, for a git worktree; else default
+    return null;
   }
-  const main = mainCheckoutOfWorktree(projectDir);
-  if (main !== null) {
+  const holders = entries.filter((name) =>
+    name !== DEFAULT_SPACE && SPACE_NAME_REGEX.test(name) &&
+    lstatSync(join(root, name), { throwIfNoEntry: false })?.isDirectory() === true &&
+    listIntentDirs(projectDir, name).length > 0,
+  );
+  return holders.length === 1 ? holders[0] : null;
+}
+
+export function namedActiveSpace(projectDir: string): string | null {
+  const namespace = workspaceRoot(projectDir);
+  let cursor: string;
+  try {
+    cursor = readFileSync(join(namespace, ACTIVE_SPACE_POINTER), "utf-8");
+  } catch {
+    const main = mainCheckoutOfWorktree(projectDir);
+    if (main === null) return null;
     try {
-      return knownActiveSpace(
-        workspaceRoot(projectDir),
-        readFileSync(join(workspaceRoot(main), ACTIVE_SPACE_POINTER), "utf-8"),
-      );
+      cursor = readFileSync(join(workspaceRoot(main), ACTIVE_SPACE_POINTER), "utf-8");
     } catch {
-      // the main checkout has no cursor either
+      return null;
     }
   }
-  return DEFAULT_SPACE;
+  return namedKnownSpace(namespace, cursor);
 }
 
 // The main checkout of a linked git worktree (`git worktree add`, a host's
@@ -284,6 +307,12 @@ export const STOP_HOOK_PROBE_ENV = "AIDLC_STOP_HOOK_PROBE";
 // and reads only the directive off stdout.
 export const ROUTE_CHECK_ENV = "AIDLC_ROUTE_CHECK";
 
+export const READ_ONLY_COMMAND_ENV = "AIDLC_READ_ONLY_COMMAND";
+
+export function isReadOnlyCommand(): boolean {
+  return process.env[READ_ONLY_COMMAND_ENV] === "1";
+}
+
 // The env marker on the `next` a prompt hook runs ahead of the agent (Kiro
 // CLI's verb-intercept). Not an observer: its step is real, but the hook hands
 // it to the chat only when it fits the hook's reply, so a line on it is not
@@ -427,7 +456,7 @@ export function auditLockIdentity(projectDir: string, intent?: string, space?: s
   if (intent === undefined) {
     return `${canonicalProjectDir}\x00${WORKSPACE_LOCK_SENTINEL}`;
   }
-  const sp = space ?? activeSpace(projectDir);
+  const sp = space ?? spaceHoldingTheWork(projectDir);
   return `${canonicalProjectDir}\x00${sp}\x00${intent}`;
 }
 
