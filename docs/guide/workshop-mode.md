@@ -828,8 +828,10 @@ when your working tree allows, else from where you are (and the line names any
 of your unpushed commits that come along). Then it commits exactly the files the
 Unit's Code Generation recorded writing (its `source-manifest.json`) with your
 own git, so your hooks, signing and identity run as usual; in a file you had
-changed yourself, only the Unit's change is committed. Your other uncommitted
-work comes along uncommitted and is never committed. Every repo is committed
+changed yourself, only the Unit's change is committed. If you committed one of
+the Unit's files yourself and haven't pushed that commit yet, the push puts your
+version of the file on the Unit's branch, and your own commit stays where it is.
+Your other uncommitted work comes along uncommitted and is never committed. Every repo is committed
 before the first push, so a hook that stops one pushes nothing. Each repo's push
 goes to the remote git would push it to; with several remotes and none set, the
 offer names each. The line says where you are and the way back ("You're on

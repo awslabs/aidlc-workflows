@@ -874,7 +874,9 @@ ones start from the fetched integration branch when your working tree allows,
 else from where you are, and the line names your unpushed commits that come
 along), commits exactly those files with `git commit` (your identity, signing,
 pre-commit and commit-msg hooks; in a file you had changed too, only the Unit's
-change), and once every repo is committed runs `git push -u <remote> <unit>`:
+change; a Unit file you committed yourself and haven't pushed goes on the branch
+as you committed it, and your commit stays where it is), and once every repo is
+committed runs `git push -u <remote> <unit>`:
 no force, no `--no-verify`. The remote is the one git would push to
 (`branch.<unit>.pushRemote`, `remote.pushDefault`, the branch's remote, then
 `origin` or the one remote); `--remote <repo>=<name>[,...]` names it instead,

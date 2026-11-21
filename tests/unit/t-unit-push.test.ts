@@ -1010,6 +1010,91 @@ describe("the push", () => {
     expect(readFileSync(join(billing, "NOTES.md"), "utf-8")).toBe("mine\n");
   });
 
+  // Back on main after a push, Code Generation again, and the Unit's file in
+  // billing committed there by hand; `how` then leaves them on main, detaches
+  // HEAD at that commit, edits the file again uncommitted, pushes the commit to
+  // a branch of theirs on the remote, reverts it and writes the file again
+  // uncommitted, or (with the manifest naming the folder) commits a thousand
+  // generated files beside it.
+  function committedOnMain(how: "main" | "detached" | "edited" | "on-a-remote" | "reverted" | "many") {
+    const { hosts, alice, record } = refundsTakenInClone();
+    codeGenerated(alice, record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    for (const repo of Object.keys(hosts)) git(join(alice, repo), ["switch", "-q", "main"]);
+    const billing = join(alice, "billing");
+    codeGeneratedAgain(alice);
+    if (how === "many") {
+      mkdirSync(join(billing, "lib", "generated"), { recursive: true });
+      for (let n = 0; n < 1000; n++) writeFileSync(join(billing, "lib", "generated", `refund-rule-${String(n).padStart(4, "0")}.ts`), `export const rule = ${n};\n`);
+      const manifest = join(record, "construction", "refunds", "code-generation", "source-manifest.json");
+      writeFileSync(manifest, `${JSON.stringify({
+        stage: "code-generation", unit: "refunds", version: 1,
+        writes: [{ repo: "checkout-api", path: "src/refunds.ts" }, { repo: "billing", path: "lib/" }],
+      })}\n`);
+    }
+    git(billing, ["add", "lib"]);
+    git(billing, ["commit", "-q", "-m", "refund, my own commit"]);
+    const mine = git(billing, ["rev-parse", "HEAD"]);
+    if (how === "detached") git(billing, ["switch", "-q", "--detach", mine]);
+    if (how === "edited") writeFileSync(join(billing, "lib", "refund.ts"), "export const refund = 3;\n");
+    if (how === "on-a-remote") git(billing, ["push", "-q", "origin", "main:alice-backup"]);
+    if (how === "reverted") {
+      git(billing, ["revert", "--no-edit", "HEAD"]);
+      mkdirSync(join(billing, "lib"), { recursive: true });
+      writeFileSync(join(billing, "lib", "refund.ts"), "export const refund = 3;\n");
+    }
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    return { hosts, billing, mine, pushed };
+  }
+
+  test("back on main after a push, with the Unit's file changed again and committed there: the push carries it onto its branch as committed, and their commit stays on main", () => {
+    const { hosts, billing, mine, pushed } = committedOnMain("main");
+    expect(git(hosts.billing, ["show", "refunds:lib/refund.ts"])).toBe("export const refund = 2;");
+    expect(git(hosts["checkout-api"], ["show", "refunds:src/refunds.ts"])).toBe("export const refunds = 2;");
+    expect(git(billing, ["branch", "--show-current"])).toBe("refunds");
+    expect(git(billing, ["rev-parse", "main"])).toBe(mine);
+    expect(git(billing, ["status", "--porcelain"])).toBe("");
+    expect(String(pushed.json?.notice)).toContain("Pushed branch refunds in checkout-api and billing. Get it merged your usual way. " +
+      "You're on refunds now in checkout-api and billing. Switch back to main any time.");
+  });
+
+  test("on a detached HEAD at a commit of theirs holding the Unit's file: the push carries it onto its branch as committed", () => {
+    const { hosts, billing, mine } = committedOnMain("detached");
+    expect(git(hosts.billing, ["show", "refunds:lib/refund.ts"])).toBe("export const refund = 2;");
+    expect(git(billing, ["branch", "--show-current"])).toBe("refunds");
+    expect(git(billing, ["rev-parse", "main"])).toBe(mine);
+  });
+
+  test("a Unit's file committed on main and edited again uncommitted: the push carries the working copy, as before", () => {
+    const { hosts, billing } = committedOnMain("edited");
+    expect(git(hosts.billing, ["show", "refunds:lib/refund.ts"])).toBe("export const refund = 3;");
+    expect(readFileSync(join(billing, "lib", "refund.ts"), "utf-8")).toBe("export const refund = 3;\n");
+  });
+
+  test("a Unit's file committed on main, that commit reverted, and the file written again uncommitted: the push carries the working copy and deletes nothing", () => {
+    const { hosts, billing } = committedOnMain("reverted");
+    expect(git(hosts.billing, ["show", "refunds:lib/refund.ts"])).toBe("export const refund = 3;");
+    expect(readFileSync(join(billing, "lib", "refund.ts"), "utf-8")).toBe("export const refund = 3;\n");
+  });
+
+  test("a thousand of the Unit's files committed on main under the folder its manifest names: the push carries them all onto its branch", () => {
+    const { hosts } = committedOnMain("many");
+    expect(git(hosts.billing, ["show", "refunds:lib/refund.ts"])).toBe("export const refund = 2;");
+    expect(git(hosts.billing, ["show", "refunds:lib/generated/refund-rule-0999.ts"])).toBe("export const rule = 999;");
+    expect(git(hosts.billing, ["ls-tree", "--name-only", "refunds", "lib/generated/"]).split("\n")).toHaveLength(1000);
+  });
+
+  // The limit: a commit of theirs already on a remote is not counted as theirs
+  // to carry (ownCommitsOnUnitFiles reads only commits on no remote), so the
+  // push does as it did before: the Unit's branch keeps its own copy.
+  test("a commit of theirs on main already pushed to a branch of theirs: the push leaves the Unit's branch as it was, as before", () => {
+    const { hosts, billing, mine } = committedOnMain("on-a-remote");
+    expect(git(hosts.billing, ["show", "refunds:lib/refund.ts"])).toBe("export const refund = 1;");
+    expect(git(hosts.billing, ["rev-parse", "alice-backup"])).toBe(mine);
+    expect(git(billing, ["branch", "--show-current"])).toBe("refunds");
+  });
+
   // A live run on Kiro CLI: the redo after a turn-down merged the newer main
   // into the Unit's branch and dropped a file of the first build; Code
   // Generation listed it as deleted, and the push said it was "not there" and

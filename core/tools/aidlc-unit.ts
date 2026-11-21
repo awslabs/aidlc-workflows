@@ -11839,7 +11839,11 @@ function unitOwnChange(dir: string, path: string, taken: string, scratch: string
 // working copy lacks. Anything else in the way stays theirs, an ignored file of
 // theirs included (--no-overwrite-ignore): git refuses, the index is put back,
 // and git's words come back. A dry run does it in a copy of their index and
-// moves nothing; it passes over an ignored file the real switch refuses.
+// moves nothing; it passes over an ignored file the real switch refuses. A
+// file of the Unit's that commits of their own hold (ownCommitsOnUnitFiles),
+// as they committed it, is taken from the commit they were on once the real
+// switch is made, so the Unit's commit carries it; their commit stays where it
+// is. A take of that file that fails puts them back where they were.
 function switchOntoUnitBranch(dir: string, unit: string, paths: string[], dryRun = false): { ok: boolean; said: string } {
   const branch = `refs/heads/${unit}`;
   const scratch = dryRun ? mkdtempSync(join(tmpdir(), "aidlc-unit-switch-")) : null;
@@ -11853,8 +11857,17 @@ function switchOntoUnitBranch(dir: string, unit: string, paths: string[], dryRun
     const differs = listed(["diff", "--name-only", "--no-renames", "HEAD", branch]);
     const staged = listed(["diff", "--cached", "--name-only", "--no-renames", "HEAD"]);
     const unstaged = listed(["diff", "--name-only", "--no-renames"]);
-    const carried = [...listed(["diff", "--name-only", "--no-renames", "HEAD"]), ...listed(["ls-files", "--others", "--exclude-standard"])]
+    const changedHere = listed(["diff", "--name-only", "--no-renames", "HEAD"]);
+    const carried = [...changedHere, ...listed(["ls-files", "--others", "--exclude-standard"])]
       .filter((path) => differs.has(path) && !(staged.has(path) && unstaged.has(path)));
+    // Only where the working copy is as HEAD holds it: unchanged, or absent from both.
+    const committed = dryRun ? [] : ownCommitsOnUnitFiles(dir, branch, paths).filter((path) => differs.has(path) && !changedHere.has(path) &&
+      (gitPathExistsAt(dir, "HEAD", path) || nothingAt(join(dir, ...path.split("/")))));
+    // The names go to git on its standard input, NUL-separated, never patterns: Windows caps a command line.
+    const fromInput = ["--pathspec-from-file=-", "--pathspec-file-nul"];
+    const named = `${committed.join("\0")}\0`;
+    const from = git(dir, ["rev-parse", "--verify", "--quiet", "HEAD"]).stdout.trim();
+    const fromBranch = git(dir, ["symbolic-ref", "--quiet", "--short", "HEAD"]).stdout.trim();
     const entries = (args: string[], mode: number, oid: number): Map<string, string> => new Map(carried.length === 0 ? [] :
       git(dir, [args[0], "-z", ...args.slice(1), "--", ...carried], env).stdout.split("\0").filter(Boolean).map((line) => {
         const [meta, path] = [line.slice(0, line.indexOf("\t")), line.slice(line.indexOf("\t") + 1)];
@@ -11872,6 +11885,15 @@ function switchOntoUnitBranch(dir: string, unit: string, paths: string[], dryRun
     put(onBranch);
     const tried = dryRun ? git(dir, ["read-tree", "-n", "-m", "-u", "HEAD", branch], env) : git(dir, ["switch", "-q", "--no-overwrite-ignore", unit]);
     if (!tried.ok && !dryRun) put(before);
+    if (tried.ok && committed.length > 0) {
+      const taken = git(dir, ["--literal-pathspecs", "restore", `--source=${from}`, "--worktree", ...fromInput], undefined, named);
+      if (!taken.ok) {
+        git(dir, ["--literal-pathspecs", "restore", "--worktree", ...fromInput], undefined, named);
+        git(dir, ["switch", "-q", "--no-overwrite-ignore", ...(fromBranch ? [fromBranch] : ["--detach", from])]);
+        put(before);
+        return { ok: false, said: taken.stderr };
+      }
+    }
     return { ok: tried.ok, said: tried.stderr };
   } finally {
     if (scratch !== null) rmSync(scratch, { recursive: true, force: true });

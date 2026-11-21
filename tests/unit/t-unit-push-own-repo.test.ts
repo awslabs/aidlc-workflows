@@ -1780,6 +1780,24 @@ describe("a Unit on the workspace's own repository", () => {
     expect(readFileSync(join(dana, "src"), "utf-8")).toBe(SCRATCH);
   });
 
+  test("kept on main at an early start, the Unit's file committed there by hand, then pushed: the push carries it onto the Unit's branch, and their commit stays on main", () => {
+    const { home, dana } = refundsPushedTwoFiles();
+    ownFile(dana, "src/refunds.ts");
+    expect(takeEarly(dana, home).status).toBe(0);
+    moveAside(dana, "src/refunds.ts");
+    writeFileSync(join(dana, "src", "reporting.ts"), "export const report = 1;\n");
+    git(dana, ["add", "src/reporting.ts"]);
+    git(dana, ["commit", "-q", "-m", "reporting, my own commit"]);
+    const mine = git(dana, ["rev-parse", "HEAD"]);
+    reportingWrote(dana, ["src/reporting.ts"]);
+    const pushed = run(UNIT, ["push"], dana);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(git(home.remote, ["show", "reporting:src/reporting.ts"])).toBe("export const report = 1;");
+    expect(git(dana, ["branch", "--show-current"])).toBe("reporting");
+    expect(git(dana, ["rev-parse", "main"])).toBe(mine);
+    expect(String(pushed.json?.notice)).toContain("Pushed branch reporting in the repo. Get it merged your usual way.");
+  });
+
   test("kept by a file of theirs in a chat: the agent's note hands over the early take again, and that command switches them once the file is moved", () => {
     const { home, dana } = refundsPushedTwoFiles();
     ownFile(dana, "src/refunds.ts");
