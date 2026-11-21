@@ -727,13 +727,13 @@ the tool results so far satisfy it, for a stop that needs more than one result
 (an engine line that can arrive before or after the step that creates the
 work).
 
-A suite launched from inside a Claude Code session (`CLAUDECODE=1`) does not
-hand that session's `ANTHROPIC_DEFAULT_*_MODEL` defaults to its drives: the
-SDK's bundled Claude Code may be older than the session's model and refuse it.
-When a drive's final provider is Bedrock, it gets CI's pinned models
-(`CI_BEDROCK_MODELS` in `scripts/ci-credential-broker.ts`) for any model the
-project settings or the test did not set; otherwise the bundled defaults. A run
-from any other shell, CI's included, keeps its environment unchanged.
+Each drive runs the first `claude` on the run's `PATH`, the Claude Code a
+person and the TUI legs start, never the Agent SDK's bundled copy; with none
+there it stops before it starts and says so in one line. It names no model of
+its own: the installed Claude Code takes the model the run's environment names,
+else the model names in the env block of the box's own `~/.claude/settings.json`,
+and when neither names one it runs its own default. Each drive's trace records
+the Claude Code version and the model its session ran on.
 
 | Assertion | Surface | On fail |
 |-----------|---------|---------|
@@ -1229,7 +1229,8 @@ Live SDK and TUI harness drivers default to the project's own Claude setting
 sources: the SDK driver loads the copied test `.claude/` project settings and
 hooks, and the TUI driver also loads that project's `.claude/settings.local.json`,
 where the person's choice of AI-DLC's status line lives. Both exclude developer
-user-level hooks/settings. This mirrors the installed
+user-level hooks/settings; the SDK driver takes only the model names from them,
+when the run names no model. This mirrors the installed
 framework surface and prevents local interactive preferences from changing test
 behavior; explicit driver options or `AIDLC_TUI_SETTING_SOURCES` remain the
 escape hatch for calibration.
@@ -1947,12 +1948,25 @@ stops dispatch and marks remaining files incomplete.
 Stock permission settings: the two golden journeys drive Claude Code in its
 default permission mode with the project's shipped settings (setting sources
 user, project and local; user is the drive's scratch config folder) and answer
-every prompt yes. A prompt for AI-DLC's own command or record (one that names
-`aidlc/` or `.claude/`), or a write outside the project, fails the journey;
-every other prompt is listed in its log (`tests/harness/stock-permissions.ts`).
-The other Claude SDK drives keep `bypassPermissions`. The Codex `--json`
-journeys run the shipped `workspace-write` sandbox, and a command naming
-`.codex/` or `aidlc/` that the sandbox refused fails the turn. Copilot CLI's
+every prompt yes. A file tool's prompt on a path inside `aidlc/` or
+`.claude/`, a write outside the project, or a prompt for a shell command that
+runs one of AI-DLC's own tools (one that names the launcher and the tools folder
+the shipped allow list names, `bun .claude/tools/aidlc.ts engine next` for one,
+by any path, alone or in a chain) fails the journey. The check reads words, not
+the shell, so a command that names both and runs neither
+(`grep -rn bun .claude/tools/`) fails too. Any other shell
+command that names AI-DLC's folders is a command the agent wrote itself: the
+journey lists and counts it under
+`Shell commands that name AI-DLC folders, listed not failed (N)`, printed once
+with its count by a Claude or opencode journey, `(0)` included, and by a Codex
+exec only when it has such a line. Every other prompt is listed in its log
+(`tests/harness/stock-permissions.ts`). The other Claude SDK drives keep
+`bypassPermissions`. The Codex `--json` journeys run the shipped
+`workspace-write` sandbox: a refused command that runs one of AI-DLC's own
+tools fails the turn, and one that only names `.codex/` or `aidlc/` is listed
+under the same heading. The opencode journey takes the same split on the calls
+its shipped permission table refused, and any other refused call that names
+`aidlc/` or `.aidlc/` fails it. Copilot CLI's
 terminal journeys answer each of its permission dialogs with the preselected
 "Yes" and count them by what drew them (AI-DLC's skill allows only its own
 record writes and its `.aidlc/bin/aidlc-engine` launcher); its `-p` case runs
