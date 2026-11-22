@@ -272,6 +272,19 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     expect(missing).toEqual([]);
   });
 
+  // A teammate who asks to take a Unit and gives no address is shown the Units
+  // (`next --units`); a skill with only the address rule leaves them asked for one.
+  test("every shipped conductor SKILL routes a Unit request with no address to the Units look", () => {
+    const missing: string[] = [];
+    for (const rel of skills) {
+      const body = readConductorSurface(rel);
+      if (!/what they can take, or to take a Unit, and give no address, run step 1 as `[^`\n]+ engine orchestrate next --units`, with nothing else of their words\./.test(body)) {
+        missing.push(rel);
+      }
+    }
+    expect(missing).toEqual([]);
+  });
+
   test("every shipped conductor SKILL names --config and the engine's print carries its steps", () => {
     const missing: string[] = [];
     for (const rel of skills) {

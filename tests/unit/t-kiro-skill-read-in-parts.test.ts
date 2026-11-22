@@ -128,7 +128,7 @@ describe("t-kiro-skill-read-in-parts: the Kiro CLI (V2) row's routing instructio
   for (const [tool, root] of TREES.filter(([, , harness]) => harness === "kiro")) {
     test(`${tool}: the lead's-address instruction ends within the first ${PER_FILE_CUT} characters`, () => {
       const text = readFileSync(join(REPO, root, ".kiro", "skills", "aidlc", "SKILL.md"), "utf-8");
-      const start = text.indexOf("**The lead's project by its address.**");
+      const start = text.indexOf("**The plan by its address.**");
       expect(start).toBeGreaterThan(-1);
       expect(text.indexOf("\n", start)).toBeLessThan(PER_FILE_CUT);
     });
