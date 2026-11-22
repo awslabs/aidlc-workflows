@@ -662,10 +662,14 @@ and remediation in the compose drops log. On Kiro CLI, the JSON and
 rejects the stage. On Kiro IDE the IDE path never reads `aidlc.json`, and
 compose gives a plugin's own agent that surface itself: to each agent the
 plugin ships it adds the lines the install keeps in
-`.kiro/tools/data/plugin-agent.md` (the `tools`, `includeMcpJson` and
-`permissions` of a persona with no role of its own, its shell deny included),
-each key the agent does not declare, and the `tools` line only beside those
-permissions; it writes the persona without them to
+`.kiro/tools/data/plugin-agent.md` (the `tools`, `includeMcpJson`,
+`resources` and `permissions` of a persona with no role of its own, its shell
+deny included), each key the agent does not declare, and the `tools` line only
+beside those permissions. The `resources` are the shared knowledge files, so a
+dispatched agent does not load the conductor's skill files, which Kiro gives a
+sub-agent that declares no `file://` resources of its own. An agent that
+declares its own `resources` keeps them, and gets the conductor's files when
+they hold no `file://` entry. Compose writes the persona without these lines to
 `.kiro/aidlc-common/personas/<agent>.md` for the lead that reads it inline, and
 judges a stage that dispatches the agent on the copy it writes. An agent the
 plugin does not ship still needs its installed `.md` authored with both blocks,

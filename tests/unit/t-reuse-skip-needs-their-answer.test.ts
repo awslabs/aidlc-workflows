@@ -180,8 +180,8 @@ for (const tree of TREES) {
 
     test("an answer the person left to the agent (you pick) lets the reuse skip commit", () => {
       const proj = storeFromOtherWork(tree);
-      says(tree, proj, "you pick, whatever is quicker");
       asked(tree, proj);
+      says(tree, proj, "you pick, whatever is quicker");
       kept(tree, proj);
       const answered = run(tree, proj, "aidlc-log", [
         "answer", "--stage", STAGE, "--details", "Reuse existing knowledge base", "--on-instruction",

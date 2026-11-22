@@ -1934,12 +1934,25 @@ stops dispatch and marks remaining files incomplete.
 Stock permission settings: the two golden journeys drive Claude Code in its
 default permission mode with the project's shipped settings (setting sources
 user, project and local; user is the drive's scratch config folder) and answer
-every prompt yes. A prompt for AI-DLC's own command or record (one that names
-`aidlc/` or `.claude/`), or a write outside the project, fails the journey;
-every other prompt is listed in its log (`tests/harness/stock-permissions.ts`).
-The other Claude SDK drives keep `bypassPermissions`. The Codex `--json`
-journeys run the shipped `workspace-write` sandbox, and a command naming
-`.codex/` or `aidlc/` that the sandbox refused fails the turn. Copilot CLI's
+every prompt yes. A file tool's prompt on a path inside `aidlc/` or
+`.claude/`, a write outside the project, or a prompt for a shell command that
+runs one of AI-DLC's own tools (one that names the launcher and the tools folder
+the shipped allow list names, `bun .claude/tools/aidlc.ts engine next` for one,
+by any path, alone or in a chain) fails the journey. The check reads words, not
+the shell, so a command that names both and runs neither
+(`grep -rn bun .claude/tools/`) fails too. Any other shell
+command that names AI-DLC's folders is a command the agent wrote itself: the
+journey lists and counts it under
+`Shell commands that name AI-DLC folders, listed not failed (N)`, printed once
+with its count by a Claude or opencode journey, `(0)` included, and by a Codex
+exec only when it has such a line. Every other prompt is listed in its log
+(`tests/harness/stock-permissions.ts`). The other Claude SDK drives keep
+`bypassPermissions`. The Codex `--json` journeys run the shipped
+`workspace-write` sandbox: a refused command that runs one of AI-DLC's own
+tools fails the turn, and one that only names `.codex/` or `aidlc/` is listed
+under the same heading. The opencode journey takes the same split on the calls
+its shipped permission table refused, and any other refused call that names
+`aidlc/` or `.aidlc/` fails it. Copilot CLI's
 terminal journeys answer each of its permission dialogs with the preselected
 "Yes" and count them by what drew them (AI-DLC's skill allows only its own
 record writes and its `.aidlc/bin/aidlc-engine` launcher); its `-p` case runs
