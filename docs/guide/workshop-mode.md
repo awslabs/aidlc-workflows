@@ -971,9 +971,11 @@ What AI-DLC records about the work (the plan, each team's build, the approvals
 and the audit trail) lives in `aidlc/`, and the people on the workspace get it
 the way they get any change: each person commits and pushes it. Commit
 `aidlc/` (the repo list, `aidlc/repos.json`, is in it) and, when the team keeps
-one, `aidlc.settings.json` at the workspace root. Tool folders (`.claude/`,
-`.codex/`, `.kiro/` and the other tools' folders) are not committed: each person
-runs `aidlc config` in their own clone for the tool they use.
+one, `aidlc.settings.json` at the workspace root. Commit the harness folders
+`aidlc config` wrote too (`.claude/`, `.codex/`, `.kiro/` and the other
+harnesses' folders), as in any other project, so teammates on the same harness
+get the same setup; a teammate on a harness the repository does not have yet
+runs `aidlc config` in their own clone for theirs.
 
 When to commit it is your team's own way of sharing its workspace, so no step
 says it. Asked where things stand (`/aidlc --status`), a Unit's build says where
@@ -1232,10 +1234,11 @@ claim-bound CAS publication; main serializes the reviewed pinned OIDs.
    chooses teams, and shares the plan.
 2. If enabled, the facilitator builds the walking skeleton at the lead's project first.
 3. Each team member clones the workspace (or the team's own), runs
-   `aidlc config` there for their own tool, makes their team's space and
-   switches to it (`/aidlc space-create <team>`, then `/aidlc space <team>`),
-   then `/aidlc`, and takes a Unit that is ready. Each team approves its own
-   stages, and checks in `aidlc/` when AI-DLC says so.
+   `aidlc config` there when the repository does not have their harness yet,
+   makes their team's space and switches to it (`/aidlc space-create <team>`,
+   then `/aidlc space <team>`), then `/aidlc`, and takes a Unit that is ready.
+   Each team approves its own stages, and checks in `aidlc/` when AI-DLC says
+   so.
 
 #### Day 2
 
