@@ -33,7 +33,7 @@ This chapter documents the workflow behaviour from the conductor's side — entr
 
 ## Entry Points
 
-The conductor passes `$ARGUMENTS` to the engine's first `next` verbatim — it never pre-parses them. The engine parses the flags and freeform text and resolves which of the invocation patterns below applies, emitting the matching directive. The patterns are engine-resolved inputs, not conductor-side branches.
+The conductor passes `$ARGUMENTS` to the engine's first `next` verbatim, and never pre-parses them; on Claude Code that first call is `next --entry`, whatever they typed, with none of the person's words, and the engine reads their typed line from its own record. The engine parses the flags and freeform text and resolves which of the invocation patterns below applies, emitting the matching directive. The patterns are engine-resolved inputs, not conductor-side branches.
 
 ### `/aidlc [scope]` -- Explicit Scope
 
