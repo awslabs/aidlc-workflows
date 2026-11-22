@@ -991,6 +991,7 @@ export const ALLOWED: Record<string, Allowed> = {
   [`${AUDIT}#appendAuditEntryUnlocked`]: { use: "keeps", why: "the audit writer", from: [`${AUDIT}#appendAuditEntry`, `${LOG}#emitAudit`] },
   [`${AUDIT}#tapAuditMetric`]: { use: "keeps", why: "the audit writer: the row's metric", from: [`${AUDIT}#appendAuditEntryUnlocked`] },
   [`${AUDIT}#tapQuestionLedger`]: { use: "keeps", why: "the audit writer: hands the row to the open-question ledger (noteQuestionRow), which keeps only a row's question fields (its id, type, chat, stage, Unit, checkpoint) and a digest of the question's own text", from: [`${AUDIT}#appendAuditEntryUnlocked`] },
+  "core/tools/aidlc-questions.ts#pauseReplyTurns": { use: "keeps", why: "pause feedback proof checks only whether a picker record is present, never its replies" },
   "core/tools/aidlc-questions.ts#boxQuestionId": { use: "decides", why: "a question box's payload, host structure: the question text the box showed, matched whole to an open question's recorded text so QUESTION_REPLIED names its id; never the reply", from: [`${HOOK}#respond`] },
   "core/tools/aidlc-questions.ts#questionTextSha": { use: "keeps", why: "a digest of the question text a box showed, for boxQuestionId's whole-text match", from: ["core/tools/aidlc-questions.ts#boxQuestionId"] },
   [`${LOG}#emitAudit`]: { use: "keeps", why: "the audit writer", from: [`${LOG}#handleAnswer`, `${LOG}#handleReview`] },

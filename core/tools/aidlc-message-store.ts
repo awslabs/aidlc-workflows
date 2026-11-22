@@ -86,6 +86,7 @@ export interface StoredMessage {
   settings: Array<{ key: string; value: string }>;
   route: MessageRoute;
   cut?: true;
+  asyncPicker?: true;
 }
 
 /** A message as the hook hands it to the store: the same fields, with the person's words still text. */
@@ -166,6 +167,7 @@ function parseMessage(id: string, raw: unknown): StoredMessage | null {
     typeof route.newIntent === "boolean" &&
     isStringList(route.skip) && isStringList(route.add) &&
     (route.projectType === null || route.projectType === "greenfield" || route.projectType === "brownfield") &&
+    (message.asyncPicker === undefined || message.asyncPicker === true) &&
     (message.cut === undefined || message.cut === true)
   ) {
     return message as StoredMessage;

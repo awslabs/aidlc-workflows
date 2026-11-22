@@ -3,10 +3,11 @@ import { projectDirFlag, settleClaudeTurnsFirst } from "./aidlc-claude-turn-pend
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { appendAuditEntry } from "./aidlc-audit.ts";
+import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import { personGitNameField } from "./aidlc-git-name.ts";
 import { beforePerUnitBlock, withStageProgressRow } from "./aidlc-graph.ts";
 import { keptSinceFinished } from "./aidlc-message-store.ts";
+import { selectedUnitCheckpoint } from "./aidlc-questions.ts";
 import { isNonAnswer } from "./aidlc-reply-reader.ts";
 import { readReviewArtifactContexts } from "./aidlc-review-brief.ts";
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
@@ -300,9 +301,6 @@ function parseFlags(
 // through it again. Every other Unit keeps its finished, approved work. Inside
 // the walk nothing else changes: no checkbox, no Current Stage, no files. Once
 // the walk has moved on to a later stage, the work moves back to the target.
-// `--via change` is a change the person asked for (at the open late question,
-// a recovery question's Request Changes, or a jump back the agent read as one):
-// the rows keep their words as the change, with the messages they came in.
 // The active Unit's lifecycle mirror is dropped; the next `unit start` writes
 // it again.
 
@@ -343,7 +341,24 @@ function changeAsked(pd: string, content: string, stage: string): GateReply {
 }
 
 function handleReopen(args: string[]): void {
-  const flags = parseFlags(args);
+  const baseArgs: string[] = [];
+  const proofs: Array<string | null> = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--expected-pause") {
+      const value = args[i + 1];
+      if (value !== undefined && !value.startsWith("--")) {
+        proofs.push(value);
+        i++;
+      } else {
+        proofs.push(null);
+      }
+    } else if (args[i].startsWith("--expected-pause=")) {
+      proofs.push(null);
+    } else {
+      baseArgs.push(args[i]);
+    }
+  }
+  const flags = parseFlags(baseArgs);
   const pd = resolveProjectDir(projectDir);
   let content = readStateFile(pd);
   const stateBefore = content;
@@ -371,10 +386,9 @@ function handleReopen(args: string[]): void {
     if (!UNIT_NAME_REGEX.test(unit)) error(`Invalid Unit name: ${unit}`);
   }
   const stageName = targetStage.name ?? targetSlug;
-  // A change is kept in the person's own words, from the gate they answered,
-  // with the messages they came in, as a gate's Request Changes row names them.
+  const invalidProof = proofs.length > 0 && (proofs.length !== 1 || flags.via !== "change" || units.length !== 1 ||
+    (proofs[0] !== "none" && !/^sha256:[0-9a-f]{64}$/.test(proofs[0] ?? "")));
   const gateStage = getField(content, "Current Stage")?.trim() ?? targetSlug;
-  const change = flags.via === "change" ? changeAsked(pd, content, gateStage) : null;
   // From a later stage of the same phase (Build and Test, say) the work moves
   // back to the target as a backward jump moves it, but with no STAGE_JUMPED or
   // STAGE_STARTED: only these Units start the step again. Each Unit's row names
@@ -409,39 +423,57 @@ function handleReopen(args: string[]): void {
     stagesReset = moved.stagesReset;
     if (current !== targetSlug) movedFrom = current;
   }
-  for (const unit of units) {
-    emitAudit(pd, "GATE_REJECTED", {
-      Stage: targetSlug,
-      "Gate Stages": stages.join(", "),
-      "Gate Scope": isTeamUnitOwnership(content) ? effectiveUnitGateRhythm(pd, content) : "unit-end",
-      Unit: unit,
-      ...claimAttemptFields(pd, unit),
-      // Marks the row as a redo or the person's jump, or the change they asked
-      // for at the gate.
-      Reopen: flags.via ?? "jump",
-      ...(flags.via === "change" ? { "User Input": "Request Changes" } : {}),
-      Feedback: flags.via === "redo"
-        ? `Redid ${stageName} for unit ${unit} (redo on re-entry).`
-        : flags.via === "change"
-          ? change?.words ?? `Reopened ${stageName} for unit ${unit} for a change.`
-          : `Reopened ${stageName} for unit ${unit} (/aidlc --stage ${targetSlug}).`,
-      ...(change?.messageId ? { "Message Id": change.messageId } : {}),
-      ...(change ? windowMessageIds(change) : {}),
-      ...(movedFrom ? { "Moved From": movedFrom } : {}),
-      ...(theirs ? personGitNameField(pd) : {}),
-    });
-    // A redo answers the re-use question for this Unit's step too: recorded
-    // here, so the reopened step redoes it without asking again.
-    if (flags.via === "redo") {
-      emitAudit(pd, "ARTIFACT_REUSED", {
-        Stage: targetSlug,
-        Decision: "redo",
-        Artifacts: `construction/${unit}/${targetSlug}/`,
-        Unit: unit,
-        Source: REDO_REUSE_SOURCE,
-      });
+  const change = withAuditLock(pd, () => {
+    let change: GateReply | null = null;
+    if (flags.via === "change") {
+      try {
+        const selected = units.map((unit) => selectedUnitCheckpoint(pd, targetSlug, unit));
+        if (proofs.length === 0 && selected.every((checkpoint) => checkpoint?.state !== "paused")) {
+          change = changeAsked(pd, stateBefore, gateStage);
+        } else if (!invalidProof && proofs.length === 1 && units.length === 1) {
+          const checkpoint = selected[0];
+          if (checkpoint?.state === "paused" && checkpoint.pauseKey === proofs[0] &&
+            checkpoint.pauseKey && checkpoint.pauseShard && checkpoint.pausePos !== undefined) {
+            change = personsGateReply(pd, resolveInvokingSessionId(pd), targetSlug, undefined, {
+              key: checkpoint.pauseKey, unit: units[0], shard: checkpoint.pauseShard, pos: checkpoint.pausePos,
+            });
+          }
+        }
+      } catch {
+        change = null;
+      }
     }
-  }
+    for (const unit of units) {
+      appendAuditEntryUnlocked("GATE_REJECTED", {
+        Stage: targetSlug,
+        "Gate Stages": stages.join(", "),
+        "Gate Scope": isTeamUnitOwnership(content) ? effectiveUnitGateRhythm(pd, content) : "unit-end",
+        Unit: unit,
+        ...claimAttemptFields(pd, unit),
+        Reopen: flags.via ?? "jump",
+        ...(flags.via === "change" ? { "User Input": "Request Changes" } : {}),
+        Feedback: flags.via === "redo"
+          ? `Redid ${stageName} for unit ${unit} (redo on re-entry).`
+          : flags.via === "change"
+            ? change?.words ?? `Reopened ${stageName} for unit ${unit} for a change.`
+            : `Reopened ${stageName} for unit ${unit} (/aidlc --stage ${targetSlug}).`,
+        ...(change?.messageId ? { "Message Id": change.messageId } : {}),
+        ...(change ? windowMessageIds(change) : {}),
+        ...(movedFrom ? { "Moved From": movedFrom } : {}),
+        ...(theirs ? personGitNameField(pd) : {}),
+      }, pd);
+      if (flags.via === "redo") {
+        appendAuditEntryUnlocked("ARTIFACT_REUSED", {
+          Stage: targetSlug,
+          Decision: "redo",
+          Artifacts: `construction/${unit}/${targetSlug}/`,
+          Unit: unit,
+          Source: REDO_REUSE_SOURCE,
+        }, pd);
+      }
+    }
+    return change;
+  });
   for (const field of ["Active Unit", "Unit Stage", "Unit State", "Unit Pause Reason", "Unit Next Action"]) {
     content = removeField(content, field);
   }
@@ -450,6 +482,12 @@ function handleReopen(args: string[]): void {
   backInFlight(pd, stateBefore, content);
   console.log(JSON.stringify({
     reopened: targetSlug, stages, units, ...(stagesReset.length > 0 ? { stages_reset: stagesReset } : {}),
+    ...(invalidProof ? { invalid_option: "--expected-pause" } : {}),
+    ...(flags.via === "change" && units.length === 1 ? {
+      message: change?.words
+        ? `Reopened ${stageName} for unit ${units[0]} to make your change.`
+        : `Reopened ${stageName} for unit ${units[0]}. When you review the revised work, check that it includes your change.`,
+    } : {}),
     state_updated: true, audit_appended: true,
   }));
 }

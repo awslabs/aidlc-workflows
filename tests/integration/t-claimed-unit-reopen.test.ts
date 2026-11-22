@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-jump:reopen, function:claimedCheckoutReopens
+// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-jump:reopen, function:claimedCheckoutReopens, function:selectedUnitCheckpoint, function:unitLifecycleRunFloorForProject
 //
 // A checkout that claimed a team Unit reopens that Unit's own stages itself:
 // the recovery question's "Reopen the approved stage" and the person's own
@@ -16,10 +16,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   artifactFilename,
+  auditBlockField,
   evaluateGuardRefusal,
   loadStageGraphAll,
   readAuditShardEvents,
+  unitLifecycleRunFloorForProject,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { selectedUnitCheckpoint } from "../../dist/claude/.claude/tools/aidlc-questions.ts";
 import {
   AIDLC_SRC,
   cleanupTestProject,
@@ -436,6 +439,61 @@ describe("a claimed checkout reopens its own Unit's stages", () => {
       expect(readAuditShardEvents(checkout).some((event) => event.event === "GATE_REJECTED")).toBe(false);
     });
   }
+
+  test("claimed clone writer: direct reopen keeps the current pause reply", () => {
+    const { checkout } = claimedPastFunctionalDesign("clone");
+    const slug = "nfr-requirements";
+    const started = run(STATE, ["unit", "start", "--stage", slug, "--unit", "alpha"], checkout);
+    expect(started.status, started.out).toBe(0);
+    const paused = run(STATE, ["unit", "pause", "--stage", slug, "--unit", "alpha", "--reason", "waiting",
+      "--next-action", "Clarify resilience."], checkout);
+    expect(paused.status, paused.out).toBe(0);
+    const shown = run(ORCH, ["next"], checkout, { AIDLC_SESSION_OVERRIDE: SESSION });
+    expect(shown.status, shown.out).toBe(0);
+    expect(JSON.parse(shown.stdout)).toMatchObject({ kind: "ask", ask_type: "unit-paused", unit: "alpha" });
+    const words = "Set the recovery time to two minutes.";
+    says(checkout, words);
+    const turn = readAuditShardEvents(checkout).findLast((row) => row.event === "HUMAN_TURN")!;
+    const id = auditBlockField(turn.block, "Message Id");
+    expect(id).toBeTruthy();
+    const checkpoint = selectedUnitCheckpoint(checkout, slug, "alpha");
+    expect(checkpoint?.pauseKey).toMatch(/^sha256:[0-9a-f]{64}$/);
+    const alphaBefore = unitLifecycleRunFloorForProject(checkout, slug, true, "alpha");
+    const betaBefore = unitLifecycleRunFloorForProject(checkout, slug, true, "beta");
+    const betaRows = readAuditShardEvents(checkout).filter((row) => auditBlockField(row.block, "Unit") === "beta");
+    const reopened = run(JUMP, ["reopen", "--target", slug, "--stages", slug, "--units", "alpha", "--scope", "feature",
+      "--via", "change", "--expected-pause", checkpoint!.pauseKey!], checkout, { AIDLC_SESSION_OVERRIDE: SESSION });
+    expect(reopened.status, reopened.out).toBe(0);
+    const rejected = readAuditShardEvents(checkout).findLast((row) => row.event === "GATE_REJECTED")!;
+    expect(auditBlockField(rejected.block, "Feedback")).toBe(words);
+    expect(auditBlockField(rejected.block, "Message Id")).toBe(id);
+    expect(unitLifecycleRunFloorForProject(checkout, slug, true, "alpha")).not.toBe(alphaBefore);
+    expect(unitLifecycleRunFloorForProject(checkout, slug, true, "beta")).toBe(betaBefore);
+    expect(readAuditShardEvents(checkout).filter((row) => auditBlockField(row.block, "Unit") === "beta")).toEqual(betaRows);
+  });
+
+  test("claimed clone writer: a foreign pause without a local showing reopens generically", () => {
+    const { checkout } = claimedPastFunctionalDesign("clone");
+    const slug = "nfr-requirements";
+    expect(run(STATE, ["unit", "start", "--stage", slug, "--unit", "alpha"], checkout).status).toBe(0);
+    expect(run(STATE, ["unit", "pause", "--stage", slug, "--unit", "alpha", "--reason", "waiting",
+      "--next-action", "Clarify resilience."], checkout).status).toBe(0);
+    const row = readAuditShardEvents(checkout).findLast((event) => event.event === "UNIT_PAUSED")!;
+    const shard = readFileSync(row.shard, "utf-8");
+    expect(shard).toContain(row.block);
+    writeFileSync(row.shard, shard.replace(row.block, ""));
+    const later = new Date(Date.parse(row.timestamp) + 1000).toISOString().replace(".000Z", "Z");
+    writeFileSync(join(seededAuditDir(checkout), "foreign-123abc.md"), `${row.block.replace(row.timestamp, later)}\n---\n`);
+    const checkpoint = selectedUnitCheckpoint(checkout, slug, "alpha");
+    expect(checkpoint?.pauseKey).toMatch(/^sha256:[0-9a-f]{64}$/);
+    says(checkout, "An unrelated instruction.");
+    const reopened = run(JUMP, ["reopen", "--target", slug, "--stages", slug, "--units", "alpha", "--scope", "feature",
+      "--via", "change", "--expected-pause", checkpoint!.pauseKey!], checkout, { AIDLC_SESSION_OVERRIDE: SESSION });
+    expect(reopened.status, reopened.out).toBe(0);
+    const rejected = readAuditShardEvents(checkout).findLast((event) => event.event === "GATE_REJECTED")!;
+    expect(auditBlockField(rejected.block, "Feedback")).toBe("Reopened NFR Requirements for unit alpha for a change.");
+    expect(auditBlockField(rejected.block, "Message Id")).toBeNull();
+  });
 
   test("over work made from a long request, the claimed checkout's re-entry step names it by its start (#3750)", () => {
     const { checkout } = claimedPastFunctionalDesign("shared");

@@ -1,6 +1,6 @@
 // covers: subcommand:aidlc-orchestrate:next, function:notePlanApprovalAskReply, function:keepRoutedPlanApprovalReply,
 // function:consumeSharedDirectiveAsk, function:planApprovalKeptReplyWaits, function:openEngineQuestion,
-// function:recordProtectedHumanResponse
+// function:recordProtectedHumanResponse, function:engineAskQuestionId, function:pauseReplyTurns, function:shownAgainFields
 //
 // A number typed for a question the engine asks while another of its questions
 // is open answers nothing by itself. With the code plan question open, a
@@ -28,7 +28,7 @@ import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOp
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   AIDLC_SRC,
   cleanupTestProject,
@@ -46,6 +46,8 @@ import {
 import { testGuardEnvironment } from "../harness/runner-profile.ts";
 import { kiroCliPrompt, kiroCliRecord, kiroCliToolResults } from "../harness/kiro-cli-record.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import { engineAskQuestionId, questionTextSha, selectedUnitCheckpoint, shownAgainFields } from "../../dist/claude/.claude/tools/aidlc-questions.ts";
+import { saveMessage } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
 import {
   artifactFilename,
   auditBlockField,
@@ -55,6 +57,7 @@ import {
   readAuditShardEvents,
   readProtectedResponse,
   reviewArtifactFingerprint,
+  sessionsDir,
   stateDigest,
   writeActiveDirectiveMarker,
   writeSessionPidEntry,
@@ -123,6 +126,273 @@ function project(policy: Policy): string {
   writeFileSync(join(dir, "unit-test-instructions.md"), "# Unit Test Instructions\n\nRun `bun test src/todo.test.ts`.\n", "utf-8");
   return proj;
 }
+
+test("a pause question is reused only for its exact pause and Unit", () => {
+  const p = project("off");
+  const key = `sha256:${"a".repeat(64)}`;
+  const about = { type: "unit-paused", stateDigest: "state", stage: "code-generation", unit: "beta", pauseKey: key };
+  appendAuditEntry("QUESTION_ASKED", {
+    "Question Id": "1234abcd", "Question Type": "unit-paused", "State Digest": "state",
+    "Pause Key": key, Stage: "code-generation", Unit: "beta",
+  }, p);
+  expect(engineAskQuestionId(p, about)).toBe("1234abcd");
+  expect(engineAskQuestionId(p, { ...about, pauseKey: `sha256:${"b".repeat(64)}` })).toBeNull();
+  expect(engineAskQuestionId(p, { ...about, unit: "alpha" })).toBeNull();
+  expect(engineAskQuestionId(p, { ...about, stage: "nfr-design" })).toBeNull();
+});
+
+test("pause reuse selects the latest ask across shards without guessing ties", () => {
+  const p = project("off");
+  const key = `sha256:${"a".repeat(64)}`;
+  const about = { type: "unit-paused", stateDigest: "state", stage: "code-generation", unit: "beta", pauseKey: key };
+  appendAuditEntry("QUESTION_ASKED", { "Question Id": "1234abcd", "Question Type": "unit-paused",
+    "State Digest": "state", "Pause Key": key, Stage: about.stage, Unit: about.unit }, p);
+  const own = readAuditShardEvents(p).findLast((row) => row.event === "QUESTION_ASKED")!;
+  const foreign = join(dirname(own.shard), "zzzz-123abc.md");
+  const older = own.block.replace(own.timestamp, "2000-01-01T00:00:00Z").replace("1234abcd", "9999aaaa");
+  writeFileSync(foreign, `${older}\n\n---\n`);
+  expect(engineAskQuestionId(p, about)).toBe("1234abcd");
+  writeFileSync(foreign, `${own.block.replace("1234abcd", "9999aaaa")}\n\n---\n`);
+  expect(engineAskQuestionId(p, about)).toBeNull();
+});
+
+test("same-second foreign lifecycle rows make pause proof ambiguous", () => {
+  const p = project("off");
+  const stage = "code-generation";
+  const floor = latestMainWorkflowStageRunFloorForProject(p, stage);
+  appendAuditEntry("UNIT_PAUSED", { Stage: stage, Unit: "beta", "Run floor": floor }, p);
+  const own = readAuditShardEvents(p).findLast((row) => row.event === "UNIT_PAUSED")!;
+  expect(selectedUnitCheckpoint(p, stage, "beta")?.pauseKey).toBeDefined();
+  const foreign = join(dirname(own.shard), "zzzz-123abc.md");
+  writeFileSync(foreign, `${own.block.replace("UNIT_PAUSED", "UNIT_RESUMED")}\n\n---\n`);
+  expect(selectedUnitCheckpoint(p, stage, "beta")?.pauseKey).toBeUndefined();
+  writeFileSync(foreign, `${own.block}\n\n---\n`);
+  expect(selectedUnitCheckpoint(p, stage, "beta")?.pauseKey).toBeUndefined();
+  const later = new Date(Date.parse(own.timestamp) + 1000).toISOString().replace(".000Z", "Z");
+  writeFileSync(foreign, `${own.block.replace(own.timestamp, later)}\n\n---\n`);
+  expect(selectedUnitCheckpoint(p, stage, "beta")?.pauseKey).toBeDefined();
+});
+
+describe("pause reply attribution", () => {
+  const key = `sha256:${"a".repeat(64)}`;
+  const qid = "abcd1234";
+  const stage = "code-generation";
+  const unit = "beta";
+  function fixture() {
+    const p = project("off");
+    appendAuditEntry("UNIT_PAUSED", { Stage: stage, Unit: unit }, p);
+    const row = readAuditShardEvents(p).findLast((entry) => entry.event === "UNIT_PAUSED")!;
+    return { p, pause: { key, unit, shard: row.shard, pos: row.pos } };
+  }
+  function show(p: string, chat: string | null, event: "QUESTION_ASKED" | "QUESTION_SHOWN" = "QUESTION_ASKED") {
+    appendAuditEntry(event, { "Question Id": qid, "Question Type": "unit-paused", "Pause Key": key,
+      Stage: stage, Unit: unit, ...(chat ? { "Question Chat": chat } : {}) }, p);
+  }
+  function turn(p: string, chat: string, words: string, options: {
+    picker?: boolean; promptPicker?: boolean; asyncPicker?: true; cut?: true; open?: string; whole?: string;
+  } = {}) {
+    const stored = saveMessage(p, { session: chat, at: new Date().toISOString(),
+      source: options.picker ? "picker" : "prompt", text: words,
+      picker: options.picker || options.promptPicker ? [{ question: "Which?", reply: words }] : null,
+      words, settings: [], route: { scope: null, newIntent: false, skip: [], add: [], projectType: null },
+      ...(options.asyncPicker ? { asyncPicker: true as const } : {}), ...(options.cut ? { cut: true as const } : {}),
+    }, options.whole);
+    appendAuditEntry("HUMAN_TURN", { Session: chat, "Open Question": "unit-paused",
+      "Open Questions": options.open ?? qid, "Message Id": stored.id }, p);
+    return stored.id;
+  }
+  const reply = (p: string, session: string | null, pause: { key: string; unit: string; shard: string; pos: number }) =>
+    personsGateReply(p, session, stage, undefined, pause);
+
+  test("named chats each keep their own words; unseen and unnamed chats do not", () => {
+    const { p, pause } = fixture();
+    show(p, SESSION);
+    turn(p, SESSION, "alpha words");
+    show(p, NEW_CHAT, "QUESTION_SHOWN");
+    turn(p, NEW_CHAT, "beta words");
+    expect(reply(p, SESSION, pause).words).toBe("alpha words");
+    expect(reply(p, NEW_CHAT, pause).words).toBe("beta words");
+    expect(reply(p, "unseen", pause)).toMatchObject({ words: null, replies: [] });
+    expect(reply(p, null, pause)).toMatchObject({ words: null, replies: [] });
+    const unseen = fixture();
+    show(unseen.p, null);
+    turn(unseen.p, SESSION, "not shown by name");
+    expect(reply(unseen.p, SESSION, unseen.pause)).toMatchObject({ words: null, replies: [] });
+  });
+
+  test("an unnamed intervening question blocks attribution until a named re-show", () => {
+    const { p, pause } = fixture();
+    show(p, SESSION);
+    appendAuditEntry("STAGE_AWAITING_APPROVAL", { Stage: stage }, p);
+    turn(p, SESSION, "ambiguous words");
+    expect(reply(p, SESSION, pause)).toMatchObject({ words: null, replies: [] });
+    const restored = shownAgainFields(p, qid, SESSION);
+    expect(restored).not.toBeNull();
+    appendAuditEntry("QUESTION_SHOWN", restored!, p);
+    turn(p, SESSION, "new words");
+    expect(reply(p, SESSION, pause).words).toBe("new words");
+  });
+
+  test("a named re-show restores a prior showing missing its pause key", () => {
+    const { p, pause } = fixture();
+    show(p, SESSION);
+    appendAuditEntry("QUESTION_SHOWN", { "Question Id": qid, "Question Type": "unit-paused",
+      "Question Chat": SESSION, Stage: stage, Unit: unit }, p);
+    turn(p, SESSION, "unproved");
+    expect(reply(p, SESSION, pause)).toMatchObject({ words: null, replies: [] });
+    const restored = shownAgainFields(p, qid, SESSION);
+    expect(restored?.["Pause Key"]).toBe(key);
+    appendAuditEntry("QUESTION_SHOWN", restored!, p);
+    turn(p, SESSION, "proved");
+    expect(reply(p, SESSION, pause).words).toBe("proved");
+  });
+
+  test("another named chat and a backfilled showing do not cover the pause", () => {
+    const { p, pause } = fixture();
+    show(p, SESSION);
+    appendAuditEntry("STAGE_AWAITING_APPROVAL", { Stage: stage, Recovered: "true" }, p);
+    appendAuditEntry("QUESTION_ASKED", { "Question Id": "eeeeeeee", "Question Type": "scope-confirm",
+      "Question Chat": NEW_CHAT, Stage: stage }, p);
+    turn(p, SESSION, "still mine");
+    expect(reply(p, SESSION, pause).words).toBe("still mine");
+  });
+
+  for (const variant of ["picker", "prompt-picker", "async", "cut", "cut-sidecar", "wrong-question"] as const) {
+    test(`mixed typed and ${variant} replies do not attach partial words`, () => {
+      const { p, pause } = fixture();
+      show(p, SESSION);
+      turn(p, SESSION, "whole first");
+      turn(p, SESSION, "second", variant === "picker" ? { picker: true } : variant === "prompt-picker" ? { promptPicker: true } :
+        variant === "async" ? { asyncPicker: true } : variant === "cut" ? { cut: true } : variant === "cut-sidecar" ? { cut: true, whole: "second and more" } :
+          { open: "eeeeeeee" });
+      expect(reply(p, SESSION, pause)).toMatchObject({ words: null, messageId: null, replies: [] });
+    });
+  }
+
+  test("blank stored words invalidate earlier pause words", () => {
+    const { p, pause } = fixture();
+    show(p, SESSION);
+    turn(p, SESSION, "first words");
+    turn(p, SESSION, "   ");
+    expect(reply(p, SESSION, pause)).toMatchObject({ words: null, messageId: null, replies: [] });
+  });
+
+  test("an empty real prompt invalidates earlier pause words", () => {
+    const { p, pause } = fixture();
+    const digest = stateDigest(readFileSync(seededStateFile(p), "utf-8"));
+    appendAuditEntry("QUESTION_ASKED", { "Question Id": qid, "Question Type": "unit-paused", "Pause Key": key,
+      "Question Chat": SESSION, "State Digest": digest, Stage: stage, Unit: unit }, p);
+    writeActiveDirectiveMarker(p, { kind: "ask", ask_type: "unit-paused", stage, unit, state_sha256: digest });
+    say(p, "first words");
+    expect(reply(p, SESSION, pause).words).toBe("first words");
+    say(p, "");
+    expect(reply(p, SESSION, pause)).toMatchObject({ words: null, messageId: null, replies: [] });
+  });
+
+  test("a foreign pause needs a local named showing with the same key", () => {
+    const { p, pause } = fixture();
+    const shard = join(dirname(pause.shard), "foreign-123abc.md");
+    writeFileSync(shard, `## Question Asked\n**Timestamp**: 2026-10-25T19:47:00Z\n` +
+      `**Event**: QUESTION_ASKED\n**Question Id**: ${qid}\n**Question Type**: unit-paused\n` +
+      `**Question Chat**: ${SESSION}\n**Pause Key**: ${key}\n**Stage**: ${stage}\n**Unit**: ${unit}\n\n---\n`);
+    const foreign = { ...pause, shard, pos: 9999 };
+    turn(p, SESSION, "not shown locally");
+    expect(reply(p, SESSION, foreign)).toMatchObject({ words: null, replies: [] });
+    show(p, SESSION, "QUESTION_SHOWN");
+    turn(p, SESSION, "shown locally");
+    expect(reply(p, SESSION, foreign).words).toBe("shown locally");
+  });
+
+  test("a local re-show of a foreign pause stamps a real typed reply", () => {
+    const { p, pause } = fixture();
+    const shard = join(dirname(pause.shard), "foreign-123abc.md");
+    const digest = stateDigest(readFileSync(seededStateFile(p), "utf-8"));
+    writeFileSync(shard, `## Question Asked\n**Timestamp**: 2026-10-25T19:47:00Z\n` +
+      `**Event**: QUESTION_ASKED\n**Question Id**: ${qid}\n**Question Type**: unit-paused\n` +
+      `**Question Chat**: ${SESSION}\n**Pause Key**: ${key}\n**State Digest**: ${digest}\n` +
+      `**Stage**: ${stage}\n**Unit**: ${unit}\n\n---\n`);
+    const shown = shownAgainFields(p, qid, SESSION);
+    expect(shown).not.toBeNull();
+    appendAuditEntry("QUESTION_SHOWN", shown!, p);
+    writeActiveDirectiveMarker(p, { kind: "ask", ask_type: "unit-paused", stage, unit, state_sha256: digest });
+    say(p, "Make the retry path explicit.", "claude", SESSION);
+    const row = readAuditShardEvents(p).findLast((entry) => entry.event === "HUMAN_TURN")!;
+    expect(auditBlockField(row.block, "Open Questions")).toBe(qid);
+    expect(reply(p, SESSION, { ...pause, shard, pos: 9999 }).words).toBe("Make the retry path explicit.");
+  });
+
+  test("a reply whose message record is missing makes the whole window unavailable", () => {
+    const { p, pause } = fixture();
+    show(p, SESSION);
+    turn(p, SESSION, "whole first");
+    appendAuditEntry("HUMAN_TURN", { Session: SESSION, "Open Question": "unit-paused", "Open Questions": qid }, p);
+    expect(reply(p, SESSION, pause)).toMatchObject({ words: null, messageId: null, replies: [] });
+  });
+
+  test("a delayed picker for pause A cannot supply pause B even when it is labeled B", () => {
+    const { p } = fixture();
+    const question = "How should this unit continue?";
+    const digest = stateDigest(readFileSync(seededStateFile(p), "utf-8"));
+    const ask = (id: string, pauseKey: string) => appendAuditEntry("QUESTION_ASKED", {
+      "Question Id": id, "Question Type": "unit-paused", "Question Chat": SESSION, "Pause Key": pauseKey,
+      "Question Text SHA-256": questionTextSha(question), "State Digest": digest, Stage: stage, Unit: unit,
+    }, p);
+    ask(qid, key);
+    appendAuditEntry("UNIT_RESUMED", { Stage: stage, Unit: unit }, p);
+    appendAuditEntry("UNIT_PAUSED", { Stage: stage, Unit: unit }, p);
+    const row = readAuditShardEvents(p).findLast((entry) => entry.event === "UNIT_PAUSED")!;
+    const secondKey = `sha256:${"b".repeat(64)}`;
+    const secondId = "abcd5678";
+    ask(secondId, secondKey);
+    writeActiveDirectiveMarker(p, { kind: "ask", ask_type: "unit-paused", stage, unit, state_sha256: digest });
+    run(p, [DISPATCHER, "engine", "hook", "record-human-turn"], JSON.stringify({
+      hook_event_name: "PostToolUse", tool_name: "AskUserQuestion", session_id: SESSION,
+      tool_input: { questions: [{ question, options: [{ label: "Change" }] }] },
+      tool_response: { answers: { [question]: "Change" } },
+    }));
+    const rows = readAuditShardEvents(p);
+    const picker = rows.findLast((entry) => entry.event === "HUMAN_TURN")!;
+    const answered = rows.findLast((entry) => entry.event === "QUESTION_REPLIED")!;
+    expect(auditBlockField(picker.block, "Open Questions")).toContain(secondId);
+    expect(auditBlockField(answered.block, "Question Id")).toBe(secondId);
+    expect(reply(p, SESSION, { key: secondKey, unit, shard: row.shard, pos: row.pos }))
+      .toMatchObject({ words: null, messageId: null, replies: [] });
+  });
+
+  test("a reply without a stored source makes the whole window unavailable", () => {
+    const { p, pause } = fixture();
+    show(p, SESSION);
+    turn(p, SESSION, "whole first");
+    const id = turn(p, SESSION, "unknown origin");
+    const file = join(sessionsDir(p), "messages", `${id}.json`);
+    const record = JSON.parse(readFileSync(file, "utf-8")) as Record<string, unknown>;
+    delete record.source;
+    writeFileSync(file, JSON.stringify(record));
+    expect(reply(p, SESSION, pause)).toMatchObject({ words: null, messageId: null, replies: [] });
+  });
+
+  test("a spent turn cannot be borrowed", () => {
+    const { p, pause } = fixture();
+    show(p, SESSION);
+    turn(p, SESSION, "already spent");
+    appendAuditEntry("GATE_APPROVED", { Stage: stage }, p);
+    expect(reply(p, SESSION, pause)).toMatchObject({ words: null, replies: [] });
+  });
+
+  test("a withdrawn turn before the pause does not move the dense floor", () => {
+    const p = project("off");
+    const old = saveMessage(p, { session: SESSION, at: new Date().toISOString(), source: "prompt", text: "old",
+      picker: null, words: "old", settings: [], route: { scope: null, newIntent: false, skip: [], add: [], projectType: null } });
+    appendAuditEntry("HUMAN_TURN", { Session: SESSION, "Message Id": old.id }, p);
+    appendAuditEntry("HOST_TURN", { Session: SESSION, "Message Id": old.id }, p);
+    appendAuditEntry("UNIT_PAUSED", { Stage: stage, Unit: unit }, p);
+    const row = readAuditShardEvents(p).findLast((entry) => entry.event === "UNIT_PAUSED")!;
+    const pause = { key, unit, shard: row.shard, pos: row.pos };
+    show(p, SESSION);
+    turn(p, SESSION, "current");
+    expect(reply(p, SESSION, pause).words).toBe("current");
+  });
+});
 
 const stageDir = (proj: string) => join(seededRecordDir(proj), "construction", "code-generation");
 

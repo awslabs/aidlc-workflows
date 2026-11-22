@@ -488,8 +488,11 @@ choice and is read as before, whichever thread asked. An answer in the other box
 Codex offers on some models, `request_user_input_async`, comes back as a new
 prompt wrapped in Codex's `<send_user_message_question_reply>` envelope (a JSON
 list of answer, question and question id); the adapter forwards the answers in
-it, each whole and one per line, as the prompt (`questionReplyWords`), so they
-are kept and read like a reply typed in the chat. Any other prompt, an envelope
+it, each whole and one per line, as the prompt (`questionReplyWords`); the
+message record also keeps `asyncPicker: true` as its origin marker. Ordinary
+gate readers still read those words like a typed reply. Only pause-reopen
+feedback attribution excludes async-picker answers, because their arrival does
+not prove which pause they answered. Any other prompt, an envelope
 with words around it included, goes on as it came. When Codex's question box
 runs out (about two minutes in default mode) it returns no answers,
 `{"answers":{}}`. The adapter forwards exactly that shape to the core hook,
@@ -505,8 +508,9 @@ the mark cut, as `Recommended` (`recommendedChoices`). That row decides
 nothing and spends no turn. Each `HUMAN_TURN` also carries the ids of the
 questions open where the person replied (`Open Questions`) and a digest of
 each entry of the stage's questions file with its answers blanked (`Questions
-Digest`), read from one small index the audit writer keeps; nothing decides on
-them yet. A Codex box the person submits with a question left
+Digest`), read from one small index the audit writer keeps. Pause-reopen
+feedback proof reads `Open Questions` to bind each eligible typed reply to the
+shown pause; `Questions Digest` does not decide that proof. A Codex box the person submits with a question left
 unanswered (Codex returns that question as an empty list) is still their reply
 when another question carries a pick: those picks are recorded, and the blank
 question gets no row. An answer the agent records with `log answer` carries the

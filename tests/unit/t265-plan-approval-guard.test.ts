@@ -1,5 +1,5 @@
 // covers: hook:aidlc-plan-approval-guard, audit:PLAN_APPROVAL_BLOCKED
-// covers: function:parseGuardRestartContinuationCommand, function:personAskedSinceGate, function:personCheckSwitchAllowed
+// covers: function:parseGuardRestartContinuationCommand, function:personAskedSinceGate, function:personCheckSwitchAllowed, function:lastStepAdmitsPersonsMoves, function:nextStageClaimSha256, function:jumpClaimSha256, function:noteNamedJump, function:claimCopilotCommand, function:settleCopilotCommand
 //
 // t265 - code-generation's plan-before-generation ordering, enforced
 // deterministically (issue: the plan was generated AFTER the code, beside
@@ -60,6 +60,11 @@ import {
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
   acquireAuditLock,
+  claimCopilotCommand,
+  jumpClaimSha256,
+  nextStageClaimSha256,
+  noteNamedJump,
+  settleCopilotCommand,
   GUARD_RECOVERY_ASK_TYPE,
   readActiveDirectiveMarker,
   readAllAuditShards,
@@ -1682,6 +1687,62 @@ describe("t265b hook lifecycle", () => {
       rmSync(proj, { recursive: true, force: true });
     }
   });
+
+  test("a settled named reopen admits only its exact pause-proof argv", () => {
+    const proj = scratchProject();
+    try {
+      const state = seedRestartRecoveryState(proj);
+      appendAuditEntry("HUMAN_TURN", { Session: "t265-proof" }, proj);
+      const proof = `sha256:${"a".repeat(64)}`;
+      const args = ["reopen", "--target", "code-generation", "--stages", "code-generation", "--units", "api",
+        "--scope", "poc", "--via", "change", "--expected-pause", proof];
+      const command = `aidlc engine jump ${args.join(" ")}`;
+      const claim = { sessionId: "t265-proof", attemptId: "t265-named", commandKind: "report" as const,
+        commandSha256: "b".repeat(64) };
+      writeActiveDirectiveMarker(proj, { kind: "ask", stage: "code-generation", ask_type: "unit-paused", state_sha256: stateDigest(state) });
+      expect(claimCopilotCommand(proj, state, claim)).toMatchObject({ allowed: true });
+      noteNamedJump(proj, claim.attemptId, args);
+      expect(settleCopilotCommand(proj, state, claim, { kind: "print", stage: "code-generation" })).toBe("settled");
+      const active = readActiveDirectiveMarker(proj, state)!;
+      expect(active.active_attempt?.named_jump_sha256).toBe(jumpClaimSha256(args));
+      const admitted = runHook(proj, BASH(command));
+      expect(admitted.code, admitted.stderr).toBe(0);
+      expect(runHook(proj, BASH(command.replace(proof, `sha256:${"c".repeat(64)}`))).code).toBe(2);
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  for (const named of [false, true]) {
+    test(`a settled predecessor claim admits pause proof with ${named ? "a nonmatching named hash" : "no named hash"}`, () => {
+      const proj = scratchProject();
+      try {
+        const state = seedRestartRecoveryState(proj);
+        appendAuditEntry("HUMAN_TURN", { Session: "t265-proof" }, proj);
+        const proof = `sha256:${"a".repeat(64)}`;
+        const args = ["reopen", "--target", "code-generation", "--stages", "code-generation", "--units", "api",
+          "--scope", "poc", "--via", "change", "--expected-pause", proof];
+        const command = `aidlc engine jump ${args.join(" ")}`;
+        const claim = { sessionId: "t265-proof", attemptId: "t265-next", commandKind: "next" as const,
+          commandSha256: nextStageClaimSha256("code-generation", { unit: "api", change: true })! };
+        expect(claimCopilotCommand(proj, state, claim)).toMatchObject({ allowed: true });
+        if (named) noteNamedJump(proj, claim.attemptId, [...args, "--other"]);
+        expect(settleCopilotCommand(proj, state, claim, { kind: "print", stage: "code-generation" })).toBe("settled");
+        const path = join(proj, RECORD_REL, ".aidlc-engine", "active-directive.json");
+        const initial = JSON.parse(readFileSync(path, "utf-8")) as { active_attempt: Record<string, unknown> };
+        expect(initial.active_attempt.named_jump_sha256 === jumpClaimSha256(args)).toBe(false);
+        const admitted = runHook(proj, BASH(command));
+        expect(admitted.code, admitted.stderr).toBe(0);
+        for (const [field, value] of [["command_sha256", "c".repeat(64)],
+          ["issued_state_sha256", "d".repeat(64)], ["guard_recovery_selection_sha256", "e".repeat(64)]] as const) {
+          writeFileSync(path, JSON.stringify({ ...initial, active_attempt: { ...initial.active_attempt, [field]: value } }));
+          expect(runHook(proj, BASH(command)).code, field).toBe(2);
+        }
+      } finally {
+        rmSync(proj, { recursive: true, force: true });
+      }
+    });
+  }
 
   test("an open recovery ask admits the answer the person picked and keeps code changes waiting (#1317)", () => {
     const publishAsk = (proj: string, remedies: Array<Record<string, unknown>>) => {

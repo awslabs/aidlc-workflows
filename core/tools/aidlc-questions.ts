@@ -1,18 +1,16 @@
-// The question record: every question AI-DLC asks carries one id on the row
-// that asks it, and each turn of the person's carries the ids of the questions
-// open where they replied and what the stage's questions file said then. The
-// ids are the one space mintQuestionId keeps, so a stored question's id is its
-// question's id. Which chats were shown a question as it stands (shownHere)
-// decides whether a reply there can answer it yet; the proof that ties an
-// answer to its question will live here too. The lib never imports
-// this module (a load-time cycle): callers import it directly, and the audit
-// writer reaches the ledger by a lazy require.
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import {
   auditBlockField,
   auditFilePath,
+  type AuditShardEvent,
+  COMMAND_TURN_REPLY,
+  currentUnitLifecycleRows,
+  openUnitCheckpoints,
+  QUESTION_TURN_REPLY,
+  type UnitCheckpoint,
+  unitMajorLifecycleMode,
   ownShardRows,
   planApprovalRuntimeFile,
   readActiveDirectiveMarker,
@@ -37,7 +35,6 @@ export const QUESTIONS_DIGEST_FIELD = "Questions Digest";
 
 /** An engine question with no row of its own, asked when the engine hands it out. */
 export const QUESTION_ASKED = "QUESTION_ASKED";
-/** A question still open, shown in a chat it was not asked or shown in before. */
 export const QUESTION_SHOWN = "QUESTION_SHOWN";
 
 // Question Types are the words the record already uses: `gate`; a `log
@@ -148,6 +145,8 @@ export interface RecordedQuestion {
   type: string;
   stage: string | null;
   unit: string | null;
+  pauseKey: string | null;
+  stateDigest: string | null;
   shows: string | null;
   /** The chats shown it since it last changed what it shows ("" for a command that named no chat). */
   currentIn: Set<string>;
@@ -171,6 +170,8 @@ export function recordedQuestion(projectDir: string, id: string): RecordedQuesti
     type: auditBlockField(asked.block, QUESTION_TYPE_FIELD) ?? "",
     stage: auditBlockField(asked.block, "Stage"),
     unit: auditBlockField(asked.block, "Unit"),
+    pauseKey: auditBlockField(asked.block, "Pause Key"),
+    stateDigest: auditBlockField(asked.block, "State Digest"),
     shows: null,
     currentIn: new Set(),
     questionsFile: auditBlockField(asked.block, "Questions File"),
@@ -224,21 +225,32 @@ export function shownOnlyInOtherChats(projectDir: string, id: string, chat: stri
   }
 }
 
-/**
- * The id an engine ask already has: the same ask type over the same state is
- * the same question (the open engine question's own rule), so the latest
- * engine ask on the committed record, when it is this one, keeps its id in a
- * new chat and in a clone. Null for a new question.
- */
-export function engineAskQuestionId(projectDir: string, about: { type: string; stateDigest: string }): string | null {
+function matchesPause(block: string, pause: { pauseKey?: string | null; stage?: string | null; unit?: string | null }): boolean {
+  return pause.pauseKey != null && auditBlockField(block, QUESTION_TYPE_FIELD) === "unit-paused" &&
+    auditBlockField(block, "Pause Key") === pause.pauseKey && auditBlockField(block, "Stage") === pause.stage &&
+    auditBlockField(block, "Unit") === pause.unit;
+}
+
+export function engineAskQuestionId(
+  projectDir: string,
+  about: { type: string; stateDigest: string; pauseKey?: string; stage?: string; unit?: string },
+): string | null {
   try {
-    const rows = readAuditShardEvents(projectDir);
+    let rows = readAuditShardEvents(projectDir);
+    if (about.type === "unit-paused") {
+      rows = rows.filter((row) => row.event === QUESTION_ASKED &&
+        ENGINE_ASK_TYPES.has(auditBlockField(row.block, QUESTION_TYPE_FIELD) ?? ""));
+      rows.sort((a, b) => a.timestamp.localeCompare(b.timestamp) || a.shardIndex - b.shardIndex || a.pos - b.pos);
+      const last = rows.at(-1);
+      if (last && rows.some((row) => row.timestamp === last.timestamp && row.shard !== last.shard)) return null;
+    }
     for (let index = rows.length - 1; index >= 0; index--) {
       const row = rows[index];
       if (row.event !== QUESTION_ASKED) continue;
       const type = auditBlockField(row.block, QUESTION_TYPE_FIELD) ?? "";
       if (!ENGINE_ASK_TYPES.has(type)) continue;
-      return type === about.type && auditBlockField(row.block, "State Digest") === about.stateDigest
+      const samePause = type !== "unit-paused" || matchesPause(row.block, about);
+      return type === about.type && samePause && auditBlockField(row.block, "State Digest") === about.stateDigest
         ? auditBlockField(row.block, QUESTION_ID_FIELD)
         : null;
     }
@@ -316,13 +328,54 @@ export function latestAskedQuestion(
   return null;
 }
 
-/**
- * The fields of a QUESTION_SHOWN row when the question is shown in a chat that
- * was not shown it as it stands (shownHere: a new chat, one that saw it before
- * its plans were edited, or a command that names no chat after a chat was
- * named), or it shows something else than it last did, with what it shows
- * now; null when that chat already saw it as it is.
- */
+export function selectedUnitCheckpoint(projectDir: string, slug: string, unit: string): UnitCheckpoint | null {
+  const unreadable: string[] = [];
+  const rows = readAuditShardEvents(projectDir, undefined, undefined, unreadable);
+  if (unreadable.length > 0) throw new Error("Unit lifecycle record is unreadable");
+  const current = currentUnitLifecycleRows(projectDir, "", slug, unitMajorLifecycleMode(projectDir), rows);
+  return openUnitCheckpoints(projectDir, current, null).find((entry) => entry.unit === unit) ?? null;
+}
+
+function relevantShowing(rows: readonly AuditShardEvent[], chat: string | null): AuditShardEvent | undefined {
+  return rows.findLast((row) => {
+    if (!ASKING_ROWS.has(row.event) && row.event !== QUESTION_SHOWN) return false;
+    if (row.event === "DECISION_RECORDED" && auditBlockField(row.block, QUESTION_ID_FIELD) === null) return false;
+    if (auditBlockField(row.block, "Recovered") === "true") return false;
+    const shownIn = auditBlockField(row.block, QUESTION_CHAT_FIELD);
+    return shownIn === null || shownIn === chat;
+  });
+}
+
+export function pauseReplyTurns(
+  projectDir: string,
+  mine: readonly AuditShardEvent[],
+  unspent: readonly AuditShardEvent[],
+  session: string | null,
+  pause: { key: string; stage: string; unit: string; shard: string; pos: number },
+): AuditShardEvent[] | null {
+  if (session === null) return null;
+  const shown = relevantShowing(mine, session);
+  if (shown === undefined || auditBlockField(shown.block, QUESTION_CHAT_FIELD) !== session ||
+    !matchesPause(shown.block, { pauseKey: pause.key, stage: pause.stage, unit: pause.unit }) ||
+    (shown.shard === pause.shard && shown.pos <= pause.pos)) return null;
+  const id = auditBlockField(shown.block, QUESTION_ID_FIELD);
+  if (id === null) return null;
+  const { readMessage } = require("./aidlc-message-store.ts") as typeof import("./aidlc-message-store.ts");
+  const turns: AuditShardEvent[] = [];
+  for (const row of unspent) {
+    if (row.shard !== shown.shard || row.pos <= shown.pos || auditBlockField(row.block, "Session") !== session) continue;
+    const reply = auditBlockField(row.block, "Reply");
+    if (reply === COMMAND_TURN_REPLY || reply === QUESTION_TURN_REPLY) continue;
+    const messageId = auditBlockField(row.block, "Message Id");
+    const open = (auditBlockField(row.block, OPEN_QUESTIONS_FIELD) ?? "").split(",").map((value) => value.trim());
+    const message = messageId === null ? null : readMessage(projectDir, messageId);
+    if (!open.includes(id) || message === null || message.session !== session || message.source !== "prompt" ||
+      message.picker !== null || message.asyncPicker === true || message.cut === true) return null;
+    turns.push(row);
+  }
+  return turns;
+}
+
 export function shownAgainFields(
   projectDir: string,
   id: string,
@@ -332,7 +385,12 @@ export function shownAgainFields(
   const question = recordedQuestion(projectDir, id);
   if (question === null) return null;
   const changed = shows !== undefined && shows !== null && shows !== question.shows;
-  if (!changed && question.currentIn.has(chat ?? "")) return null;
+  const previous = question.type === "unit-paused" ? relevantShowing(ownShardRows(projectDir).mine, chat) : undefined;
+  const restores = question.type === "unit-paused" && (previous === undefined ||
+    auditBlockField(previous.block, QUESTION_ID_FIELD) !== id ||
+    !matchesPause(previous.block, question) ||
+    (auditBlockField(previous.block, QUESTION_CHAT_FIELD) ?? "") !== (chat ?? ""));
+  if (!changed && !restores && question.currentIn.has(chat ?? "")) return null;
   const now = shows ?? question.shows;
   return {
     [QUESTION_ID_FIELD]: id,
@@ -341,6 +399,8 @@ export function shownAgainFields(
     ...(now ? { [QUESTION_SHOWS_FIELD]: now } : {}),
     ...(question.stage !== null ? { Stage: question.stage } : {}),
     ...(question.unit !== null ? { Unit: question.unit } : {}),
+    ...(question.pauseKey !== null ? { "Pause Key": question.pauseKey } : {}),
+    ...(question.type === "unit-paused" && question.stateDigest !== null ? { "State Digest": question.stateDigest } : {}),
     ...(question.questionsFile !== null ? { "Questions File": question.questionsFile } : {}),
   };
 }

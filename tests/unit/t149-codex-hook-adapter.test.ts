@@ -1,7 +1,8 @@
 // t149-codex-hook-adapter: the Codex stdin shim normalizes live-captured
 // payloads into the core hooks' contract.
 //
-// covers: file:hooks/aidlc-continue-workflow.ts, file:hooks/aidlc-session-start.ts, file:hooks/aidlc-sync-workflow-state.ts, file:hooks/aidlc-log-subagent.ts, file:hooks/aidlc-write-audit-log.ts, hook:aidlc-plan-approval-guard, function:hasExplicitHumanSelection, function:emptyPickerResult, audit:QUESTION_UNANSWERED
+// covers: file:hooks/aidlc-continue-workflow.ts, file:hooks/aidlc-session-start.ts, file:hooks/aidlc-sync-workflow-state.ts, file:hooks/aidlc-log-subagent.ts, file:hooks/aidlc-write-audit-log.ts, hook:aidlc-plan-approval-guard, function:hasExplicitHumanSelection, function:emptyPickerResult, audit:QUESTION_UNANSWERED, function:questionReplyWords, function:pauseReplyTurns, function:selectedUnitCheckpoint, subcommand:aidlc-jump:reopen
+// covers: function:questionTextSha, function:unitLifecycleRunFloorForProject
 //
 // WHAT. Each case pipes a fixture from tests/fixtures/codex-hook-payloads/
 // (field-verbatim captures off Codex CLI 0.137.0 — the spike corpus at
@@ -60,7 +61,12 @@ import {
 import { hostname, tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { appendAuditEntry } from "../../core/tools/aidlc-audit.ts";
+import { questionTextSha, selectedUnitCheckpoint } from "../../core/tools/aidlc-questions.ts";
 import {
+  auditBlockField,
+  readAuditShardEvents,
+  unitLifecycleRunFloorForProject,
   createIntent,
   engineDir,
   humanActedSinceGate,
@@ -679,12 +685,6 @@ describe("t149 Codex typed guard switch", () => {
   });
 });
 
-// Codex 0.164.0 offers request_user_input_async beside its box on some models
-// (every gpt-6 model in its catalog). An answer given there comes back as a new
-// prompt in Codex's own reply envelope (codex-rs context-fragments
-// answered_question.rs at rust-v0.164.0; LIVE_REPLY is a live capture): the
-// person's turn, kept and read like a reply they typed in the chat, as their
-// answer alone.
 describe("t149 Codex async question box", () => {
   const SESSION = "019f0000-0000-7000-8000-00000000a51c";
   const OPEN = "<send_user_message_question_reply>";
@@ -720,6 +720,86 @@ describe("t149 Codex async question box", () => {
     return listMessages(dir).map((record) => personsWordsText(record.text));
   }
 
+  function twoPauses(dir: string): { key: string; questionId: string } {
+    const file = seededStateFile(dir);
+    const state = readFileSync(file, "utf-8")
+      .replace("- **Lifecycle Phase**: INCEPTION", "- **Lifecycle Phase**: CONSTRUCTION")
+      .replace("- **Current Stage**: requirements-analysis", "- **Current Stage**: code-generation")
+      .replace("## Runtime State\n", "## Runtime State\n- **Construction Iteration**: unit-major\n- **Unit Ownership**: solo\n");
+    writeFileSync(file, state);
+    appendAuditEntry("WORKFLOW_STARTED", { Scope: "feature" }, dir);
+    const stage = "code-generation";
+    const unit = "alpha";
+    const floor = unitLifecycleRunFloorForProject(dir, stage, true, unit);
+    const lifecycle = (event: "UNIT_PAUSED" | "UNIT_RESUMED") => appendAuditEntry(event,
+      { Stage: stage, Unit: unit, "Run floor": floor }, dir);
+    const question = (id: string, key: string) => appendAuditEntry("QUESTION_ASKED", {
+      "Question Id": id, "Question Type": "unit-paused", "Question Chat": SESSION, "Pause Key": key,
+      "Question Text SHA-256": questionTextSha(QUESTION), "State Digest": stateDigest(state), Stage: stage, Unit: unit,
+    }, dir);
+    lifecycle("UNIT_PAUSED");
+    question("a1a1a1a1", selectedUnitCheckpoint(dir, stage, unit)!.pauseKey!);
+    lifecycle("UNIT_RESUMED");
+    lifecycle("UNIT_PAUSED");
+    const key = selectedUnitCheckpoint(dir, stage, unit)!.pauseKey!;
+    const questionId = "b2b2b2b2";
+    question(questionId, key);
+    writeActiveDirectiveMarker(dir, { kind: "ask", ask_type: "unit-paused", stage, unit, state_sha256: stateDigest(state) });
+    return { key, questionId };
+  }
+
+  function reopenPause(dir: string, key: string) {
+    return spawnSync(process.execPath, [join(dir, ".codex", "tools", "aidlc-jump.ts"), "reopen", "--target", "code-generation",
+      "--stages", "code-generation", "--units", "alpha", "--scope", "feature", "--via", "change", "--expected-pause", key,
+      "--project-dir", dir], { cwd: dir, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      env: { ...process.env, CLAUDE_PROJECT_DIR: undefined, AIDLC_SESSION_OVERRIDE: SESSION } });
+  }
+
+  test("a delayed Codex async picker reply never supplies a new pause's change", () => {
+    const dir = scratchProject(true);
+    try {
+      const { key, questionId } = twoPauses(dir);
+      const sent = prompt(dir, LIVE_REPLY);
+      expect(sent.code, sent.stderr).toBe(0);
+      const row = readAuditShardEvents(dir).findLast((entry) => entry.event === "HUMAN_TURN")!;
+      expect(auditBlockField(row.block, "Open Questions")).toContain(questionId);
+      const message = listMessages(dir).find((entry) => entry.id === auditBlockField(row.block, "Message Id"))!;
+      expect(message.source).toBe("prompt");
+      expect(message.picker).toBeNull();
+      expect(personsWordsText(message.text)).toBe(ANSWER);
+      expect(message.words && personsWordsText(message.words)).toBe(ANSWER);
+      expect(message.asyncPicker).toBe(true);
+      const reopened = reopenPause(dir, key);
+      expect(reopened.status, `${reopened.stdout}${reopened.stderr}`).toBe(0);
+      const rejected = readAuditShardEvents(dir).findLast((entry) => entry.event === "GATE_REJECTED")!;
+      expect(auditBlockField(rejected.block, "Feedback")).toBe("Reopened Code Generation for unit alpha for a change.");
+      expect(auditBlockField(rejected.block, "Message Id")).toBeNull();
+      expect(auditBlockField(rejected.block, "Message Ids")).toBeNull();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a typed Codex prompt supplies the current pause's change", () => {
+    const dir = scratchProject(true);
+    try {
+      const { key, questionId } = twoPauses(dir);
+      expect(prompt(dir, ANSWER).code).toBe(0);
+      const row = readAuditShardEvents(dir).findLast((entry) => entry.event === "HUMAN_TURN")!;
+      expect(auditBlockField(row.block, "Open Questions")).toContain(questionId);
+      const id = auditBlockField(row.block, "Message Id");
+      const message = listMessages(dir).find((entry) => entry.id === id)!;
+      expect(message).not.toHaveProperty("asyncPicker");
+      const reopened = reopenPause(dir, key);
+      expect(reopened.status, `${reopened.stdout}${reopened.stderr}`).toBe(0);
+      const rejected = readAuditShardEvents(dir).findLast((entry) => entry.event === "GATE_REJECTED")!;
+      expect(auditBlockField(rejected.block, "Feedback")).toBe(ANSWER);
+      expect(auditBlockField(rejected.block, "Message Id")).toBe(id);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("an answer in Codex's async question box is the person's turn, kept and read at the gate as their own words", () => {
     const dir = scratchProject(true);
     try {
@@ -734,10 +814,24 @@ describe("t149 Codex async question box", () => {
       expect(humanTurnCount(dir)).toBe(1);
       const [record] = listMessages(dir);
       expect(record.source).toBe("prompt");
+      expect(record.asyncPicker).toBe(true);
       expect(personsWordsText(record.text)).toBe(ANSWER);
       expect(record.words && personsWordsText(record.words)).toBe(ANSWER);
       expect(personsGateReply(dir, SESSION, stage).words).toBe(ANSWER);
       expect(readAudit(dir)).not.toContain(OPEN);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a real typed prompt has no async picker marker", () => {
+    const dir = scratchProject(true);
+    try {
+      expect(prompt(dir, "Please cover the retry path.").code).toBe(0);
+      const [record] = listMessages(dir);
+      expect(record.source).toBe("prompt");
+      expect(record).not.toHaveProperty("asyncPicker");
+      expect(personsWordsText(record.text)).toBe("Please cover the retry path.");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

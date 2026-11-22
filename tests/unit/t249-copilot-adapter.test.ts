@@ -2,6 +2,7 @@
 // payloads into the core hooks' contract.
 //
 // covers: file:hooks/aidlc-continue-workflow.ts, file:hooks/aidlc-session-start.ts, file:hooks/aidlc-write-audit-log.ts, file:hooks/aidlc-log-subagent.ts, file:hooks/aidlc-session-end.ts, file:hooks/aidlc-deliver-stage-rules.ts, file:hooks/aidlc-plan-approval-guard.ts, file:hooks/aidlc-review-freeze.ts, function:ACTIVE_DIRECTIVE_MESSAGE_MAX_BYTES, function:invalidateActiveDirectiveContext, function:recordCopilotHumanSequence, function:claimCopilotCommand, function:settleCopilotCommand, function:copilotStopEvidence, function:consumeCopilotConversation, function:settleCopilotIntentBoundary, function:updateCopilotStopCount, audit:SUBAGENT_PROMPT_UNMATCHED, function:appendSubagentPromptUnmatched, audit:COORDINATION_STOOD_ASIDE, function:appendCoordinationStoodAside, function:clearSessionIntentSwitch, function:recordIntentKey, function:parseRecordIntentKey, function:RECORD_INTENT_PREFIX
+// covers: function:lastStepAdmitsPersonsMoves, function:jumpClaimSha256, function:noteNamedJump, function:selectedUnitCheckpoint, function:unitLifecycleRunFloorForProject, subcommand:aidlc-jump:reopen
 //
 // WHAT. Each case pipes a fixture from tests/fixtures/copilot-hook-payloads/
 // (field-verbatim captures off Copilot CLI 1.0.74, plus a task launch off 1.0.74
@@ -68,6 +69,11 @@ import {
   acquireAuditLock,
   auditBlockField,
   auditLockDir,
+  claimCopilotCommand,
+  jumpClaimSha256,
+  noteNamedJump,
+  settleCopilotCommand,
+  unitLifecycleRunFloorForProject,
   engineDir,
   humanTurnMarkerPath,
   humanTurnState,
@@ -101,6 +107,8 @@ import {
   seededStateFile,
   WORKER_BRIEF_SECTIONS_FIXTURE,
 } from "../harness/fixtures.ts";
+import { appendAuditEntry } from "../../core/tools/aidlc-audit.ts";
+import { selectedUnitCheckpoint } from "../../core/tools/aidlc-questions.ts";
 import { writeActiveDirectiveMarker } from "../../core/tools/aidlc-lib.ts";
 import { saveRestartRequest } from "../../core/tools/aidlc-question-store.ts";
 import {
@@ -5983,6 +5991,95 @@ describe("t249 Copilot guard-tool-call runs the four guards in the adapter's own
 });
 
 describe("t249 a jump the person asks for starts its step in the claimed next", () => {
+  test("a named report reopen admits its exact stale pause key without changing the transition", () => {
+    const dir = orchestrationProject();
+    const session = "pause-proof-owner";
+    const file = seededStateFile(dir);
+    const state = readFileSync(file, "utf-8")
+      .replace("- **Lifecycle Phase**: INCEPTION", "- **Lifecycle Phase**: CONSTRUCTION")
+      .replace("- **Current Stage**: requirements-analysis", "- **Current Stage**: code-generation")
+      .replace("## Runtime State\n", "## Runtime State\n- **Construction Iteration**: unit-major\n- **Unit Ownership**: solo\n");
+    writeFileSync(file, state);
+    appendAuditEntry("WORKFLOW_STARTED", { Scope: "feature" }, dir);
+    const floor = unitLifecycleRunFloorForProject(dir, "code-generation", true, "alpha");
+    appendAuditEntry("UNIT_PAUSED", { Stage: "code-generation", Unit: "alpha", "Run floor": floor }, dir);
+    const current = selectedUnitCheckpoint(dir, "code-generation", "alpha");
+    expect(current?.pauseKey).toMatch(/^sha256:[0-9a-f]{64}$/);
+    const stale = `sha256:${"b".repeat(64)}`;
+    expect(stale).not.toBe(current!.pauseKey);
+    const args = ["reopen", "--target", "code-generation", "--stages", "code-generation", "--units", "alpha",
+      "--scope", "feature", "--via", "change", "--expected-pause", stale];
+    const command = `aidlc engine jump ${args.join(" ")}`;
+    appendAuditEntry("HUMAN_TURN", { Session: session }, dir);
+    writeActiveDirectiveMarker(dir, { kind: "ask", stage: "code-generation", ask_type: "unit-paused", state_sha256: stateDigest(state) });
+    const reportArgs = ["report", "--stage", "code-generation", "--unit", "alpha", "--result", "rejected", "--user-input", "Request Changes"];
+    const claim = { sessionId: session, attemptId: "pause-report", commandKind: "report" as const,
+      commandSha256: createHash("sha256").update(JSON.stringify(reportArgs)).digest("hex") };
+    expect(claimCopilotCommand(dir, state, claim)).toMatchObject({ allowed: true });
+    noteNamedJump(dir, claim.attemptId, args);
+    expect(settleCopilotCommand(dir, state, claim, { kind: "print", stage: "code-generation" })).toBe("settled");
+    expect((marker(dir).active_attempt as Record<string, unknown>).named_jump_sha256).toBe(jumpClaimSha256(args));
+    expect(permission(guardDecision(dir, commandPayload(dir, session, command)).stdout)).not.toBe("deny");
+    expect(permission(guardDecision(dir, commandPayload(dir, session,
+      command.replace(stale, `sha256:${"c".repeat(64)}`))).stdout)).toBe("deny");
+    const reopened = spawnSync(process.execPath, [join(dir, ".aidlc", "tools", "aidlc-jump.ts"), ...args, "--project-dir", dir], {
+      cwd: dir, encoding: "utf-8", env: { ...process.env, AIDLC_SESSION_OVERRIDE: session },
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(reopened.status, `${reopened.stdout}${reopened.stderr}`).toBe(0);
+    const rejected = readAuditShardEvents(dir).findLast((entry) => entry.event === "GATE_REJECTED")!;
+    expect(auditBlockField(rejected.block, "Feedback")).toBe("Reopened Code Generation for unit alpha for a change.");
+    expect(auditBlockField(rejected.block, "Message Id")).toBeNull();
+    expect(unitLifecycleRunFloorForProject(dir, "code-generation", true, "alpha")).not.toBe(floor);
+  });
+
+  test("an admitted stale pause key changes feedback but not the Unit transition", () => {
+    const results: Array<{ feedback: string | null; id: string | null; expectedId: string | null; transition: string[] }> = [];
+    for (const stale of [false, true]) {
+      const dir = orchestrationProject();
+      const session = "pause-comparison-owner";
+      const file = seededStateFile(dir);
+      const state = readFileSync(file, "utf-8")
+        .replace("- **Lifecycle Phase**: INCEPTION", "- **Lifecycle Phase**: CONSTRUCTION")
+        .replace("- **Current Stage**: requirements-analysis", "- **Current Stage**: code-generation")
+        .replace("## Runtime State\n", "## Runtime State\n- **Construction Iteration**: unit-major\n- **Unit Ownership**: solo\n");
+      writeFileSync(file, state);
+      appendAuditEntry("WORKFLOW_STARTED", { Scope: "feature" }, dir);
+      const floor = unitLifecycleRunFloorForProject(dir, "code-generation", true, "alpha");
+      appendAuditEntry("UNIT_PAUSED", { Stage: "code-generation", Unit: "alpha", "Run floor": floor }, dir);
+      const key = selectedUnitCheckpoint(dir, "code-generation", "alpha")!.pauseKey!;
+      appendAuditEntry("QUESTION_ASKED", { "Question Id": "abcdef12", "Question Type": "unit-paused",
+        "Question Chat": session, "Pause Key": key, "State Digest": stateDigest(state), Stage: "code-generation", Unit: "alpha" }, dir);
+      writeActiveDirectiveMarker(dir, { kind: "ask", stage: "code-generation", unit: "alpha", ask_type: "unit-paused", state_sha256: stateDigest(state) });
+      const typed = runAdapter(dir, "record-human-turn", { hook_event_name: "UserPromptSubmit", session_id: session,
+        cwd: dir, prompt: "Cover the retry path." });
+      expect(typed.code, typed.stderr).toBe(0);
+      const turn = readAuditShardEvents(dir).findLast((entry) => entry.event === "HUMAN_TURN")!;
+      const expectedId = auditBlockField(turn.block, "Message Id");
+      const proof = stale ? `sha256:${"b".repeat(64)}` : key;
+      const args = ["reopen", "--target", "code-generation", "--stages", "code-generation", "--units", "alpha",
+        "--scope", "feature", "--via", "change", "--expected-pause", proof];
+      const command = `aidlc engine jump ${args.join(" ")}`;
+      const claim = { sessionId: session, attemptId: "pause-report", commandKind: "report" as const, commandSha256: "a".repeat(64) };
+      expect(claimCopilotCommand(dir, state, claim)).toMatchObject({ allowed: true });
+      noteNamedJump(dir, claim.attemptId, args);
+      expect(settleCopilotCommand(dir, state, claim, { kind: "print", stage: "code-generation" })).toBe("settled");
+      expect(permission(guardDecision(dir, commandPayload(dir, session, command)).stdout)).not.toBe("deny");
+      const reopened = spawnSync(process.execPath, [join(dir, ".aidlc", "tools", "aidlc-jump.ts"), ...args, "--project-dir", dir], {
+        cwd: dir, encoding: "utf-8", env: { ...process.env, AIDLC_SESSION_OVERRIDE: session },
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      });
+      expect(reopened.status, `${reopened.stdout}${reopened.stderr}`).toBe(0);
+      const row = readAuditShardEvents(dir).findLast((entry) => entry.event === "GATE_REJECTED")!;
+      expect(unitLifecycleRunFloorForProject(dir, "code-generation", true, "alpha")).not.toBe(floor);
+      results.push({ feedback: auditBlockField(row.block, "Feedback"), id: auditBlockField(row.block, "Message Id"), expectedId,
+        transition: [auditBlockField(row.block, "Stage")!, auditBlockField(row.block, "Unit")!, auditBlockField(row.block, "Reopen")!] });
+    }
+    expect(results[0]).toMatchObject({ feedback: "Cover the retry path.", id: results[0].expectedId });
+    expect(results[1]).toMatchObject({ feedback: "Reopened Code Generation for unit alpha for a change.", id: null });
+    expect(results[1].transition).toEqual(results[0].transition);
+  });
+
   test("next --phase makes the jump, returns the target's step, and the adapter delivers it", () => {
     const dir = orchestrationProject();
     const session = "jump-one-step-owner";

@@ -6,7 +6,7 @@
 // covers: function:constructionPolicyChangeAuthority, function:constructionPolicyChangeAllowed
 // covers: function:hasPendingDecision
 // covers: function:guardRecoveryAskFromRefusalText, function:unitOpenCheckpoints, subcommand:aidlc-state:unit, subcommand:aidlc-log:review, hook:aidlc-session-start
-// covers: function:unitStepOwedOnlyReceipt, function:unitStepChangeReopen
+// covers: function:unitStepOwedOnlyReceipt, function:unitStepChangeReopen, function:selectedUnitCheckpoint, function:openUnitCheckpoints
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
   NATIVE_STARTUP_TIMEOUT_MS,
@@ -45,7 +45,7 @@ import {
   artifactFilename, findStageBySlug, latestMainWorkflowStageRunFloorForProject,
   reviewArtifactFingerprint, authorizedConstructionPolicyChange, auditBlockField, readAuditShardEvents, setField, unitCompletedReceipts,
   hasPendingDecision, guardRecoveryAskFromRefusalText, freshReviewReceipts, getField, REDO_REUSE_SOURCE,
-  _resetScopeMappingForTests, constructionCheckpointGaps,
+  _resetScopeMappingForTests, constructionCheckpointGaps, unitOpenCheckpoints, clearActiveDirectiveMarker,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 // The stage's checks run once before its review or gate, and again at the gate
@@ -4179,23 +4179,353 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
 
   const rejections = (p: string) => readAuditShardEvents(p).filter((row) => row.event === "GATE_REJECTED");
 
+  test("a pause key stays stable across turns and changes for the next pause", () => {
+    const p = betaPaused("none");
+    const key = () => (unitOpenCheckpoints(p, "code-generation").find((entry) => entry.unit === "beta") as
+      { pauseKey?: string } | undefined)?.pauseKey;
+    const first = key();
+    expect(first).toMatch(/^sha256:[0-9a-f]{64}$/);
+    policyHuman(p, "Another detail.", "t342-plan");
+    expect(key()).toBe(first);
+    expect(tool(p, "state", ["unit", "resume", "--stage", "code-generation", "--unit", "beta"]).status).toBe(0);
+    expect(tool(p, "state", ["unit", "pause", "--stage", "code-generation", "--unit", "beta",
+      "--reason", "waiting for an answer", "--next-action", "Revise the plan."]).status).toBe(0);
+    expect(key()).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(key()).not.toBe(first);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("pause questions keep their key and reuse their ID until a new pause", () => {
+    const p = betaCodeWrittenAndReviewed("none");
+    const env = { ...process.env, AIDLC_SESSION_OVERRIDE: "t342-plan" };
+    const pause = () => tool(p, "state", ["unit", "pause", "--stage", "code-generation", "--unit", "beta",
+      "--reason", "waiting for an answer", "--next-action", "Revise the plan."], env);
+    const questions = () => readAuditShardEvents(p).filter((row) => row.event === "QUESTION_ASKED" &&
+      auditBlockField(row.block, "Question Type") === "unit-paused");
+    expect(pause().status).toBe(0);
+    const firstKey = unitOpenCheckpoints(p, "code-generation").find((item) => item.unit === "beta")?.pauseKey;
+    expect(next(p, env)).toMatchObject({ kind: "ask", ask_type: "unit-paused" });
+    expect(questions()).toHaveLength(1);
+    expect(auditBlockField(questions()[0].block, "Pause Key")).toBe(firstKey ?? null);
+    const firstId = auditBlockField(questions()[0].block, "Question Id");
+    expect(next(p, env)).toMatchObject({ kind: "ask", ask_type: "unit-paused" });
+    expect(questions()).toHaveLength(1);
+    expect(tool(p, "state", ["unit", "resume", "--stage", "code-generation", "--unit", "beta"], env).status).toBe(0);
+    expect(pause().status).toBe(0);
+    const secondKey = unitOpenCheckpoints(p, "code-generation").find((item) => item.unit === "beta")?.pauseKey;
+    expect(secondKey).not.toBe(firstKey);
+    expect(next(p, env)).toMatchObject({ kind: "ask", ask_type: "unit-paused" });
+    expect(questions()).toHaveLength(2);
+    expect(auditBlockField(questions()[1].block, "Pause Key")).toBe(secondKey ?? null);
+    expect(auditBlockField(questions()[1].block, "Question Id")).not.toBe(firstId);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("the printed paused change reopen names the current pause key", () => {
+    const p = betaPaused("none");
+    const key = unitOpenCheckpoints(p, "code-generation").find((item) => item.unit === "beta")?.pauseKey;
+    expect(key).toMatch(/^sha256:[0-9a-f]{64}$/);
+    const step = changeFor(p, "change");
+    expect(step.kind).toBe("print");
+    expect(step.message).toContain(`--expected-pause ${key}`);
+    expect(step.message).toContain("make the change from their own words; they already said what to change, so do not ask whether to keep, change or redo its files.");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("an ambiguous pause prints no proof for its change", () => {
+    const p = betaPaused("none");
+    const own = readAuditShardEvents(p).findLast((row) => row.event === "UNIT_PAUSED" && auditBlockField(row.block, "Unit") === "beta")!;
+    writeFileSync(join(dirname(own.shard), "zzzz-123abc.md"), `${own.block}\n\n---\n`);
+    expect(unitOpenCheckpoints(p, "code-generation").find((item) => item.unit === "beta")?.pauseKey).toBeUndefined();
+    const step = changeFor(p, "change");
+    expect(step.message).toContain("--expected-pause none");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a non-paused named report retains the ordinary reopen route", () => {
+    const p = betaCodeWrittenAndReviewed();
+    const id = policyHuman(p, "Change beta's plan.", "t342-plan");
+    const report = tool(p, "orchestrate", ["report", "--stage", "code-generation", "--result", "rejected",
+      "--unit", "beta", "--user-input", "Request Changes", "--message", id]);
+    expect(report.status, report.out).toBe(0);
+    const step = JSON.parse(report.stdout) as { message: string };
+    expect(step.message).not.toContain("--expected-pause");
+    expect(step.message).toContain('"Making your change in Code Generation for unit beta.');
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a report naming a message prints no pause proof for its change", () => {
+    const p = betaPaused("none");
+    const env = { ...process.env, AIDLC_SESSION_OVERRIDE: "t342-plan" };
+    expect(next(p, env)).toMatchObject({ kind: "ask", ask_type: "unit-paused", unit: "beta" });
+    const first = policyHuman(p, "Use the first change.", "t342-plan");
+    policyHuman(p, "Use the second change.", "t342-plan");
+    const report = tool(p, "orchestrate", ["report", "--stage", "code-generation", "--result", "rejected",
+      "--unit", "beta", "--user-input", "Request Changes", "--message", first]);
+    expect(report.status, report.out).toBe(0);
+    const step = JSON.parse(report.stdout) as { kind: string; message?: string };
+    expect(step.kind).toBe("print");
+    expect(step.message).toContain("--expected-pause none");
+    const command = /`[^`]*aidlc-jump\.ts (reopen [^`]+)`/.exec(step.message ?? "")?.[1];
+    expect(command).toBeDefined();
+    const argv = [...command!.matchAll(/'([^']*)'|(\S+)/g)].map((match) => match[1] ?? match[2]);
+    expect(tool(p, "state", ["unit", "resume", "--stage", "code-generation", "--unit", "beta"], env).status).toBe(0);
+    clearActiveDirectiveMarker(p);
+    const ordinaryId = policyHuman(p, "An ordinary reply after resuming.", "t342-plan");
+    const ordinaryTurn = readAuditShardEvents(p).findLast((row) => row.event === "HUMAN_TURN" && auditBlockField(row.block, "Message Id") === ordinaryId)!;
+    expect(auditBlockField(ordinaryTurn.block, "Open Question")).toBeNull();
+    const reopened = tool(p, "jump", argv, env);
+    expect(reopened.status, reopened.out).toBe(0);
+    const row = rejections(p).at(-1)!;
+    expect(auditBlockField(row.block, "Feedback")).toBe("Reopened Code Generation for unit beta for a change.");
+    expect(auditBlockField(row.block, "Message Id")).toBeNull();
+    expect(auditBlockField(row.block, "Message Ids")).toBeNull();
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a named report without a message keeps the pause reply", () => {
+    const p = betaPaused("none");
+    const env = { ...process.env, AIDLC_SESSION_OVERRIDE: "t342-plan" };
+    expect(next(p, env)).toMatchObject({ kind: "ask", ask_type: "unit-paused", unit: "beta" });
+    const words = "Use the report change.";
+    const id = policyHuman(p, words, "t342-plan");
+    const report = tool(p, "orchestrate", ["report", "--stage", "code-generation", "--result", "rejected",
+      "--unit", "beta", "--user-input", "Request Changes"], env);
+    expect(report.status, report.out).toBe(0);
+    const step = JSON.parse(report.stdout) as { message: string };
+    const command = /`[^`]*aidlc-jump\.ts (reopen [^`]+)`/.exec(step.message)?.[1];
+    expect(command).toBeDefined();
+    const argv = [...command!.matchAll(/'([^']*)'|(\S+)/g)].map((match) => match[1] ?? match[2]);
+    const result = tool(p, "jump", argv, env);
+    expect(result.status, result.out).toBe(0);
+    expect(JSON.parse(result.stdout).message).toBe("Reopened Code Generation for unit beta to make your change.");
+    const row = rejections(p).at(-1)!;
+    expect(auditBlockField(row.block, "Feedback")).toBe(words);
+    expect(row.block).toContain(id);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a paused change keeps the way back to the other Unit", () => {
+    const p = betaCodeWrittenAndReviewed("none");
+    reopenFor(p, ["--stage", "nfr-design", "--unit", "alpha"]);
+    expect(next(p)).toMatchObject({ kind: "run-stage", stage: "nfr-design", unit: "alpha" });
+    const started = tool(p, "state", ["unit", "start", "--stage", "nfr-design", "--unit", "alpha"]);
+    expect(started.status, started.out).toBe(0);
+    const resumed = tool(p, "state", ["unit", "resume", "--stage", "code-generation", "--unit", "beta"]);
+    expect(resumed.status, resumed.out).toBe(0);
+    const paused = tool(p, "state", ["unit", "pause", "--stage", "code-generation", "--unit", "beta",
+      "--reason", "waiting", "--next-action", "Revise beta."]);
+    expect(paused.status, paused.out).toBe(0);
+    expect(next(p)).toMatchObject({ kind: "ask", ask_type: "unit-paused", unit: "beta" });
+    policyHuman(p, "Change beta's plan.", "t342-plan");
+    const step = changeFor(p, "change");
+    expect(step.kind, JSON.stringify(step)).toBe("print");
+    expect(step.message).toContain("unit pause --stage nfr-design --unit alpha");
+    expect(step.message).toContain("You can pick alpha up again any time.");
+    expect(step.message).toContain("next --stage nfr-design --unit alpha");
+    runPrintedCommands(p, step.message!);
+    expect(unitOpenCheckpoints(p, "nfr-design").find((checkpoint) => checkpoint.unit === "alpha"))
+      .toMatchObject({ state: "paused", setAsideFor: "beta" });
+    expect(rejections(p).some((row) => auditBlockField(row.block, "Unit") === "beta")).toBe(true);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a named chat's pause reply is preserved when its finished Unit reopens", () => {
+    const p = betaCodeWrittenAndReviewed("none");
+    const env = { ...process.env, AIDLC_SESSION_OVERRIDE: "t342-plan" };
+    const paused = tool(p, "state", [
+      "unit", "pause", "--stage", "code-generation", "--unit", "beta", "--reason", "waiting for an answer",
+      "--next-action", "Revise the plan.",
+    ], env);
+    expect(paused.status, paused.out).toBe(0);
+    expect(next(p, env)).toMatchObject({ kind: "ask", ask_type: "unit-paused", unit: "beta" });
+    const words = "Change beta's plan: cover the retry path.";
+    const id = policyHuman(p, words, "t342-plan");
+    const step = runOrchestrateNext(join(AIDLC_SRC, "tools/aidlc-orchestrate.ts"), p,
+      ["--stage", "code-generation", "--unit", "beta", "--change"], { env }).directive;
+    expect(step?.kind).toBe("print");
+    const command = /`[^`]*aidlc-jump\.ts (reopen [^`]+)`/.exec(typeof step?.message === "string" ? step.message : "")?.[1];
+    expect(command).toBeDefined();
+    guardsLetThrough(p, `aidlc engine jump ${command}`);
+    const argv = [...command!.matchAll(/'([^']*)'|(\S+)/g)].map((match) => match[1] ?? match[2]);
+    const reopened = tool(p, "jump", argv, env);
+    expect(reopened.status, reopened.out).toBe(0);
+    expect(JSON.parse(reopened.stdout).message).toBe("Reopened Code Generation for unit beta to make your change.");
+    const row = rejections(p).at(-1)!;
+    expect(auditBlockField(row.block, "Feedback")).toBe(words);
+    expect(row.block).toContain(id);
+    expect(next(p, env)).toMatchObject({ kind: "run-stage", stage: "code-generation", unit: "beta", plan_approval: { status: "revise", feedback: words } });
+    expect(approved(p, "alpha")).toBe(true);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a delayed picker for an earlier pause cannot supply the reopened change", () => {
+    const p = betaCodeWrittenAndReviewed("none");
+    const env = { ...process.env, AIDLC_SESSION_OVERRIDE: "t342-plan" };
+    const pause = () => tool(p, "state", ["unit", "pause", "--stage", "code-generation", "--unit", "beta",
+      "--reason", "waiting for an answer", "--next-action", "Revise the plan."], env);
+    expect(pause().status).toBe(0);
+    const first = next(p, env) as unknown as { question: string; question_id: string };
+    expect(tool(p, "state", ["unit", "resume", "--stage", "code-generation", "--unit", "beta"], env).status).toBe(0);
+    expect(pause().status).toBe(0);
+    const second = next(p, env) as unknown as { question: string; question_id: string };
+    expect(second.question).toBe(first.question);
+    expect(second.question_id).not.toBe(first.question_id);
+    hookCall(p, [join(AIDLC_SRC, "tools/aidlc.ts"), "engine", "hook", "record-human-turn"], {
+      hook_event_name: "PostToolUse", tool_name: "AskUserQuestion",
+      tool_input: { questions: [{ question: first.question, options: [{ label: "Change" }] }] },
+      tool_response: { answers: { [first.question]: "Change" } },
+    });
+    const rows = readAuditShardEvents(p);
+    const picker = rows.findLast((row) => row.event === "HUMAN_TURN")!;
+    const answered = rows.findLast((row) => row.event === "QUESTION_REPLIED");
+    expect(answered, JSON.stringify(rows.slice(-6))).toBeDefined();
+    expect(auditBlockField(answered!.block, "Question Id")).toBe(second.question_id);
+    const pickerId = auditBlockField(picker.block, "Message Id");
+    const step = runOrchestrateNext(join(AIDLC_SRC, "tools/aidlc-orchestrate.ts"), p,
+      ["--stage", "code-generation", "--unit", "beta", "--change"], { env }).directive;
+    const command = /`[^`]*aidlc-jump\.ts (reopen [^`]+)`/.exec(typeof step?.message === "string" ? step.message : "")?.[1];
+    expect(command).toBeDefined();
+    const argv = [...command!.matchAll(/'([^']*)'|(\S+)/g)].map((match) => match[1] ?? match[2]);
+    const reopened = tool(p, "jump", argv, env);
+    expect(reopened.status, reopened.out).toBe(0);
+    const row = rejections(p).at(-1)!;
+    expect(auditBlockField(row.block, "Feedback")).toBe("Reopened Code Generation for unit beta for a change.");
+    expect(auditBlockField(row.block, "Message Id")).toBeNull();
+    expect(pickerId).toBeTruthy();
+    expect(row.block).not.toContain(pickerId!);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("an old pause command after resume reopens without borrowing ordinary words", () => {
+    const p = betaCodeWrittenAndReviewed("none");
+    const env = { ...process.env, AIDLC_SESSION_OVERRIDE: "t342-plan" };
+    const ordinaryId = policyHuman(p, "Ordinary words before the pause.", "t342-plan");
+    const ordinaryTurn = readAuditShardEvents(p).findLast((row) => row.event === "HUMAN_TURN")!;
+    expect(auditBlockField(ordinaryTurn.block, "Message Id")).toBe(ordinaryId);
+    expect(auditBlockField(ordinaryTurn.block, "Open Question")).toBeNull();
+    const paused = tool(p, "state", ["unit", "pause", "--stage", "code-generation", "--unit", "beta",
+      "--reason", "waiting for an answer", "--next-action", "Revise the plan."], env);
+    expect(paused.status, paused.out).toBe(0);
+    expect(next(p, env)).toMatchObject({ kind: "ask", ask_type: "unit-paused" });
+    policyHuman(p, "First change.", "t342-plan");
+    const step = runOrchestrateNext(join(AIDLC_SRC, "tools/aidlc-orchestrate.ts"), p,
+      ["--stage", "code-generation", "--unit", "beta", "--change"], { env }).directive;
+    const command = /`[^`]*aidlc-jump\.ts (reopen [^`]+)`/.exec(typeof step?.message === "string" ? step.message : "")?.[1];
+    expect(command).toBeDefined();
+    const resumed = tool(p, "state", ["unit", "resume", "--stage", "code-generation", "--unit", "beta"], env);
+    expect(resumed.status, resumed.out).toBe(0);
+    const argv = [...command!.matchAll(/'([^']*)'|(\S+)/g)].map((match) => match[1] ?? match[2]);
+    const reopened = tool(p, "jump", argv, env);
+    expect(reopened.status, reopened.out).toBe(0);
+    const row = rejections(p).at(-1)!;
+    expect(auditBlockField(row.block, "Feedback")).toBe("Reopened Code Generation for unit beta for a change.");
+    expect(auditBlockField(row.block, "Message Id")).toBeNull();
+    expect(auditBlockField(row.block, "Message Ids")).toBeNull();
+    expect(row.block).not.toContain(ordinaryId);
+    expect(JSON.parse(reopened.stdout).message).toBe(
+      "Reopened Code Generation for unit beta. When you review the revised work, check that it includes your change.",
+    );
+    expect(approved(p, "alpha")).toBe(true);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("an old pause command reopens without borrowing a same-second later pause's reply", () => {
+    const p = betaCodeWrittenAndReviewed("none");
+    const env = { ...process.env, AIDLC_SESSION_OVERRIDE: "t342-plan" };
+    const pause = () => tool(p, "state", ["unit", "pause", "--stage", "code-generation", "--unit", "beta",
+      "--reason", "waiting for an answer", "--next-action", "Revise the plan."], env);
+    expect(pause().status).toBe(0);
+    const firstPause = readAuditShardEvents(p).findLast((row) => row.event === "UNIT_PAUSED")!;
+    const firstKey = unitOpenCheckpoints(p, "code-generation").find((checkpoint) => checkpoint.unit === "beta")?.pauseKey;
+    expect(firstKey).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(next(p, env)).toMatchObject({ kind: "ask", ask_type: "unit-paused" });
+    policyHuman(p, "First change.", "t342-plan");
+    const step = runOrchestrateNext(join(AIDLC_SRC, "tools/aidlc-orchestrate.ts"), p,
+      ["--stage", "code-generation", "--unit", "beta", "--change"], { env }).directive;
+    const command = /`[^`]*aidlc-jump\.ts (reopen [^`]+)`/.exec(typeof step?.message === "string" ? step.message : "")?.[1];
+    expect(command).toBeDefined();
+    expect(command).toContain(`--expected-pause ${firstKey}`);
+    expect(tool(p, "state", ["unit", "resume", "--stage", "code-generation", "--unit", "beta"], env).status).toBe(0);
+    expect(pause().status).toBe(0);
+    const lifecycle = readAuditShardEvents(p);
+    const resumed = lifecycle.findLast((row) => row.event === "UNIT_RESUMED" && auditBlockField(row.block, "Unit") === "beta")!;
+    const secondPause = lifecycle.findLast((row) => row.event === "UNIT_PAUSED" && auditBlockField(row.block, "Unit") === "beta")!;
+    expect(resumed.shard).toBe(firstPause.shard);
+    expect(secondPause.shard).toBe(firstPause.shard);
+    let shard = readFileSync(firstPause.shard, "utf-8");
+    for (const row of [resumed, secondPause]) {
+      expect(shard).toContain(row.block);
+      shard = shard.replace(row.block, row.block.replace(`**Timestamp**: ${row.timestamp}`, `**Timestamp**: ${firstPause.timestamp}`));
+    }
+    writeFileSync(firstPause.shard, shard);
+    const pauses = readAuditShardEvents(p).filter((row) => row.event === "UNIT_PAUSED" &&
+      auditBlockField(row.block, "Unit") === "beta").slice(-2);
+    expect(pauses).toHaveLength(2);
+    expect(pauses[1].timestamp).toBe(pauses[0].timestamp);
+    const secondKey = unitOpenCheckpoints(p, "code-generation").find((checkpoint) => checkpoint.unit === "beta")?.pauseKey;
+    expect(secondKey).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(secondKey).not.toBe(firstKey);
+    expect(next(p, env)).toMatchObject({ kind: "ask", ask_type: "unit-paused" });
+    const laterId = policyHuman(p, "Second change.", "t342-plan");
+    const argv = [...command!.matchAll(/'([^']*)'|(\S+)/g)].map((match) => match[1] ?? match[2]);
+    const reopened = tool(p, "jump", argv, env);
+    expect(reopened.status, reopened.out).toBe(0);
+    const row = rejections(p).at(-1)!;
+    expect(auditBlockField(row.block, "Feedback")).toBe("Reopened Code Generation for unit beta for a change.");
+    expect(auditBlockField(row.block, "Message Id")).toBeNull();
+    expect(auditBlockField(row.block, "Message Ids")).toBeNull();
+    expect(row.block).not.toContain(laterId);
+    expect((reopened.stdout.match(/When you review the revised work/g) ?? [])).toHaveLength(1);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("misplaced pause proof on a redo reports invalid proof but still reopens", () => {
+    const p = betaPaused("none");
+    const key = unitOpenCheckpoints(p, "code-generation").find((checkpoint) => checkpoint.unit === "beta")?.pauseKey;
+    expect(key).toMatch(/^sha256:[0-9a-f]{64}$/);
+    const result = tool(p, "jump", ["reopen", "--target", "code-generation", "--stages", "code-generation",
+      "--units", "beta", "--scope", "classic", "--via", "redo", "--expected-pause", key!],
+      { ...process.env, AIDLC_SESSION_OVERRIDE: "t342-plan" });
+    expect(result.status, result.out).toBe(0);
+    expect(JSON.parse(result.stdout)).toHaveProperty("invalid_option");
+    const row = rejections(p).at(-1)!;
+    expect(auditBlockField(row.block, "Reopen")).toBe("redo");
+    expect(auditBlockField(row.block, "Feedback")).toBe("Redid Code Generation for unit beta (redo on re-entry).");
+    expect(auditBlockField(row.block, "Message Id")).toBeNull();
+    expect(auditBlockField(row.block, "Message Ids")).toBeNull();
+    expect(approved(p, "alpha")).toBe(true);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  for (const proof of [["--expected-pause"], ["--expected-pause", "bad"],
+    ["--expected-pause", "none", "--expected-pause", "none"]]) {
+    test(`invalid pause proof ${proof.join(" ")} never prevents a reopen`, () => {
+      const p = betaPaused("none");
+      const env = { ...process.env, AIDLC_SESSION_OVERRIDE: "t342-plan" };
+      const result = tool(p, "jump", ["reopen", ...proof, "--target", "code-generation", "--stages", "code-generation",
+        "--units", "beta", "--scope", "classic", "--via", "change"], env);
+      expect(result.status, result.out).toBe(0);
+      expect(JSON.parse(result.stdout)).toHaveProperty("invalid_option");
+      const row = rejections(p).at(-1)!;
+      expect(auditBlockField(row.block, "Feedback")).toBe("Reopened Code Generation for unit beta for a change.");
+      expect(auditBlockField(row.block, "Message Id")).toBeNull();
+      expect(approved(p, "alpha")).toBe(true);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+  }
+
   for (const form of ["change", "rejection"] as const) {
     for (const review of ["ready", "asked", "none"] as const) {
       test(`${form}: the Unit paused with every file written and its review ${review === "ready" ? "READY" : review === "asked" ? "asked, no verdict" : "never asked"} is reopened for the change`, () => {
         const p = betaPaused(review);
+        const env = { ...process.env, AIDLC_SESSION_OVERRIDE: "t342-plan" };
+        expect(next(p, env)).toMatchObject({ kind: "ask", ask_type: "unit-paused", unit: "beta" });
+        policyHuman(p, "Change beta's plan: cover the retry path.", "t342-plan");
         const step = changeFor(p, form);
         expect(step.kind, JSON.stringify(step)).toBe("print");
         const message = step.message ?? "";
         expect(message).not.toContain("has not reached");
-        expect(message).toContain('"Making your change in Code Generation for unit beta. alpha keeps its finished work.');
-        const reopen = /aidlc-jump\.ts (reopen --target code-generation --stages code-generation --units beta --scope classic --via change)`/
+        expect(message).toContain("tell the person the writer's message in one line");
+        expect(message).toContain("alpha keeps its finished work.");
+        const reopen = /aidlc-jump\.ts (reopen --target code-generation --stages code-generation --units beta --scope classic --via change --expected-pause \S+)`/
           .exec(message)?.[1];
         expect(reopen, message).toBeDefined();
         guardsLetThrough(p, `aidlc engine jump ${reopen}`);
-        runPrintedCommands(p, message);
+        const argv = [...reopen!.matchAll(/'([^']*)'|(\S+)/g)].map((match) => match[1] ?? match[2]);
+        const result = tool(p, "jump", argv, env);
+        expect(result.status, result.out).toBe(0);
+        expect(JSON.parse(result.stdout).message).toBe("Reopened Code Generation for unit beta to make your change.");
         expect(rejections(p)).toHaveLength(1);
         expect(auditBlockField(rejections(p)[0].block, "Unit")).toBe("beta");
         expect(auditBlockField(rejections(p)[0].block, "Reopen")).toBe("change");
+        expect(auditBlockField(rejections(p)[0].block, "Feedback")).toBe("Change beta's plan: cover the retry path.");
         expect(approved(p, "alpha")).toBe(true);
         expect(next(p)).toMatchObject({
           kind: "run-stage", stage: "code-generation", unit: "beta", plan_approval: { status: "revise" },

@@ -188,6 +188,8 @@ Jumps directly to a specific stage or phase. Supports both forward and backward 
 5. Warns about missing upstream artifacts. It does not ask for confirmation: the person asked for the jump.
 6. Creates stage-level tasks and begins execution from the target stage.
 
+A one-Unit change at a pause that needs reopening records the person's reply to that pause when the question and the whole typed reply can be proved in the invoking chat. Otherwise the reopen still runs with generic feedback and no reply IDs; its acknowledgment asks the person to check the revised work includes their change. The internal `--expected-pause <key|none>` on `jump reopen` controls feedback attribution only: a stale or invalid key never prevents the reopen. A paused report that names `--message` uses `none`, so it does not borrow another reply window.
+
 **Backward jump** (target is behind current position):
 1. Same resolution and validation as forward jump.
 2. Resets all downstream stages (after the target) to `[ ]` (not started). Artifacts on disk are preserved, not deleted.
@@ -1055,6 +1057,8 @@ The orchestration engine owns every transition above. The conductor reports outc
    - **Request Changes** -> `aidlc engine orchestrate report --stage <slug> --result rejected --user-input "Request Changes"` (a reply that says what to change is its own feedback; otherwise add `--reason '<feedback>'`). The engine emits `GATE_REJECTED` + `STAGE_REVISING`, marks `[?]` → `[R]`, and increments Revision Count. Under solo unit-major Construction, `--unit` naming the Unit whose step the walk is on, where that step's work is written and reviewed and only its completion receipt is unrecorded, returns a `print` naming the Unit-scoped `aidlc-jump.ts reopen ... --via change` instead, and records nothing itself: the completion is not a prerequisite for revising the step. Paused there, it names the same reopen once the step's files are all written and only its review or its completion is owed; before its files are all written, the `print` names `aidlc-state.ts unit resume` instead, so the change is made on the step and no rejection is recorded.
    - After re-running work for a `[R]` stage, call `aidlc engine orchestrate report --stage <slug> --result revised` to re-enter the gate (re-runs gate sensors, emits a fresh `STAGE_AWAITING_APPROVAL`, marks `[R]` → `[?]`). The approve-time unrecorded-revision backstop uses the same sensor enforcement before recovered re-entry; a blocking result leaves the durable state at `[R]`.
 
+   At a paused Unit whose written work needs reopening, Request Changes follows the one-Unit pause rule above: only a proved reply to that pause becomes feedback; otherwise the reopen uses generic feedback.
+
 5. **Advance to the next stage**: the approval report in step 4 also advances. The engine derives the next in-scope stage from the state file's EXECUTE/SKIP suffix (set by `init`) plus the compiled scope grid (`scope-grid.json`). It marks `[x]` on completed, `[-]` on next, updates Current Stage / Lifecycle Phase / Active Agent / Next Stage / Last Completed Stage / Last Updated / Completed count, and emits `STAGE_STARTED` for the next stage. At a phase boundary it additionally emits `PHASE_COMPLETED` + `PHASE_VERIFIED` + `PHASE_STARTED` atomically.
 
    The tool is idempotent — replaying `advance <slug>` a second time returns `{replay: true}` without re-emitting events.
@@ -1351,7 +1355,8 @@ The reply that opens or shows the gate, the gate-only step, every engine `ask`,
 and the JSON `log decision` and the checkpoint asks print, carry `question_id`:
 the id of that question on the record (its `Question Id` on the asking row,
 `tools/aidlc-questions.ts`). It is structure for the agent, never shown to the
-person; nothing reads it back yet.
+person. The pause-reopen writer reads it to prove which question a typed reply
+answered; other gate windows retain their existing rules.
 
 ### Conditional Approve-and-Add Gate (Ideation and Inception only)
 

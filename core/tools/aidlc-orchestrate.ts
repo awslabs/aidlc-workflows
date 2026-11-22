@@ -981,8 +981,12 @@ function loadStateFileIfPresent(projectDir: string): string | null {
 
 // --- Directive emission ---
 
+type PauseQuestionContext = { pauseKey?: string; stage: string; unit: string };
+const pauseQuestions = new WeakMap<Directive, PauseQuestionContext>();
+
 interface PreparedEmission {
   transported: Directive; serialized: string; resultSha256: string; projectDir?: string;
+  pauseQuestion?: PauseQuestionContext;
   // The questions file of the stage a run-stage hands out, from the project.
   questionsFile?: string;
   // Clears the person lines this step carries, once it is written.
@@ -1904,6 +1908,7 @@ function prepareEmission(directive: Directive): PreparedEmission {
   nameCeremonyModules(directive);
   clearEarlierAttemptSummary(directive);
   const requested = directive;
+  const pauseQuestion = pauseQuestions.get(requested);
   // Read before the notices below can copy the directive. A guard-recovery
   // ask whose ways on are the conductor's own work (agent_work) is no question
   // for the person: the turn goes on, and the conductor carries them out.
@@ -2154,7 +2159,7 @@ function prepareEmission(directive: Directive): PreparedEmission {
     transported.kind === "ask" && transported.question_id === undefined && askState !== null && engineProjectDir &&
     transported.ask_type !== AI_DLC_UPDATE_ASK_TYPE
   ) {
-    const id = askQuestionId(engineProjectDir, transported, askState);
+    const id = askQuestionId(engineProjectDir, transported, askState, pauseQuestion);
     if (id !== null) transported.question_id = id;
   }
   const result = validateDirective(transported);
@@ -2360,6 +2365,7 @@ function prepareEmission(directive: Directive): PreparedEmission {
     transported,
     serialized,
     resultSha256: sha256(serialized),
+    ...(pauseQuestion ? { pauseQuestion } : {}),
     ...(questionsFile !== undefined ? { questionsFile } : {}),
     ...(route
       ? { projectDir: route.codekbCtx.projectDir }
@@ -3277,15 +3283,11 @@ function emit(requested: Directive): void {
   writePrepared(prepared);
 }
 
-// The id an engine question goes out with: the code plan question's from its
-// own record; one stored with its request keeps that id (set where it is
-// built); any other is the same question while it asks the same thing over the
-// same state (the open engine question's rule), else a fresh id.
-function askQuestionId(projectDir: string, ask: AskDirective, state: string): string | null {
+function askQuestionId(projectDir: string, ask: AskDirective, state: string, pause?: PauseQuestionContext): string | null {
   if ((ask as { agent_work?: unknown }).agent_work === true) return null;
   if (ask.ask_type === PLAN_APPROVAL_ASK_TYPE) return planApprovalQuestionId(projectDir, ask);
   try {
-    return engineAskQuestionId(projectDir, { type: ask.ask_type, stateDigest: stateDigest(state) }) ??
+    return engineAskQuestionId(projectDir, { type: ask.ask_type, stateDigest: stateDigest(state), ...pause }) ??
       newQuestionId(projectDir);
   } catch {
     return null;
@@ -3316,6 +3318,8 @@ function recordQuestionStep(prepared: PreparedEmission): void {
             ...askedQuestionFields(projectDir, { type: step.ask_type, shows, chat, id }),
             ...(stage ? { Stage: stage } : {}),
             ...(unit ? { Unit: unit } : {}),
+            ...(step.ask_type === "unit-paused" && prepared.pauseQuestion?.pauseKey
+              ? { "Pause Key": prepared.pauseQuestion.pauseKey } : {}),
             ...(step.choices?.length ? { Options: JSON.stringify(step.choices.map((choice) => choice.label)) } : {}),
             "State Digest": prepared.marker?.state_sha256 ?? "",
             [QUESTION_TEXT_FIELD]: questionTextSha(step.question),
@@ -4161,9 +4165,10 @@ function pausedUnitQuestion(
 function unitPausedAskDirective(
   question: string,
   stage: string,
-  unit: string,
+  checkpoint: UnitCheckpoint,
 ): AskDirective {
-  return {
+  const unit = checkpoint.unit;
+  const directive: AskDirective = {
     kind: "ask",
     ask_type: "unit-paused",
     response_route: "command",
@@ -4173,6 +4178,8 @@ function unitPausedAskDirective(
     resume_command:
       `${aidlcToolInvocation("state")} unit resume --stage ${shellArg(stage)} --unit ${shellArg(unit)}`,
   };
+  pauseQuestions.set(directive, { stage, unit, ...(checkpoint.pauseKey ? { pauseKey: checkpoint.pauseKey } : {}) });
+  return directive;
 }
 
 // The new-work routing ask's own options about an active workflow, in its
@@ -16325,7 +16332,7 @@ function emitPerUnitRunStage(
     emit(unitPausedAskDirective(
       pausedUnitQuestion(cp.unit, node.slug, cp.reason, cp.nextAction),
       node.slug,
-      cp.unit,
+      cp,
     ));
     return;
   }
@@ -17104,7 +17111,7 @@ function emitTeamUnitMajorRunStage(
     emit(unitPausedAskDirective(
       pausedUnitQuestion(checkpoint.unit, step.stage, checkpoint.reason, checkpoint.nextAction),
       step.stage,
-      checkpoint.unit,
+      checkpoint,
     ));
     return;
   }
@@ -18384,7 +18391,7 @@ function unitStepChangeReopen(
   ) return null;
   const reopen = unitMajorReopen(projectDir, scope, stateContent, stageSlug, {
     stage: stageSlug, jumpUnit: unit, everyUnit: false, change: true,
-  });
+  }, flags.message !== undefined);
   return reopen !== null && reopen !== "route" && reopen.kind === "print" ? reopen : null;
 }
 
@@ -18394,6 +18401,7 @@ function unitMajorReopen(
   stateContent: string,
   targetSlug: string,
   flags: ParsedFlags,
+  reportNamedMessage = false,
 ): PrintDirective | { kind: "error"; message: string } | "route" | null {
   const walk = unitJumpWalk(projectDir, scope, stateContent, flags.jumpUnit !== undefined);
   if (!walk) return null;
@@ -18534,6 +18542,26 @@ function unitMajorReopen(
       `${reopenedText}. You can pick ${first.unit} up again any time.${keptLine}`
     : `Reopened ${reopenedText}.` +
       (kept.length > 0 ? `${keptLine} You can redo it for ${kept.length === 1 ? kept[0] : "them"} too.` : "");
+  const paused = reopened.length === 1 && unitPausedOnStep(step, targetSlug, reopened[0]) && step.kind === "paused"
+    ? step.checkpoint : null;
+  if (flags.change && paused !== null) {
+    scopeArg(scope);
+    const proof = reportNamedMessage ? "none" : paused?.pauseKey ?? "none";
+    const jump = ["reopen", "--target", targetSlug, "--stages", stages.join(","), "--units", reopened[0],
+      "--scope", scope, "--via", "change", "--expected-pause", proof];
+    const asideLine = first
+      ? ` Paused ${list(asides.map((entry) => `unit ${entry.unit} at ${nameOf(entry.aside.stage)}`))}.` +
+        ` You can pick ${first.unit} up again any time.` : "";
+    return jumpStepPrint(
+      `Run ${unpark}${asides.map((entry) => `\`${entry.aside.command}\`, then `).join("")}\`${jumpCommandText(jump)}\` ` +
+      `to reopen "${targetSlug}" and the steps after it for unit "${reopened[0]}" only, ` +
+      `then tell the person the writer's message in one line${asideLine || keptLine ? `, followed by "${`${asideLine}${keptLine}`.trim()}"` : ""} ` +
+      `and re-run \`next\` to continue. When "${targetSlug}" comes back for unit "${reopened[0]}", ` +
+      "make the change from their own words; they already said what to change, so do not ask whether to keep, " +
+      "change or redo its files." + (first ? backTo(first.unit, first.aside.stage) : ""),
+      jump,
+    );
+  }
   const reopen =
     `${aidlcToolInvocation("jump")} reopen --target ${targetSlug} --stages ${stages.join(",")} --units ${reopened.join(",")} --scope ${scopeArg(scope)}` +
     (flags.change ? " --via change" : "");
@@ -18838,7 +18866,7 @@ function emitUnitMajorRunStage(
     emit(unitPausedAskDirective(
       pausedUnitQuestion(cp.unit, step.stage, cp.reason, cp.nextAction),
       step.stage,
-      cp.unit,
+      cp,
     ));
     return;
   }

@@ -1044,10 +1044,9 @@ switch (target) {
     // Plan Approval choice from either channel, but the break-glass override
     // phrase counts only when the human typed it as a prompt. The box's reply
     // goes along as it came, so each question's reply is kept word for word.
-    // An answer in Codex's other box arrives as a prompt in Codex's envelope
-    // and goes on as the answer alone, read like a reply typed in the chat.
     const selectionText = explicitHumanSelectionText(codex.tool_response);
     const typed = codex.prompt || codex.user_prompt || codex.message || "";
+    const asyncPickerWords = codex.tool_name === "request_user_input" ? null : questionReplyWords(typed);
     const forwarded =
       codex.tool_name === "request_user_input"
         ? {
@@ -1061,7 +1060,8 @@ switch (target) {
         : {
             hook_event_name: "UserPromptSubmit",
             ...(codex.session_id ? { session_id: codex.session_id } : {}),
-            prompt: questionReplyWords(typed) ?? typed,
+            prompt: asyncPickerWords ?? typed,
+            ...(asyncPickerWords !== null ? { async_picker: true } : {}),
           };
     const turn = runCoreWithStderr("aidlc-record-human-turn.ts", JSON.stringify(forwarded));
     // The core hook's note says what a switch the person typed did, and that the

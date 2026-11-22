@@ -29557,14 +29557,19 @@ export function unshownGateReplyStands(projectDir: string, stage: string, shown?
 
 export function personsGateReply(
   projectDir: string, session: string | null, stage: string, asked?: AuditShardEvent,
+  pause?: { key: string; unit: string; shard: string; pos: number },
 ): GateReply {
   const none: GateReply = { words: null, messageId: null, replies: [], elsewhere: [] };
   try {
     const { mine, others } = ownShardRows(projectDir);
     const { from, unspent } = unspentStageTurns(mine, others, stage);
-    let turns = unspent.filter((row) => isReplyTurn(row));
-    let held = unspent.filter((row) =>
-      auditBlockField(row.block, OPEN_QUESTION_FIELD) !== null && auditBlockField(row.block, "Message Id") !== null);
+    const selected = pause === undefined ? undefined :
+      (require("./aidlc-questions.ts") as typeof import("./aidlc-questions.ts"))
+        .pauseReplyTurns(projectDir, mine, unspent, session, { ...pause, stage });
+    if (selected === null) return none;
+    let turns = selected ?? unspent.filter((row) => isReplyTurn(row));
+    let held = pause === undefined ? unspent.filter((row) =>
+      auditBlockField(row.block, OPEN_QUESTION_FIELD) !== null && auditBlockField(row.block, "Message Id") !== null) : [];
     if (session !== null) {
       turns = turns.filter((row) => chatOf(row) === session);
       held = held.filter((row) => chatOf(row) === session);
@@ -29608,6 +29613,7 @@ export function personsGateReply(
       const text = message?.words ? personsWordsText(message.words) : "";
       if (!isNonAnswer(text)) said.push(text);
     }
+    if (pause !== undefined && (!tied || !whole || said.length !== replies.length)) return none;
     return {
       words: tied && whole && said.length > 0 ? said.join("\n") : null,
       messageId: replies.at(-1)?.id ?? null,
@@ -36087,6 +36093,7 @@ type UnitLifecycleRow = {
   event: string;
   block: string;
   unit: string;
+  ambiguous?: boolean;
 };
 
 // A unit's lifecycle for one stage ends in a completion receipt or, under
@@ -36217,7 +36224,7 @@ export function currentUnitLifecycleRows(
         if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
         return a.pos - b.pos;
       });
-      reduced.push(candidates[candidates.length - 1]);
+      reduced.push({ ...candidates[candidates.length - 1], ambiguous: true });
     }
     start = end;
   }
@@ -36259,6 +36266,9 @@ export interface UnitCheckpoint {
   state: "in-progress" | "paused";
   reason: string | null;
   nextAction: string | null;
+  pauseKey?: string;
+  pausePos?: number;
+  pauseShard?: string;
   // The Unit this one was paused for (#1411): the person asked for that Unit's
   // work while this one was open, so the walk takes that Unit first and then
   // asks to pick this one up again. Null for an ordinary pause.
@@ -36269,22 +36279,27 @@ export interface UnitCheckpoint {
 // resumed, or paused), most recently touched first. Only the Units this checkout
 // holds (unitsHeldHere; null is every Unit): another checkout's open Unit,
 // pushed with main, is that checkout's, and never stops one held here (#3610).
-function openUnitCheckpoints(rows: readonly UnitLifecycleRow[], held: ReadonlySet<string> | null): UnitCheckpoint[] {
+export function openUnitCheckpoints(projectDir: string, rows: readonly UnitLifecycleRow[], held: ReadonlySet<string> | null): UnitCheckpoint[] {
   const open: UnitCheckpoint[] = [];
+  const record = recordDir(projectDir);
   const seen = new Set<string>();
   for (let i = rows.length - 1; i >= 0; i--) {
-    const { unit, event, block } = rows[i];
+    const { unit, event, block, pos, shard } = rows[i];
     if (held !== null && !held.has(unit)) continue;
     if (seen.has(unit)) continue;
     seen.add(unit);
     if (UNIT_TERMINAL_EVENTS.has(event)) continue;
     const paused = event === "UNIT_PAUSED";
+    const identity = paused && !rows[i].ambiguous && record !== null ? relative(record, shard).replaceAll("\\", "/") : null;
+    const pauseKey = identity === null ? null : `sha256:${createHash("sha256")
+      .update(JSON.stringify([identity, pos, block.replace(/\r\n?/g, "\n").trim()]), "utf-8").digest("hex")}`;
     open.push({
       unit,
       state: paused ? "paused" : "in-progress",
       reason: auditBlockField(block, "Reason"),
       nextAction: auditBlockField(block, "Next Action"),
       setAsideFor: paused ? auditBlockField(block, "Set Aside For") : null,
+      ...(pauseKey !== null ? { pauseKey, pausePos: pos, pauseShard: shard } : {}),
     });
   }
   return open;
@@ -36373,7 +36388,7 @@ export function unitLifecycleSnapshot(
       receipts.delete(row.unit);
     }
   }
-  const open = openUnitCheckpoints(rows, unitsHeldHere(projectDir));
+  const open = openUnitCheckpoints(projectDir, rows, unitsHeldHere(projectDir));
   const checkpoint = open[0] ?? null;
   const unitEvents = new Set([
     "UNIT_STARTED",
@@ -36536,8 +36551,6 @@ export function activeUnitCheckpoint(
   return unitOpenCheckpoints(projectDir, slug)[0] ?? null;
 }
 
-// Every open Unit of the stage, most recently touched first (see
-// openUnitCheckpoints).
 export function unitOpenCheckpoints(
   projectDir: string,
   slug: string,
@@ -36545,7 +36558,7 @@ export function unitOpenCheckpoints(
   const audit = readAllAuditShards(projectDir);
   if (!audit) return [];
   const unitMajor = unitMajorLifecycleMode(projectDir);
-  return openUnitCheckpoints(currentUnitLifecycleRows(projectDir, audit, slug, unitMajor), unitsHeldHere(projectDir));
+  return openUnitCheckpoints(projectDir, currentUnitLifecycleRows(projectDir, audit, slug, unitMajor), unitsHeldHere(projectDir));
 }
 
 // Latest STAGE_STARTED slug in an audit buffer, or null if none. findAllEvents

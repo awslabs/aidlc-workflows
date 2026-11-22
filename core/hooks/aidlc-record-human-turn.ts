@@ -632,6 +632,7 @@ try {
   // request_user_input, any adapter's picker payload) arrives under
   // tool_response instead.
   let typedPrompt = "";
+  let asyncPicker = false;
   // Set when the reply is a picker selection: the question and labels the
   // harness reports it under, so it pairs only with the recorded question.
   let pickerQuestion: PlanApprovalPickerQuestion | undefined;
@@ -676,6 +677,7 @@ try {
       relays_terminal_output?: unknown;
       context_may_reach_person?: unknown;
       wants_first_step_note?: unknown;
+      async_picker?: unknown;
     };
     relaysTerminalOutput = parsed.relays_terminal_output === true;
     contextMayReachPerson = parsed.context_may_reach_person === true;
@@ -711,6 +713,7 @@ try {
       typeof parsed.tool_name !== "string"
     ) {
       promptSubmitted = true;
+      asyncPicker = parsed.async_picker === true;
       typedPrompt =
         [prompt, userPrompt, message].find(
           (value): value is string =>
@@ -845,6 +848,7 @@ try {
         session: sessionId || null,
         at: isoTimestamp(),
         source: promptSubmitted ? "prompt" : "picker",
+        ...(asyncPicker ? { asyncPicker: true as const } : {}),
         text: full.slice(0, MESSAGE_TEXT_MAX_CHARS),
         ...(cut ? { cut: true as const } : {}),
         picker: picker === null ? null : picker.entries,
