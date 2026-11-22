@@ -1167,6 +1167,19 @@ function questionsCount(path: string): string {
   return ` (${total} ${noun}, ${done})`;
 }
 
+// The record as the file holds it, for a note asked on every step, a status or
+// a help included: such a note never brings a record an earlier State Version
+// wrote up to date, which would write it. Null when there is none or it cannot
+// be read.
+function stateFileAsItIs(projectDir: string): string | null {
+  const path = engineStateFilePath(projectDir);
+  try {
+    return existsSync(path) ? readFileSync(path, "utf-8") : null;
+  } catch {
+    return null;
+  }
+}
+
 // Every step reads the state through here, so a record an earlier State
 // Version wrote is brought up to the current one before any routing.
 function loadStateFileIfPresent(projectDir: string): string | null {
@@ -5943,7 +5956,8 @@ function offersOnce(projectDir: string, offers: StepOffer[]): StepOffer[] {
 
 // The work selected here is the home of Units teams build (not a team's build).
 function atTeamHome(projectDir: string): boolean {
-  const state = loadStateFileIfPresent(projectDir);
+  // A record an earlier State Version wrote has no Home Location: no team home, read as it is or brought up to date.
+  const state = stateFileAsItIs(projectDir);
   // The lead's own checkout only: one that did not make the plan is a team's.
   return state !== null && isTeamUnitOwnership(state) && homeLocation(state) !== null && unitBuildOf(state) === null &&
     !planMadeElsewhere(projectDir);
@@ -10794,7 +10808,8 @@ function updateCommitStep(projectDir: string, stateContent: string): PrintDirect
 // After that offer, while the main it was put for still stands ahead and
 // behind: the command for the agent when the person asks for it in words.
 function levelOfferNote(projectDir: string): string | null {
-  const state = loadStateFileIfPresent(projectDir);
+  // No level offer is ever put on a record an earlier State Version wrote: no note, read as it is or brought up to date.
+  const state = stateFileAsItIs(projectDir);
   const due = state === null ? null : levelDue(projectDir, state);
   if (due === null || !handoverOffered(projectDir, teamHandoverMarkName("level", due.head.slice(0, 12)))) return null;
   return `When the person asks to bring their ${due.branch} level, run \`${CHECKOUT_STEPS.level.via()}\` and tell them in plain words what it reports.`;
@@ -10930,7 +10945,8 @@ function unitToForkAsk(projectDir: string, stateContent: string): AskDirective |
 // After that offer, while its push stands or a merge of that branch waits on
 // the Unit's branch: the commands for the agent when the person asks in words.
 function mainMovedNote(projectDir: string): string | null {
-  const state = loadStateFileIfPresent(projectDir);
+  // A record an earlier State Version wrote has no Unit build: no note, read as it is or brought up to date.
+  const state = stateFileAsItIs(projectDir);
   const build = state === null ? null : unitBuildOf(state);
   if (state === null || build === null) return null;
   const moved = mainMovedRepos(projectDir, build.unit, unitBranchOf(state, build.unit)).filter((repo) => !repo.hostAhead);

@@ -15,10 +15,17 @@
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { auditBlockField, readAuditShardEvents, REQUEST_TEXT_DIR } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
-import { fixtureIntentId8, seededRecordDir, seededStateFile } from "../harness/fixtures.ts";
+import {
+  cleanupTestProject,
+  createOrchestrationTestProject,
+  fixtureIntentId8,
+  FIXTURES_DIR,
+  seededRecordDir,
+  seededStateFile,
+} from "../harness/fixtures.ts";
 import {
   claimPayload,
   cleanupTeamBuild,
@@ -1725,5 +1732,44 @@ describe("built here, in a checkout that does not lead the work", () => {
     expect(said).toContain("refunds is already taken: alice builds it");
     expect(said).toContain("reporting is still open: a take is one Unit at a time, so say if you want it too.");
     expect(said).not.toContain("Do you lead");
+  });
+});
+
+// The notes asked on every step, the commands that move no work included
+// (whether this is a team home, the level and the main-moved notes), read the
+// record as it is, so a record an earlier AI-DLC wrote stays as that release
+// left it until a step that moves the work brings it up to date.
+describe("a command that moves no work leaves a record an earlier AI-DLC wrote as it is", () => {
+  for (const args of [["--status"], ["--help"], ["--doctor"], ["--version"], ["intent", "list"], ["space", "list"]]) {
+    test(`next ${args.join(" ")} over a State Version 7 record`, () => {
+      const proj = createOrchestrationTestProject();
+      try {
+        const path = seededStateFile(proj);
+        const older = readFileSync(join(FIXTURES_DIR, "state-mid-inception.md"), "utf-8")
+          .replace(/^- \*\*State Version\*\*: .*$/m, "- **State Version**: 7");
+        writeFileSync(path, older, "utf-8");
+        const answered = run(ORCH, ["next", ...args], proj);
+        expect(answered.status, answered.out).toBe(0);
+        expect(readFileSync(path, "utf-8")).toBe(older);
+        expect(existsSync(join(dirname(path), "aidlc-state.v7.md"))).toBe(false);
+        expect(readAuditShardEvents(proj).filter((row) => row.event === "STATE_UPGRADED")).toHaveLength(0);
+      } finally {
+        cleanupTestProject(proj);
+      }
+    });
+  }
+
+  // Where the notes apply they are there as before: a team home at the current State Version.
+  test("next --status at a team home still carries the team commands, and the record stays as it is", () => {
+    const home = makeHome();
+    chooseTeams(home.dir);
+    share(home.dir);
+    const before = stateOf(home.dir);
+    expect(field(before, "State Version")).toBe("9");
+    const status = next(home.dir, ENV, ["--status"]);
+    expect(String(status.board_note ?? ""), JSON.stringify(status).slice(0, 600)).toContain(
+      "when they ask to build a Unit left open here, run `bun .claude/tools/aidlc-unit.ts assign --here <unit> ",
+    );
+    expect(stateOf(home.dir)).toBe(before);
   });
 });
