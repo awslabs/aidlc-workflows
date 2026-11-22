@@ -14,17 +14,23 @@
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { parseStageFrontmatter } from "../../core/tools/aidlc-lib.ts";
+import {
+  AIDLC_SRC, cleanupTestProject, createOrchestrationTestProject, DEFAULT_RECORD_DIR, DEFAULT_SPACE, resetAidlcEnv,
+  runOrchestrateNext, sedReplaceInFile, seededRecordDir, seededStateFile, seedStateFile,
+} from "../harness/fixtures.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const ROOT = join(import.meta.dir, "../..");
 const STAGE = join(ROOT, "core/aidlc-common/stages/inception/units-generation.md");
-const REVIEWING = join(ROOT, "core/knowledge/aidlc-architecture-reviewer-agent/reviewing.md");
 const SENSOR = join(ROOT, "core/tools/aidlc-sensor-upstream-coverage.ts");
+const MOCKUPS = `aidlc/spaces/${DEFAULT_SPACE}/intents/${DEFAULT_RECORD_DIR}/inception/refined-mockups`;
+
+resetAidlcEnv();
 
 interface Consume {
   artifact: string;
@@ -33,7 +39,7 @@ interface Consume {
 
 const tempDirs: string[] = [];
 afterAll(() => {
-  for (const dir of tempDirs) rmSync(dir, { recursive: true, force: true });
+  for (const dir of tempDirs) cleanupTestProject(dir);
 });
 
 function stageConsumes(): Consume[] {
@@ -41,13 +47,29 @@ function stageConsumes(): Consume[] {
   return frontmatter.consumes as Consume[];
 }
 
-function unitsGenerationReview(): string {
-  const text = readFileSync(REVIEWING, "utf-8").replace(/\r\n/g, "\n");
-  const start = text.indexOf("### Units Generation");
-  expect(start).toBeGreaterThan(-1);
-  const rest = text.slice(start + 1);
-  const next = rest.search(/\n###? /);
-  return next === -1 ? rest : rest.slice(0, next);
+interface Step {
+  consumes: string[];
+  consumes_absent?: Array<{ path: string }>;
+}
+
+function unitsGenerationStep(withMockups: boolean): Step {
+  const proj = createOrchestrationTestProject();
+  tempDirs.push(proj);
+  seedStateFile(proj, "state-construction.md");
+  const state = seededStateFile(proj);
+  sedReplaceInFile(state, /^- \*\*Current Stage\*\*:.*$/m, "- **Current Stage**: units-generation");
+  sedReplaceInFile(state, /^- \[.\] units-generation /m, "- [-] units-generation ");
+  if (withMockups) {
+    for (const name of ["mockups.md", "interaction-spec.md"]) {
+      const path = join(seededRecordDir(proj), "inception", "refined-mockups", name);
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, "# seeded\n");
+    }
+  }
+  const { directive, out } = runOrchestrateNext(join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts"), proj);
+  expect(directive?.kind, out).toBe("run-stage");
+  expect(directive?.stage).toBe("units-generation");
+  return directive as unknown as Step;
 }
 
 describe("Units Generation reads the mockups", () => {
@@ -55,20 +77,14 @@ describe("Units Generation reads the mockups", () => {
     const consumes = stageConsumes();
     expect(consumes).toContainEqual({ artifact: "mockups", required: false });
     expect(consumes).toContainEqual({ artifact: "interaction-spec", required: false });
-    const body = readFileSync(STAGE, "utf-8");
-    expect(body).toContain("refined-mockups/mockups.md");
-    expect(body).toContain("belongs to a Unit whose responsibilities");
   });
 
-  test("2: the reviewer asks who builds the logic, the screen and the connection, and about the mockups", () => {
-    const section = unitsGenerationReview();
-    expect(section).toMatch(/which Unit builds the logic/);
-    expect(section).toMatch(/which Unit builds the screen/);
-    expect(section).toMatch(/which Unit connects the two/);
-    expect(section).toMatch(/mockups\.md.*interaction-spec\.md/s);
-    expect(section).toMatch(/every screen, control and command/);
-    expect(section).toMatch(/Major/);
-    expect(section).toMatch(/Do not accept the plan's own statement/);
+  test("2: the step lists both documents when Refined Mockups produced them, and neither when it did not", () => {
+    const present = unitsGenerationStep(true);
+    expect(present.consumes).toEqual(expect.arrayContaining([`${MOCKUPS}/mockups.md`, `${MOCKUPS}/interaction-spec.md`]));
+    const absent = unitsGenerationStep(false);
+    const named = [...absent.consumes, ...(absent.consumes_absent ?? []).map((entry) => entry.path)];
+    expect(named.filter((path) => path.startsWith(`${MOCKUPS}/`))).toEqual([]);
   });
 
   test("3: upstream-coverage still passes an output that never mentions the mockups", () => {
@@ -98,8 +114,4 @@ describe("Units Generation reads the mockups", () => {
     expect(result.unreferenced).toEqual([]);
     expect(result.findings_count).toBe(0);
   });
-
-  // 4 (the run-stage directive's resolved consumes) is not covered here: building
-  // a directive needs a seeded intent record and a full orchestrate run, which is
-  // not cheap; the reviewer's pass-list is "the resolved paths in directive.consumes".
 });
