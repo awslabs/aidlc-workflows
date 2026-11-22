@@ -26,7 +26,14 @@
 //   9. autonomous Construction and team-owned Units keep one turn, one gate;
 //  10. the learnings question surfaces each listed stage; any other stage is still refused;
 //  11. "skip Functional Design and approve the rest": the skip step names the approval of the
-//      rest, which approves them together; a skip alone leaves them to their question.
+//      rest, which approves them together; a skip alone leaves them to their question;
+//  13. a review of a listed stage recorded after the one answer that raises a finding ends what
+//      that answer covers for that stage: its gate, the one question for it and the rest, shows
+//      the finding before it is approved (under strict after a change asked at the gate; under
+//      strict and under the feature scope's own off after a review done late); a clean review
+//      does not end it, nor a review of another listed stage, nor an earlier pass when the
+//      latest is clean; the test is the whole stage's, so an earlier Unit's open finding counts
+//      too.
 //
 // SOURCE UNDER TEST (dist/claude/.claude/tools/): aidlc-orchestrate.ts next and
 // report, aidlc-state.ts gate-start and approve, through the spawned engine.
@@ -55,6 +62,8 @@ import {
   auditBlockField,
   latestMainWorkflowStageRunFloorForProject,
   readAuditShardEvents,
+  resolveGuardPolicy,
+  setGuardPolicyLine,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   renderTestingContract,
@@ -847,6 +856,150 @@ describe("t-late-design-gates-one-approval: one question for the late stage appr
     expect(again.approve_together?.stages?.map((s) => s.slug)).toEqual(BLOCK);
     expect(again.approve_together?.prompt).toBe(ONE_QUESTION);
     expect(rows(proj, "GATE_REJECTED")).toHaveLength(0);
+  });
+
+  // A review recorded after the one answer, with the given verdict and, when
+  // named, one new finding (Major on NOT-READY, Minor on READY).
+  function reviewAfter(proj: string, stage: string, unit: string, iteration: number, verdict: "READY" | "NOT-READY", finding?: string, prior = ""): void {
+    const reviewer = "aidlc-architecture-reviewer-agent";
+    const artifact = join(seededRecordDir(proj), "construction", unit, stage, artifactFilename(REVIEW_ARTIFACTS[stage]));
+    const args = [LOG, "review", "--stage", stage, "--reviewer", reviewer, "--unit", unit, "--iteration", String(iteration), "--project-dir", proj];
+    const opts = { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" as const, env: { ...engineEnv(), AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "1" } };
+    const request = spawnSync(BUN, args, opts);
+    expect(request.status, `${request.stdout}${request.stderr}`).toBe(0);
+    const { reviewFile } = JSON.parse(request.stdout.split("\n").find((line) => line.startsWith("{")) ?? "{}") as { reviewFile: string };
+    const draft = join(proj, reviewFile);
+    mkdirSync(dirname(draft), { recursive: true });
+    const row = finding === undefined ? ""
+      : `| ${verdict === "READY" ? "Minor" : "Major"} | ${relative(proj, artifact).replaceAll("\\", "/")} > section | ${finding} | Say how |\n`;
+    writeFileSync(draft,
+      `## Review\n\n**Verdict:** ${verdict}\n**Reviewer:** ${reviewer}\n**Iteration:** ${iteration}\n\n### Findings\n\n` +
+        `**Prior findings**\n\n| ID | Now | Severity | Note |\n|---|---|---|---|\n${prior}\n` +
+        `**New findings**\n\n| Severity | Location | Finding | Required action |\n|---|---|---|---|\n${row}\n### Summary\n\nDone.\n`,
+      "utf-8");
+    const done = spawnSync(BUN, [...args, "--verdict", verdict], opts);
+    expect(done.status, `${done.stdout}${done.stderr}`).toBe(0);
+  }
+  const approvedStages = (proj: string) => rows(proj, "GATE_APPROVED").map((r) => r.stage);
+  const coveredBy = (proj: string, stage: string) =>
+    auditBlockField(rows(proj, "GATE_APPROVED").find((r) => r.stage === stage)?.block ?? "", "Approved Together With");
+  const acceptsNotice = (finding: string) =>
+    `Approve accepts the open review finding R-01 (${finding}) as risk; you can also approve and ask for it to be ` +
+    "fixed, or reject it as not applying, saying why.";
+  // Under strict, at the one late gate, the person asks for a change in NFR Design for beta and to go on; the
+  // agent makes it (the review freeze off, or the write past it) and reports their approval; NFR Design stops for
+  // its stale review, which the agent then runs.
+  function strictChangeAtTheGate(proj: string): void {
+    const file = seededStateFile(proj);
+    writeFileSync(file, setGuardPolicyLine(readFileSync(file, "utf-8"), "strict (set by you)"));
+    openFirstGate(proj);
+    Bun.sleepSync(1100);
+    says(proj, "Fix the rate limit note in NFR Design for beta, then go on.");
+    const asked = auditBlockField(rows(proj, "HUMAN_TURN").at(-1)?.block ?? "", "Message Id") as string;
+    Bun.sleepSync(1100);
+    const doc = join(seededRecordDir(proj), "construction", "beta", "nfr-design", artifactFilename("security-design"));
+    writeFileSync(doc, `${readFileSync(doc, "utf-8")}\n- Rate limit: 100 requests a minute.\n`);
+    recordArtifactWriteViaHook(proj, doc, "Edit");
+    runReport(proj, ["--stage", "functional-design", "--result", "approved", "--user-input", "Approve", "--message", asked]);
+    expect(approvedStages(proj)).toEqual(["functional-design", "nfr-requirements"]);
+    expect(currentStage(proj)).toBe("nfr-design");
+  }
+  // The stage's approval with no new reply is refused; next hands its gate as the one question for it and the
+  // rest, with the finding named; the person's reply approves them.
+  function shownThenApproved(proj: string, finding: string): void {
+    const again = runReport(proj, ["--stage", "nfr-design", "--result", "approved", "--user-input", "Approve"]);
+    expect(approvedStages(proj), JSON.stringify(again)).toEqual(["functional-design", "nfr-requirements"]);
+    expect(String(again.message)).toContain("no new human reply has been received for this approval question");
+    const gate = runNext(proj);
+    expect(gate).toMatchObject({ kind: "run-stage", stage: "nfr-design", gate: true });
+    expect(gate.approve_together?.stages?.map((s) => s.slug)).toEqual(["nfr-design", "infrastructure-design", "code-generation"]);
+    expect(gate.change_notices as string[]).toContain(acceptsNotice(finding));
+    Bun.sleepSync(1100);
+    says(proj, "approve");
+    const done = runReport(proj, ["--stage", "nfr-design", "--result", "approved", "--user-input", "Approve"]);
+    expect(done.kind, JSON.stringify(done)).toBe("done");
+    expect(approvedStages(proj)).toEqual(BLOCK);
+    expect(coveredBy(proj, "nfr-design")).toBeNull();
+    expect(coveredBy(proj, "code-generation")).toBe("nfr-design");
+  }
+
+  for (const [verdict, finding] of [
+    ["NOT-READY", "The rate limit has no burst rule"],
+    ["READY", "The burst rule could name its window"],
+  ] as const) {
+    test(`13: strict, a change asked at the one late gate and its ${verdict} review with a finding: that stage's gate shows it before its approval`, () => {
+      const proj = seedBuiltProject({ checkpoints: "disabled" });
+      strictChangeAtTheGate(proj);
+      reviewAfter(proj, "nfr-design", "beta", 2, verdict, finding);
+      shownThenApproved(proj, finding);
+    });
+  }
+
+  test("13b: strict, the same with a review that raises nothing: the one answer still covers the stage", () => {
+    const proj = seedBuiltProject({ checkpoints: "disabled" });
+    strictChangeAtTheGate(proj);
+    reviewAfter(proj, "nfr-design", "beta", 2, "READY");
+    const done = runReport(proj, ["--stage", "nfr-design", "--result", "approved", "--user-input", "Approve"]);
+    expect(done.kind, JSON.stringify(done)).toBe("done");
+    expect(approvedStages(proj)).toEqual(BLOCK);
+    expect(coveredBy(proj, "nfr-design")).toBe("functional-design");
+  });
+
+  test("13c: strict, a clean review of beta while alpha's earlier review of the stage still lists a finding: the stage is shown", () => {
+    const proj = seedBuiltProject({ checkpoints: "disabled" }, [["nfr-design", "alpha"]]);
+    logReviewReady(proj, "nfr-design", "alpha", "No burst rule is said");
+    strictChangeAtTheGate(proj);
+    reviewAfter(proj, "nfr-design", "beta", 2, "READY");
+    shownThenApproved(proj, "No burst rule is said");
+  });
+
+  // Under which Guard Policy the person meets the one question more: a stage stops for a review it lacks under
+  // strict (enterprise's own, and this file's bare state) and under the feature scope's own off alike, so a review
+  // done late that raises a finding shows the stage under both; a clean one is covered (case 5).
+  for (const policy of ["strict", "off (from scope feature)"] as const) {
+    test(`13d: Guard Policy ${policy}: a review done late that raises a finding shows the stage before its approval`, () => {
+      const proj = seedBuiltProject({ checkpoints: "disabled" }, [["nfr-design", "beta"]]);
+      const file = seededStateFile(proj);
+      if (policy !== "strict") writeFileSync(file, setGuardPolicyLine(readFileSync(file, "utf-8"), policy));
+      expect(resolveGuardPolicy(proj, readFileSync(file, "utf-8")).value).toBe(policy === "strict" ? "strict" : "off");
+      openFirstGate(proj);
+      Bun.sleepSync(1100);
+      says(proj, "approve");
+      runReport(proj, ["--stage", "functional-design", "--result", "approved", "--user-input", "Approve"]);
+      expect(approvedStages(proj)).toEqual(["functional-design", "nfr-requirements"]);
+      logReviewReady(proj, "nfr-design", "beta", "No burst rule is said");
+      shownThenApproved(proj, "No burst rule is said");
+    });
+  }
+
+  test("13e: a finding in another listed stage's later review does not end this stage's cover", () => {
+    const proj = seedBuiltProject({ checkpoints: "disabled" }, [["nfr-design", "beta"], ["infrastructure-design", "beta"]]);
+    openFirstGate(proj);
+    personReplies(proj);
+    runReport(proj, ["--stage", "functional-design", "--result", "approved", "--user-input", "Approve"]);
+    expect(currentStage(proj)).toBe("nfr-design");
+    logReviewReady(proj, "nfr-design", "beta");
+    reviewAfter(proj, "infrastructure-design", "beta", 1, "NOT-READY", "No alarm is said");
+    runReport(proj, ["--stage", "nfr-design", "--result", "approved", "--user-input", "Approve"]);
+    expect(coveredBy(proj, "nfr-design")).toBe("functional-design");
+  });
+
+  test("13f: strict, a late review NOT-READY, fixed in the review loop and then clean: the one answer still covers the stage", () => {
+    const proj = seedBuiltProject({ checkpoints: "disabled" }, [["nfr-design", "beta"]]);
+    openFirstGate(proj);
+    Bun.sleepSync(1100);
+    says(proj, "approve");
+    runReport(proj, ["--stage", "functional-design", "--result", "approved", "--user-input", "Approve"]);
+    expect(approvedStages(proj)).toEqual(["functional-design", "nfr-requirements"]);
+    reviewAfter(proj, "nfr-design", "beta", 1, "NOT-READY", "The rate limit has no burst rule");
+    const doc = join(seededRecordDir(proj), "construction", "beta", "nfr-design", artifactFilename("security-design"));
+    writeFileSync(doc, `${readFileSync(doc, "utf-8")}\n- Bursts: up to 20 at once.\n`);
+    recordArtifactWriteViaHook(proj, doc, "Edit");
+    reviewAfter(proj, "nfr-design", "beta", 2, "READY", undefined, "| R-01 | Fixed | Major | The burst rule is said |\n");
+    const done = runReport(proj, ["--stage", "nfr-design", "--result", "approved", "--user-input", "Approve"]);
+    expect(done.kind, JSON.stringify(done)).toBe("done");
+    expect(approvedStages(proj)).toEqual(BLOCK);
+    expect(coveredBy(proj, "nfr-design")).toBe("functional-design");
   });
 
   test("7: no shipped prose still describes the late per-stage cascade", () => {
