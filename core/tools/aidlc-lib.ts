@@ -31416,7 +31416,7 @@ export function humanPresenceGuardDisabled(projectDir?: string): boolean {
 // The same hard signal `next`'s stop reads, for the current workflow: a stage
 // or gate event and no heartbeat at all, with no link on the way to the
 // status files. Anything unreadable proves nothing.
-function hooksNeverRanHere(projectDir?: string): boolean {
+export function hooksNeverRanHere(projectDir?: string): boolean {
   try {
     const project = resolveProjectDir(projectDir);
     return hookLiveness(project).neverFired && !hookStatusPathLinked(project);

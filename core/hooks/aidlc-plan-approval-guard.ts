@@ -46,7 +46,9 @@
 // zero-Unit directive selects construction/code-generation. Step 4 dispatches
 // carry that choice explicitly as `AIDLC-UNIT: <unit>` or
 // `AIDLC-STAGE: code-generation`, plus the exact `AIDLC-TESTING-CONTRACT`
-// marker. The selected target must have a non-empty plan and test instructions,
+// marker, except where the developer's start hands it the plan
+// (briefHandedAtStart): there a start naming no target is for the step's one
+// target. The selected target must have a non-empty plan and test instructions,
 // a structured contract matching current memory/scope/strategy/type, an
 // explicit "Approve Plan" answer, and a matching approval fingerprint over
 // those exact bytes. Missing, conflicting, unknown, stale, and
@@ -197,7 +199,11 @@ import {
   evaluateCodeGenerationApproval,
   parkedWhereItStands,
   planReviewAppendix,
+  briefHandedAtStart,
+  handedBriefTarget,
+  promptStageMarkers,
   promptTestingContractMarkers,
+  promptUnitMarkers,
   setAsideBuildUnderOff,
   stepNextCommand,
   WORKER_BRIEF_SECTIONS,
@@ -439,7 +445,7 @@ export interface UnitEvidence {
   reviewAppendix?: string;
 }
 
-/** The decision's verdict. `mentioned` carries the explicit marker value(s). */
+/** The decision's verdict. `mentioned` carries the marker value(s), or the handed target where the prompt names none. */
 export interface PlanApprovalVerdict {
   block: boolean;
   mentioned: string[];
@@ -470,40 +476,15 @@ function approvalEvidenceIsCurrent(evidence: UnitEvidence | undefined): boolean 
 
 export { normalizeStageName };
 
-const UNIT_MARKER_RE = /^[ \t]*AIDLC-UNIT[ \t]*:[ \t]*(.*?)[ \t]*$/;
-const STAGE_MARKER_RE = /^[ \t]*AIDLC-STAGE[ \t]*:[ \t]*(.*?)[ \t]*$/;
-
-/**
- * Return the distinct, non-empty target markers in encounter order. Repeated
- * copies of the same marker are harmless (some harnesses carry both task and
- * prompt-template text); different values are ambiguous and block.
- */
-export function promptUnitMarkers(text: string): string[] {
-  const units = new Set<string>();
-  for (const line of text.split(/\r?\n/)) {
-    const marker = line.match(UNIT_MARKER_RE);
-    const unit = marker?.[1].trim() ?? "";
-    if (unit.length > 0) units.add(unit);
-  }
-  return Array.from(units);
-}
-
-export function promptStageMarkers(text: string): string[] {
-  const stages = new Set<string>();
-  for (const line of text.split(/\r?\n/)) {
-    const marker = line.match(STAGE_MARKER_RE);
-    const stage = marker?.[1].trim() ?? "";
-    if (stage.length > 0) stages.add(normalizeStageName(stage));
-  }
-  return Array.from(stages);
-}
+export { promptStageMarkers, promptUnitMarkers };
 
 /**
  * The plan-approval dispatch decision. Pure: no I/O, no environment.
  *
  * Blocks when the dispatch targets the developer agent for code-generation
  * unless the prompt carries exactly one target marker (`AIDLC-UNIT` or the
- * stage-level `AIDLC-STAGE: code-generation`), that marker identifies a known
+ * stage-level `AIDLC-STAGE: code-generation`), or none where `ctx.handed`
+ * names the target the start hands the plan for, that target is a known
  * approval target, and that target has approved plan evidence.
  */
 export function evaluatePlanApprovalDispatch(
@@ -513,6 +494,8 @@ export function evaluatePlanApprovalDispatch(
   ctx: {
     currentStage: string;
     units: UnitEvidence[];
+    /** The target a tool hands the brief for as the developer starts (briefHandedAtStart), when it does. */
+    handed?: string | null;
   },
 ): PlanApprovalVerdict {
   const allow: PlanApprovalVerdict = { block: false, mentioned: [] };
@@ -520,8 +503,15 @@ export function evaluatePlanApprovalDispatch(
   if (subagentType !== GUARDED_AGENT) return allow;
   if (normalizeStageName(ctx.currentStage) !== GUARDED_STAGE) return allow;
 
+  // Where a tool hands the developer its brief as it starts, a message that
+  // names no target is for the step's own, and the brief is the tool's to carry.
+  const handed = ctx.handed;
   const markedUnits = promptUnitMarkers(promptText);
   const markedStages = promptStageMarkers(promptText);
+  if (handed !== undefined && markedUnits.length + markedStages.length === 0) {
+    if (handed === null) markedStages.push(GUARDED_STAGE);
+    else markedUnits.push(handed);
+  }
   const mentioned = [
     ...markedUnits,
     ...markedStages.map((stage) => `stage:${stage}`),
@@ -543,11 +533,12 @@ export function evaluatePlanApprovalDispatch(
   const appendixInBrief =
     target !== undefined && promptCarriesReviewAppendix(promptText, target.reviewAppendix);
   const approved = approvalEvidenceIsCurrent(target);
-  const contractMatches = contractMarkers.length === 1 && contractMarkers[0] === target?.contractHash;
+  const contractMatches = (handed !== undefined && contractMarkers.length === 0) ||
+    (contractMarkers.length === 1 && contractMarkers[0] === target?.contractHash);
   // The marker lines head the brief; alone they hand the developer none of the
   // plan or instructions the approval covers. The brief's own sections, as the
   // brief command prints them, say the brief is there.
-  const briefCarried = promptCarriesBriefSections(promptText);
+  const briefCarried = handed !== undefined || promptCarriesBriefSections(promptText);
   const handoff: HandoffDefect | undefined = target === undefined
     ? "unknown-target"
     : approved && !contractMatches ? "contract" : approved && !briefCarried ? "brief" : undefined;
@@ -2999,9 +2990,11 @@ async function evaluate(
       const recordDir = docsRoot(projectDir);
       units = gatherApprovalEvidence(projectDir, knownUnits(projectDir, recordDir), setAside ?? undefined);
       if (guardedDispatch) {
+        const handed = briefHandedAtStart(projectDir) ? handedBriefTarget(projectDir, dispatchPrompt) : null;
         verdict = evaluatePlanApprovalDispatch(toolName, subagentType, dispatchPrompt, {
           currentStage: activeDirective.stage,
           units,
+          ...(handed !== null ? { handed: handed.unit } : {}),
         });
         // A directive that names no target (a step gone stale, a question, a
         // pause) carries no approval to a worker, so this is the same refusal

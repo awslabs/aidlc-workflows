@@ -34,7 +34,13 @@ import {
   guardOperationMatchesRemedy,
   isGuardRecoveryOperation,
 } from "./aidlc-guard-operation.ts";
-import { readsAlikeInDoubleQuotes } from "./aidlc-runtime-paths.ts";
+import {
+  aidlcToolInvocation,
+  quoteCommandArgument,
+  readsAlikeInDoubleQuotes,
+  runtimeProjectDir,
+} from "./aidlc-runtime-paths.ts";
+import { briefHandedByTool } from "./aidlc-testing-posture.ts";
 
 // --- Public types ---
 
@@ -1785,11 +1791,25 @@ export function inputsNote(paths: readonly string[]): string {
 // Code Generation: the engine asks for Plan Approval itself (a plan-approval
 // ask), so a stage step only ever says whether to plan or to build. The `next`
 // it names is an isolated run's own when the plan state carries one.
+// How the developer of a one-target build gets its brief on this install: a
+// tool hands it over as it starts, or the conductor's message starts with it.
+export function developerBriefSentence(unit: string | null, projectDir = runtimeProjectDir()): string {
+  if (briefHandedByTool(projectDir)) {
+    return "The developer gets the plan and its test instructions from AI-DLC as it starts: leave them out of its " +
+      "message and do not retell them.";
+  }
+  const target = unit === null ? "--stage-level" : `--unit ${quoteCommandArgument(unit)}`;
+  return `Start the developer's message with the output of \`${aidlcToolInvocation("testing-posture")} brief ${target}\`, ` +
+    "word for word: it carries the plan and its test instructions.";
+}
+
 export function planNote(
   plan: { status: string; skipped?: true; notice?: string; next?: string; feedback?: string },
   invocation: string,
+  brief?: string,
 ): string {
   const next = plan.next ?? `${invocation} next`;
+  const handOver = brief === undefined ? "" : ` ${brief}`;
   switch (plan.status) {
     case "plan":
       // A Unit's build back at Code Generation after its home turned it down:
@@ -1808,9 +1828,9 @@ export function planNote(
     default:
       return plan.skipped === true
         ? `Say to the person first: ${plan.notice ?? "Plan approval is off for this piece of work."} Then build from ` +
-          "the plan as it is (Code Generation Step 4) without asking for approval, and report."
+          `the plan as it is (Code Generation Step 4) without asking for approval, and report.${handOver}`
         : "The plan is approved: build it as it is (Code Generation Step 4), then report; never rewrite an approved " +
-          "plan unless the person asks.";
+          `plan unless the person asks.${handOver}`;
   }
 }
 
@@ -2100,6 +2120,7 @@ export function withAgentNotes<T extends object>(
         notes.plan_note = planNote(
           d.plan_approval as { status: string; skipped?: true; notice?: string; next?: string; feedback?: string },
           invocation,
+          d.stage === "code-generation" ? developerBriefSentence(typeof d.unit === "string" ? d.unit : null) : undefined,
         );
       }
     }
