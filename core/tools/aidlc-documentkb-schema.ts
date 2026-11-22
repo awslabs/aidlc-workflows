@@ -77,6 +77,8 @@ export interface ExtractionRecord {
   extractor?: ExtractorIdentity;
   chars?: number;
   truncated?: boolean;
+  // Present only when the PDF page cap ended the text: the pages kept.
+  pages_kept?: number;
   reason?: string;
   detectedType?: string;
   // The sha256 this derivative was produced FROM. Compared against the row's
@@ -184,7 +186,7 @@ export function isValidIsoTimestamp(raw: unknown): boolean {
 
 // Bounds for the LLM-authored `tags` field. The precedent where the engine
 // stores anything free-form (`EXTRACT_OUTPUT_CHAR_CAP` in aidlc-knowledge.ts,
-// `BOLT_SLUG_MAX_LENGTH`, `UNIT_NAME_MAX_LENGTH` in aidlc-lib.ts) is: cap it,
+// `BOLT_SLUG_MAX_LENGTH` in aidlc-lib.ts, `UNIT_NAME_MAX_LENGTH` in aidlc-review-records.ts) is: cap it,
 // don't trust the producer to self-limit. A tag is a short label, not prose,
 // so the per-tag cap is the same order of magnitude as those slug/name caps;
 // the count cap keeps a runaway generation from turning `tags` into an
@@ -418,6 +420,15 @@ function validateExtraction(raw: unknown, where: string, errors: string[]): void
     errors.push(
       `${where}.extraction.truncated must be a boolean when state is "${state}" — ` +
         `a reader cannot tell a complete extraction from a capped one without it`,
+    );
+  }
+  if (
+    raw.pages_kept !== undefined &&
+    (typeof raw.pages_kept !== "number" || !Number.isInteger(raw.pages_kept) || raw.pages_kept < 1 ||
+      raw.truncated !== true)
+  ) {
+    errors.push(
+      `${where}.extraction.pages_kept must be a positive integer, and only on a truncated extraction`,
     );
   }
   if (req.reason && typeof raw.reason !== "string") {

@@ -615,7 +615,7 @@ describe("t31 (u) the parser names the flag, and the policy decision finds its s
     const r = log(["answer", "--stage", "feasibility", "--answer", "yes please"], proj());
     expect(r.status).toBe(1);
     const message = refusal(r);
-    expect(message).toMatch(/^Cannot record this answer: "--answer" is not an option of log answer\. It takes --[a-z-]+(, --[a-z-]+)*\. /);
+    expect(message).toMatch(/^Cannot record this answer: "--answer" is not an option of log answer\. It takes --[a-z.-]+(, --[a-z.-]+)*\. /);
     expect(message).toContain("--details");
     expect(message).toContain(`If "--answer" is part of a value that a bare double quote split: ${howToPass("--details", RUN_TODO)}`);
     expect(message).not.toContain("so it is probably part of a value");

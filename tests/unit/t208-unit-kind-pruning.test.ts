@@ -40,12 +40,18 @@ import {
   resetAidlcEnv,
   runOrchestrateNext,
   seedAidlcMemory,
+  seedAnsweredUnitQuestions,
   seedBoltDag,
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { artifactFilename } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+// The stage's checks run once before its review or gate, and again at the gate
+// (completionChecksStep, t-checks-before-review); this file's fixture documents
+// are not written for them and its subject is not them, so they stay off here.
+process.env.AIDLC_DISABLE_SENSORS = "1";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -371,6 +377,7 @@ describe("t208 engine unit-kind pruning", () => {
   test("2: covering only the pruned set advances iteration off the spec unit", () => {
     const proj = seedProject("nfr-requirements");
     seedBoltDag(proj, [{ name: "api", kind: "spec" }, { name: "svc" }]);
+    seedAnsweredUnitQuestions(proj, "nfr-requirements", ["svc"]);
     coverUnit(proj, "api", "nfr-requirements", NFR_REQ_SPEC);
     logReviewReady(proj, "api", 1, "nfr-requirements");
     completeWave(proj, "api", "nfr-requirements");
@@ -643,6 +650,7 @@ describe("t208 engine unit-kind pruning", () => {
   test("8b: a ui unit is covered without its optional artifact on disk", () => {
     const proj = seedProject("functional-design");
     seedBoltDag(proj, [{ name: "web", kind: "ui" }, { name: "svc" }]);
+    seedAnsweredUnitQuestions(proj, "functional-design", ["svc"]);
     coverUnit(proj, "web", "functional-design", ["functional-spec", "traceability"]);
     logReviewReady(proj, "web");
     completeWave(proj, "web", "functional-design");

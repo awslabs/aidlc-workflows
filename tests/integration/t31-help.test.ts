@@ -17,9 +17,10 @@
 // CONTRACT CONFIRMED: help text is no longer a static constant — renderHelpText()
 // (aidlc-utility.ts) compiles the scope block live from
 // loadScopeMapping() (aidlc-lib.ts) over validScopes() (aidlc-lib.ts),
-// so stage counts ("All 33 stages" / "9 of 33 stages") are derived from the
-// shipped scope-grid EXECUTE/Total tallies, not hardcoded. This guards stale
-// counts.
+// so stage counts ("All 30 stages" / "6 of 30 stages") are derived from the
+// shipped scope-grid, not hardcoded: the stages a scope runs after
+// Initialization, of the stages after Initialization, the count its plan offer
+// gives on existing code. This guards stale counts.
 //
 // NO AUDIT / NO STATE / NO PROJECT DIR: `help` is a pure read-only renderer.
 // It emits no audit event, writes no file, and needs no --project-dir / temp
@@ -135,15 +136,33 @@ describe("t31 aidlc-utility help — CLI contract (migrated from t31-help-text-c
   }
 
   // --- Stage-count semantics (compiled from scope-mapping.json EXECUTE/Total). ---
-  test("enterprise/feature shows 'All 33 stages'", () => {
-    // execute === total -> "All <total> stages" (aidlc-utility.ts renderHelpText).
-    expect(HELP.stdout).toContain("All 33 stages");
+  test("enterprise/feature shows 'All 30 stages'", () => {
+    // Every stage after Initialization runs -> "All <total> stages" (aidlc-utility.ts renderHelpText).
+    expect(HELP.stdout).toContain("All 30 stages");
   });
 
-  test("bugfix shows compiled '9 of 33 stages' count", () => {
-    // execute !== total -> "<execute> of <total> stages"; bugfix tallies 9
-    // EXECUTE of 33.
-    expect(HELP.stdout).toContain("9 of 33 stages");
+  test("bugfix shows compiled '6 of 30 stages' count", () => {
+    // Otherwise "<run> of <total> stages": bugfix runs 6 of the 30 stages after
+    // Initialization, the count its plan offer gives on existing code.
+    expect(HELP.stdout).toContain("6 of 30 stages");
+  });
+
+  test("every scope's row counts the stages it runs after Initialization", () => {
+    const grid = require(join(REPO_ROOT, "dist", "claude", ".claude", "tools", "data", "scope-grid.json")) as Record<
+      string,
+      { stages: Record<string, "EXECUTE" | "SKIP"> }
+    >;
+    const graph = require(join(REPO_ROOT, "dist", "claude", ".claude", "tools", "data", "stage-graph.json")) as Array<{
+      slug: string;
+      phase: string;
+    }>;
+    const after = graph.filter((stage) => stage.phase !== "initialization").map((stage) => stage.slug);
+    for (const scope of SCOPES) {
+      const runs = after.filter((slug) => grid[scope].stages[slug] === "EXECUTE").length;
+      const count = runs === after.length ? `All ${runs} stages` : `${runs} of ${after.length} stages`;
+      const row = HELP.stdout.split("\n").find((line) => new RegExp(`^\\s+${scope}\\s`).test(line));
+      expect(row, scope).toContain(count);
+    }
   });
 
   test("classic row shows '(default)' marker", () => {

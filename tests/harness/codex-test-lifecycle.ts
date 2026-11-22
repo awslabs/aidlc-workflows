@@ -3,6 +3,7 @@ import { lstatSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { CODEX_FILE, coordinatorReportPath } from "../lib/e2e-deferred-cleanup.ts";
 import { FILE_CLEANUP_RESERVE_MS, remainingOperationTimeoutMs } from "./test-budget.ts";
+import { keepLegAudit } from "./leg-evidence.ts";
 import { PersonTurnLedger, unbackedFailure } from "./person-turns.ts";
 import { codexSandboxProblems } from "./stock-permissions.ts";
 
@@ -95,6 +96,7 @@ export function recordCodexExec(
       `${header}Exit code: ${result.rc}\nSignal: ${result.signal ?? "none"}\nSpawn error: ${result.error ?? "none"}\n\n` +
       (result.out ?? `STDOUT:\n${result.stdout ?? ""}\nSTDERR:\n${result.stderr ?? ""}`));
   }
+  keepLegAudit(cwd);
   if (unbacked.length > 0) throw unbackedFailure(`The codex exec "${label}"`, unbacked);
   if (sandbox.problems.length > 0) {
     throw new Error(`The codex exec "${label}" met the sandbox a person on stock settings meets:\n${sandbox.problems.map((line) => `  ${line}`).join("\n")}`);

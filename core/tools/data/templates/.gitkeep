@@ -5,10 +5,10 @@
 #
 #   1. team template      aidlc/spaces/<space>/memory/templates/<artifact>.md   (override)
 #   2. framework default   <harness>/tools/data/templates/<artifact>.md          (THIS dir)
-#   3. else                the generic >=2-H2 floor                              (fallthrough)
+#   3. else                no heading required                                   (fallthrough)
 #
 # The framework ships NO default template files at GA (the structure exists and
-# is extensible, but every artifact hits the generic floor until a team authors
+# is extensible, but no artifact has a required heading until a team authors
 # its own template, OR a later PR drops a default <artifact>.md here). Resolution
 # falls through gracefully when this dir holds only this marker.
 #

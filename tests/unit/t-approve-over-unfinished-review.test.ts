@@ -35,6 +35,11 @@ import {
 import { artifactFilename, auditBlockField, findStageBySlug, getField, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { renderTestingContract, resolveTestingPosture } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 
+// The stage's checks run once before its review or gate, and again at the gate
+// (completionChecksStep, t-checks-before-review); this file's fixture documents
+// are not written for them and its subject is not them, so they stay off here.
+process.env.AIDLC_DISABLE_SENSORS = "1";
+
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 const BUN = process.execPath;
@@ -79,7 +84,9 @@ function report(proj: string, args: string[], extra: Record<string, string> = {}
   return JSON.parse(line as string) as Record<string, unknown>;
 }
 
-function says(proj: string, prompt: string): void {
+// The person types `prompt` in this chat; the shipped human-turn hook keeps it.
+// Returns the id of the message it kept.
+function says(proj: string, prompt: string): string {
   const env: Record<string, string | undefined> = {
     ...process.env,
     CLAUDE_PROJECT_DIR: proj,
@@ -96,6 +103,9 @@ function says(proj: string, prompt: string): void {
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
   });
   expect(result.status, result.stderr).toBe(0);
+  const id = auditBlockField(events(proj, "HUMAN_TURN").at(-1)?.block ?? "", "Message Id");
+  expect(id).not.toBeNull();
+  return id as string;
 }
 
 function reviewAskedNeverFinished(proj: string): void {
@@ -486,7 +496,7 @@ describe("a Unit's recovery review that never finished, at unit complete and at 
 
   // unit-a reviewed READY, then its rules changed and its review was asked for
   // again: the one recovery pass, with no verdict. `asked`: the person asked for
-  // it (under strict their word since then lets `unit complete` record).
+  // it.
   function recoveryLeftUnfinished(asked = true): void {
     expect(unitVerb("start", "unit-a").rc).toBe(0);
     const names = unitArtifacts("unit-a");
@@ -574,9 +584,9 @@ describe("a stage's recovery review that never finished, after the person turns 
 
   test("the gate opens on the earlier READY review", () => {
     recoveryAskedNeverFinished(proj);
-    says(proj, "turn guard policy off");
+    const asked = says(proj, "turn guard policy off");
     const set = run(join(AIDLC_SRC, "tools", "aidlc-utility.ts"), [
-      "config-change", "--guard-policy", "off", "--person-words", "turn guard policy off", "--project-dir", proj,
+      "config-change", "--guard-policy", "off", "--message", asked, "--project-dir", proj,
     ]);
     expect(set.rc, set.out).toBe(0);
     expect(getField(readFileSync(seededStateFile(proj), "utf-8"), "Guard Policy")).toBe("off (set by you)");

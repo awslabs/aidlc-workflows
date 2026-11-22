@@ -152,10 +152,10 @@ describe("t326 pinned team Unit merge", () => {
   });
 
   // The engine's own approvals record the label the person chose, with or
-  // without an option letter, and every reader takes the label
-  // (planApprovalAnswerLabel, questionsFileApproved). The merge evidence read
-  // only the exact "A. Approve Plan" line, so a Unit whose plan the person had
-  // approved was held at the merge as if they had not.
+  // without an option letter, and the merge evidence reads the approval row
+  // that pins the file's bytes, never the line's label. It once read only the
+  // exact "A. Approve Plan" line, so a Unit whose plan the person had approved
+  // was held at the merge as if they had not.
   test.each(["[Answer]: Approve Plan", "[Answer]: a. Approve Plan"])(
     "an approved plan recorded as %s pins, gates and lands",
     (answerLine) => {

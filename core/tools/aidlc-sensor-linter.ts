@@ -259,7 +259,7 @@ function probeEslintAvailable(filePath: string, cwd: string): void {
 // those as tool-unavailable masks real bugs that the user should see, so
 // we surface parse-error stderr patterns BEFORE the conservative
 // tool-unavailable fallback and exit 2 (script-error). The dispatcher's
-// branch e then emits SENSOR_PASSED with Note=script-error: exit-2,
+// branch e then emits SENSOR_COULD_NOT_RUN with Note=script-error: exit-2,
 // keeping the audit pair closed while flagging the breakage in stderr.
 function probeEslintConfig(filePath: string, cwd: string): void {
 	const result = invokeEslint(["--print-config", filePath], cwd, filePath);

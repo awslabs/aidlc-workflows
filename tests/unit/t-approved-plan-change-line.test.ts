@@ -1,5 +1,6 @@
 // covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-testing-posture:restore,
-// function:approvedPlanChangeLine, function:approvedPlanChangeText, function:restoreApprovedPlan
+// function:approvedPlanChangeLine, function:approvedPlanChangeText, function:restoreApprovedPlan, function:personTurnStands,
+// function:guardStoodAsideLine, function:fenceCheckName
 //
 // An approved code plan that changes before the build is named for the person
 // in one line, and they can go back to the plan they approved. A resumed build
@@ -18,6 +19,10 @@
 //   - ticking a step is not a change, an added step is named as added, and
 //     once the build has started the line says so and offers the rebuild;
 //   - the plan-approval guard lets restore through while the plan waits;
+//   - under relaxed, the line beside each build step on the edited plan says
+//     plan re-approval is off, never plan approval, which stays on; a plan
+//     built with plan approval off keeps the plan-approval name, since nobody
+//     approved it;
 //   - their words in a new chat, in any wording, are read for the way back,
 //     and the print names the restore (a person once got a question about
 //     where the words belong instead, and their "1" built, or under strict
@@ -43,6 +48,8 @@ import {
   renderTestingContract,
   resolveTestingPosture,
 } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
+import { auditBlockField, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -52,6 +59,7 @@ const POSTURE = join(AIDLC_SRC, "tools", "aidlc-testing-posture.ts");
 const DISPATCHER = join(AIDLC_SRC, "tools", "aidlc.ts");
 const GUARD = join(AIDLC_SRC, "hooks", "aidlc-plan-approval-guard.ts");
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
+const UTILITY = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
 const SESSION = "01995000-7a11-7000-8000-00000000c1de";
 const UNIT = "unit-2";
 const STEPS = [
@@ -73,7 +81,7 @@ interface Emitted {
   kind: string;
   ask_type?: string;
   change_notices?: string[];
-  plan_approval?: { status?: string; note?: string };
+  plan_approval?: { status?: string; note?: string; skipped?: true };
 }
 
 const created: string[] = [];
@@ -207,6 +215,39 @@ function startBuild(proj: string, unit: string | null = UNIT): void {
   expect(dispatch.status, String(dispatch.stderr)).toBe(0);
 }
 
+/** What one build step on the edited plan says: the brief's note, then the guard's line at the dispatch and at a write. */
+function buildStepLines(proj: string, unit: string | null = UNIT): string[] {
+  const brief = run(proj, [POSTURE, "brief", ...targetArgs(unit), "--project-dir", proj]);
+  expect(brief.status, String(brief.stderr)).toBe(0);
+  const guard = (tool_name: string, tool_input: Record<string, string>): string => {
+    const result = run(proj, [GUARD], JSON.stringify({
+      hook_event_name: "PreToolUse",
+      session_id: SESSION,
+      cwd: proj,
+      tool_name,
+      tool_input,
+    }));
+    expect(result.status, String(result.stderr)).toBe(0);
+    return String(result.stdout);
+  };
+  return [
+    String(brief.stderr),
+    guard("Task", { subagent_type: "aidlc-developer-agent", prompt: String(brief.stdout) }),
+    guard("Write", { file_path: join(proj, "src", "cart.ts"), content: "export const cart = [];\n" }),
+  ];
+}
+
+const planApprovalStoodAside = (proj: string): number => readAuditShardEvents(proj).filter((row) =>
+  row.event === "GUARD_STOOD_ASIDE" && auditBlockField(row.block, "Guard") === "plan-approval").length;
+
+// The id of the message the hook kept for the person's latest turn.
+function latestMessageId(proj: string): string {
+  const turn = readAuditShardEvents(proj).filter((row) => row.event === "HUMAN_TURN").at(-1);
+  const id = turn === undefined ? null : auditBlockField(turn.block, "Message Id");
+  expect(id).not.toBeNull();
+  return id as string;
+}
+
 function restore(proj: string, unit: string | null = UNIT): string {
   const result = run(proj, [POSTURE, "restore", ...targetArgs(unit), "--project-dir", proj]);
   expect(result.status, String(result.stderr)).toBe(0);
@@ -274,6 +315,42 @@ describe("an approved plan that changed before the build is named, and can be un
       say(proj, "yes, go back");
       expect(restore(proj)).toBe("Back to the plan you approved.");
     });
+
+    // An answer never uses their message up: the yes that also answered the
+    // agent's own question still stands behind going back.
+    test(`${policy}: a yes that also answered the agent's question restores the plan`, () => {
+      const proj = project(policy);
+      approvedPlan(proj);
+      const approved = readFileSync(planPath(proj), "utf-8");
+      rewrite(proj);
+      next(proj);
+      say(proj, "yes, go back, and keep the cart model as it is");
+      appendAuditEntry("QUESTION_ANSWERED", {
+        Stage: "code-generation", Details: "Q1: keep the cart model", "Message Id": latestMessageId(proj),
+      }, proj);
+      expect(restore(proj)).toBe("Back to the plan you approved.");
+      expect(readFileSync(planPath(proj), "utf-8")).toBe(approved);
+    });
+
+    // The approval their message gave uses it up for going back on its own:
+    // the refusal leads with naming that message, and named, it restores.
+    test(`${policy}: going back on the message that approved takes that message named`, () => {
+      const proj = project(policy);
+      approvedPlan(proj);
+      const approved = readFileSync(planPath(proj), "utf-8");
+      const id = latestMessageId(proj);
+      rewrite(proj);
+      next(proj);
+      const refused = run(proj, [POSTURE, "restore", "--unit", UNIT, "--project-dir", proj]);
+      expect(refused.status, String(refused.stdout)).not.toBe(0);
+      expect(String(refused.stderr)).toContain(`If their message ${id} (sent `);
+      expect(String(refused.stderr)).toContain("run the same command with --message <id>");
+      expect(String(refused.stderr)).not.toContain("approve\"");
+      const named = run(proj, [POSTURE, "restore", "--unit", UNIT, "--message", id, "--project-dir", proj]);
+      expect(named.status, String(named.stderr)).toBe(0);
+      expect(String(named.stdout).trim()).toBe("Back to the plan you approved.");
+      expect(readFileSync(planPath(proj), "utf-8")).toBe(approved);
+    });
   }
 
   test("ticking a step is not a change; once the build has started, the line says so and offers the rebuild", () => {
@@ -334,6 +411,52 @@ describe("an approved plan that changed before the build is named, and can be un
       tool_input: { command },
     }));
     expect(hook.status, `${command}\n${hook.stderr}`).toBe(0);
+  });
+
+  // Relaxed lowers only the re-approval of an edited plan: plan approval, the
+  // plan question, stays on, and a line calling it off is false.
+  test("relaxed: once the approved plan changed, the build's line names plan re-approval, never plan approval off", () => {
+    const proj = project("relaxed");
+    approvedPlan(proj);
+    startBuild(proj);
+    rewrite(proj);
+    expect(next(proj).change_notices).toContain(changed(REBUILD_ASK, "after the build started"));
+    const before = planApprovalStoodAside(proj);
+    for (const said of buildStepLines(proj)) {
+      expect(said).toContain(
+        "Continuing past the plan re-approval check because it is off for this piece of work (guard policy relaxed (set by you))",
+      );
+      expect(said).not.toContain("plan-approval check because it is off");
+    }
+    expect(planApprovalStoodAside(proj)).toBe(before + 3);
+    const setting = run(proj, [UTILITY, "config-get", "guard.plan-approval", "--project-dir", proj]);
+    expect(setting.status, String(setting.stderr)).toBe(0);
+    expect(String(setting.stdout).trim()).toBe("on (from scope feature)");
+  });
+
+  // poc builds a plan without asking (a skipped receipt), so there is no
+  // approval to re-approve: the line keeps the plan-approval name.
+  test("relaxed, plan approval off: once the plan built without asking changed, the line keeps plan-approval, never re-approval", () => {
+    const proj = project("relaxed", null);
+    const statePath = seededStateFile(proj);
+    writeFileSync(statePath, readFileSync(statePath, "utf-8").replace("\n- **Plan Approval**: on (set by you)", ""), "utf-8");
+    mkdirSync(recordDir(proj, null), { recursive: true });
+    writeFileSync(planPath(proj, null), planText(proj), "utf-8");
+    writeFileSync(instructionsPath(proj, null), INSTRUCTIONS, "utf-8");
+    const build = next(proj);
+    expect(build.kind, JSON.stringify(build)).toBe("run-stage");
+    expect(build.plan_approval).toMatchObject({ status: "approved", skipped: true });
+    startBuild(proj, null);
+    rewrite(proj, null);
+    expect(next(proj).kind).toBe("run-stage");
+    const before = planApprovalStoodAside(proj);
+    for (const said of buildStepLines(proj, null)) {
+      expect(said).toContain(
+        "Continuing past the plan-approval check because it is off for this piece of work (guard policy relaxed (set by you))",
+      );
+      expect(said).not.toContain("re-approval");
+    }
+    expect(planApprovalStoodAside(proj)).toBe(before + 3);
   });
 });
 

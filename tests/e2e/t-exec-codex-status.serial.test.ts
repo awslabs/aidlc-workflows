@@ -16,7 +16,7 @@
 // What this proves on the SHIPPED tree, structurally:
 //   - skill discovery at .agents/skills/aidlc under a real codex session;
 //   - the engine's print-directive terminal arm (status names no workflow);
-//   - nothing is scaffolded by a read-only utility (no aidlc-docs creature);
+//   - nothing is scaffolded by a read-only utility (no work record);
 //   - the trust `package.ts codex trust` seeds is the trust Codex checks, so
 //     the project's hooks run, matched ones included.
 //
@@ -139,12 +139,12 @@ describe("t-exec-codex-status — $aidlc --status on the shipped dist/codex via 
         const r = execCodex(proj, home, "Use the $aidlc skill to run: /aidlc --status");
         expect(r.rc, codexExecDiagnostic(r)).toBe(0);
         expect(r.out.toLowerCase().includes("no active"), codexExecDiagnostic(r)).toBe(true);
-        // Read-only: the status path must not scaffold a workspace. The
-        // hooks-health heartbeat dir is hook plumbing (the byte-shared Stop
-        // hook writes it on every turn, same as the Claude harness) — the
-        // workspace signals are the state file and the scaffold tree.
-        expect(existsSync(join(proj, "aidlc-docs", "aidlc-state.md"))).toBe(false);
-        expect(existsSync(join(proj, "aidlc-docs", "ideation"))).toBe(false);
+        // Read-only: the status path must not scaffold a workflow. The hooks'
+        // hooks-health heartbeat is hook plumbing, not work; the workflow
+        // signals are the intent registry and the pre-migration aidlc-docs/
+        // tree.
+        expect(existsSync(join(proj, "aidlc", "spaces", "default", "intents", "intents.json"))).toBe(false);
+        expect(existsSync(join(proj, "aidlc-docs"))).toBe(false);
         // The seeded trust is the trust Codex checks: Codex reports running the
         // project's hooks, SessionStart and a matched one (every PostToolUse
         // group has a matcher; this run's tool calls are Bash). With a seed

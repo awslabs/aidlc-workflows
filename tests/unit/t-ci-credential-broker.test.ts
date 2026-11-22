@@ -54,12 +54,13 @@ function collector(reply: (request: CapturedRequest) => Response = () => new Res
   return { requests, origin: `http://127.0.0.1:${server.port}` };
 }
 
-async function fixture(reply?: (request: CapturedRequest) => Response, mantleReply?: (request: CapturedRequest) => Response, signingCredentials = credentials) {
+async function fixture(reply?: (request: CapturedRequest) => Response, mantleReply?: (request: CapturedRequest) => Response, signingCredentials = credentials, log?: (line: string) => void, idleTimeoutMs?: number) {
   const upstream = collector(reply);
   const mantle = collector(mantleReply);
   const sts = collector(() => new Response(identityXml, { headers: { "content-type": "text/xml" } }));
   const broker = await startCredentialBroker(signingCredentials, {
-    upstream: upstream.origin, stsUpstream: sts.origin, mantleUpstream: mantle.origin,
+    upstream: upstream.origin, stsUpstream: sts.origin, mantleUpstream: mantle.origin, ...(log ? { log } : {}),
+    ...(idleTimeoutMs ? { idleTimeoutMs } : {}),
   });
   stop.push(broker.stop);
   return { broker, upstream, mantle, sts, origin: `http://127.0.0.1:${broker.port}` };
@@ -257,6 +258,149 @@ describe("CI request-signing broker", () => {
     expect(captured.url.pathname).toBe("/openai/v1/responses");
     expect(captured.body).toEqual(body);
     await verifySignature(captured, "bedrock-mantle", "/openai/v1/responses", "", signingCredentials);
+  });
+
+  // Mantle's openai.gpt-5.5 stalls a response that asks for a reasoning
+  // summary once the model reasons (measured 2026-10-21), and Copilot CLI asks
+  // for one on every request: the broker forwards the request without it.
+  test.each([
+    [{ summary: "auto", effort: "low" }, { effort: "low" }],
+    [{ summary: "auto" }, {}],
+  ])("drops reasoning.summary %j from a Mantle request and signs what it forwards", async (sent, forwarded) => {
+    const { origin, mantle } = await fixture(undefined, () => Response.json({ id: "response-fixture", output: [] }));
+    const request = { model: CI_BEDROCK_MODELS.copilot, input: "snow 雪", stream: true, store: false, reasoning: sent, include: ["reasoning.encrypted_content"] };
+    const response = await fetch(`${origin}/openai/v1/responses`, {
+      method: "POST", body: JSON.stringify(request), headers: { "content-type": "application/json" },
+    });
+    expect(response.status).toBe(200);
+    expect(mantle.requests).toHaveLength(1);
+    const [captured] = mantle.requests;
+    expect(JSON.parse(new TextDecoder().decode(captured.body))).toEqual({ ...request, reasoning: forwarded });
+    await verifySignature(captured, "bedrock-mantle", "/openai/v1/responses", "", credentials);
+  });
+
+  // One line per request in the job's logs, so a stall shows where it is:
+  // what was asked, the answer's status, how long it ran and when its last
+  // byte came. Never a header (the client's credentials) or a body.
+  test("logs one line per request with method, path, model, status and duration, never a header or a body", async () => {
+    const lines: string[] = [];
+    const { origin } = await fixture(undefined, () => Response.json({ id: "response-fixture", output: [] }), credentials,
+      (line) => lines.push(line));
+    const answered = await fetch(`${origin}/openai/v1/responses`, {
+      method: "POST",
+      body: JSON.stringify({ model: CI_BEDROCK_MODELS.copilot, input: "snow 雪", reasoning: { summary: "auto" } }),
+      headers: { "content-type": "application/json", Authorization: "Bearer client-secret-value", "X-Amz-Security-Token": "client-token" },
+    });
+    expect(answered.status).toBe(200);
+    await answered.text();
+    const refused = await fetch(`${origin}/openai/v1/responses`, {
+      method: "POST", body: JSON.stringify({ model: "other-model", input: "snow 雪" }), headers: { "content-type": "application/json" },
+    });
+    expect(refused.status).toBe(403);
+    await refused.text();
+    for (let wait = 0; wait < 50 && lines.length < 2; wait++) await Bun.sleep(20);
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toMatch(new RegExp(
+      `^\\d{4}-\\d\\d-\\d\\dT[\\d:.]+Z POST /openai/v1/responses model=${CI_BEDROCK_MODELS.copilot.replaceAll(".", "\\.")} ` +
+      "status=200 ms=\\d+ last_byte_ms=\\d+ bytes=\\d+ end=complete dropped=reasoning\\.summary$"));
+    expect(lines[1]).toMatch(/ POST \/openai\/v1\/responses model=- status=403 ms=\d+ /);
+    for (const line of lines) {
+      for (const secret of ["client-secret-value", "client-token", "snow", credentials.sessionToken, credentials.secretAccessKey]) {
+        expect(line).not.toContain(secret);
+      }
+    }
+  });
+
+  test("logs a stream the client gave up on as incomplete, with the time of its last byte", async () => {
+    const lines: string[] = [];
+    const { origin } = await fixture(undefined, () => new Response(new ReadableStream({
+      start(controller) { controller.enqueue(new TextEncoder().encode("event: response.created\n\n")); },
+    }), { headers: { "content-type": "text/event-stream" } }), credentials, (line) => lines.push(line));
+    const client = new AbortController();
+    const response = await fetch(`${origin}/openai/v1/responses`, {
+      method: "POST", signal: client.signal,
+      body: JSON.stringify({ model: CI_BEDROCK_MODELS.copilot, input: "snow 雪" }), headers: { "content-type": "application/json" },
+    });
+    const reader = response.body!.getReader();
+    expect((await reader.read()).value?.byteLength).toBe(25);
+    await Bun.sleep(200);
+    client.abort();
+    await reader.read().catch(() => undefined);
+    for (let wait = 0; wait < 50 && lines.length < 1; wait++) await Bun.sleep(20);
+    expect(lines).toHaveLength(1);
+    const [, ms, lastByte] = lines[0].match(/ status=200 ms=(\d+) last_byte_ms=(\d+) bytes=25 end=incomplete$/) ?? [];
+    expect(Number(ms) - Number(lastByte)).toBeGreaterThanOrEqual(150);
+  });
+
+  // A service that opens a stream and then sends only keepalive comments has
+  // stopped answering (Mantle's reasoning-summary stall held one for 46
+  // minutes): the broker ends it once no data has come for the idle time.
+  test("ends a stream that sends only keepalive comments for the idle time, and logs it", async () => {
+    const lines: string[] = [];
+    let beat: ReturnType<typeof setInterval> | undefined;
+    let upstreamCancelled = false;
+    stop.push(() => clearInterval(beat));
+    const { origin } = await fixture(undefined, () => new Response(new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode('event: response.created\ndata: {"type":"response.created"}\n\n'));
+        beat = setInterval(() => controller.enqueue(encoder.encode(":\n\n")), 30);
+      },
+      cancel() {
+        clearInterval(beat);
+        upstreamCancelled = true;
+      },
+    }), { headers: { "content-type": "text/event-stream" } }), credentials, (line) => lines.push(line), 200);
+    const response = await fetch(`${origin}/openai/v1/responses`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: CI_BEDROCK_MODELS.copilot, input: "snow 雪", stream: true }),
+    });
+    expect(response.status).toBe(200);
+    const reader = response.body!.getReader();
+    stop.push(() => void reader.cancel().catch(() => {}));
+    const ended = (async () => {
+      while (!(await reader.read()).done) { /* keepalives */ }
+      return "closed";
+    })().catch(() => "cut");
+    expect(await Promise.race([ended, Bun.sleep(2000).then(() => "still open")])).toBe("cut");
+    for (let wait = 0; wait < 50 && !(lines.length && upstreamCancelled); wait++) await Bun.sleep(20);
+    expect(upstreamCancelled).toBe(true);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(/ status=200 ms=\d+ last_byte_ms=\d+ bytes=\d+ end=idle-timeout$/);
+  });
+
+  // Only an SSE comment line is a keepalive: real events, and any byte of a
+  // stream that is not SSE (here ':' after a newline), are data.
+  test.each([
+    ["/openai/v1/responses", "text/event-stream", (n: number) => encoder.encode(`event: response.output_text.delta\ndata: {"n":${n}}\n\n`)],
+    [`/model/${CI_BEDROCK_MODELS.opencode}/invoke-with-response-stream`, "application/vnd.amazon.eventstream", (n: number) => new Uint8Array([58, n, 10, 58, 255, 10])],
+  ] as const)("keeps %s streaming past the idle time while data keeps coming", async (path, type, chunk) => {
+    const lines: string[] = [];
+    const sent: Uint8Array[] = [];
+    let timer: ReturnType<typeof setInterval> | undefined;
+    stop.push(() => clearInterval(timer));
+    const reply = () => new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        timer = setInterval(() => {
+          const value = chunk(sent.length);
+          sent.push(value);
+          controller.enqueue(value);
+          if (sent.length === 8) {
+            clearInterval(timer);
+            controller.close();
+          }
+        }, 100);
+      },
+    }), { headers: { "content-type": type } });
+    const { origin } = await fixture(reply, reply, credentials, (line) => lines.push(line), 200);
+    const response = await fetch(origin + path, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: CI_BEDROCK_MODELS.codex, input: "hello", stream: true }),
+    });
+    expect(response.status).toBe(200);
+    expect(Buffer.from(await response.arrayBuffer())).toEqual(Buffer.concat(sent));
+    for (let wait = 0; wait < 50 && lines.length < 1; wait++) await Bun.sleep(20);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(new RegExp(` status=200 ms=\\d+ last_byte_ms=\\d+ bytes=${Buffer.concat(sent).length} end=complete$`));
   });
 
   test("refuses non-Codex models and non-Responses Mantle operations", async () => {

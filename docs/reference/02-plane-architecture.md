@@ -175,7 +175,7 @@ worktree-scoped — and the user can launch `/aidlc` in two terminals
 against the same checkout — so the compile needs defence regardless.
 
 - **Concurrent compiles** would race writes to `data/stage-graph.json`.
-  The compile runs under `withAuditLock` (in `aidlc-lib.ts`)
+  The compile runs under `withAuditLock` (in `aidlc-locks.ts`)
   so concurrent invocations serialise — the second waits for the first
   to finish, then runs against fresh source state.
 - **Crash mid-write.** A compile interrupted mid-write must not leave

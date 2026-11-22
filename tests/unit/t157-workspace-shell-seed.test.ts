@@ -112,8 +112,8 @@ describe("t157 seeded workspace shell + re-rooted .gitignore (SEED)", () => {
       const dir = mem(h, "templates");
       expect(existsSync(dir), `${h}: templates/ dir`).toBe(true);
       // The floor is empty-but-present — only the .gitkeep keeps the dir, NO
-      // framework default templates ship (resolution falls through to the
-      // sensor's >=2-H2 floor when a template is absent).
+      // framework default templates ship (with no template, the sensor
+      // requires no heading).
       const entries = readdirSync(dir);
       expect(entries, `${h}: templates/ holds only .gitkeep`).toEqual([".gitkeep"]);
     }

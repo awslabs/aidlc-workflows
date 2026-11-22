@@ -13,8 +13,9 @@
 // argument or after `--` is still their text (#847).
 //
 // The second half: the lowering flag the person typed rides the answer commands
-// to the work they pick, and creation takes it once they have asked in this
-// chat, recording it as theirs.
+// to the work they pick, and creation takes it on the message of theirs the
+// agent names (`--message '<id>'`), which the engine proves is this chat's,
+// recording it as theirs.
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -38,6 +39,9 @@ import {
   auditBlockField,
   getField,
   hooksHealthDir,
+  MESSAGE_FILL,
+  MESSAGE_SLOT,
+  personsWordsText,
   readAuditShardEvents,
   writeSessionPidEntry,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -119,12 +123,21 @@ function hook(proj: string, args: string[], input: string, extra: NodeJS.Process
   expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
 }
 
-/** The person types `prompt`, through the host's own human-turn hook. */
-function say(proj: string, prompt: string, harness: "claude" | "codex" = "claude"): void {
+/**
+ * The person types `prompt`, through the host's own human-turn hook. Returns
+ * the id of the message the hook kept, the one the agent names with `--message`.
+ */
+function say(proj: string, prompt: string, harness: "claude" | "codex" = "claude"): string {
+  const before = new Set(listMessages(proj).map((message) => message.id));
+  const kept = (): string => {
+    const fresh = listMessages(proj).filter((message) => !before.has(message.id));
+    expect(fresh.length, JSON.stringify(fresh)).toBe(1);
+    return fresh[0].id;
+  };
   if (harness === "claude") {
     hook(proj, [DISPATCHER, "engine", "hook", "record-human-turn"],
       JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: SESSION, cwd: proj, prompt }));
-    return;
+    return kept();
   }
   if (!existsSync(join(proj, ".codex"))) {
     cpSync(join(REPO_ROOT, "dist", "codex", ".codex"), join(proj, ".codex"), { recursive: true });
@@ -133,6 +146,7 @@ function say(proj: string, prompt: string, harness: "claude" | "codex" = "claude
   hook(proj, [join(proj, ".codex", "hooks", "aidlc-codex-adapter.ts"), "record-human-turn"],
     JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: SESSION, turn_id: "t1", cwd: proj, prompt }),
     { CLAUDE_PROJECT_DIR: undefined, AIDLC_UNATTENDED: undefined, USER_PROMPT: undefined, CODEX_THREAD_ID: undefined, CODEX_SESSION_ID: undefined });
+  return kept();
 }
 
 function utility(proj: string, args: string[], extra: NodeJS.ProcessEnv = {}): { status: number; out: string } {
@@ -384,17 +398,15 @@ describe("an answer flag misplaced on next never reaches the person", () => {
   });
 
   // A setting read from their words beside their reply to the plan question
-  // names those words, so it lands as theirs.
-  test("a setting asked for in plain words beside the plan answer: the setter names their words", () => {
+  // names the message they asked in, so it lands as theirs.
+  test("a setting asked for in plain words beside the plan answer: the setter names their message", () => {
     const proj = planQuestionProject();
     expect(next(proj).d.ask_type).toBe("plan-approval");
     say(proj, "approve it, and turn the sensors off");
     const { d, out } = next(proj, ["--sensors", "off", "approve", "it"]);
     expect(d.kind, out).toBe("print");
-    expect(String(d.message)).toContain(
-      "config set sensors off --person-words '<their words>'`, with <their words> the person's reply that asked for it, " +
-        "word for word, first",
-    );
+    expect(String(d.message)).toContain(`config set sensors off --message '${MESSAGE_SLOT}'\`${MESSAGE_FILL}, first`);
+    expect(String(d.message)).not.toContain("--person-words");
   });
 
   test("a setting typed beside the plan answer: the setter names no words", () => {
@@ -507,64 +519,79 @@ describe("creation takes a lowering flag the command passes when the person aske
 
   test("before any work exists, their message in this chat is the proof", () => {
     const proj = emptyProject();
-    say(proj, "I trust these plans, let it build them without me");
-    const made = utility(proj, [
-      ...CREATE, "--plan-approval", "off", "--person-words", "I trust these plans, let it build them without me",
-    ]);
+    const id = say(proj, "I trust these plans, let it build them without me");
+    const made = utility(proj, [...CREATE, "--plan-approval", "off", "--message", id]);
     expect(made.status, made.out).toBe(0);
     expect(createdField(proj, "Plan Approval")).toBe("off (set by you)");
+  });
+
+  test("their message on record but not named: the refusal leads with the retry that names it", () => {
+    const proj = emptyProject();
+    const id = say(proj, "I trust these plans, let it build them without me");
+    const made = utility(proj, [...CREATE, "--plan-approval", "off"]);
+    expect(made.status).toBe(1);
+    expect(errorText(made.out)).toContain(`If their message ${id} (sent `);
+    expect(errorText(made.out)).toContain(`run the same command with --message ${MESSAGE_SLOT}`);
+    expect(errorText(made.out)).not.toContain("I trust these plans");
   });
 
   test("with no message of theirs on record, the refusal stands and names the wait", () => {
     const proj = emptyProject();
     const made = utility(proj, [...CREATE, "--plan-approval", "off"]);
     expect(made.status).toBe(1);
-    expect(errorText(made.out)).toContain("No reply from the person has arrived since the last decision");
+    expect(errorText(made.out)).toContain(
+      `Run it with --message ${MESSAGE_SLOT}, the message they asked in, when they ask for it.`,
+    );
+    expect(errorText(made.out)).not.toContain("If their message");
     expect(errorText(made.out)).not.toContain("Create the piece of work without it");
   });
 
   test("a message from another chat is not this chat's proof", () => {
     const proj = emptyProject();
+    const other = "01995000-7a11-7000-8000-00000000c009";
     hook(proj, [DISPATCHER, "engine", "hook", "record-human-turn"],
       JSON.stringify({
         hook_event_name: "UserPromptSubmit",
-        session_id: "01995000-7a11-7000-8000-00000000c009",
+        session_id: other,
         cwd: proj,
         prompt: "build it without asking me",
       }),
-      { AIDLC_SESSION_OVERRIDE: "01995000-7a11-7000-8000-00000000c009" });
-    const made = utility(proj, [...CREATE, "--plan-approval", "off"]);
+      { AIDLC_SESSION_OVERRIDE: other });
+    const theirs = listMessages(proj).at(-1)?.id as string;
+    expect(theirs).toBeDefined();
+    const made = utility(proj, [...CREATE, "--plan-approval", "off", "--message", theirs]);
     expect(made.status, made.out).toBe(1);
+    expect(errorText(made.out)).toContain(`message ${theirs} was not sent on this piece of work`);
   });
 
   test("an unattended driver is refused even with their message on record", () => {
     const proj = emptyProject();
-    say(proj, "I trust these plans, let it build them without me");
-    const made = utility(proj, [...CREATE, "--plan-approval", "off"], { AIDLC_UNATTENDED: "1" });
+    const id = say(proj, "I trust these plans, let it build them without me");
+    const made = utility(proj, [...CREATE, "--plan-approval", "off", "--message", id], { AIDLC_UNATTENDED: "1" });
     expect(made.status).toBe(1);
   });
 
   test("a team's strict Guard Policy refuses it first, naming the file", () => {
     const proj = emptyProject();
     const path = lockMemory(proj);
-    say(proj, "I trust these plans, let it build them without me");
-    const made = utility(proj, [...CREATE, "--plan-approval", "off"]);
+    const id = say(proj, "I trust these plans, let it build them without me");
+    const made = utility(proj, [...CREATE, "--plan-approval", "off", "--message", id]);
     expect(made.status).toBe(1);
     // The path is compared against the parsed error: a Windows path's backslashes
     // are escaped inside the JSON the command prints.
     expect(errorText(made.out)).toContain(path);
   });
 
-  test("with work open, a Guard Policy the command lowers is theirs once they have spoken", () => {
+  test("with work open, a Guard Policy the command lowers is theirs on the message they asked in", () => {
     const proj = emptyProject();
     expect(utility(proj, ["intent-create", "--scope", "poc", "--arguments", "first", "--label", "first"]).status).toBe(0);
     const health = hooksHealthDir(proj);
     mkdirSync(health, { recursive: true });
     writeFileSync(join(health, "write-audit-log.last"), new Date().toISOString());
-    say(proj, "please go on without stopping for the plan");
+    const id = say(proj, "please go on without stopping for the plan");
     const made = utility(proj, [
       "intent-create", "--scope", "enterprise", "--arguments", "second", "--label", "second",
-      "--guard-policy", "relaxed", "--person-words", "please go on without stopping for the plan",
+      "--guard-policy", "relaxed", "--message", id,
     ]);
     expect(made.status, made.out).toBe(0);
     expect(createdField(proj, "Guard Policy")).toBe("relaxed (set by you)");
@@ -591,7 +618,7 @@ describe("creation takes a lowering flag the command passes when the person aske
 
 // ---------------------------------------------------------------------------
 // Every harness: the person's message is on record, so the flag the command
-// carries is backed by their words wherever they drive AI-DLC from
+// carries is backed by the message the agent names wherever they drive AI-DLC from
 // ---------------------------------------------------------------------------
 
 /** The entry each harness gives the person's typed prompt, as its install ships it. */
@@ -644,12 +671,12 @@ describe("the person's own words reach the record from every harness they drive"
       expect(fired.status, `${harness}: ${fired.stdout}${fired.stderr}`).toBe(0);
       const records = listMessages(proj);
       expect(records.length, `${harness}: ${JSON.stringify(records)}`).toBe(1);
-      expect(records[0].words, harness).toBe("add the export");
+      expect(records[0].words && personsWordsText(records[0].words), harness).toBe("add the export");
       expect(records[0].settings, harness).toEqual([{ key: "plan-approval", value: "off" }]);
-      // So the creation the agent runs for them, naming their reply, carries the flag as theirs.
+      // So the creation the agent runs for them, naming their message, carries the flag as theirs.
       const made = utility(proj, [
         "intent-create", "--scope", "enterprise", "--arguments", "add the export",
-        "--label", "export", "--plan-approval", "off", "--person-words", prompt,
+        "--label", "export", "--plan-approval", "off", "--message", records[0].id,
       ]);
       expect(made.status, `${harness}: ${made.out}`).toBe(0);
       expect(createdField(proj, "Plan Approval"), harness).toBe("off (set by you)");
@@ -683,7 +710,7 @@ describe("the Kiro CLI forwarding latch lets the agent correct the line", () => 
     expect(intercept.status, `${intercept.stdout}${intercept.stderr}`).toBe(0);
     const records = listMessages(proj);
     expect(records.length, JSON.stringify(records)).toBe(1);
-    expect(records[0].text).toBe(typed);
+    expect(personsWordsText(records[0].text)).toBe(typed);
     const first = next(proj, ["--plan-aprroval", "off", "add", "the", "export"]);
     expect(first.d.kind, first.out).toBe("print");
     expect(String(first.d.message)).toContain("--plan-aprroval off");
@@ -716,7 +743,7 @@ describe("a reply carrying a flag-shaped word of their own stays their reply", (
     ], { cwd: proj, env: env(proj), encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
     expect(answered.status, `${answered.stdout}${answered.stderr}`).toBe(0);
     expect(next(proj).d.plan_approval?.status).toBe("approved");
-    expect(listMessages(proj).map((message) => message.text))
+    expect(listMessages(proj).map((message) => personsWordsText(message.text)))
       .toContain("/aidlc approve, but add a --verbose flag");
   });
 
@@ -763,6 +790,7 @@ describe("a misspelt setting after the person's words is not swallowed by the wo
     expect(d.narration, out).toBeUndefined();
     expect(String(d.message)).toContain("--plan-aprroval off");
     expect(String(d.message)).toContain(ANSWER_COMMAND);
+    expect(String(d.message)).toContain("--details 'Request Changes: <what they asked>'");
     expect(String(d.message)).toContain("only the person's words");
     expect(String(d.message)).toContain("`--` before their words");
     expect(String(d.message)).toContain("the flag `next` takes");
@@ -784,8 +812,8 @@ describe("a misspelt setting after the person's words is not swallowed by the wo
     const proj = emptyProject();
     say(proj, "/aidlc --plan-aprroval off -- add the export");
     const [record] = listMessages(proj);
-    expect(record.words, JSON.stringify(record)).toBe("--plan-aprroval off add the export");
-    expect(record.text).toBe("/aidlc --plan-aprroval off -- add the export");
+    expect(record.words && personsWordsText(record.words), JSON.stringify(record)).toBe("--plan-aprroval off add the export");
+    expect(personsWordsText(record.text)).toBe("/aidlc --plan-aprroval off -- add the export");
   });
 
   test("a flag they are asking to have built stays their words, through the delimiter", () => {
@@ -797,5 +825,59 @@ describe("a misspelt setting after the person's words is not swallowed by the wo
     const ask = next(proj, ["--", "add a --verbose flag to the CLI"]);
     expect(ask.d.kind, ask.out).toBe("ask");
     expect(String(ask.d.question)).toContain("add a --verbose flag to the CLI");
+  });
+});
+
+// #2401: on Kiro IDE an agent put a flag of its own invention at the front of
+// the one quoted argument holding the request, and `--description Northwind
+// Mini Bank: ...` became the work's name. The tool cannot tell that from a
+// person whose request opens with the same word ("--description should be
+// added to the CLI"), so one quoted argument stays their words whatever its
+// first word; only a flag the agent passes as its own argument is refused.
+describe("a quoted request is the person's words, whatever its first word", () => {
+  const REQUEST = "Northwind Mini Bank: a small demo of a bank's core money handling";
+
+  test("the parser keeps a quoted request that opens with a flag-shaped word whole", () => {
+    for (const args of [[`--description ${REQUEST}`], ["--scope", "classic", `--description ${REQUEST}`], ["--description should be added to the CLI"]]) {
+      const parsed = parseNextFlags(args);
+      expect(parsed.untakenFlag, args.join(" | ")).toBeUndefined();
+      expect(parsed.intent, args.join(" | ")).toBe(args[args.length - 1]);
+    }
+  });
+
+  test("the same flag as its own argument is still refused, and creates nothing", () => {
+    const proj = emptyProject();
+    const { d, out } = next(proj, ["--scope", "classic", "--description", REQUEST]);
+    expect(d.kind, out).toBe("print");
+    expect(String(d.message)).toContain("`next` does not take `--description");
+    expect(existsSync(join(intents(proj), "active-intent"))).toBe(false);
+    expect(events(proj).join(" ")).not.toContain("WORKFLOW_STARTED");
+  });
+
+  test("next starts the work with a quoted request that opens with a flag-shaped word, whole", () => {
+    const proj = emptyProject();
+    const words = "--description should be added to the CLI";
+    say(proj, `/aidlc classic "${words}"`);
+    const { d, out } = next(proj, ["--scope", "classic", words]);
+    expect(String(d.message), out).not.toContain("does not take");
+    const request = /--request ([0-9a-f]{8})/.exec(String(d.message))?.[1];
+    expect(request, out).toBeDefined();
+    const made = utility(proj, ["intent-create", "--scope", "classic", "--request", String(request), "--label", "cli-description"]);
+    expect(made.status, made.out).toBe(0);
+    expect(createdField(proj, "Project"), made.out).toBe(words);
+  });
+
+  test("a flag-shaped word later in the quoted request stays their words", () => {
+    const parsed = parseNextFlags(["build the reverser, and add a --description flag to it"]);
+    expect(parsed.untakenFlag).toBeUndefined();
+    expect(parsed.intent).toBe("build the reverser, and add a --description flag to it");
+  });
+
+  test("a request opening with front matter or a dash rule stays their words", () => {
+    for (const words of ["---\ntitle: Northwind\n---\nBuild the bank", "----- notes below", "---> build the bank"]) {
+      const parsed = parseNextFlags([words]);
+      expect(parsed.untakenFlag, words).toBeUndefined();
+      expect(parsed.intent, words).toBe(words);
+    }
   });
 });

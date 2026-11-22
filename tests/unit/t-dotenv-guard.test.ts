@@ -15,7 +15,7 @@ import {
   dropDotenvNames,
   setByDotenvFile,
 } from "../../core/tools/aidlc-runtime-paths.ts";
-import { createTestProject, REPO_ROOT } from "../harness/fixtures.ts";
+import { createTestProject, removeWorkspaceRecord, REPO_ROOT } from "../harness/fixtures.ts";
 
 const BUN = process.execPath;
 // The copy-channel shape: the project's own copied dispatcher, as its hooks run it.
@@ -128,6 +128,8 @@ describe("t-dotenv-guard: the module", () => {
 describe("t-dotenv-guard: a host declaration survives a .env that names it", () => {
   test("an unattended driver stays unattended when the project .env also names the flag", () => {
     const project = projectWithClaudeTree();
+    // A project where no work was ever created.
+    removeWorkspaceRecord(project);
     writeFileSync(join(project, ".env"), "AIDLC_UNATTENDED=1\n");
     // The runner's fixture profile switches the presence checks off in the real environment; the
     // hooks-off stop needs them on to be the thing an unattended run skips.
@@ -141,9 +143,9 @@ describe("t-dotenv-guard: a host declaration survives a .env that names it", () 
     });
     const captured = `${next.stdout ?? ""}${next.stderr ?? ""}`;
     expect(next.stdout, captured).not.toBe("");
-    const directive = JSON.parse(next.stdout ?? "{}") as { kind?: string; message?: string };
+    const directive = JSON.parse(next.stdout ?? "{}") as { kind?: string; narration?: string };
     // Unattended: no person to stop for, so the first `next` goes straight to the engine's answer about the workflow.
-    expect(directive.kind, captured).toBe("error");
-    expect(directive.message, captured).toContain("No workflow state found");
+    expect(directive.kind, captured).toBe("print");
+    expect(directive.narration, captured).toBe("Tell me what to build and I'll start it.");
   });
 });

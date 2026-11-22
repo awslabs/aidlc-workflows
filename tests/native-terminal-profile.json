@@ -75,6 +75,10 @@
             },
             {
               "classname": "native Bun terminal driver commands",
+              "name": "Kiro's V3 offer at launch is answered Remind me later before the wait matches"
+            },
+            {
+              "classname": "native Bun terminal driver commands",
               "name": "natural exit drains final UTF-8, preserves the target exit code, and permits same-name restart"
             },
             {
@@ -427,6 +431,14 @@
             {
               "classname": "Claude onboarding profile isolation",
               "name": "without an override the legacy home-level config is still seeded additively"
+            },
+            {
+              "classname": "Kiro CLI's V3 offer at launch",
+              "name": "navigation takes Remind me later and refuses anything else"
+            },
+            {
+              "classname": "Kiro CLI's V3 offer at launch",
+              "name": "the offer is answered Remind me later and never Enter on another option"
             }
           ]
         },
@@ -934,6 +946,10 @@
             },
             {
               "classname": "native Bun terminal driver commands",
+              "name": "Kiro's V3 offer at launch is answered Remind me later before the wait matches"
+            },
+            {
+              "classname": "native Bun terminal driver commands",
               "name": "natural exit drains final UTF-8, preserves the target exit code, and permits same-name restart"
             },
             {
@@ -1262,6 +1278,14 @@
             {
               "classname": "Claude onboarding profile isolation",
               "name": "without an override the legacy home-level config is still seeded additively"
+            },
+            {
+              "classname": "Kiro CLI's V3 offer at launch",
+              "name": "navigation takes Remind me later and refuses anything else"
+            },
+            {
+              "classname": "Kiro CLI's V3 offer at launch",
+              "name": "the offer is answered Remind me later and never Enter on another option"
             }
           ]
         },
@@ -1798,6 +1822,10 @@
             },
             {
               "classname": "native Bun terminal driver commands",
+              "name": "Kiro's V3 offer at launch is answered Remind me later before the wait matches"
+            },
+            {
+              "classname": "native Bun terminal driver commands",
               "name": "natural exit drains final UTF-8, preserves the target exit code, and permits same-name restart"
             },
             {
@@ -2154,6 +2182,14 @@
             {
               "classname": "Claude onboarding profile isolation",
               "name": "without an override the legacy home-level config is still seeded additively"
+            },
+            {
+              "classname": "Kiro CLI's V3 offer at launch",
+              "name": "navigation takes Remind me later and refuses anything else"
+            },
+            {
+              "classname": "Kiro CLI's V3 offer at launch",
+              "name": "the offer is answered Remind me later and never Enter on another option"
             }
           ]
         },

@@ -384,38 +384,14 @@ describe("t-tui-t73-intent-capture (answering the stage gate produces artifacts 
         expect(summaryConfirmedAt).toBeGreaterThan(-1);
         expect(generatedArtifactAt).toBeGreaterThan(summaryConfirmedAt);
 
-        // --- learnings-before-gate ordering (guards the §13 turn binding) ------
-        // The learnings ritual is its own logged human interaction BEFORE the
-        // gate opens: its QUESTION_ANSWERED row must precede the stage's
-        // STAGE_AWAITING_APPROVAL row in the audit ledger. Without this pin a
-        // conductor that reopens the gate ahead of the learnings turn (the
-        // pre-fix live failure mode on Kiro) would still pass this test.
-        const questionAnsweredAt = auditMd.lastIndexOf(
-          "**Event**: QUESTION_ANSWERED",
-        );
-        const gateOpenedAt = auditMd.lastIndexOf(
-          "**Event**: STAGE_AWAITING_APPROVAL",
-        );
-        expect(questionAnsweredAt).toBeGreaterThan(-1);
-        expect(gateOpenedAt).toBeGreaterThan(questionAnsweredAt);
-        // Interview answers also emit QUESTION_ANSWERED, so the ordering pin
-        // alone passes when the ritual is skipped outright. The ANSWER's
-        // Details is free conductor paraphrase (live-observed: "Keep the note
-        // (c1: ...)" - no pinned token survives), but the ritual's DECISION
-        // row is deterministic: §13 mandates the structured question ship the
-        // verbatim "Nothing to add" / "Add a note" labels in its --options.
-        // Pin the ritual on that row, then require an answer row after it and
-        // before the gate - the §3 logging pair, wording-free.
-        const learningsDecisionAt = auditMd.search(
+        // --- no learnings question with nothing corrected ----------------------
+        // The person picked the defaults and corrected nothing, so the learnings
+        // step asks nothing and the gate follows the summary.
+        expect(auditMd).not.toMatch(/\*\*Question Kind\*\*: learnings-note/);
+        expect(auditMd).not.toMatch(
           /\*\*Event\*\*: DECISION_RECORDED\n(?:\*\*[^\n]+\n)*?\*\*Options\*\*: [^\n]*Nothing to add[^\n]*Add a note/,
         );
-        expect(learningsDecisionAt).toBeGreaterThan(-1);
-        const learningsAnswerAt = auditMd.indexOf(
-          "**Event**: QUESTION_ANSWERED",
-          learningsDecisionAt,
-        );
-        expect(learningsAnswerAt).toBeGreaterThan(learningsDecisionAt);
-        expect(gateOpenedAt).toBeGreaterThan(learningsAnswerAt);
+        expect(auditMd.lastIndexOf("**Event**: STAGE_AWAITING_APPROVAL")).toBeGreaterThan(-1);
 
         // --- render assertion (the tui-only value-add) -----------------------
         // The captured grid showed the AUQ select footer and/or the multi-tab

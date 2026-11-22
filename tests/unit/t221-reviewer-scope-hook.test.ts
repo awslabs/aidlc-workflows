@@ -39,6 +39,7 @@ import {
 import { stateDigest, writeActiveDirectiveMarker } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { hookGroupMembers } from "../../core/tools/aidlc-command.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
+import kiroManifest from "../../harness/kiro/manifest.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
@@ -537,12 +538,21 @@ function scratchProject(): string {
     "aidlc-lib.ts",
     "aidlc-artifact-vocabulary.ts",
     "aidlc-settings.ts",
+    "aidlc-markdown.ts",
+    "aidlc-locks.ts",
+    "aidlc-review-records.ts",
+    "aidlc-learned-date.ts",
+    "aidlc-kiro-chat-record.ts",
     "aidlc-install-paths.ts",
     "aidlc-distribution.ts",
     "aidlc-channel.ts",
     "aidlc-version.ts",
     "aidlc-runtime-paths.ts",
     "aidlc-runtime-budget.ts",
+    "aidlc-lock-line.ts",
+    "aidlc-review-manifest.ts",
+    "aidlc-command.ts",
+    "aidlc-color.ts",
     "aidlc-guard-fences.ts",
     "aidlc-guard-switch.ts",
     "aidlc-guard-operation.ts",
@@ -966,6 +976,19 @@ describe("t221 (b) dispatch-record lifecycle (shipped hook, subprocess)", () => 
     expect(runHook(proj, write).code).toBe(0);
   });
 
+  test("a merged cell alone, without the landing in the checkout's history, keeps a claimed checkout held", () => {
+    const proj = scratchProject();
+    seedUnitScope(
+      proj,
+      "U03-scoring",
+      "\n## Unit Progress\n| unit | owner | code-generation | merged |\n| --- | --- | --- | --- |\n" +
+        "| U03-scoring | t221 | [x] | [x] |\n",
+    );
+    const r = runHook(proj, { hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: "touch Construction/u05-API/result.md" } });
+    expect(r.code).toBe(2);
+    expect(r.stderr).toContain('scoped to Unit "U03-scoring"');
+  });
+
   test.each([
     ["relaxed policy", "- **Guard Policy**: relaxed (set by you)\n", {}],
     ["off policy", "- **Guard Policy**: off (set by you)\n", {}],
@@ -1074,7 +1097,7 @@ describe("t221 (c) harness registration and protocol prose", () => {
           // The registration passes its own agent name so the adapter forwards
           // a real identity instead of a bare scoped_registration.
           expect(e.command).toBe(
-            `bun ${harness.manifest.harnessDir}/tools/aidlc.ts engine adapter kiro reviewer-scope ${agent}`,
+            `bun ${harness.manifest.harnessDir}/tools/aidlc.ts engine adapter kiro reviewer-scope ${agent}${kiroManifest.hookCommandSuffix}`,
           );
         }
         expect(

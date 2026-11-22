@@ -15,7 +15,7 @@
 //     <slug>/memory.md`, dropping the active intent's record dir
 //     (aidlc/spaces/<sp>/intents/<YYMMDD>-<label>). The state advance transition
 //     had the same 2-arg relativeMemoryPath call. surface then join()'d that
-//     against projectDir and missed the real diary, surfacing zero candidates.
+//     against projectDir and missed the real diary, counting no entries.
 //   READ SIDE - surface extracted the phase as memRel.split("/")[1], which under
 //     the workspace prefix is "spaces", not the real phase. The robust extraction
 //     is the third-from-last segment: memory_path always ends
@@ -129,7 +129,7 @@ function mkWorkspaceProject(): string {
 function memoryDiary(): string {
   // parseMemoryEntryLine counts any non-empty line under a heading as one entry
   // (a canonical `<ts> - <text>` bullet is parsed further, a bare line degrades
-  // to a raw entry), so this single bullet yields exactly one candidate.
+  // to a raw entry), so this single bullet yields exactly one entry.
   return [
     "## Interpretations",
     "- Reused the existing auth module; saved a rewrite this stage",
@@ -188,7 +188,7 @@ describe("t199 per-intent memory path (write + read)", () => {
     const out = JSON.parse(s.stdout);
     // The phase is the real one (inception), NOT "spaces" (the old front-index bug).
     expect(out.phase).toBe("inception");
-    expect(out.candidates.length).toBe(1);
+    expect(out.memory_entries_total).toBe(1);
   }, TIMEOUT);
 
   test("surface uses the session binding when the shared cursor points elsewhere", () => {
@@ -240,7 +240,7 @@ describe("t199 per-intent memory path (write + read)", () => {
     mkdirSync(dirname(otherDiary), { recursive: true });
     writeFileSync(
       otherDiary,
-      "## Interpretations\n- This belongs to the shared cursor only\n",
+      "## Interpretations\n- This belongs to the shared cursor only\n- So does this\n",
     );
     writeSessionBinding(pd, "session-a", DEFAULT_SPACE, DEFAULT_RECORD_DIR, "switch");
     setActiveIntentCursor(pd, other.dirName, DEFAULT_SPACE);
@@ -257,8 +257,8 @@ describe("t199 per-intent memory path (write + read)", () => {
     expect(surfaced.status, surfaced.stderr).toBe(0);
     const out = JSON.parse(surfaced.stdout);
     expect(out.intent).toBe(DEFAULT_RECORD_DIR);
-    expect(out.candidates).toHaveLength(1);
-    expect(out.candidates[0].summary).toContain("existing auth module");
+    // The bound record's diary (one entry), not the shared cursor's (two).
+    expect(out.memory_entries_total).toBe(1);
   }, TIMEOUT);
 
   // ===========================================================================
@@ -296,7 +296,7 @@ describe("t199 per-intent memory path (write + read)", () => {
     expect(s.status).toBe(0);
     const out = JSON.parse(s.stdout);
     expect(out.phase).toBe("inception");
-    expect(out.candidates.length).toBe(1);
+    expect(out.memory_entries_total).toBe(1);
   }, TIMEOUT);
 
   // ===========================================================================
@@ -309,7 +309,7 @@ describe("t199 per-intent memory path (write + read)", () => {
     const pd = mkWorkspaceProject();
     expect(existsSync(join(seededRecordDir(pd), "runtime-graph.json"))).toBe(false);
     // Seed the diary at the path compile WOULD have recorded, so a wrong
-    // recomputation surfaces zero candidates rather than passing by accident.
+    // recomputation counts no entries rather than passing by accident.
     const diaryDir = join(seededRecordDir(pd), "inception", "user-stories");
     mkdirSync(diaryDir, { recursive: true });
     writeFileSync(join(diaryDir, "memory.md"), memoryDiary());
@@ -322,7 +322,7 @@ describe("t199 per-intent memory path (write + read)", () => {
     expect(s.status, s.stderr).toBe(0);
     const out = JSON.parse(s.stdout);
     expect(out.phase).toBe("inception");
-    expect(out.candidates.length).toBe(1);
+    expect(out.memory_entries_total).toBe(1);
     // The recompute is exact and leaves the person nothing to do, so it says
     // nothing: Codex shows every stderr line, once per stage surfaced.
     expect(s.stderr).toBe("");
@@ -345,7 +345,7 @@ describe("t199 per-intent memory path (write + read)", () => {
       { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
     );
     expect(s.status, s.stderr).toBe(0);
-    expect(JSON.parse(s.stdout).candidates.length).toBe(1);
+    expect(JSON.parse(s.stdout).memory_entries_total).toBe(1);
 
     expect(
       spawnSync(BUN, [RUNTIME_TS, "--project-dir", pd, "compile"], {

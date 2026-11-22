@@ -51,6 +51,19 @@ function project(): string {
   return dir;
 }
 
+// The human-turn hook keeps the person's message `text` (their `words` past an
+// AIDLC entry) and names it on its turn row; returns the message's id. The
+// store drops records older than a day as it saves one, so the message keeps
+// the time it is saved at.
+function kept(dir: string, text: string, words = text, chat = "chat-a"): string {
+  const message = saveMessage(dir, {
+    session: chat, at: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"), source: "prompt", text, picker: null, words,
+    settings: [], route: { scope: null, newIntent: false, skip: [], add: [], projectType: null },
+  });
+  row(dir, "HUMAN_TURN", { Session: chat, Origin: "person", Source: "typed", "Message Id": message.id });
+  return message.id;
+}
+
 // The runner never retries a file that fails with this error (tests/lib/file-retry.ts),
 // so every person-turn failure must be one: the drives' unbacked-decision failure and
 // a test's own "the person came first" check alike.
@@ -125,56 +138,39 @@ describe("person-turn check", () => {
   });
 
   // "Choose the recommended answers", said in the opening command before the
-  // questions came: the agent's answers carry the words, and that turn backs them.
-  test("a choice the person left to the agent is backed by the turn that said so", () => {
+  // questions came: the agent's answers name that message, and its turn backs them.
+  test("a choice the person left to the agent is backed by the turn that sent the message it names", () => {
     const dir = project();
     const drive = new PersonTurnLedger(dir);
-    drive.sent("/aidlc build the lunch poll, and choose the  Recommended answers for the questions");
+    const opening = "/aidlc build the lunch poll, and choose the  Recommended answers for the questions";
+    drive.sent(opening);
+    const id = kept(dir, opening, "build the lunch poll, and choose the  Recommended answers for the questions");
     row(dir, "DECISION_RECORDED", { Stage: "intent-capture" });
     row(dir, "QUESTION_ANSWERED", {
       Stage: "intent-capture", Details: "Q1: A; Q2: B",
-      "Answer Source": "chosen by the agent as the person asked", Instruction: "choose the recommended answers",
+      "Answer Source": "chosen by the agent, reading their message", "Message Id": id,
     });
     expect(drive.unbacked()).toEqual([]);
   });
 
-  test("a choice marked as left to the agent in words the person never sent is flagged", () => {
+  test("a choice marked as left to the agent naming no message, or one the person never sent, is flagged", () => {
     const dir = project();
     const drive = new PersonTurnLedger(dir);
     drive.sent("/aidlc build the lunch poll");
     row(dir, "DECISION_RECORDED", { Stage: "intent-capture" });
     row(dir, "QUESTION_ANSWERED", {
       Stage: "intent-capture", Details: "Q1: A",
-      "Answer Source": "chosen by the agent as the person asked", Instruction: "up to you",
+      "Answer Source": "chosen by the agent, reading their message", "Conductor Summary": "up to you",
     });
     row(dir, "DECISION_RECORDED", { Stage: "requirements-analysis" });
     row(dir, "QUESTION_ANSWERED", {
       Stage: "requirements-analysis", Details: "Q1: B",
-      "Answer Source": "chosen by the agent as the person asked", Instruction: "",
+      "Answer Source": "chosen by the agent, reading their message", "Message Id": kept(dir, "up to you"),
     });
     const problems = drive.unbacked();
     expect(problems).toHaveLength(2);
     expect(problems[0]).toContain("QUESTION_ANSWERED intent-capture");
     expect(problems[1]).toContain("QUESTION_ANSWERED requirements-analysis");
-  });
-
-  // The engine's own check of the quote (log answer --on-instruction), so a
-  // quote the engine records is one the drive finds, punctuation aside.
-  test("a choice left to the agent is backed by its quote whatever the punctuation, and not by words cut from it", () => {
-    const dir = project();
-    const drive = new PersonTurnLedger(dir);
-    drive.sent("Honestly, it\u2019s up to you!");
-    row(dir, "DECISION_RECORDED", { Stage: "intent-capture" });
-    row(dir, "QUESTION_ANSWERED", {
-      Stage: "intent-capture", Details: "Q1: A",
-      "Answer Source": "chosen by the agent as the person asked", Instruction: "it's up to you.",
-    });
-    expect(drive.unbacked()).toEqual([]);
-    row(dir, "QUESTION_ANSWERED", {
-      Stage: "intent-capture", Details: "Q2: A",
-      "Answer Source": "chosen by the agent as the person asked", Instruction: "honestly up to you",
-    });
-    expect(drive.unbacked()).toHaveLength(1);
   });
 
   test("an answer needs a turn after its question opened; another stage's turn does not count", () => {
@@ -223,26 +219,29 @@ describe("person-turn check", () => {
   });
 
   // The rows of the 2026-10-16 nightly's compose-front run: the person's only words came in the first chat; the
-  // second chat's "Approve" created the work as a new project, and the agent changed it to existing code in those words.
-  test("a project type changed in the person's own words is backed by the turn that holds them, from an earlier chat too", () => {
+  // second chat's "Approve" created the work as a new project, and the agent changed it to existing code naming the
+  // message those words came in.
+  test("a project type changed on the person's message is backed by the turn that sent it, from an earlier chat too", () => {
     const words = "harden the deployment pipeline and add observability for our existing service - no new features, compose a custom plan for exactly this";
     const opening = `Use the $aidlc skill to run: /aidlc compose "${words}"`;
-    const beat = (earlier: string[], quoted?: string) => {
+    // `named`: the text of the message the change names, kept as the hook keeps it.
+    const beat = (earlier: string[], named?: string) => {
       const dir = createTestProject();
       projects.push(dir);
       const drive = new PersonTurnLedger(dir, earlier);
       drive.sent("Approve");
       row(dir, "WORKFLOW_STARTED");
       row(dir, "WORKSPACE_INITIALISED", { "Project Type": "Greenfield", "Project Type Source": "scan" });
+      const id = named === undefined ? undefined : kept(dir, named);
       row(dir, "WORKSPACE_RECLASSIFIED", {
-        "Old Project Type": "Greenfield (scan)", "New Project Type": "Brownfield (you)", ...(quoted === undefined ? {} : { "Person Words": quoted }),
+        "Old Project Type": "Greenfield (scan)", "New Project Type": "Brownfield (you)", ...(id === undefined ? {} : { "Message Id": id }),
       });
       return drive.unbacked();
     };
-    expect(beat([opening], words)).toEqual([]);
-    // The run's own failure stays for a change that quotes nothing, words the person never sent, or a turn not in the work.
+    expect(beat([opening], opening)).toEqual([]);
+    // The run's own failure stays for a change that names no message, a message the driver never sent, or a turn not in the work.
     const failure = 'recorded words "Brownfield (you)": no reply from the person after it opened; the driver sent 1 turn(s): "Approve"';
-    for (const problems of [beat([opening]), beat([opening], "it is an existing service"), beat([], words)]) {
+    for (const problems of [beat([opening]), beat([opening], "it is an existing service"), beat([], opening)]) {
       expect(problems).toHaveLength(1);
       expect(problems[0]).toStartWith("WORKSPACE_RECLASSIFIED at ");
       expect(problems[0]).toEndWith(failure);
@@ -674,9 +673,10 @@ describe("person-turn check", () => {
   });
 
   // Run 38809298225 on Windows: the person picked "Guide me" on a lone
-  // question, and the agent recorded it as a choice left to it, quoting the
-  // pick. Only the pick's own words can back that quote.
-  test("a lone menu pick backs an answer the agent records quoting it", () => {
+  // question, and the agent recorded it as a choice left to it, naming the
+  // pick's message. Only a turn the driver read the pick's words off can back
+  // that message.
+  test("a lone menu pick backs an answer the agent records naming its message", () => {
     const screen = [
       "─".repeat(60),
       " ☐ Answer mode",
@@ -707,14 +707,15 @@ describe("person-turn check", () => {
       });
       nextPersonTurnCarriesPicks(session, 1, words);
       submittedToPersonTurnSession(session, "");
+      const id = kept(dir, "Guide me");
       row(dir, "QUESTION_ANSWERED", {
         Stage: "practices-discovery", Details: "Guide me",
-        "Answer Source": "chosen by the agent as the person asked", Instruction: "Guide me",
+        "Answer Source": "chosen by the agent, reading their message", "Message Id": id,
       });
       return unbackedTuiDecisions(dir);
     });
     expect(problems[0]).toEqual([]);
-    // A pick with no words backs no quote.
+    // A pick the driver read no words off backs no message.
     expect(problems[1]).toHaveLength(1);
     expect(problems[1][0]).toContain("QUESTION_ANSWERED practices-discovery");
     expect(problems[1][0]).toContain('recorded words "Guide me"');

@@ -10,12 +10,13 @@ support_agents:
 mode: inline
 produces:
   - build-instructions
-  - integration-test-instructions
-  - performance-test-instructions
-  - security-test-instructions
   - build-and-test-summary
   - build-test-results
   - cross-unit-traceability
+optional_produces:
+  - integration-test-instructions
+  - performance-test-instructions
+  - security-test-instructions
 consumes:
   - artifact: code-generation-plan
     required: true
@@ -41,7 +42,7 @@ scopes:
   - workshop
   - express
 inputs: ALL code generation outputs across all units
-outputs: build-instructions.md, integration-test-instructions.md, performance-test-instructions.md, security-test-instructions.md, build-and-test-summary.md, test-results.md, cross-unit-traceability.md (under this stage's record dir, engine-resolved)
+outputs: "build-instructions.md, build-and-test-summary.md, test-results.md, cross-unit-traceability.md, CONDITIONAL: integration-test-instructions.md (Standard and above), performance-test-instructions.md and security-test-instructions.md (Comprehensive, when that NFR kind exists) (under this stage's record dir, engine-resolved)"
 ---
 
 # Build and Test
@@ -93,7 +94,7 @@ Create `<record>/construction/build-and-test/build-instructions.md`:
 
 ### Step 3-7: Generate Test Instructions (Strategy-Aware)
 
-Consult the active test strategy from `aidlc-state.md` → `**Test Strategy**` (see stage-protocol.md §8 "Test Strategy"). Generate additional test instruction files based on the strategy level:
+Consult the active test strategy from `aidlc-state.md` → `**Test Strategy**`, or the run-stage's `test_strategy` when an isolated run carries one (see stage-protocol.md §8 "Test Strategy"). Generate additional test instruction files based on the strategy level:
 
 **Minimal strategy** — generate no additional test instruction files. Unit
 tests are covered per-unit by Code Generation.
@@ -115,6 +116,11 @@ Each instruction file should include:
 - Expected coverage targets appropriate to the strategy level
 - Test data management and environment setup
 
+These three instruction files are declared under `optional_produces`, because a
+Minimal run writes none of them and a Standard run writes only the integration
+one; only the build instructions, the summary, the results and the cross-unit
+traceability are always written.
+
 These are soft guidelines — the LLM can generate additional test types at any strategy level if context demands it (e.g., a Minimal security-patch may still warrant security test instructions).
 
 ### Step 8: Generate Build and Test Summary
@@ -122,7 +128,7 @@ These are soft guidelines — the LLM can generate additional test types at any 
 Create `<record>/construction/build-and-test/build-and-test-summary.md`:
 - Overall build status and prerequisites
 - Test type inventory (which test types were generated)
-- Coverage expectations per unit
+- Coverage expectations for the project and each Unit
 - A `## Target Verification Matrix` with one row per target and these columns:
   Target ID, Source, Expected, Actual, Evidence, Owning Stage, Verdict
 - Each applicable target begins with Actual and Evidence `Pending`, and Verdict
@@ -148,6 +154,34 @@ Attempt to execute the build and test commands documented in the instruction fil
    malformed per-unit file may carry a project-wide command; run that command
    once, never N times. Capture and report stage-level/per-unit pass/fail
    results without double counting.
+   When a coverage floor is set for the whole project (by the Testing
+   Contract, a team rule, or a threshold in the project's coverage
+   configuration for all measured source), run the project's full-suite
+   coverage command once on the assembled project with its own
+   coverage configuration (an identical command already run in this step in
+   the same repository counts), and record its command, exit code and report
+   in `test-results.md`.
+   In a multi-repo intent, run it once in each repository the floor applies
+   to, with that repository's own command and coverage configuration, and
+   name the repository in the row's Evidence. That run, never a unit-scoped
+   one, is the Evidence for a project-wide coverage-floor row in the Target
+   Verification Matrix, and one repository's run is never the Evidence for
+   another repository's floor. A unit-scoped command whose output shows all
+   of its selected tests passed and the threshold of a floor set for the
+   whole project (one that applies to all measured source, even when the
+   runner checks it file by file) as the only cause of its non-zero exit
+   counts as passed, from a new or an already-approved instructions file:
+   record its exit code and this reason in `test-results.md`. That applies
+   only when that exit stopped no later step of the command: when a step after
+   it did not run because of it (one chained, such as `… && <lint>`, one in a
+   script or lifecycle hook the command calls, or a later task or phase of a
+   build tool; tell from the scripts, hooks and task or phase definitions the
+   command runs and from its output), the command is not exempt and its
+   non-zero exit is a failed command.
+   Any other non-zero exit (a failed or errored test, a threshold set for one
+   path or Unit), or output that does not show both, is a failed command. A
+   coverage target set for one Unit needs its own check on that Unit's scope
+   and its own evidence; a passing full-suite run does not make it `Met`.
 3. **Integration tests** (if applicable): Run integration test commands. Capture results.
 4. **Other applicable checks**: Run every applicable command from performance,
    security, contract, E2E, accessibility, and other generated instruction
@@ -171,6 +205,17 @@ Attempt to execute the build and test commands documented in the instruction fil
      target: `Met`, `Not Met`, or `Unverified`. `Pending` is allowed only while
      Step 8 is being prepared; no `Pending` verdict may remain when Step 9
      exits.
+   - Wherever this stage reports browser behavior as tested (a matrix row,
+     a `cross-unit-traceability.md` entry, the summary, or the readiness
+     assessment), name where the check ran: Node, a DOM emulator (jsdom,
+     Happy DOM), or a real browser engine (for example Chromium driven by
+     Playwright). Tests in Node or a DOM emulator, including an
+     assembled-bundle journey, are integration evidence: they cannot show
+     native browser behavior such as calling `fetch` without its `window`
+     receiver, so never call them browser or end-to-end evidence. Only a run
+     in a real browser engine makes a target that requires behavior in a
+     browser `Met`; without one, including when no browser can launch here,
+     that target is `Unverified`.
    - `## Loop-Back Log` (only when the failure ladder's rung 3 or 4 fires a
      loop-back): one `### Loop-back N — <ISO timestamp>` entry per attempt,
      carrying Diagnosis / Root-cause stage / Planned fix / Estimated impact. This section
@@ -178,7 +223,9 @@ Attempt to execute the build and test commands documented in the instruction fil
      never Redo, on loop-back re-entry — Redo would erase the ledger).
 
 **Failure predicate**: Build and Test has failed when any build or test command
-fails OR any applicable target is `Not Met` or `Unverified`. Before entering
+fails OR any applicable target is `Not Met` or `Unverified`. One exception: a
+browser target whose only gap is that no real browser engine ran it is said at
+the approval gate (Step 12), not handled as a failure. Before entering
 failure handling, finalize the matrix and summary with all evidence available
 on that exit path. Weakening, relaxing, lowering, or disabling a defined
 quality target is never an acceptable fix.
@@ -267,6 +314,12 @@ Present completion message and approval gate:
 
 Summary of all test instruction sets generated, readiness assessment, then:
 
+When a target, done condition, or acceptance criterion that requires behavior
+in a browser was checked only in Node or a DOM emulator, say so once, in one
+line, naming what and where it ran, for example: "The transfer journey was
+checked in Happy DOM, not a real browser." The person decides at the gate with
+that in front of them.
+
 ```
 **Review:** `<record>/construction/build-and-test/`
 ```
@@ -296,6 +349,6 @@ build exit code remains the authoritative signal.
 
 When `directive.protocol_modules` lists `learnings`, follow
 `stage-protocol-learnings.md`: keep the diary at `directive.memory_path` while
-working and run the ritual before the approval gate, applying its bootstrap,
-`single: true`, per-unit, and gate-revision exemptions. When the module is absent,
-skip both the diary and the ritual.
+working, and take the learnings step before the approval gate; that module says
+when it asks the person anything. When the module is absent, skip both the diary
+and the step.

@@ -213,8 +213,12 @@ Review outcome: Concerns remain for your decision.
 > R-03 Required action: Human should confirm at the gate that a single integration-adoption
   metric is sufficient, or ask a follow-up to add a data-accuracy or reliability metric ...
 
+Approve accepts the open review findings R-01 (...), R-02 (...) and R-03 (The table carries a
+single, binary success metric ("at least one real...) as risk; you can also approve and ask for
+one to be fixed, or reject one as not applying, saying why.
+
 Decision options:
-- Approve - continue with the open findings accepted.
+- Approve - continue.
 - Request Changes - return to the listed artifacts so the required actions can be addressed.
 
  Approval
@@ -226,9 +230,14 @@ Decision options:
 Each finding has an ID, a severity, where it is, and what would resolve it. The
 engine owns the stable finding list. Later checks report only what changed,
 while your decisions remain exactly as you made them. Choose **Approve** to
-continue with every open finding accepted, or **Request Changes** to return to
-the listed artifacts. When rejecting an open finding as inapplicable, give its
-ID and reason. If a reviewer marks one fixed and you disagree, request changes
+continue with every open finding accepted as risk (the line under the findings
+names them), or **Request Changes** to return to the listed artifacts. To decide
+one differently, say so in your own words: approving and asking for R-03 to
+be fixed records that you asked for the fix, so the next check looks at it
+again; rejecting R-03 as not applying records it that way, with your reason,
+and brings the same gate back with the review as it stands, since nothing else
+changed. When rejecting an open finding as inapplicable, give its ID and reason. If
+a reviewer marks one fixed and you disagree, request changes
 with that ID and explain why it is not fixed; the engine reopens it for the
 next check. Ordinary revision feedback changes no finding decision. After a
 backward jump, Keep and Modify retain this list and its decisions. Redo from
@@ -288,6 +297,21 @@ If you ask to leave planned work out of a build ("skip the remaining stories"),
 the build goes on without it and its approval says what was left out, for
 example "Left out of this build: AC2.1.1, AC2.1.2 and AC2.2.1." The Unit's
 `traceability.json` keeps each of those items as `Deferred`, with your words.
+
+Code Generation is told which files you had before the work started, and
+builds around them unless its plan changes one. When the build changes or
+deletes a file you had before the work started (a
+README, LICENSE, docs or configs; on existing code, any file it deletes and the
+changed files AI-DLC does not read as code or a build file by their name, so a
+README or `.env` but not `package.json`, a `Dockerfile` or a YAML config), its
+approval says so once, with the
+command that puts each one back when git holds your copy, for example "The
+build changed README.md, a file you had before this work started. To put it
+back, run `git checkout HEAD -- README.md`.", or that there is no committed
+copy to put back. AI-DLC's own files, as its setup or a later `aidlc config`
+wrote them, are not among them, and neither is AI-DLC's marked part of a file
+it shares with you, such as AGENTS.md or `.gitignore`, when git holds your copy
+of it: your part of that file still is.
 
 If no autonomy choice is already recorded, the workflow then asks how to continue building the remaining work: **Continue automatically** or **Review each checkpoint**.
 

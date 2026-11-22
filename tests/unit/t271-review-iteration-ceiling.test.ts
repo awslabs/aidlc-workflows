@@ -8,7 +8,8 @@
 // function:isReviewRecordRelativePath, function:readReviewRecord,
 // function:latestReviewRecordRefs, function:mergeReviewRecordsFromDelta,
 // function:reviewRecordMatchesCompletion, function:pairedReviewRecordForCompletion,
-// function:completionCarriesVerifiedReview, function:stageGateReportCommand, function:learningsRitualRuns,
+// function:completionCarriesVerifiedReview, function:stageGateReportCommand, function:stageReviewBriefCommand,
+// function:learningsRitualRuns,
 // function:reviewVerdictNote
 //
 // t271 — engine-enforced review iteration ceiling (aidlc-log review).
@@ -54,6 +55,7 @@ import { basename, dirname, join, relative } from "node:path";
 import {
   cleanupTestProject,
   createTestProject,
+  seedAidlcMemory,
   seedAuditFile,
   seedBoltDagBatches,
   seededAuditDir,
@@ -71,6 +73,7 @@ import {
   latestReviewRecordRefs,
   markEngineTouch,
   markHumanTurn,
+  MESSAGE_FILL,
   mergeReviewRecordsFromDelta,
   REVIEW_RECORD_MAX_BYTES,
   turnMarkersShowConversational,
@@ -86,6 +89,11 @@ import {
   toPosix,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { readReviewArtifactContexts } from "../../dist/claude/.claude/tools/aidlc-review-brief.ts";
+
+// The stage's checks run once before its review or gate, and again at the gate
+// (completionChecksStep, t-checks-before-review); this file's fixture documents
+// are not written for them and its subject is not them, so they stay off here.
+process.env.AIDLC_DISABLE_SENSORS = "1";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
@@ -247,7 +255,28 @@ function runState(proj: string, args: string[]) {
 // state-mid-inception.md: Scope bugfix (review_cap advisory), Current Stage
 // requirements-analysis (declared advisory anyway). For adversarial cases we
 // flip the scope field to `feature` (uncapped).
-function seedProject(scope: "bugfix" | "feature" | "classic"): string {
+const ORCHESTRATE_TOOL = join(import.meta.dir, "..", "..", "dist", "claude", ".claude", "tools", "aidlc-orchestrate.ts");
+
+function orchestrate(proj: string, args: string[]) {
+  const result = spawnSync(process.execPath, [ORCHESTRATE_TOOL, ...args, "--project-dir", proj], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    encoding: "utf-8",
+    cwd: proj,
+    env: { ...process.env, AIDLC_PROJECT_DIR: proj, CLAUDE_PROJECT_DIR: proj },
+  });
+  return { status: result.status, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
+}
+
+/** The guard-recovery step a refusal carries inside its error text. */
+function refusalAsk(stderr: string): { agent_work?: boolean; remedies: { op: string; requiresHuman: boolean; action: string }[] } {
+  const line = stderr.split("\n").find((entry) => entry.startsWith("{")) ?? "{}";
+  const error = String((JSON.parse(line) as { error?: string }).error ?? "");
+  const at = error.indexOf('{"kind":"ask"');
+  expect(at, error).toBeGreaterThanOrEqual(0);
+  return JSON.parse(error.slice(at));
+}
+
+function seedProject(scope: "bugfix" | "feature" | "classic" | "express"): string {
   const proj = createTestProject();
   seedStateFile(proj, "state-mid-inception.md");
   seedAuditFile(proj);
@@ -259,7 +288,7 @@ function seedProject(scope: "bugfix" | "feature" | "classic"): string {
         "- **Scope**: bugfix",
         `- **Scope**: ${scope}`
       ).replace(
-        "- [S] units-generation — SKIP (bugfix scope)",
+        "- [ ] units-generation — SKIP (bugfix scope)",
         "- [ ] units-generation — EXECUTE",
       ),
     );
@@ -492,6 +521,10 @@ describe("t271 review iteration ceiling", () => {
       (JSON.parse(stdout.trim().split("\n").at(-1) ?? "{}") as { agent_note?: string }).agent_note;
     const RA = ["--stage", "requirements-analysis", "--reviewer", "aidlc-product-lead-agent", "--iteration", "1"];
     const NO_LEARNINGS = { AIDLC_DISABLE_LEARNINGS: "1" };
+    // The gate's review brief is named with its command, so an agent that does
+    // not hold the reviewer protocol (after a compaction, live on Copilot) does
+    // not guess at the tool.
+    const BRIEF_FIRST = "aidlc-review-brief.ts review --stage requirements-analysis --why first";
     // The skill's completion sequence runs stage-completion verification
     // before the summary, the learnings question and the gate's report.
     const verifiesFirst = (step: string | undefined, ...after: string[]): void => {
@@ -526,7 +559,8 @@ describe("t271 review iteration ceiling", () => {
         });
         expect(step, verdict).toContain("say the completion summary, then run");
         expect(step).toContain("report --stage requirements-analysis --result awaiting-approval");
-        verifiesFirst(step, "completion summary", "report --stage");
+        verifiesFirst(step, "completion summary", "report --stage", BRIEF_FIRST);
+        expect(step?.indexOf(BRIEF_FIRST) ?? -1).toBeGreaterThan(step?.indexOf("report --stage") ?? -1);
         expect(step).not.toContain("learnings");
         // Agent-facing only: no verdict token.
         expect(step).not.toContain("READY");
@@ -535,21 +569,71 @@ describe("t271 review iteration ceiling", () => {
       expect(turnMarkersShowConversational(proj)).toBe(false);
     });
 
-    test("with the learnings ceremony on, the learnings question comes first and is the only step", () => {
+    // The learnings step asks only after a correction, which is the agent's to
+    // read, so the step names it before the gate's own report.
+    test("with the learnings ceremony on, the learnings step comes first, then the gate's report", () => {
       const { step } = verdictNote("-", "READY");
-      expect(step).toContain("learnings ritual");
-      expect(step).not.toContain("--result");
-      verifiesFirst(step, "completion summary", "learnings ritual");
+      expect(step).toContain("take the learnings step");
+      expect(step).toContain("report --stage requirements-analysis --result awaiting-approval");
+      verifiesFirst(step, "completion summary", "take the learnings step", "report --stage", BRIEF_FIRST);
     });
 
-    test("an open gate is shown again, and a revision's gate with --result revised", () => {
+    test("an open gate is shown again, and a revision's gate with --result revised after the learnings step", () => {
       const open = verdictNote("?", "READY").step;
       expect(open).toContain("report --stage requirements-analysis --result awaiting-approval");
-      verifiesFirst(open, "report --stage");
+      verifiesFirst(open, "report --stage", BRIEF_FIRST);
       const revised = verdictNote("R", "READY").step;
       expect(revised).toContain("report --stage requirements-analysis --result revised");
-      verifiesFirst(revised, "report --stage");
-      expect(revised).not.toContain("learnings");
+      verifiesFirst(revised, "take the learnings step", "report --stage",
+        "aidlc-review-brief.ts review --stage requirements-analysis --why revision");
+    });
+
+    // The step's brief command runs as named: it prints the gate's brief, adds
+    // no audit row, and hands back no step of its own, so nothing loops.
+    test("the review brief the step names runs as written and prints the gate's brief", () => {
+      const { proj, step } = verdictNote("-", "READY", NO_LEARNINGS);
+      const named = [...(step ?? "").matchAll(/`([^`]+)`/g)].map((m) => m[1]).find((c) => c.includes("aidlc-review-brief.ts"));
+      expect(named, step).toBeDefined();
+      const words = (named as string).split(" ");
+      expect(words.slice(0, 2)).toEqual(["bun", ".claude/tools/aidlc-review-brief.ts"]);
+      const before = (readAllAuditShards(proj).match(/\*\*Event\*\*: ERROR_LOGGED/g) ?? []).length;
+      const ran = spawnSync(process.execPath, [join(dirname(LOG_TOOL), "aidlc-review-brief.ts"), ...words.slice(2)], {
+        cwd: proj,
+        encoding: "utf-8",
+        env: { ...process.env, CLAUDE_PROJECT_DIR: proj },
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      });
+      expect(ran.status, `${ran.stdout}${ran.stderr}`).toBe(0);
+      expect(ran.stdout).toContain("**Stage:** Requirements Analysis");
+      expect(ran.stdout).not.toContain('"kind"');
+      expect((readAllAuditShards(proj).match(/\*\*Event\*\*: ERROR_LOGGED/g) ?? []).length).toBe(before);
+    });
+
+    // A backward jump starts the stage's attempt again, and the brief at its
+    // gate says what the jump changed and invalidated only as the stale brief,
+    // so the step names that one (the reviewer protocol's own choice).
+    test("after a backward jump the stage's review names the stale brief", () => {
+      const proj = seedProject("feature");
+      const sf = seededStateFile(proj);
+      writeFileSync(sf, readFileSync(sf, "utf-8")
+        .replace("- [-] requirements-analysis", "- [x] requirements-analysis")
+        .replace("- [ ] units-generation", "- [-] units-generation")
+        .replace("- **Current Stage**: requirements-analysis", "- **Current Stage**: units-generation"));
+      const jumped = spawnSync(process.execPath, [
+        join(dirname(LOG_TOOL), "aidlc-jump.ts"), "execute", "--target", "requirements-analysis",
+        "--direction", "backward", "--scope", "feature", "--project-dir", proj,
+      ], {
+        cwd: proj,
+        encoding: "utf-8",
+        env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1" },
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      });
+      expect(jumped.status, `${jumped.stdout}${jumped.stderr}`).toBe(0);
+      const requested = runReview(proj, RA, NO_LEARNINGS);
+      expect(requested.status, requested.stderr).toBe(0);
+      const recorded = runReview(proj, [...RA, "--verdict", "READY"], NO_LEARNINGS);
+      expect(recorded.status, recorded.stderr).toBe(0);
+      expect(note(recorded.stdout)).toContain("aidlc-review-brief.ts review --stage requirements-analysis --why stale");
     });
 
     // Their words come first, so on a terminal verdict too nothing runs
@@ -582,7 +666,8 @@ describe("t271 review iteration ceiling", () => {
         input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: "t271-asked", prompt: "please have it reviewed" }),
       });
       expect(asked.status, `${asked.stdout}${asked.stderr}`).toBe(0);
-      const requested = runReview(proj, [...RA, "--person-asked"], NO_LEARNINGS);
+      const message = auditBlockField(auditBlocks(proj, "HUMAN_TURN").at(-1)!, "Message Id")!;
+      const requested = runReview(proj, [...RA, "--person-asked", "--message", message], NO_LEARNINGS);
       expect(requested.status, requested.stderr).toBe(0);
       expect(readAllAuditShards(proj)).toContain("**Person Asked**: true");
       const recorded = runReview(proj, [...RA, "--verdict", "NOT-READY"], NO_LEARNINGS);
@@ -602,7 +687,7 @@ describe("t271 review iteration ceiling", () => {
       expect(turnMarkersShowConversational(proj)).toBe(true);
     });
 
-    test("an adversarial pass with one left names the next pass; an autonomous Construction gate and a Unit name none", () => {
+    test("an adversarial pass with one left names the next pass; an autonomous Construction gate names none", () => {
       const iterationOnly = { AIDLC_SKIP_SOURCE_FRESHNESS: "1" };
       const first = ["--stage", "code-generation", "--reviewer", "aidlc-architecture-reviewer-agent", "--iteration", "1"];
       for (const autonomous of [false, true]) {
@@ -612,7 +697,7 @@ describe("t271 review iteration ceiling", () => {
         // earlier design stage was approved by the person.
         let state = readFileSync(sf, "utf-8").replace("- [ ] code-generation", "- [-] code-generation");
         if (autonomous) {
-          state = `${state.replace("- [S] functional-design — SKIP (bugfix scope)", "- [x] functional-design — EXECUTE")}\n` +
+          state = `${state.replace("- [ ] functional-design — SKIP (bugfix scope)", "- [x] functional-design — EXECUTE")}\n` +
             "- **Construction Autonomy Mode**: autonomous\n";
         }
         writeFileSync(sf, state);
@@ -628,17 +713,135 @@ describe("t271 review iteration ceiling", () => {
           expect(note(recorded.stdout)).not.toContain("stage-completion verification");
         }
       }
+    });
 
-      const unitProj = seedProject("feature");
-      writeReviewedArtifact(unitProj, "code-generation", "plan\n", "unit-alpha");
-      const unit = [
-        "--stage", "code-generation", "--reviewer", "aidlc-architecture-reviewer-agent",
-        "--unit", "unit-alpha", "--iteration", "1",
-      ];
-      expect(runReview(unitProj, unit).status).toBe(0);
-      const unitVerdict = runReview(unitProj, [...unit, "--verdict", "READY"]);
-      expect(unitVerdict.status, unitVerdict.stderr).toBe(0);
-      expect(note(unitVerdict.stdout)).toBeUndefined();
+    // A Unit's verdict named no step either, so on Kiro IDE the turn
+    // could end before the Unit's completion or its checkpoint. What follows a
+    // Unit is its route's, so the step is `next`.
+    describe("a Unit's verdict", () => {
+      const CG = ["--stage", "code-generation", "--reviewer", "aidlc-architecture-reviewer-agent", "--unit", "unit-alpha"];
+      function unitVerdict(
+        verdict: "READY" | "NOT-READY",
+        options: { box?: string; between?: (proj: string) => void } = {},
+      ): string | undefined {
+        const proj = seedProject("feature");
+        const sf = seededStateFile(proj);
+        writeFileSync(sf, readFileSync(sf, "utf-8").replace("- [ ] code-generation", `- [${options.box ?? "-"}] code-generation`));
+        writeReviewedArtifact(proj, "code-generation", "plan\n", "unit-alpha");
+        const pass = [...CG, "--iteration", "1"];
+        expect(runReview(proj, pass).status).toBe(0);
+        options.between?.(proj);
+        const recorded = runReview(proj, [...pass, "--verdict", verdict]);
+        expect(recorded.status, recorded.stderr).toBe(0);
+        return note(recorded.stdout);
+      }
+
+      test("with no further pass, names next and nothing of a stage's gate", () => {
+        const step = unitVerdict("READY");
+        expect(step).toMatch(/^No further review pass follows: run `[^`]*orchestrate next` and follow the step it returns/);
+        expect(step).not.toContain("--result");
+        expect(step).not.toContain("stage-completion verification");
+        expect(step).not.toContain("READY");
+      });
+
+      test("with a pass left, names the Unit's next pass", () => {
+        const step = unitVerdict("NOT-READY");
+        expect(step).toContain("--unit unit-alpha");
+        expect(step).toContain("--iteration 2");
+        expect(step).not.toContain("orchestrate next");
+      });
+
+      test("when the person wrote while it ran, names next first, with their words", () => {
+        const step = unitVerdict("READY", {
+          between: (proj) => {
+            const replied = spawnSync(process.execPath, [join(dirname(LOG_TOOL), "aidlc.ts"), "engine", "hook", "record-human-turn"], {
+              cwd: proj, encoding: "utf-8", env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_UNATTENDED: "" },
+              input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: "t271-unit-wrote", prompt: "looks fine, approve it" }),
+            });
+            expect(replied.status, `${replied.stdout}${replied.stderr}`).toBe(0);
+          },
+        });
+        expect(step).toMatch(/^The person wrote since the review was requested: run `[^`]*orchestrate next`/);
+      });
+
+      test("of a stage no longer in flight names none", () => {
+        expect(unitVerdict("READY", { box: "x" })).toBeUndefined();
+      });
+
+      // A unit-major walk keeps Current Stage on the first per-Unit stage, and
+      // a later one's own box stays pending while its Units are worked.
+      test("of a later stage of a unit-major walk, its box still pending, names next", () => {
+        expect(unitVerdict("READY", { box: " " })).toMatch(/^No further review pass follows: run `[^`]*orchestrate next`/);
+      });
+
+      // A team's route hands the stage body back to a Unit with no completion
+      // receipt, so a Unit still open on the stage records its completion first.
+      test("of a Unit still open on its stage, records its completion before next", () => {
+        const step = unitVerdict("READY", {
+          between: (proj) => appendAuditEntry("UNIT_STARTED", {
+            Stage: "code-generation", Unit: "unit-alpha", "Run floor": "unstarted#0",
+          }, proj),
+        });
+        expect(step).toMatch(
+          /^No further review pass follows: record this Unit's completion with `[^`]*state unit complete --stage code-generation --unit unit-alpha`, then run `[^`]*orchestrate next`/,
+        );
+      });
+
+      test("of autonomous unit-major Code Generation, outside a swarm Bolt, names next", () => {
+        const proj = seedProject("feature");
+        const sf = seededStateFile(proj);
+        writeFileSync(sf, readFileSync(sf, "utf8")
+          .replace("- [ ] code-generation", "- [-] code-generation")
+          .replace("## Runtime State\n", "## Runtime State\n- **Construction Iteration**: unit-major\n- **Construction Autonomy Mode**: autonomous\n"));
+        writeReviewedArtifact(proj, "code-generation", "plan\n", "unit-alpha");
+        const pass = [...CG, "--iteration", "1"];
+        expect(runReview(proj, pass).status).toBe(0);
+        const recorded = runReview(proj, [...pass, "--verdict", "READY"]);
+        expect(recorded.status, recorded.stderr).toBe(0);
+        expect(note(recorded.stdout)).toMatch(/^No further review pass follows: run `[^`]*orchestrate next`/);
+      });
+
+      // A swarm batch and a wave go on through their own loop (the referee's
+      // check and finalize; the wave's other entries and `unit complete
+      // --wave`), so a `next` there would run ahead of it.
+      test("in a swarm Bolt names none, though a pass is left", () => {
+        const proj = seedProject("feature");
+        const sf = seededStateFile(proj);
+        writeFileSync(sf, readFileSync(sf, "utf8")
+          .replace("- [ ] code-generation", "- [-] code-generation")
+          .replace("- **Test Strategy**: Minimal", "- **Test Strategy**: Minimal\n- **Review Override**: none\n- **Construction Autonomy Mode**: autonomous"));
+        appendAuditEntry("BOLT_STARTED", {
+          "Bolt names": "unit-alpha",
+          "Batch number": "1",
+          "Walking skeleton": "false",
+          "Bolt slug": "unit-alpha",
+        }, proj);
+        writeSourceManifest(proj, "unit-alpha");
+        const iterationOnly = { AIDLC_SKIP_SOURCE_FRESHNESS: "1" };
+        const pass = [...CG, "--iteration", "1"];
+        // Admitted with reviews off: the swarm's own declared class, so a second pass is left.
+        expect(runReview(proj, pass, iterationOnly).status).toBe(0);
+        const recorded = runReview(proj, [...pass, "--verdict", "NOT-READY"], iterationOnly);
+        expect(recorded.status, recorded.stderr).toBe(0);
+        expect(note(recorded.stdout)).toBeUndefined();
+      });
+
+      test("of a design stage a stage-major walk may run as a wave names none; unit by unit it names next", () => {
+        for (const unitMajor of [false, true]) {
+          const proj = seedProject("feature");
+          const sf = seededStateFile(proj);
+          let state = readFileSync(sf, "utf-8").replace(/^- \[S\] functional-design .*$/m, "- [-] functional-design \u2014 EXECUTE");
+          if (unitMajor) state = state.replace("## Runtime State\n", "## Runtime State\n- **Construction Iteration**: unit-major\n");
+          writeFileSync(sf, state);
+          writeReviewedArtifact(proj, "functional-design", "# spec\n", "unit-alpha");
+          const pass = ["--stage", "functional-design", "--reviewer", "aidlc-architecture-reviewer-agent", "--unit", "unit-alpha", "--iteration", "1"];
+          expect(runReview(proj, pass).status).toBe(0);
+          const recorded = runReview(proj, [...pass, "--verdict", "READY"]);
+          expect(recorded.status, recorded.stderr).toBe(0);
+          if (unitMajor) expect(note(recorded.stdout), "unit-major").toContain("orchestrate next");
+          else expect(note(recorded.stdout), "stage-major").toBeUndefined();
+        }
+      });
     });
   });
 
@@ -725,9 +928,11 @@ describe("t271 review iteration ceiling", () => {
     expect(pendingRetry.stdout).toContain('"retry":"pending-request"');
     expect(pendingRetry.stdout).not.toContain('"recovery"');
 
-    expect(
-      runReview(proj, [...base, "--iteration", "2", "--verdict", "READY"]).status,
-    ).toBe(0);
+    const recovered = runReview(proj, [...base, "--iteration", "2", "--verdict", "READY"]);
+    expect(recovered.status).toBe(0);
+    // The recovery pass re-checked a changed output: its gate's brief is the stale one.
+    const recoveredStep = (JSON.parse(recovered.stdout.trim().split("\n").at(-1) ?? "{}") as { agent_note?: string }).agent_note;
+    expect(recoveredStep).toContain("aidlc-review-brief.ts review --stage requirements-analysis --why stale");
     writeReviewedArtifact(proj, "requirements-analysis", "changed again\n");
 
     const spent = runReview(proj, [...base, "--iteration", "3"]);
@@ -894,6 +1099,77 @@ describe("t271 review iteration ceiling", () => {
     expect(refused.stderr).toContain("allows 0 review passes");
   });
 
+  // A stage this work runs with no review (express's review_cap none, a Review
+  // Override of none): an agent that asks for one anyway is answered with its
+  // own way on, the gate, and the person is asked nothing. Copilot's agent did
+  // this on express in the 2.11.1 testing, and the person was asked what to
+  // change in requirements nobody had found a problem with.
+  for (const [label, scope, override] of [
+    ["express", "express", false],
+    ["a Review Override of none", "feature", true],
+  ] as const) {
+    test(`${label}: a review the stage does not run is refused with the gate as the agent's own step, then the gate opens`, () => {
+      const proj = seedProject(scope);
+      try {
+        if (override) {
+          const sf = seededStateFile(proj);
+          writeFileSync(sf, readFileSync(sf, "utf8").replace(`- **Scope**: ${scope}`, `- **Scope**: ${scope}\n- **Review Override**: none`));
+        }
+        const request = ["--stage", "requirements-analysis", "--reviewer", "aidlc-product-lead-agent", "--iteration", "1"];
+        const refused = runReview(proj, request);
+        expect(refused.status).not.toBe(0);
+        expect(refused.stderr).toContain("allows 0 review passes. This stage runs no review in this work: open the approval gate.");
+        expect(refused.stderr).not.toContain("unresolved findings");
+        const ask = refusalAsk(refused.stderr);
+        expect(ask.agent_work, refused.stderr).toBe(true);
+        expect(ask.remedies.map((remedy) => [remedy.op, remedy.requiresHuman])).toEqual([["present-findings-at-gate", false]]);
+        expect(ask.remedies[0].action).toBe("This stage runs no review in this work: open its approval gate for the human.");
+        expect(auditBlocks(proj, "REVIEW_REQUESTED")).toHaveLength(0);
+        // The step it names, then next: the gate, never the stage body or a review again.
+        seedAidlcMemory(proj);
+        const opened = orchestrate(proj, ["report", "--stage", "requirements-analysis", "--result", "awaiting-approval"]);
+        expect(opened.status, `${opened.stdout}${opened.stderr}`).toBe(0);
+        expect(opened.stdout).toContain("Recorded awaiting-approval");
+        const after = orchestrate(proj, ["next"]);
+        const step = JSON.parse(after.stdout) as { kind: string; stage?: string; gate_only?: boolean; reviewer?: string };
+        expect(step.stage, after.stdout).toBe("requirements-analysis");
+        expect(step.gate_only, after.stdout).toBe(true);
+        expect(step.reviewer).toBeUndefined();
+        // Asked again at the open gate, the review is still refused.
+        const again = runReview(proj, request);
+        expect(again.status).not.toBe(0);
+        expect(again.stderr).toContain("allows 0 review passes");
+        expect(auditBlocks(proj, "REVIEW_REQUESTED")).toHaveLength(0);
+      } finally {
+        cleanupTestProject(proj);
+      }
+    });
+  }
+
+  // Only the budget refusal hands over the gate: a review asked for before the
+  // summary is confirmed is refused for the summary, and the gate, which would
+  // refuse it for the same reason, is not offered, first time or again.
+  test("a Review Override of none: a review refused for the summary offers no gate", () => {
+    const proj = seedProject("feature");
+    try {
+      const sf = seededStateFile(proj);
+      writeFileSync(sf, readFileSync(sf, "utf8").replace("- **Scope**: feature", "- **Scope**: feature\n- **Review Override**: none"));
+      const request = ["--stage", "requirements-analysis", "--reviewer", "aidlc-product-lead-agent", "--iteration", "1"];
+      for (const attempt of [1, 2]) {
+        const refused = runReview(proj, request, { AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "0" });
+        expect(refused.status, `attempt ${attempt}`).not.toBe(0);
+        expect(refused.stderr).not.toContain("allows 0 review passes");
+        const ops = refusalAsk(refused.stderr).remedies.map((remedy) => remedy.op);
+        expect(ops, `attempt ${attempt}: ${refused.stderr}`).toContain("reconfirm-summary");
+        expect(ops).not.toContain("present-approval-gate");
+        expect(ops).not.toContain("present-findings-at-gate");
+      }
+      expect(auditBlocks(proj, "REVIEW_REQUESTED")).toHaveLength(0);
+    } finally {
+      cleanupTestProject(proj);
+    }
+  });
+
   test("a resumed classic intent keeps one advisory pass gated and the cap-exempt pre-merge reviewer", () => {
     const proj = seedProject("classic");
     try {
@@ -981,6 +1257,8 @@ describe("t271 review iteration ceiling", () => {
     ]);
     expect(over.status).not.toBe(0);
     expect(over.stderr).toContain("allows 1 review pass");
+    // A spent pass keeps its own way on; only a stage that runs no review names the gate.
+    expect(over.stderr).not.toContain("runs no review");
   });
 
   test("a matching autonomous Bolt attempt uses the declared class", () => {
@@ -2709,6 +2987,12 @@ describe("t271 review iteration ceiling", () => {
       "list continuation code cannot open a fake HTML comment",
       "blockquote continuation code cannot open a fake HTML comment",
     ]);
+    // A review file is its request's own slot, so a reviewer that writes
+    // another round than the request's (the count starts again after a
+    // rejection or a jump) still records, with the request's round. The
+    // appended section has no slot: its Iteration line is what ties it to the
+    // request, and it is still refused.
+    const ownRoundInAReviewFile = "wrong iteration";
     for (const scenario of cases) {
       for (const path of ["record", "embedded"] as const) {
         const proj = seedProject("feature");
@@ -2735,6 +3019,11 @@ describe("t271 review iteration ceiling", () => {
           }
           if (scenario.name === "duplicate review section") {
             expectedError = "the review has two Review sections; keep one and write it whole";
+          }
+          // A review file signed by another agent is that agent's review: the
+          // refusal names the requested reviewer to dispatch, not a line to fix.
+          if (scenario.name === "forged reviewer") {
+            expectedError = "is signed by aidlc-architecture-reviewer-agent, and this review was requested from aidlc-product-lead-agent";
           }
         } else {
           appendFileSync(artifact, scenario.suffix, "utf-8");
@@ -2765,6 +3054,18 @@ describe("t271 review iteration ceiling", () => {
             ),
             `${scenario.name} (${path})`,
           ).toEqual([]);
+          continue;
+        }
+        if (path === "record" && scenario.name === ownRoundInAReviewFile) {
+          expect(completed.status, `${scenario.name} (${path}): ${completed.stderr}`).toBe(0);
+          const recorded = auditBlocks(proj, "REVIEW_COMPLETED");
+          expect(recorded, `${scenario.name} (${path})`).toHaveLength(1);
+          expect(auditBlockField(recorded[0], "Verdict"), `${scenario.name} (${path})`).toBe("READY");
+          expect(auditBlockField(recorded[0], "Iteration"), `${scenario.name} (${path})`).toBe("1");
+          const { reviewRecord } = JSON.parse(completed.stdout) as { reviewRecord: string };
+          expect((JSON.parse(
+            readFileSync(join(seededRecordDir(proj), reviewRecord), "utf-8"),
+          ) as ReviewRecord).iteration, `${scenario.name} (${path})`).toBe(1);
           continue;
         }
         expect(completed.status, `${scenario.name} (${path})`).not.toBe(0);
@@ -3963,18 +4264,22 @@ describe("t271 review iteration ceiling", () => {
 });
 
 // A message of the person's after the review is not, by itself, a request for
-// another pass: the agent says the person asked (--person-asked), and the
-// record proves they spoke since the review was last requested. Each message
-// goes through the real human-turn hook, as a typed prompt.
+// another pass: the agent says the person asked (--person-asked) and names the
+// message they asked in (--message), which the engine proves theirs and sent
+// after the review was last requested. Each message goes through the real
+// human-turn hook, as a typed prompt.
 describe("a pass past the cap runs only when the person asked for it", () => {
   const ENTRY = join(import.meta.dir, "..", "..", "dist", "claude", ".claude", "tools", "aidlc.ts");
   const REVIEWER = "aidlc-product-lead-agent";
   const pass = (n: number) => ["--stage", "requirements-analysis", "--reviewer", REVIEWER, "--iteration", String(n)];
-  const FLAG_STEP =
-    "If the person asked for this review, run the same command again with --person-asked. " +
-    "Otherwise do not ask the reviewer again; include the findings in the approval summary for the human.";
+  const FLAG_STEP = `If the person asked for this review, run the same command again with --person-asked --message <id>${MESSAGE_FILL}`;
+  const OTHERWISE = "Otherwise do not ask the reviewer again; include the findings in the approval summary for the human.";
+  // The engine's times are to the second, and a message in the same second as
+  // the review's request is not sent after it.
+  const tick = () => Bun.sleepSync(1100);
 
-  function typed(proj: string, prompt: string): void {
+  // Returns the id of the message the hook kept for the turn.
+  function typed(proj: string, prompt: string): string {
     const env: NodeJS.ProcessEnv = { ...process.env, AIDLC_PROJECT_DIR: proj, CLAUDE_PROJECT_DIR: proj };
     delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
     delete env.AIDLC_UNATTENDED;
@@ -3984,13 +4289,17 @@ describe("a pass past the cap runs only when the person asked for it", () => {
       input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: "t271-person", prompt }),
     });
     expect(res.status, `${res.stdout}${res.stderr}`).toBe(0);
+    const id = auditBlockField(auditBlocks(proj, "HUMAN_TURN").at(-1) ?? "", "Message Id");
+    expect(id).not.toBeNull();
+    return id as string;
   }
 
-  // Classic: one advisory pass, NOT-READY.
+  // Classic: one advisory pass, NOT-READY; the next message comes a second later.
   function reviewedOnce(): string {
     const proj = seedProject("classic");
     expect(runReview(proj, pass(1)).status).toBe(0);
     expect(runReview(proj, [...pass(1), "--verdict", "NOT-READY"]).status).toBe(0);
+    tick();
     return proj;
   }
 
@@ -4002,6 +4311,7 @@ describe("a pass past the cap runs only when the person asked for it", () => {
         const own = runReview(proj, pass(2));
         expect(own.status).not.toBe(0);
         expect(own.stderr).toContain(FLAG_STEP);
+        expect(own.stderr).toContain(OTHERWISE);
         expect(own.stderr).not.toContain("guard-recovery");
         expect(auditBlocks(proj, "REVIEW_REQUESTED")).toHaveLength(1);
       } finally {
@@ -4010,12 +4320,16 @@ describe("a pass past the cap runs only when the person asked for it", () => {
     });
   }
 
-  test("a review the person asks for runs with --person-asked, and its row records that they asked, in their words", () => {
+  test("a review the person asks for runs with --person-asked and their message, and its row records that they asked, in their words", () => {
     const proj = reviewedOnce();
     try {
       const words = "Please have the reviewer look at the requirements again";
-      typed(proj, words);
-      const asked = runReview(proj, [...pass(2), "--person-asked"]);
+      const message = typed(proj, words);
+      // The flag alone names no message: the step names the one to add.
+      const unnamed = runReview(proj, [...pass(2), "--person-asked"], { AIDLC_SESSION_OVERRIDE: "t271-person" });
+      expect(unnamed.status).not.toBe(0);
+      expect(unnamed.stderr).toContain(`${FLAG_STEP} (${message}, sent `);
+      const asked = runReview(proj, [...pass(2), "--person-asked", "--message", message], { AIDLC_SESSION_OVERRIDE: "t271-person" });
       expect(asked.status, asked.stderr).toBe(0);
       const row = auditBlocks(proj, "REVIEW_REQUESTED").at(-1)!;
       expect(auditBlockField(row, "Iteration")).toBe("2");
@@ -4025,12 +4339,16 @@ describe("a pass past the cap runs only when the person asked for it", () => {
       const verdict = runReview(proj, [...pass(2), "--person-asked", "--verdict", "NOT-READY"]);
       expect(verdict.status, verdict.stderr).toBe(0);
       expect(auditBlocks(proj, "REVIEW_COMPLETED")).toHaveLength(2);
-      // Nothing said since: the flag lifts nothing, and today's refusal stands.
-      const again = runReview(proj, [...pass(3), "--person-asked"]);
-      expect(again.status).not.toBe(0);
-      expect(again.stderr).toContain("this stage allows 1 review pass");
-      expect(again.stderr).toContain("guard-recovery");
-      expect(again.stderr).not.toContain("--person-asked");
+      // Nothing said since: the flag lifts nothing, and today's refusal stands,
+      // whether it names no message or the one sent before this review.
+      for (const named of [[], ["--message", message]]) {
+        const again = runReview(proj, [...pass(3), "--person-asked", ...named]);
+        expect(again.status).not.toBe(0);
+        expect(again.stderr).toContain("this stage allows 1 review pass");
+        expect(again.stderr).toContain("guard-recovery");
+        expect(again.stderr).not.toContain("--person-asked");
+      }
+      expect(auditBlocks(proj, "REVIEW_REQUESTED")).toHaveLength(2);
     } finally {
       cleanupTestProject(proj);
     }
@@ -4042,12 +4360,12 @@ describe("a pass past the cap runs only when the person asked for it", () => {
   test("a request missing the flag and naming the wrong pass is answered in one step that names both", () => {
     const proj = reviewedOnce();
     try {
-      typed(proj, "Please have the reviewer look at the requirements again");
+      const message = typed(proj, "Please have the reviewer look at the requirements again");
       const own = runReview(proj, pass(3));
       expect(own.status).not.toBe(0);
-      const step = /run the same command again with (--person-asked(?: --iteration (\d+))?)\./.exec(own.stderr);
-      expect(step?.[1], own.stderr).toBe("--person-asked --iteration 2");
-      const followed = runReview(proj, [...pass(Number(step?.[2] ?? 3)), "--person-asked"]);
+      const step = /run the same command again with (--person-asked --message <id>(?: --iteration (\d+))?),/.exec(own.stderr);
+      expect(step?.[1], own.stderr).toBe("--person-asked --message <id> --iteration 2");
+      const followed = runReview(proj, [...pass(Number(step?.[2] ?? 3)), "--person-asked", "--message", message]);
       expect(followed.status, followed.stderr).toBe(0);
       expect(auditBlockField(auditBlocks(proj, "REVIEW_REQUESTED").at(-1)!, "Person Asked")).toBe("true");
     } finally {
@@ -4072,8 +4390,8 @@ describe("a pass past the cap runs only when the person asked for it", () => {
   test("within the stage's passes the flag lifts nothing, so the row does not say the person asked", () => {
     const proj = seedProject("classic");
     try {
-      typed(proj, "Review the requirements");
-      expect(runReview(proj, [...pass(1), "--person-asked"]).status).toBe(0);
+      const message = typed(proj, "Review the requirements");
+      expect(runReview(proj, [...pass(1), "--person-asked", "--message", message]).status).toBe(0);
       expect(auditBlockField(auditBlocks(proj, "REVIEW_REQUESTED").at(-1)!, "Person Asked")).toBeNull();
     } finally {
       cleanupTestProject(proj);

@@ -23,7 +23,6 @@ import {
   evaluateCodeGenerationApproval,
   parseTestingContract,
   questionsFileApprovalFingerprint,
-  questionsFileApproved,
   questionsFileHasPendingPlanApproval,
   renderTestingContract,
   resolveCodeGenerationAuthority,
@@ -470,6 +469,30 @@ describe("t299 (1) additive methodology resolution", () => {
     ).toThrow("Invalid Testing Posture Methodology");
   });
 
+  // The learnings tool once wrote its visible date after the text of every
+  // line it kept, a field line too. Such a line already in memory is read as
+  // its value; the Ordering, which takes any text, keeps it, and anything else
+  // after a Methodology value is still refused.
+  test("a Methodology the learnings tool wrote with its date is read as its value", () => {
+    const contract = resolve({
+      org: ORG,
+      project: [
+        "<!-- Project-specific specialisation. -->",
+        "",
+        "- Methodology: tdd (learned 2026-10-26) <!-- cid:unscoped:user-stories:5a3af90e -->",
+        "- Ordering: tests first (learned 2026-10-26) <!-- cid:unscoped:user-stories:620da805 -->",
+      ].join("\n"),
+    });
+    expect([contract.methodology, contract.source]).toEqual(["tdd", "project"]);
+    expect(contract.ordering).toBe("tests first (learned 2026-10-26)");
+
+    for (const value of ["tdd (learned yesterday)", "tdd (learned 2026-10-26) then bdd", "tdd(learned 2026-10-26)"]) {
+      expect(() => resolve({ org: ORG, project: `- Methodology: ${value}` })).toThrow(
+        "Invalid Testing Posture Methodology",
+      );
+    }
+  });
+
   test("structured TDD remains authoritative when Ordering contains before and after", () => {
     const contract = resolve({
       org: ORG,
@@ -560,6 +583,9 @@ describe("t299 (2) methodology-specific plan profiles", () => {
     );
     expect(acceptance).toBeGreaterThan(0);
     expect(acceptance).toBeLessThan(implementation);
+    expect(atdd.steps[acceptance]).toBe(
+      "Acceptance Red - write executable acceptance tests for the complete feature before implementation, run them, and record the failing command output.",
+    );
   });
 
   test("custom/mixed preserves its exact ordering without TDD coercion", () => {
@@ -727,7 +753,6 @@ describe("t299 (4) structured contract and approval fingerprint", () => {
       "",
     ].join("\n");
 
-    expect(questionsFileApproved(questions)).toBe(true);
     expect(questionsFileApprovalFingerprint(questions)).toBe(fingerprint);
   });
 
@@ -755,7 +780,6 @@ describe("t299 (4) structured contract and approval fingerprint", () => {
     for (const subheading of ["### Scope", "#### Scope", "###### Scope"]) {
       expect(questionsFileApprovalFingerprint(withSubheading(subheading)), subheading)
         .toBe(fingerprint);
-      expect(questionsFileApproved(withSubheading(subheading)), subheading).toBe(true);
     }
 
     // A heading at the section's own depth still ends it: that is the next
@@ -792,7 +816,6 @@ describe("t299 (4) structured contract and approval fingerprint", () => {
         "",
       ].join("\n");
     for (const subheading of ["### 5. Follow-up", "### Follow-up", "## Other question"]) {
-      expect(questionsFileApproved(pendingThen(subheading)), subheading).toBe(false);
       expect(questionsFileHasPendingPlanApproval(pendingThen(subheading)), subheading)
         .toBe(true);
     }
@@ -811,7 +834,6 @@ describe("t299 (4) structured contract and approval fingerprint", () => {
       "",
     ].join("\n");
     expect(questionsFileApprovalFingerprint(numbered)).toBe(fingerprint);
-    expect(questionsFileApproved(numbered)).toBe(true);
   });
 
   test("a memory change after approval invalidates the unit contract", () => {

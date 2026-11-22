@@ -114,7 +114,7 @@ const sha256 = (proj: string): string =>
 interface SensorFiring {
   id: string;
   fire_id: string;
-  result: "passed" | "failed" | "budget-override" | "incomplete";
+  result: "passed" | "failed" | "could-not-run" | "budget-override" | "incomplete";
   ts: string;
   detail_path?: string;
 }
@@ -189,8 +189,8 @@ describe("t98 sensor_firings pairing (migrated from t98-sensor-firings-populator
     expect(ts).toEqual([...ts].sort());
   });
 
-  test("16: forward-compat shape — fire_id present, 4-state enum, detail_path only on failed", () => {
-    const valid = ["passed", "failed", "budget-override", "incomplete"];
+  test("16: forward-compat shape - fire_id present, 5-state enum, detail_path only on failed", () => {
+    const valid = ["passed", "failed", "could-not-run", "budget-override", "incomplete"];
     for (const f of sf()) {
       expect(typeof f.fire_id).toBe("string");
       expect(f.fire_id.length).toBeGreaterThan(0);
@@ -199,6 +199,41 @@ describe("t98 sensor_firings pairing (migrated from t98-sensor-firings-populator
         expect(f.detail_path).toBeUndefined();
       }
     }
+  });
+});
+
+// A check whose script crashed or could not start is recorded as could not
+// run (its own terminal row), and the firing says so: never passed or failed.
+describe("t98 a fire whose check could not run", () => {
+  const fixture = readFileSync(join(FIXTURES_DIR, "audit-sensor-pairing.md"), "utf-8");
+  const pair = [
+    "## Sensor Fired\n**Timestamp**: 2026-05-28T08:06:00Z\n**Event**: SENSOR_FIRED\n**Fire id**: eeee0005\n**Sensor ID**: type-check\n**Stage slug**: code-generation\n**Output path**: src/cli.ts\n",
+    "## Sensor Could Not Run\n**Timestamp**: 2026-05-28T08:06:03Z\n**Event**: SENSOR_COULD_NOT_RUN\n**Fire id**: eeee0005\n**Sensor ID**: type-check\n**Stage slug**: code-generation\n**Output path**: src/cli.ts\n**Duration ms**: 300\n**Note**: script-error: exit-1\n",
+  ].join("\n---\n\n");
+  const at = fixture.indexOf("## Stage Completed");
+  const dir = mkdtempSync(join(tmpdir(), "aidlc-t98c-"));
+  tempDirs.push(dir);
+  const audit = join(dir, "audit.md");
+  writeFileSync(audit, `${fixture.slice(0, at)}${pair}\n---\n\n${fixture.slice(at)}`, "utf-8");
+  const PROJ = makeProjectWithAudit(audit);
+  const rc = runCompile(PROJ);
+
+  test("pairs by fire_id as could-not-run, with no detail path", () => {
+    expect(at).toBeGreaterThan(0);
+    expect(rc).toBe(0);
+    const f = byFireId(stage(readGraph(PROJ), "code-generation").sensor_firings, "eeee0005");
+    expect(f?.result).toBe("could-not-run");
+    expect(f?.detail_path).toBeUndefined();
+  });
+
+  test("the session summary counts it as could not run, not passed", () => {
+    const res = spawnSync(BUN, [RUNTIME_TS, "--project-dir", PROJ, "summary", "--json"], { encoding: "utf-8" });
+    expect(res.status, `${res.stdout}${res.stderr}`).toBe(0);
+    const sensors = JSON.parse(res.stdout).sensors;
+    expect(sensors.could_not_run).toBe(1);
+    expect(sensors.passed).toBe(1);
+    const text = spawnSync(BUN, [RUNTIME_TS, "--project-dir", PROJ, "summary"], { encoding: "utf-8" });
+    expect(text.stdout).toContain("Could not run:    1");
   });
 });
 

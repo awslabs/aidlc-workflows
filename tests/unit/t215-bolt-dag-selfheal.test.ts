@@ -31,6 +31,7 @@ import {
   resetAidlcEnv,
   runOrchestrateNext,
   seedAidlcMemory,
+  seedAnsweredUnitQuestions,
   seedBoltDag,
   seededRecordDir,
   seededStateFile,
@@ -39,6 +40,11 @@ import {
   artifactFilename,
   parseBoltDag,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+// The stage's checks run once before its review or gate, and again at the gate
+// (completionChecksStep, t-checks-before-review); this file's fixture documents
+// are not written for them and its subject is not them, so they stay off here.
+process.env.AIDLC_DISABLE_SENSORS = "1";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -488,6 +494,7 @@ describe("t215 bolt dag self-heal", () => {
     const proj = seedProject("functional-design");
     seedBoltDag(proj, ["alpha"]);
     seedAlphaBetaDependency(proj);
+    seedAnsweredUnitQuestions(proj, "functional-design", ["alpha", "beta"]);
     coverUnit(proj, "alpha", "functional-design", FD_PRODUCES);
     logReview(proj, "alpha");
     const alphaCompletion = runNext(proj);

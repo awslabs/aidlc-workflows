@@ -4,11 +4,12 @@ import { firstFrontQuestionSince, latestFrontQuestionId, readQuestion } from "./
 import {
   assertChangeControlLedgerWritable,
   auditBlockField,
+  CONFIG_KEYS,
   type GuardPolicy,
   guardPolicyAtLeast,
   keepActiveDirectiveOverSettingWrite,
   maximalAttemptEvents,
-  personSpokeSinceGate,
+  CONDUCTOR_SUMMARY_FIELD,
   scopeGuardPolicyDefault,
   readAuditShardEvents,
   type AuditShardEvent,
@@ -72,9 +73,10 @@ import {
   parseGuardPolicyStateLine,
   commandAtPersonsTerminal,
   splitKiroCommandArgs,
+  personsWordsText,
 } from "./aidlc-lib.ts";
 import { entrySkillInvocation } from "./aidlc-runtime-paths.ts";
-import { chatsSince, latestMessage, latestSpendingTimestamp, listMessages, replyOfTheirs } from "./aidlc-message-store.ts";
+import { chatsSince, latestMessage, latestSpendingTimestamp, listMessages, type StoredMessage } from "./aidlc-message-store.ts";
 import { backOnLine, quoted, widerPlaceOffer } from "./aidlc-recorded-switches.ts";
 import { settingPurpose } from "./aidlc-settings.ts";
 
@@ -93,20 +95,7 @@ export const VALID_TEST_STRATEGIES: Record<string, string> = {
   comprehensive: "Comprehensive",
 };
 
-const GUARD_FENCE_CONFIG_KEYS = SWITCHABLE_GUARD_FENCES.map((fence) => guardFenceConfigKey(fence)) as
-  ["guard.plan-approval", "guard.review-freeze", "guard.state-transition", "guard.reviewer-scope"];
-export const CONFIG_KEYS = [
-  "depth",
-  "test-strategy",
-  "review",
-  "guard-policy",
-  "sensors",
-  "learnings",
-  "summary-confirmation",
-  "plan-approval",
-  "collaborators",
-  ...GUARD_FENCE_CONFIG_KEYS,
-] as const;
+export { CONFIG_KEYS };
 export type ConfigKey = (typeof CONFIG_KEYS)[number];
 export type IntentSettingsRequest = Partial<Record<ConfigKey, { value: string; source: string }>>;
 export type ReviewOverride = "adversarial" | "advisory" | "none";
@@ -374,14 +363,14 @@ function setterCommandNames(text: string, key: string, value: string): boolean {
 }
 
 /**
- * Whether a setting is the person's, with their words, from recorded facts
- * only: the one rule behind every "set by you" the setter, the kept settings,
- * creation and the routed line say. Theirs when they typed it on their own line
- * in this chat (the message record's settings, or the setter command typed
- * whole), on their latest line or one no decision has spent since; when they
- * ran the command at their own terminal; or when the agent, which read the
- * chat, passed their words (--person-words) and a reply of theirs in this chat
- * since the last decision is exactly those words. A routing answer is no
+ * Whether a setting is the person's, from recorded facts only: the one rule
+ * behind every "set by you" the setter, the kept settings, creation and the
+ * routed line say. Theirs when they typed it on their own line in this chat
+ * (the message record's settings, or the setter command typed whole), on their
+ * latest line or one no decision has spent since; when they ran the command at
+ * their own terminal; or when the agent, which read the chat, named the message
+ * they asked in (--message), which the setter has proved theirs
+ * (proveMessage): its words and id go on the record. A routing answer is no
  * decision here: it sends the words and the settings before it to the work it
  * names, where this setter runs. Null otherwise: the setting is still carried
  * out, and recorded as the command's. Who may lower a check is not decided here.
@@ -391,26 +380,34 @@ export function settingTheirs(
   sessionId: string | null,
   key: string,
   value: string | undefined,
-  personWords?: string,
+  message?: StoredMessage,
   selection: { intent?: string; space?: string } = {},
-): { words: string | null } | null {
+): SettingProof | null {
   if (commandAtPersonsTerminal()) return { words: null };
-  return saidInChat(projectDir, sessionId, key, value, personWords, selection);
+  return saidInChat(projectDir, sessionId, key, value, message, selection);
+}
+
+/** Whose a setting is: the words and the message that asked for it, where the record has them. */
+export interface SettingProof {
+  words: string | null;
+  message?: string;
 }
 
 /**
- * The chat half of settingTheirs: their typed line or their whole reply in this
- * chat, never their own terminal. What the folder is (`project-type`) is read
- * this way too: the line keeps it as the route's project type, not a setting.
+ * The chat half of settingTheirs: their typed line in this chat or the message
+ * the agent named, never their own terminal. What the folder is
+ * (`project-type`) and the scope (`scope`) are read this way too: the line
+ * keeps each in its route, not as a setting.
  */
 export function saidInChat(
   projectDir: string,
   sessionId: string | null,
   key: string,
   value: string | undefined,
-  personWords?: string,
+  message?: StoredMessage,
   selection: { intent?: string; space?: string } = {},
-): { words: string | null } | null {
+): SettingProof | null {
+  if (message !== undefined) return { words: personsWordsText(message.words ?? message.text), message: message.id };
   let rows: AuditShardEvent[] = [];
   try {
     rows = readAuditShardEvents(projectDir, selection.intent, selection.space);
@@ -418,7 +415,7 @@ export function saidInChat(
     rows = [];
   }
   // A command whose chat the engine cannot name is this work's one chat: the
-  // only one that has spoken since the last decision (as proveMessage reads it).
+  // only one that has spoken since the last decision (as the window reads it).
   // A decision their newest message led to itself (the plan answer typed
   // beside the setting) leaves none spoken since; that message's chat is it.
   let chat = sessionId;
@@ -439,15 +436,18 @@ export function saidInChat(
       message.session === chat && (spentAt === null || message.at >= spentAt));
     if (latest !== null && !lines.some((message) => message.id === latest.id)) lines.push(latest);
     const names = key === "plan-approval" || key === "guard.plan-approval" ? ["plan-approval", "guard.plan-approval"] : [key];
+    // A scope typed on their line counts for the work their chat was on: a
+    // scope change acts on running work, whose record names the line's turn.
+    const onThisWork = (message: StoredMessage): boolean => rows.some((row) =>
+      row.event === "HUMAN_TURN" && auditBlockField(row.block, "Message Id") === message.id);
     if (lines.some((message) => message.settings.some((setting) => names.includes(setting.key) && setting.value === value) ||
       (key === "project-type" && message.route.projectType === value) ||
-      names.some((name) => setterCommandNames(message.text, name, value)))) {
+      (key === "scope" && message.route.scope === value && onThisWork(message)) ||
+      names.some((name) => setterCommandNames(personsWordsText(message.text), name, value)))) {
       return { words: null };
     }
   }
-  if (personWords === undefined) return null;
-  const reply = replyOfTheirs(projectDir, chat, personWords, decisions);
-  return reply === null ? null : { words: reply.words ?? reply.text };
+  return null;
 }
 
 export function applyIntentSettings(
@@ -455,19 +455,25 @@ export function applyIntentSettings(
   content: string,
   requested: IntentSettingsRequest,
   {
-    sessionId = null, typedByPerson = false, fail: die = throwSettingsError, reviewScope, personWords, notTheirs,
+    sessionId = null, typedByPerson = false, fail: die = throwSettingsError, reviewScope, message, agentText, notTheirs,
     ...selection
   }: {
     intent?: string; space?: string; sessionId?: string | null; typedByPerson?: boolean;
     fail?: (message: string) => never;
     /** The scope a review level is compared with; defaults to the state's own. */
     reviewScope?: string;
-    /** The person's words the agent says asked for this (--person-words), proven against their replies. */
-    personWords?: string;
+    /** The message the agent named as the one that asked for this (--message), proved by the caller. */
+    message?: StoredMessage;
+    /** Words the agent passed in a form from before --message (--person-words): its own text, proving nothing. */
+    agentText?: string;
     /** Settings carried with `typedByPerson` that were kept as a command's, not theirs. */
     notTheirs?: ReadonlySet<string>;
   },
-): { content: string; audit: AuditEntryInput[]; lines: string[] } {
+): {
+  content: string; audit: AuditEntryInput[]; lines: string[];
+  /** A line says a check of theirs is off for this piece of work, to a chat (not their own terminal). */
+  checkOffInTheirName: boolean;
+} {
   // `guard.plan-approval` is another way to say `plan-approval`: one switch that
   // removes the plan stop. Whether an edited plan asks again is Guard Policy's.
   if (requested["guard.plan-approval"] !== undefined) {
@@ -630,9 +636,10 @@ export function applyIntentSettings(
     die(guardSwitchRefusal(lowering[0]));
   }
   // Lowering a fence is the person's call. Their typed switch carries it out,
-  // and so does this setter when a person has spoken since the last decision
-  // (the approval they gave in the same message leaves the rest of it standing):
-  // the conductor runs what they asked for, in their own words.
+  // and so does this setter when the agent names the message they asked in
+  // (--message, proved by the caller; one that already gave an approval or
+  // another decision does not stand): the conductor runs what they asked
+  // for, and the record names their message.
   // A command the person ran at their own terminal carries itself: this rule
   // protects them from a worker lowering a check on their behalf, and it has no
   // business standing in front of what they typed. An agent's tool call arrives
@@ -649,33 +656,45 @@ export function applyIntentSettings(
     ceremonies[key] !== undefined && requested[CEREMONY_FLAGS[key].slice(2) as ConfigKey]?.source === "you");
   const personsRequest = lowering.length > 0 || theirCeremonies.length > 0;
   const atTheirTerminal = personsRequest && !typedByPerson && commandAtPersonsTerminal();
-  if (
-    lowering.length > 0 && !typedByPerson && !atTheirTerminal && !fenceKeyBypassed(projectDir, sessionId) &&
-    !personSpokeSinceGate(projectDir, { requests: true, outlivesApproval: true })
-  ) {
-    die(guardSwitchRefusal(lowering[0], projectDir));
-  }
   // The setter carries out what the person asked, and records it as theirs only
   // when a fact on record says so (settingTheirs): they typed it on their own
-  // line, ran it at their own terminal, or the agent passed their words and a
-  // reply of theirs in this chat is exactly those words. Their words go on the
-  // record then; anything else is recorded as the command's, with no words, so
-  // the work never says they decided what they did not. A setting carried with
-  // typedByPerson is theirs unless it was kept as a command's (notTheirs).
-  const proofs = new Map<string, { words: string | null } | null>();
-  const theirs = (key: string): { words: string | null } | null => {
+  // line, ran it at their own terminal, or the agent named the message they
+  // asked in. Their words and that message go on the record then; anything else
+  // is recorded as the command's, with no words, so the work never says they
+  // decided what they did not. A setting carried with typedByPerson is theirs
+  // unless it was kept as a command's (notTheirs).
+  const proofs = new Map<string, SettingProof | null>();
+  const theirs = (key: string): SettingProof | null => {
     if (typedByPerson) return notTheirs?.has(key) ? null : { words: null };
     if (requested[key as ConfigKey]?.source !== "you") return null;
     if (!proofs.has(key)) {
       const value = requested[key as ConfigKey]?.value.trim().toLowerCase();
-      proofs.set(key, settingTheirs(projectDir, sessionId, key, value, personWords, selection));
+      proofs.set(key, settingTheirs(projectDir, sessionId, key, value, message, selection));
     }
     return proofs.get(key) ?? null;
   };
+  // A lowering stands on what makes each check it lowers theirs: the message
+  // the agent named, their own typed line for it, or their own terminal. A check
+  // the Guard Policy word lowers is asked for by that word.
+  const requestFor = (key: string): string => requested[key as ConfigKey] !== undefined ? key : "guard-policy";
+  if (
+    lowering.length > 0 && !typedByPerson && !atTheirTerminal && !fenceKeyBypassed(projectDir, sessionId) &&
+    !lowering.every((item) => theirs(requestFor(item.key)) !== null)
+  ) {
+    die(guardSwitchRefusal(lowering[0], projectDir));
+  }
   const askedKeys = Object.keys(requested).filter((key) => requested[key as ConfigKey]?.source === "you");
-  const askedIn = typedByPerson || atTheirTerminal
+  const asked = typedByPerson || atTheirTerminal
     ? null
-    : askedKeys.map((key) => theirs(key)?.words ?? null).find((words) => words !== null) ?? null;
+    : askedKeys.map((key) => theirs(key)).find((proof) => proof?.words) ?? null;
+  const askedIn = asked?.words ?? null;
+  // What a setting's row keeps of who asked: their words and the message they
+  // sent them in, when it is theirs; otherwise the agent's own text from a form
+  // before --message, which claims nothing.
+  const askedRow = (theirsHere: boolean): Record<string, string> =>
+    theirsHere && askedIn !== null
+      ? { "Person Reply": askedIn, ...(asked?.message ? { "Message Id": asked.message } : {}) }
+      : !theirsHere && agentText ? { [CONDUCTOR_SUMMARY_FIELD]: agentText } : {};
   // Theirs, asked in the chat or run at their terminal: each check it turns off
   // is said in one line, with their words where the record has them, and the way
   // back, instead of the setter's own line.
@@ -765,8 +784,7 @@ export function applyIntentSettings(
             eventType: "GUARD_POLICY_SET",
             fields: {
               "Old Value": oldValue, "New Value": changeControl, Source: policySource,
-              ...(askedIn && policySource === "you" && lowering.some((item) => item.key === "guard-policy")
-                ? { "Person Reply": askedIn } : {}),
+              ...(lowering.some((item) => item.key === "guard-policy") ? askedRow(policySource === "you") : {}),
             },
           });
         }
@@ -792,7 +810,7 @@ export function applyIntentSettings(
         const source = writtenSource("guard-policy", ccRequest.source);
         const fenceFields = {
           Guard: fence, Scope: getField(content, "Scope") ?? "", Source: source,
-          ...(askedIn && source === "you" && after[fence].value === "off" ? { "Person Reply": askedIn } : {}),
+          ...(after[fence].value === "off" ? askedRow(source === "you") : {}),
         };
         audit.push(
           after[fence].value === "off"
@@ -849,7 +867,7 @@ export function applyIntentSettings(
             eventType: "GUARD_DISABLED",
             fields: {
               Guard: request.fence, Scope: scopeName, Source: source,
-              ...(askedIn && source === "you" ? { "Person Reply": askedIn } : {}),
+              ...askedRow(source === "you"),
             },
           });
         }
@@ -871,7 +889,7 @@ export function applyIntentSettings(
         }
         const already = `The ${checkLabel(request.fence)} is already ${after.value}`;
         const offer = request.value === "off" && after.value === "off" && !atTheirTerminal
-          ? widerPlaceOffer(projectDir, projectSwitchOf(`guard.${request.fence}`), "work")
+          ? widerPlaceOffer(projectDir, projectSwitchOf(`guard.${request.fence}`), { work: content })
           : null;
         lines.push(offer ? `${already}. ${offer}` : already);
         continue;
@@ -882,7 +900,7 @@ export function applyIntentSettings(
       // computed event name is invisible to it.
       const fenceFields = {
         Guard: request.fence, Scope: scopeName, Source: source,
-        ...(askedIn && source === "you" && after.value === "off" ? { "Person Reply": askedIn } : {}),
+        ...(after.value === "off" ? askedRow(source === "you") : {}),
       };
       audit.push(
         after.value === "off"
@@ -923,7 +941,9 @@ export function applyIntentSettings(
         lines.push(held);
       } else if (!scopeDefault(flag)) {
         const already = `${field} is already ${previous}`;
-        const offer = value === "off" && !atTheirTerminal ? widerPlaceOffer(projectDir, CEREMONY_ENV[key], "work") : null;
+        const offer = value === "off" && !atTheirTerminal
+          ? widerPlaceOffer(projectDir, CEREMONY_ENV[key], { work: content })
+          : null;
         lines.push(offer ? `${already}. ${offer}` : already);
       }
       continue;
@@ -937,7 +957,7 @@ export function applyIntentSettings(
       eventType: "CEREMONY_SET",
       fields: {
         Key: key, Old: oldValue, New: value, Source: source,
-        ...(askedIn && value === "off" && source === "you" ? { "Person Reply": askedIn } : {}),
+        ...(value === "off" ? askedRow(source === "you") : {}),
       },
     });
     if (held !== null) {
@@ -956,17 +976,19 @@ export function applyIntentSettings(
     // they asked carries it below instead). A value the scope set is nobody's
     // request to turn the check off, so it offers nothing.
     if (value === "off" && !scopeDefault(flag) && !saidAsAsked(flag) && !atTheirTerminal && lines.length > 0) {
-      const offer = widerPlaceOffer(projectDir, CEREMONY_ENV[key], "work");
+      const offer = widerPlaceOffer(projectDir, CEREMONY_ENV[key], { work: content });
       if (offer) lines[lines.length - 1] = `${lines[lines.length - 1]} ${offer}`;
     }
   }
+  let checkOffInTheirName = false;
   for (const item of lowering) {
     if (!saidAsAsked(item.key)) continue;
     const line = askedSwitchLine(item, askedIn, cc.value, !atTheirTerminal);
-    const offer = atTheirTerminal ? null : widerPlaceOffer(projectDir, projectSwitchOf(item.key), "work");
+    const offer = atTheirTerminal ? null : widerPlaceOffer(projectDir, projectSwitchOf(item.key), { work: content });
     lines.push(offer ? `${line} ${offer}` : line);
+    checkOffInTheirName ||= !atTheirTerminal;
   }
-  return { content, audit, lines };
+  return { content, audit, lines, checkOffInTheirName };
 }
 
 // The project's switch for a check set for this piece of work, which is where
@@ -1178,7 +1200,18 @@ function grantCovers(
   if (request === null) return false;
   const answered = grant.request ??
     firstFrontQuestionSince(projectDir, grant.recordedAt, OPEN_QUESTION_WINDOW_MS, { routing: grant.withDescription === true });
-  if (answered === null) return false;
+  // Kept with no plan question about it, where work is here and none is
+  // selected ("for the work you pick up or start next"): the work started
+  // from a which-work question's new-work answer, asked in the same sitting,
+  // before or after the setting, with no plan question in between, is that
+  // next work.
+  if (answered === null) {
+    const asked = readQuestion(projectDir, request);
+    const kept = Date.parse(grant.recordedAt);
+    const at = Date.parse(asked?.createdAt ?? "");
+    return asked?.origin === "routing" && !Number.isNaN(kept) && !Number.isNaN(at) &&
+      Math.abs(at - kept) <= OPEN_QUESTION_WINDOW_MS && Date.now() - kept <= OPEN_QUESTION_WINDOW_MS;
+  }
   const rootOf = (id: string): string => readQuestion(projectDir, id)?.composedFrom ?? id;
   return answered === request || rootOf(request) === rootOf(answered);
 }
@@ -1254,6 +1287,13 @@ export function planApprovalCreationGranted(
   } catch {
     return false;
   }
+}
+
+/** Plan approval off asked for `request` in this chat before the work existed,
+ *  by a person in the session: what intent create applies, and what the plan
+ *  the person approved never fills over on its creation print. */
+export function planApprovalCreationAsked(projectDir: string, sessionId: string | null, request: string | null): boolean {
+  return planApprovalCreationGranted(projectDir, sessionId, request) && process.env.AIDLC_UNATTENDED !== "1";
 }
 
 /** Spent by the next piece of work this chat creates, whether or not it was the one asked for. */
@@ -1650,8 +1690,9 @@ export function keepSettingsForNextWork(
   // question open to bind it to, the setting goes to whichever work the chat
   // picks or starts next (keptForPickedWork), and its line says so.
   workToPick = false,
-  // The person's words the agent says asked for this (--person-words).
-  personWords?: string,
+  // The message the agent named as the one that asked for this (--message),
+  // proved by the caller.
+  message?: StoredMessage,
 ): string[] {
   const forNext = workToPick && latestFrontQuestionId(projectDir, OPEN_QUESTION_WINDOW_MS) === null
     ? FOR_WORK_PICKED_OR_STARTED
@@ -1660,7 +1701,7 @@ export function keepSettingsForNextWork(
   // Kept as theirs only when a fact on record says so (settingTheirs), as on
   // open work; otherwise kept as the command's, and the line says nothing of them.
   const theirs = (key: string): boolean =>
-    settingTheirs(projectDir, sessionId, key, value(key), personWords) !== null;
+    settingTheirs(projectDir, sessionId, key, value(key), message) !== null;
   const planApproval = value("plan-approval") ?? value("guard.plan-approval");
   const policy = value("guard-policy");
   const fences = SWITCHABLE_GUARD_FENCES.filter((fence) => fence !== "plan-approval");

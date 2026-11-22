@@ -6,6 +6,7 @@ import {
   currentFingerprintForm,
   entrySkillInvocation,
   getField,
+  MESSAGE_SPENDING_EVENTS,
   parseCheckboxes,
   readAllAuditShards,
   rememberRawFingerprint,
@@ -86,6 +87,14 @@ export interface StageValidityInspection {
   redefined: Array<{ stage: string; basis: StageValidationBasis; said: boolean }>;
   /** Finished stages whose receipt is one recorded for a new definition. */
   renewed: string[];
+  /**
+   * Finished stages whose only change is to their own documents' content,
+   * made before the person's next message after the one that approved them,
+   * in graph order, each with its receipt for the files as they are and that
+   * message. They are no issue under any Guard Policy: the change stands with
+   * the approval.
+   */
+  amended: Array<{ stage: string; basis: StageValidationBasis; message: string }>;
 }
 
 /** Structural subset shared by StageEntry, GraphStage, and focused fixtures. */
@@ -121,6 +130,12 @@ interface CompletionReceipts {
   latestKnown: Map<string, StageValidationBasis>;
   /** Stages whose current receipt is one recorded for a new definition. */
   renewed: Set<string>;
+  /**
+   * Stages whose current completion came with an approval naming the person's
+   * latest message, with no decision since that names another or none: that
+   * message's id.
+   */
+  approvedIn: Map<string, string>;
 }
 
 interface ObservedDependency {
@@ -566,33 +581,63 @@ function completionReceiptsFromAudit(audit: string): CompletionReceipts {
   const current = new Map<string, StageValidationBasis>();
   const latestKnown = new Map<string, StageValidationBasis>();
   const renewed = new Set<string>();
+  // The message the approval in each stage's current attempt named, before and
+  // after its completion. A decision that names another message, or none (the
+  // run's own approval), ends both.
+  const approvals = new Map<string, string>();
+  const approvedWith = new Map<string, string>();
+  let latestMessage: string | null = null;
 
   for (const event of orderedMainWorkflowEvents(audit)) {
+    if (event.event === "HUMAN_TURN") {
+      latestMessage = auditBlockField(event.block, "Message Id");
+      continue;
+    }
+    if (MESSAGE_SPENDING_EVENTS.has(event.event)) {
+      const message = auditBlockField(event.block, "Message Id");
+      for (const named of [approvals, approvedWith]) {
+        for (const [slug, id] of named) if (id !== message) named.delete(slug);
+      }
+    }
     const stage = auditBlockField(event.block, "Stage");
     if (!stage) continue;
+    if (event.event === "GATE_APPROVED") {
+      const message = auditBlockField(event.block, "Message Id");
+      if (message) approvals.set(stage, message);
+      else approvals.delete(stage);
+      continue;
+    }
     if (event.event === "STAGE_STARTED") {
       // The previous receipt still describes the dependency graph that may have
       // fed later completed stages, but it is no longer current evidence for
       // this stage's execution attempt.
       current.delete(stage);
       renewed.delete(stage);
+      approvals.delete(stage);
+      approvedWith.delete(stage);
       continue;
     }
-    if (event.event === "STAGE_DEFINITION_CHANGED") {
-      // The stage itself changed after it finished: its receipt for the new
-      // definition stands in for the one it finished with.
+    if (event.event === "STAGE_DEFINITION_CHANGED" || event.event === "STAGE_OUTPUT_AMENDED") {
+      // The stage itself changed after it finished, or its own documents did
+      // before the person's next message after its approval: this receipt
+      // stands in for the one it finished with. Only a change to the stage
+      // itself is AI-DLC's, the one status names.
       const basis = parseStageValidationBasis(auditBlockField(event.block, VALIDATION_BASIS_FIELD));
       if (basis && latestKnown.has(stage)) {
         latestKnown.set(stage, basis);
         if (current.has(stage)) {
           current.set(stage, basis);
-          renewed.add(stage);
+          if (event.event === "STAGE_DEFINITION_CHANGED") renewed.add(stage);
         }
       }
       continue;
     }
     if (event.event !== "STAGE_COMPLETED") continue;
     renewed.delete(stage);
+    const approved = approvals.get(stage);
+    approvals.delete(stage);
+    if (approved) approvedWith.set(stage, approved);
+    else approvedWith.delete(stage);
     const basis = parseStageValidationBasis(
       auditBlockField(event.block, VALIDATION_BASIS_FIELD),
     );
@@ -605,7 +650,8 @@ function completionReceiptsFromAudit(audit: string): CompletionReceipts {
       latestKnown.delete(stage);
     }
   }
-  return { current, latestKnown, renewed };
+  const approvedIn = new Map([...approvedWith].filter(([, message]) => message === latestMessage));
+  return { current, latestKnown, renewed, approvedIn };
 }
 
 /** Return schema-3 receipts for each stage's current attempt. */
@@ -877,6 +923,18 @@ export function stageDefinitionChangedFields(
   };
 }
 
+/** The record of a stage's receipt for its own documents as they were changed before the person's next message. */
+export function stageOutputAmendedFields(
+  stage: string, basis: StageValidationBasis, message: string,
+): Record<string, string> {
+  return {
+    Stage: stage,
+    [VALIDATION_BASIS_FIELD]: canonicalJson(basis),
+    "Message Id": message,
+    Details: `changed before the person's next message after ${message}; receipt renewed`,
+  };
+}
+
 export function codeArrivedStageLine(name: string): string {
   return `${name} ran before the code was here. I'm carrying on with it as it is. ` +
     `Do you want me to redo ${name} with the code?`;
@@ -913,6 +971,7 @@ export function inspectStageValidity(
   const directReasons = new Map<string, string[]>();
   const edits = new Map<string, Set<string>>();
   const redefined = new Map<string, { basis: StageValidationBasis; said: boolean }>();
+  const amended = new Map<string, { basis: StageValidationBasis; message: string }>();
   const warnings: string[] = [];
   const unavailable = new Set<string>();
 
@@ -935,11 +994,24 @@ export function inspectStageValidity(
     // Content recorded over raw line endings reads as the same content now.
     const recorded = basisInCurrentForm(previous);
     const edited = changesExplainedBy(recorded, current, contentOnly);
-    const accepted = options.acceptContentChanges === true ? edited : new Set<string>();
-    const changes = diffStageValidationBasis(recorded, current).filter(
-      (change) => (change !== "project-type" || workDependsOnProjectType(stage)) && !accepted.has(change),
+    const found = diffStageValidationBasis(recorded, current).filter(
+      (change) => change !== "project-type" || workDependsOnProjectType(stage),
     );
     edits.set(slug, edited);
+    // Only its own documents were edited, before the person's next message
+    // after the one that approved it: the approval stands with the change, one
+    // rule under every Guard Policy, and the stage hands back its receipt for
+    // the files as they are.
+    const approvedIn = receipts.approvedIn.get(slug);
+    if (
+      approvedIn !== undefined && completedSlugs.has(slug) && found.length > 0 &&
+      found.every((change) => change.startsWith("output:") && edited.has(change))
+    ) {
+      amended.set(slug, { basis: current, message: approvedIn });
+      continue;
+    }
+    const accepted = options.acceptContentChanges === true ? edited : new Set<string>();
+    const changes = found.filter((change) => !accepted.has(change));
     // Only the stage itself changed: its work stands, so it roots nothing, and a
     // finished one hands back its new receipt. An optional document that came
     // or went in the same window reads as the definition's.
@@ -978,5 +1050,7 @@ export function inspectStageValidity(
     renewed: stages
       .filter((stage) => completedSlugs.has(stage.slug) && receipts.renewed.has(stage.slug))
       .map((stage) => stage.slug),
+    amended: stages.filter((stage) => amended.has(stage.slug))
+      .map((stage) => ({ stage: stage.slug, ...amended.get(stage.slug)! })),
   };
 }

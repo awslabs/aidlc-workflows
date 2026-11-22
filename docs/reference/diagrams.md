@@ -381,7 +381,7 @@ flowchart LR
 
 ## 8. Session Resume Flow
 
-When the user invokes `/aidlc`, the orchestrator checks for an active intent's `aidlc-state.md`. If found, it carries on from the checkpoint (the first call is `next --resume`), and the person can ask to redo, jump to a stage, or start fresh at any time. If not found, it creates the first intent. The orchestrator also checks for `.aidlc-engine/recovery.md` to detect possible state corruption from context compaction.
+When the user invokes `/aidlc`, the orchestrator checks for an active intent's `aidlc-state.md`. If found, it carries on from the checkpoint (the first call is `next --resume`), and the person can ask to redo, jump to a stage, or start fresh at any time. If not found, it creates the first intent.
 
 ```mermaid
 flowchart TD
@@ -389,9 +389,6 @@ flowchart TD
     ARG_CHECK{"Arguments\nprovided?"}
     STATUS_CHECK{"Argument =\n--status?"}
     STATE_EXISTS{"Active intent\nexists?"}
-    RECOVERY_CHECK{".aidlc-engine/recovery.md\nexists?"}
-    CORRUPTION{"State matches\nrecovery file?"}
-    WARN["Warn user about\npossible corruption"]
 
     CONTINUE["Carry on from the\ncheckpoint:\nnext --resume"]
     OTHER["Person asks to redo,\njump, or start fresh:\nreport --result resumed"]
@@ -410,13 +407,8 @@ flowchart TD
     STATUS_CHECK -->|Yes| STATUS_DISPLAY
     STATUS_CHECK -->|No| STATE_EXISTS
 
-    STATE_EXISTS -->|Yes| RECOVERY_CHECK
+    STATE_EXISTS -->|Yes| CONTINUE
     STATE_EXISTS -->|No| SCOPE_DETECT
-
-    RECOVERY_CHECK -->|Yes| CORRUPTION
-    RECOVERY_CHECK -->|No| CONTINUE
-    CORRUPTION -->|Mismatch| WARN --> CONTINUE
-    CORRUPTION -->|Match| CONTINUE
 
     CONTINUE -.->|"any time"| OTHER
     OTHER -->|"start fresh: confirm"| CREATE
@@ -429,7 +421,6 @@ flowchart TD
     style OTHER fill:#bbdefb,stroke:#1565c0,color:#000
     style CONTINUE fill:#c8e6c9,stroke:#388e3c,color:#000
     style CREATE fill:#c8e6c9,stroke:#388e3c,color:#000
-    style WARN fill:#ffcdd2,stroke:#c62828,color:#000
 ```
 
 ---

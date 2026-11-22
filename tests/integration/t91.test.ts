@@ -139,6 +139,26 @@ function makeProject(): string {
     join(proj, ".claude", "tools", "aidlc-settings.ts"),
   );
   copyFileSync(
+    join(SRC_TOOLS, "aidlc-markdown.ts"),
+    join(proj, ".claude", "tools", "aidlc-markdown.ts"),
+  );
+  copyFileSync(
+    join(SRC_TOOLS, "aidlc-locks.ts"),
+    join(proj, ".claude", "tools", "aidlc-locks.ts"),
+  );
+  copyFileSync(
+    join(SRC_TOOLS, "aidlc-review-records.ts"),
+    join(proj, ".claude", "tools", "aidlc-review-records.ts"),
+  );
+  copyFileSync(
+    join(SRC_TOOLS, "aidlc-learned-date.ts"),
+    join(proj, ".claude", "tools", "aidlc-learned-date.ts"),
+  );
+  copyFileSync(
+    join(SRC_TOOLS, "aidlc-kiro-chat-record.ts"),
+    join(proj, ".claude", "tools", "aidlc-kiro-chat-record.ts"),
+  );
+  copyFileSync(
     join(SRC_TOOLS, "aidlc-install-paths.ts"),
     join(proj, ".claude", "tools", "aidlc-install-paths.ts"),
   );
@@ -165,6 +185,22 @@ function makeProject(): string {
   copyFileSync(
     join(SRC_TOOLS, "aidlc-runtime-budget.ts"),
     join(proj, ".claude", "tools", "aidlc-runtime-budget.ts"),
+  );
+  copyFileSync(
+    join(SRC_TOOLS, "aidlc-lock-line.ts"),
+    join(proj, ".claude", "tools", "aidlc-lock-line.ts"),
+  );
+  copyFileSync(
+    join(SRC_TOOLS, "aidlc-review-manifest.ts"),
+    join(proj, ".claude", "tools", "aidlc-review-manifest.ts"),
+  );
+  copyFileSync(
+    join(SRC_TOOLS, "aidlc-command.ts"),
+    join(proj, ".claude", "tools", "aidlc-command.ts"),
+  );
+  copyFileSync(
+    join(SRC_TOOLS, "aidlc-color.ts"),
+    join(proj, ".claude", "tools", "aidlc-color.ts"),
   );
   copyFileSync(
     join(SRC_TOOLS, "aidlc-guard-fences.ts"),

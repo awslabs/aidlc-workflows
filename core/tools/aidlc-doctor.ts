@@ -38,6 +38,7 @@ import {
   discoverProjectHarnesses,
 } from "./aidlc-runtime-paths.ts";
 import { installRoot, windowsGitBashLauncherState } from "./aidlc-install-paths.ts";
+import { deepFolder } from "./aidlc-folder-depth.ts";
 import { versionChannel } from "./aidlc-channel.ts";
 import {
   configureColor,
@@ -61,6 +62,7 @@ import {
 import {
   flagsDoctorCheck,
   frameworkFilesDoctorCheck,
+  kiroCliWorkflowsDoctorCheck,
   kiroIdeWorkflowsDoctorCheck,
   kiroIdeTerminalDoctorCheck,
   providerDoctorCheck,
@@ -148,12 +150,24 @@ function windowsGitBashLauncherCheck(): DoctorCheck | null {
   };
 }
 
+// A Windows project folder too deep for AI-DLC's records: advisory, as config
+// says it; moving the folder is the person's call. Every harness installed in
+// the project counts, since one that refuses a long path on its own keeps it.
+function projectFolderDepthCheck(projectDir: string): DoctorCheck | null {
+  const deep = deepFolder(projectDir, process.platform, undefined, {
+    harnesses: discoverProjectHarnesses(projectDir).map((harness) => harness.distribution),
+  });
+  return deep && { pass: false, severity: "warn", label: `Project folder: ${deep.facts}`, fix: deep.fix };
+}
+
 export async function doctorUpdateState(
   flags: Record<string, string>,
   interactive = Boolean(process.stdin.isTTY && process.stdout.isTTY),
 ): Promise<UpdateState> {
   const explicit = flags["check-updates"] === "true";
-  const mayRefresh = interactive &&
+  // An export is a report someone asked for, often run by a script or an agent
+  // with no terminal, and it is passed on: it refreshes an old check too.
+  const mayRefresh = (interactive || "export" in flags) &&
     flags.json !== "true" &&
     flags.quiet !== "true";
   let update = cachedUpdateState();
@@ -165,11 +179,13 @@ export async function doctorUpdateState(
   ) {
     // An automatic refresh is opportunistic UI work. Its short fallback keeps
     // doctor responsive; a requested --check-updates is required network work.
-    update = await refreshUpdateState(explicit ? DEFAULT_SUBPROCESS_TIMEOUT_MS : 750, {
+    const refreshed = await refreshUpdateState(explicit ? DEFAULT_SUBPROCESS_TIMEOUT_MS : 750, {
       offline: flags.offline === "true" ? true : undefined,
       baseUrl: flags["release-base-url"],
       caBundle: flags["ca-bundle"],
     });
+    const keepNeverChecked = !explicit && update.state === "absent" && refreshed.state === "unavailable";
+    if (!keepNeverChecked) update = refreshed;
   }
   return update;
 }
@@ -181,8 +197,9 @@ export function updateCheck(state: UpdateState): DoctorCheck {
   const running = versionChannel(state.currentVersion);
   const otherChannel = state.state === "behind" && running !== state.channel;
   // A machine that has never checked is not behind: doctor refreshes the cache
-  // only in a terminal, so the first doctor from a chat tool would otherwise
-  // warn on every fresh install. The row passes and names the check.
+  // only in a terminal or for --export, so the first doctor from a chat tool
+  // would otherwise warn on every fresh install. The row passes and names the
+  // check.
   const neverChecked = state.state === "absent";
   return {
     pass: state.state === "current" || neverChecked,
@@ -609,11 +626,15 @@ export async function main(argv: string[]): Promise<void> {
   checks.push(...await kiroSessionDoctorChecks(projectDir));
   const kiroWorkflows = kiroIdeWorkflowsDoctorCheck(projectDir, harnessDir());
   if (kiroWorkflows) checks.push(kiroWorkflows);
+  const kiroCliWorkflows = kiroCliWorkflowsDoctorCheck(projectDir, harnessDir());
+  if (kiroCliWorkflows) checks.push(kiroCliWorkflows);
   const kiroTerminal = kiroIdeTerminalDoctorCheck(projectDir, harnessDir());
   if (kiroTerminal) checks.push(kiroTerminal);
   checks.push(flagsDoctorCheck(projectDir, harnessDir(), switchesOffLines(projectDir, process.env, "command")));
   checks.push(providerDoctorCheck(projectDir, harnessDir()));
   checks.push(workspaceSiblingDoctorCheck(projectDir, harnessDir()));
+  const folderDepth = projectFolderDepthCheck(projectDir);
+  if (folderDepth) checks.push(folderDepth);
   checks.push(frameworkFilesDoctorCheck(projectDir, harnessDir()));
   const requestCap = vscodeRequestCapDoctorCheck(projectDir, harnessDir());
   if (requestCap) checks.push(requestCap);

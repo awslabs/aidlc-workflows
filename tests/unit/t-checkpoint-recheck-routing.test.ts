@@ -152,8 +152,10 @@ function approve(p: string, unit: string) {
 
 // One review through the logger, as a real run records it: the request, the
 // reviewer's file in the slot it names, then the verdict.
+// Its documents are not written for the stage's checks, which run before the
+// review (completionChecksStep, t-checks-before-review), and they are not its subject.
 function reviewThroughLog(p: string, args: string[]) {
-  const requested = tool(p, "log", args);
+  const requested = tool(p, "log", args, { ...process.env, AIDLC_DISABLE_SENSORS: "1" });
   expect(requested.status, requested.out).toBe(0);
   const request = JSON.parse(requested.stdout.trim().split(/\r?\n/).at(-1)!) as { recovery?: string; reviewFile: string };
   const iteration = args[args.indexOf("--iteration") + 1];

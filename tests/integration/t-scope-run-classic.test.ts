@@ -12,12 +12,11 @@ scopeRunSuite("classic");
 // Every scope with Units asks "How should I continue building the remaining
 // work?". Where a question is numbered prose that ends the turn (Kiro CLI,
 // Copilot, opencode, Codex without request_user_input), the shared Stop hook
-// blocks that turn end today: it has no wait carve-out for this question, which
-// the protocol forbids logging. The scope runs exempt that one hand-off
-// (KNOWN_STOP_BLOCKS in tests/harness/scope-run.ts); the fix removes it there
-// and turns this on.
-test.todo(
-  "the turn ends at the autonomy question on numbered-prose harnesses (blocked by: Stop hook has no wait carve-out for the autonomy offer)",
+// lets that turn end through its autonomy-question carve-out
+// (core/hooks/aidlc-continue-workflow.ts), though the protocol forbids logging
+// this question.
+test(
+  "the turn ends at the autonomy question on numbered-prose harnesses",
   () => {
     const run = runScope("classic");
     const asked = run.agent.handoffs.filter((h) => h.what === "autonomy");

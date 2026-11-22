@@ -147,7 +147,9 @@ export async function sanitizeLogs(
     }
     if (prune && !keepTraces && (
       name.endsWith(".ndjson") || name.startsWith("sdk-drive") || name.startsWith("tui-drive") ||
-      (stat.isDirectory() && inArtifacts && name === "traces")
+      (stat.isDirectory() && inArtifacts && name === "traces") ||
+      // A leg's audit copies and the agent's words (tests/harness/leg-evidence.ts).
+      (stat.isDirectory() && name === "leg-evidence")
     )) {
       fs.rmSync(path, { recursive: true, force: true });
       removed.push({ path: redactSecrets(relative(root, path).split(sep).join("/")), reason: "driver-trace" });

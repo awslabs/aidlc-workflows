@@ -29,8 +29,8 @@ with `/aidlc --sensors on|off`, `/aidlc --learnings on|off`, or
 `/aidlc --summary-confirmation on|off`.
 
 Plan approval is off as well: once the code plan is written you see one line
-naming it, code generation starts, and the line asks whether you want to look at
-the plan first. You can also ask to see a plan before it is built, or to be
+naming it, code generation starts, and the line says you can ask to go over the
+plan at any time. You can also ask to see a plan before it is built, or to be
 asked about every plan.
 
 ## Why these stages, why skip those

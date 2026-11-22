@@ -101,7 +101,7 @@ describe("t250 (smoke) ```question fence is a SPEC to render, never echoed to ch
         expect(/ladder prompt/i.test(t)).toBe(true);
         expect(/halt-and-ask/i.test(t)).toBe(true);
         expect(/consolidated-summary confirmation/i.test(t)).toBe(true);
-        expect(/learnings gate/i.test(t)).toBe(true);
+        expect(/learnings question/i.test(t)).toBe(true);
       });
 
       test("preserves the self-reference carve-out: illustrative example fences survive", () => {

@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-orchestrate:next, function:planProposalDirective, function:freshWorkOfferDirective, function:nextFlagShape
+// covers: subcommand:aidlc-orchestrate:next, function:planProposalDirective, function:planChoicesLine, function:freshWorkOfferDirective, function:nextFlagShape
 //
 // The plan for a request the person typed in their own words is proposed by the
 // agent, not matched from a keyword list. `next "<request>"` on a workspace
@@ -56,6 +56,7 @@ type Directive = Record<string, unknown> & {
   compose_command?: string;
   new_intent_command?: string;
   scope_commands?: Array<{ scope: string; command: string; stages?: string }>;
+  choices?: Array<{ label: string; detail?: string; command?: string }>;
 };
 
 const REQUEST = /--request ([0-9a-f]{8})/;
@@ -82,13 +83,28 @@ function answerArgs(command: unknown): string[] {
   return text.slice(text.indexOf(" next ") + 6).split(" ");
 }
 
+/** The size a separate-work answer's creation print gives the new work. */
+function creationSize(tools: string, proj: string, command: unknown): string {
+  const created = next(tools, proj, answerArgs(command));
+  const size = /to start the new intent \(([^)]+)\)/.exec(String(created.message))?.[1];
+  expect(size, JSON.stringify(created).slice(0, 300)).toMatch(/^\d+ stages?, \d+ approval gates?/);
+  return size!;
+}
+
+/** Every plan this install ships, each with its length here, as the plan proposal step lists them. */
+function expectEveryPlan(message: string): void {
+  expect(message).not.toContain("scope table");
+  for (const scope of validScopes()) expect(message).toMatch(new RegExp(`${scope} \\(\\d+ stages?(, [^)]*)?\\):`));
+}
+
 /**
- * The creation the plan question's yes names, run as the agent runs it (where
- * work exists but none is selected, the yes meets the question of which piece
- * this is first; it is a separate new piece): the new work exists and is selected.
+ * The creation the question's yes names, run as the agent runs it: the plan
+ * question's yes, or, where work exists but none is selected, the question of
+ * which piece this is, answered as a separate new piece. The new work exists
+ * and is selected.
  */
 function createFromConfirm(proj: string, ask: Directive, env: NodeJS.ProcessEnv = { ...process.env }): string {
-  let created = next(CLAUDE_TOOLS, proj, answerArgs(ask.confirm_command), env);
+  let created = next(CLAUDE_TOOLS, proj, answerArgs(ask.confirm_command ?? ask.new_intent_command), env);
   if (created.kind === "ask" && created.new_intent_command !== undefined) created = next(CLAUDE_TOOLS, proj, answerArgs(created.new_intent_command), env);
   expect(created.kind, JSON.stringify(created).slice(0, 300)).toBe("print");
   const id = REQUEST.exec(String(created.message))![1];
@@ -360,6 +376,19 @@ describe("t-plan-proposed-by-the-agent: finished work and new work beside active
     expect(ask.proposed_scope).toBe("feature");
     expect(String(ask.question)).toContain('as "feature" work');
     expect(String(ask.new_intent_command)).toContain("--new-intent --scope feature --request");
+    // The option says the size of the plan that answer starts, as its creation says it.
+    const option = `as "feature" work (${creationSize(CLAUDE_TOOLS, proj, ask.new_intent_command)}) without changing it`;
+    expect(String(ask.question)).toContain(option);
+    expect(String(ask.numbered_prose_question)).toContain(option);
+    expect(ask.choices?.[1]?.detail).toContain(option);
+  });
+
+  test("a plan named before the words: the separate-work answer says that plan's size here", () => {
+    proj = activeProject();
+    const ask = next(CLAUDE_TOOLS, proj, ["bugfix", "fix the login"]);
+    expect(ask.ask_type, JSON.stringify(ask).slice(0, 300)).toBe("new-work-routing");
+    const size = creationSize(CLAUDE_TOOLS, proj, ask.new_intent_command);
+    expect(ask.choices?.[1]?.detail).toBe(`Set it up alongside the current one as "bugfix" work (${size}) without changing it`);
   });
 
   test("with no plan proposed, the routing question says the plan comes next, and that answer reaches the proposal step", () => {
@@ -371,6 +400,8 @@ describe("t-plan-proposed-by-the-agent: finished work and new work beside active
     expect(ask.proposed_scope).toBe("");
     expect(String(ask.question)).toContain("you pick its plan next");
     expect(String(ask.new_intent_command)).not.toContain("--scope");
+    // The choice leaves the plan to the person, so no command that picks one is handed out beside it.
+    expect(ask.scope_commands).toEqual([]);
     const command = String(ask.new_intent_command);
     const step = next(CLAUDE_TOOLS, proj, command.split(" ").slice(command.split(" ").indexOf("next") + 1));
     expect(step.kind, JSON.stringify(step).slice(0, 300)).toBe("print");
@@ -388,25 +419,102 @@ describe("t-plan-proposed-by-the-agent: finished work and new work beside active
   });
 });
 
+// Every tool asks which work the request belongs to first, naming the plan the
+// agent proposed, so the person answers one question; before, every tool but
+// Kiro asked for the plan first and which work only after the yes.
 describe("t-plan-proposed-by-the-agent: work here but none selected", () => {
   for (const [harness, tools] of [["claude", CLAUDE_TOOLS], ["kiro", KIRO_TOOLS]] as const) {
-    test(`${harness}: the none-selected reading, the agent's plan, then one question, within three calls`, () => {
+    test(`${harness}: the none-selected reading, the agent's plan, then one question naming it, within three calls`, () => {
       proj = cloneWithWork(tools);
       const chain = follow(tools, proj, ["fix the login"], "bugfix");
       const note = JSON.stringify(chain.last).slice(0, 400);
       expect(chain.last.kind, note).toBe("ask");
       expect(chain.calls).toBeLessThanOrEqual(3);
-      if (harness === "kiro") {
-        // Kiro's routing harness asks which work it belongs to first, naming the plan.
-        expect(chain.last.ask_type, note).toBe("new-work-routing");
-        expect(chain.last.proposed_scope).toBe("bugfix");
-        expect(String(chain.last.question)).toContain('as "bugfix" work');
-      } else {
-        expect(chain.last.ask_type, note).toBe("scope-confirm");
-        expect(chain.last.proposed_scope).toBe("bugfix");
+      expect(chain.last.ask_type, note).toBe("new-work-routing");
+      expect(chain.last.proposed_scope).toBe("bugfix");
+      const option = `as "bugfix" work (${creationSize(tools, proj, chain.last.new_intent_command)}) without changing it`;
+      expect(String(chain.last.question)).toContain(option);
+      expect(chain.last.choices?.[1]?.detail).toContain(option);
+    });
+
+    // With no plan proposed, the separate-work answer reaches the new work's
+    // plan step; once that work exists, the words' own request answered again
+    // (the agent re-running the reading step's command) carries on with it, so
+    // nothing asks where work already built belongs.
+    test(`${harness}: no plan proposed: the separate-work answer reaches the plan step, the work starts once, and the request answered again carries on with it`, () => {
+      proj = cloneWithWork(tools);
+      const read = next(tools, proj, ["fix the login"]);
+      const root = REQUEST.exec(String(read.message))![1];
+      const ask = next(tools, proj, ["--request", root]);
+      expect(ask.ask_type, JSON.stringify(ask).slice(0, 300)).toBe("new-work-routing");
+      const step = next(tools, proj, answerArgs(ask.new_intent_command));
+      expect(String(step.message), JSON.stringify(step).slice(0, 300)).toContain(PROPOSAL);
+      const plan = next(tools, proj, ["--propose", "bugfix", "--request", REQUEST.exec(String(step.message))![1]]);
+      expect(plan.ask_type, JSON.stringify(plan).slice(0, 300)).toBe("scope-confirm");
+      const creation = next(tools, proj, answerArgs(plan.confirm_command));
+      const id = /intent create --scope bugfix --request ([0-9a-f]{8})/.exec(String(creation.message))?.[1];
+      expect(id, JSON.stringify(creation).slice(0, 300)).toBeDefined();
+      const made = spawnSync(process.execPath, [join(tools, "aidlc-utility.ts"), "intent-create", "--scope", "bugfix", "--request", id!, "--label", "login-fix", "--project-dir", proj], {
+        cwd: proj,
+        encoding: "utf-8",
+        env: { ...process.env, CLAUDE_PROJECT_DIR: proj },
+      });
+      expect(made.status, `${made.stdout}${made.stderr}`).toBe(0);
+      for (const args of [["--request", root], ["--request", root, "--propose", "bugfix"]]) {
+        const again = next(tools, proj, args);
+        expect(again.kind, JSON.stringify(again).slice(0, 300)).toBe("print");
+        expect(String(again.message)).toContain("Already started");
       }
+      expect(readdirSync(join(proj, "aidlc", "spaces", "default", "intents")).filter((name) => /^\d{6}-/.test(name))).toHaveLength(3);
     });
   }
+
+  // Words that skip the reading step (a setting typed with them, or the
+  // delimiter's re-run of words that answer nothing) reach the plan step first
+  // where finished work is here, so its way back is named before any question.
+  for (const [harness, tools, args] of [
+    ["claude", CLAUDE_TOOLS, ["--depth", "minimal", "go back to code generation on the finished work"]],
+    ["claude", CLAUDE_TOOLS, ["--", "go back to code generation on the finished work"]],
+    ["kiro", KIRO_TOOLS, ["--depth", "minimal", "go back to code generation on the finished work"]],
+  ] as const) {
+    test(`${harness}: finished work beside unfinished work, words with no reading step (${args[0]}): the plan step names the finished work and the way back`, () => {
+      proj = createOrchestrationTestProject();
+      seedStateFile(proj, COMPLETED);
+      const r = spawnSync(process.execPath, [join(tools, "aidlc-utility.ts"), "intent-create", "--scope", "bugfix", "--label", "auth", "--project-dir", proj], {
+        cwd: proj,
+        encoding: "utf-8",
+        env: { ...process.env },
+      });
+      expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
+      rmSync(join(proj, "aidlc", "spaces", "default", "intents", "active-intent"), { force: true });
+      const step = next(tools, proj, [...args]);
+      expect(step.kind, JSON.stringify(step).slice(0, 300)).toBe("print");
+      expect(String(step.message)).toContain("is finished, and it is not selected in this chat.");
+      expect(String(step.message)).toContain("next --stage <stage slug>`");
+      expect(String(step.message)).toContain(PROPOSAL);
+    });
+  }
+
+  // Finished work beside unfinished work, none selected: the words may ask to go
+  // back to a stage of the finished work, and the reading step, which the agent
+  // reads before any question, says so with the command that selects it.
+  test("finished work beside unfinished work: the reading step names the finished work and the way back to a stage", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, COMPLETED);
+    const r = spawnSync(process.execPath, [join(CLAUDE_TOOLS, "aidlc-utility.ts"), "intent-create", "--scope", "bugfix", "--label", "auth", "--project-dir", proj], {
+      cwd: proj,
+      encoding: "utf-8",
+      env: { ...process.env },
+    });
+    expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
+    rmSync(join(proj, "aidlc", "spaces", "default", "intents", "active-intent"), { force: true });
+    const read = next(CLAUDE_TOOLS, proj, ["go back to code generation on the finished work"]);
+    expect(read.kind, JSON.stringify(read).slice(0, 300)).toBe("print");
+    const message = String(read.message);
+    expect(message).toStartWith("Work is in progress here (");
+    expect(message).toContain("is finished, and it is not selected in this chat.");
+    expect(message).toContain("next --stage <stage slug>`");
+  });
 
   test("kiro: without a proposed plan the pick question says the plan comes next", () => {
     proj = cloneWithWork(KIRO_TOOLS);
@@ -417,6 +525,66 @@ describe("t-plan-proposed-by-the-agent: work here but none selected", () => {
     expect(String(ask.question)).toContain("you pick its plan next");
     expect(String(ask.new_intent_command)).not.toContain("--scope");
   });
+
+  // A tailored plan is no plan's name: the question names none, and the
+  // separate-work answer reaches the new work's plan step, where the agent's
+  // tailored-plan reading gets the compose offer. Before, the answer ran
+  // `--scope compose` and met "Unknown scope".
+  test("kiro: a tailored plan proposed names no plan, and the separate-work answer reaches the plan step", () => {
+    proj = cloneWithWork(KIRO_TOOLS);
+    const read = next(KIRO_TOOLS, proj, ["build a notes app"]);
+    const id = REQUEST.exec(String(read.message))![1];
+    const ask = next(KIRO_TOOLS, proj, ["--request", id, "--propose", "compose"]);
+    expect(ask.ask_type, JSON.stringify(ask).slice(0, 300)).toBe("new-work-routing");
+    expect(ask.proposed_scope).toBe("");
+    expect(String(ask.question)).toContain("you pick its plan next");
+    expect(String(ask.question)).not.toContain("compose");
+    expect(ask.choices?.[1]?.detail ?? "").not.toContain("compose");
+    expect(String(ask.new_intent_command)).not.toContain("--scope");
+    const step = next(KIRO_TOOLS, proj, answerArgs(ask.new_intent_command));
+    expect(step.kind, JSON.stringify(step).slice(0, 300)).toBe("print");
+    expect(String(step.message)).toContain(PROPOSAL);
+    const stepId = REQUEST.exec(String(step.message))![1];
+    const offer = next(KIRO_TOOLS, proj, ["--propose", "compose", "--request", stepId]);
+    expect(offer.ask_type, JSON.stringify(offer).slice(0, 300)).toBe("compose-offer");
+  });
+});
+
+// The routing question asks where the new words belong, so a bare "yes" picks
+// none of its options. An option worded "Yes, set it up alongside ..." answered
+// it anyway: a person's "yes" was taken for that option and new work started
+// that they never picked. No option, in any shape of the question, opens with a
+// word that answers yes or no.
+describe("t-plan-proposed-by-the-agent: the routing question's options answer only what it asks", () => {
+  const ANSWERS_YES_OR_NO = /^(?:yes|no|yeah|yep|sure|ok|okay|nope)\b/i;
+  const withRequest = (tools: string, words: string[]): Directive => {
+    const read = next(tools, proj, words);
+    return next(tools, proj, ["--request", REQUEST.exec(String(read.message))![1]]);
+  };
+  const shapes: Array<[string, () => Directive]> = [
+    ["beside active work, with a plan", () => { proj = activeProject(); return next(CLAUDE_TOOLS, proj, ["bugfix", "fix the login"]); }],
+    ["beside active work, no plan yet", () => { proj = activeProject(); return withRequest(CLAUDE_TOOLS, ["add CSV export"]); }],
+    ["a scope that differs from the active work's", () => { proj = activeProject(); return next(CLAUDE_TOOLS, proj, ["--scope", "bugfix", "fix the login flow"]); }],
+    ["work here but none selected, with a plan", () => { proj = cloneWithWork(KIRO_TOOLS); return follow(KIRO_TOOLS, proj, ["fix the login"], "bugfix").last; }],
+    ["work here but none selected, no plan yet", () => { proj = cloneWithWork(KIRO_TOOLS); return withRequest(KIRO_TOOLS, ["fix the login"]); }],
+  ];
+  for (const [shape, ask] of shapes) {
+    test(shape, () => {
+      const d = ask();
+      expect(d.ask_type, JSON.stringify(d).slice(0, 300)).toBe("new-work-routing");
+      expect(d.choices).toHaveLength(3);
+      for (const { label, detail } of d.choices!) {
+        expect(label).not.toMatch(ANSWERS_YES_OR_NO);
+        expect(detail ?? "", label).not.toMatch(ANSWERS_YES_OR_NO);
+      }
+      const numbered = String(d.numbered_prose_question).split("\n").flatMap((line) => /^\d+\. \*\*(.+?)\*\*(.*)$/.exec(line) ?? []);
+      expect(numbered.length).toBeGreaterThan(0);
+      for (const text of numbered) expect(text.replace(/^[^A-Za-z]+/, "")).not.toMatch(ANSWERS_YES_OR_NO);
+      const clauses = String(d.question).split(" - ").slice(1);
+      expect(clauses.length, String(d.question)).toBeGreaterThan(0);
+      for (const clause of clauses) expect(clause, String(d.question)).not.toMatch(ANSWERS_YES_OR_NO);
+    });
+  }
 });
 
 // #2359 F1 and F4: a line that opens with a plan's name and goes on in words
@@ -572,7 +740,8 @@ describe("t-plan-proposed-by-the-agent: creation retires the request's whole cha
     // the person gets the question of which work to pick up.
     const step = next(CLAUDE_TOOLS, proj, first as string[], chat);
     const setter = /Run `bun \.claude\/tools\/aidlc\.ts ([^`]+)`/.exec(String(step.message))?.[1];
-    expect(setter, JSON.stringify(step).slice(0, 300)).toBe("engine config set guard.review-freeze off");
+    // A check turned off: the step asks the setter for its lines alone, as it prints them verbatim.
+    expect(setter, JSON.stringify(step).slice(0, 300)).toBe("engine config set guard.review-freeze off --verbatim");
     const kept = spawnSync(process.execPath, [join(CLAUDE_TOOLS, "aidlc.ts"), ...(setter as string).split(" ")], {
       cwd: proj,
       encoding: "utf-8",
@@ -583,11 +752,13 @@ describe("t-plan-proposed-by-the-agent: creation retires the request's whole cha
     const bare = next(CLAUDE_TOOLS, proj, [], chat);
     expect(bare.ask_type, JSON.stringify(bare).slice(0, 300)).toBe("intent-pick");
     expect(String(bare.question ?? ""), JSON.stringify(bare).slice(0, 300)).not.toContain("fix the login");
-    // Work exists but none is selected here: the reading print, the agent's plan, the plan question.
+    // Work exists but none is selected here: the reading print, the agent's plan,
+    // and the question of which work it belongs to, naming the plan.
     const offer = follow(CLAUDE_TOOLS, proj, ["add", "a", "CSV", "export"], "feature", chat).last;
-    expect(offer.ask_type, JSON.stringify(offer).slice(0, 300)).toBe("scope-confirm");
-    // The person goes ahead with the plan.
-    reply(proj, "1", OTHER_CHAT);
+    expect(offer.ask_type, JSON.stringify(offer).slice(0, 300)).toBe("new-work-routing");
+    expect(offer.proposed_scope).toBe("feature");
+    // The person says it is separate new work, on that plan.
+    reply(proj, "2", OTHER_CHAT);
     createFromConfirm(proj, offer, chat);
     const record = readFileSync(join(proj, "aidlc", "spaces", "default", "intents", "active-intent"), "utf-8").trim();
     const state = readFileSync(join(proj, "aidlc", "spaces", "default", "intents", record, "aidlc-state.md"), "utf-8");
@@ -596,14 +767,272 @@ describe("t-plan-proposed-by-the-agent: creation retires the request's whole cha
 });
 
 describe("t-plan-proposed-by-the-agent: the reading prints name the plan clause", () => {
-  test("active work, team mode and the none-selected print all tell the agent to add --propose for new work", () => {
+  // The plan the agent proposes comes from the plans these prints list, each
+  // with its length here: the skill carries no scope table to pick it from.
+  test("active work, team mode and the none-selected print all tell the agent to add --propose for new work, from every plan with its length", () => {
     proj = activeProject();
-    expect(String(next(CLAUDE_TOOLS, proj, ["add CSV export"]).message)).toContain("add `--propose <plan>`");
+    const active = String(next(CLAUDE_TOOLS, proj, ["add CSV export"]).message);
+    expect(active).toContain("add `--propose <plan>`");
+    expectEveryPlan(active);
     const state = seededStateFile(proj);
     writeFileSync(state, readFileSync(state, "utf-8").replace("- **Current Stage**: feasibility", "- **Current Stage**: feasibility\n- **Unit Ownership**: team"));
-    expect(String(next(CLAUDE_TOOLS, proj, ["add CSV export"]).message)).toContain("add `--propose <plan>`");
+    const team = String(next(CLAUDE_TOOLS, proj, ["add CSV export"]).message);
+    expect(team).toContain("add `--propose <plan>`");
+    expectEveryPlan(team);
     cleanupTestProject(proj);
     proj = cloneWithWork(CLAUDE_TOOLS);
-    expect(String(next(CLAUDE_TOOLS, proj, ["add CSV export"]).message)).toContain("add `--propose <plan>`");
+    const unselected = String(next(CLAUDE_TOOLS, proj, ["add CSV export"]).message);
+    expect(unselected).toContain("add `--propose <plan>`");
+    expectEveryPlan(unselected);
+  });
+});
+
+// The which-work question's separate-work answer that says "you pick its plan
+// next" goes on to the plan step, so the question hands out no command that
+// picks a plan beside it; with a plan named, every plan keeps its row, for a
+// person who names another. Before, the rows were there either way, and agents
+// on opencode and Kiro CLI ran the bugfix row for "2": work on a plan nobody picked.
+describe("t-plan-proposed-by-the-agent: the which-work question hands out no plan when its answer leaves the plan to the person", () => {
+  test("kiro, work here and none selected: no plan proposed, no plan rows; a plan proposed, every plan's row", () => {
+    proj = cloneWithWork(KIRO_TOOLS);
+    const read = next(KIRO_TOOLS, proj, ["fix the login"]);
+    const id = REQUEST.exec(String(read.message))![1];
+    const open = next(KIRO_TOOLS, proj, ["--request", id]);
+    expect(open.ask_type, JSON.stringify(open).slice(0, 300)).toBe("new-work-routing");
+    expect(open.proposed_scope).toBe("");
+    expect(open.scope_commands).toEqual([]);
+    const named = next(KIRO_TOOLS, proj, ["--request", id, "--propose", "bugfix"]);
+    expect(named.ask_type, JSON.stringify(named).slice(0, 300)).toBe("new-work-routing");
+    expect(named.scope_commands?.map((row) => row.scope).sort()).toEqual([...validScopes()].sort());
+  });
+});
+
+// A person who answers the which-work question in their own words with another
+// plan than the one it named ("separate, but use the classic plan") gets that
+// plan: the step that reads their reply names each other plan's command, the
+// rows the question itself carries. Before, it named the proposed plan's alone,
+// so the plan they named was dropped or their words were spent as a new request.
+describe("t-plan-proposed-by-the-agent: a reply naming another plan at the which-work question has that plan's command", () => {
+  const WORDS = "Separate work, but use the classic plan";
+  const OTHER_PLAN = '"Separate new piece of work" on another plan they name';
+  const asked = (tools: string, project: string, plan: string[]): Directive => {
+    const read = next(tools, project, ["fix the logout bug"]);
+    const id = REQUEST.exec(String(read.message))![1];
+    const open = next(tools, project, ["--request", id, ...plan]);
+    expect(open.ask_type, JSON.stringify(open).slice(0, 300)).toBe("new-work-routing");
+    return open;
+  };
+
+  test.each([
+    ["claude code, work in progress", CLAUDE_TOOLS, activeProject],
+    ["kiro, work here and none selected", KIRO_TOOLS, () => cloneWithWork(KIRO_TOOLS)],
+  ])("%s: the step names the classic plan's command, which starts the work on classic", (_where, tools, make) => {
+    proj = make();
+    const open = asked(tools, proj, ["--propose", "bugfix"]);
+    const classic = open.scope_commands!.find((row) => row.scope === "classic")!.command;
+    const step = String(next(tools, proj, [WORDS]).message);
+    expect(step).toContain("has not answered the question about where their words belong");
+    // The proposed plan's command stays first under its own answer.
+    expect(step).toContain(`"Separate new piece of work": \`${open.new_intent_command}\``);
+    const others = step.slice(step.indexOf(OTHER_PLAN));
+    expect(step.indexOf(OTHER_PLAN), step).toBeGreaterThan(step.indexOf(`"Separate new piece of work": `));
+    expect(others).toContain(`\`${classic}\``);
+    for (const row of open.scope_commands!.filter((entry) => entry.scope !== "bugfix")) expect(others).toContain(`\`${row.command}\``);
+    const started = next(tools, proj, answerArgs(classic));
+    expect(started.kind, JSON.stringify(started).slice(0, 300)).toBe("print");
+    expect(String(started.message)).toContain("--scope classic");
+  });
+
+  // A plan typed with the request asks the question at once, with what was
+  // typed: a setting kept for the new work rides every plan's command, a change
+  // to the stages each plan that can make it, as the question's own rows.
+  test.each([
+    ["kiro, work here and none selected, a setting and a skip typed", KIRO_TOOLS, () => cloneWithWork(KIRO_TOOLS),
+      ["--scope", "bugfix", "--learnings", "on", "--skip", "reverse-engineering", "fix the logout bug"], "bugfix"],
+    ["claude code, work in progress, another plan typed", CLAUDE_TOOLS, activeProject, ["--scope", "classic", "fix the logout bug"], "classic"],
+  ])("%s: each other plan's command in the step is the question's own row", (_where, tools, make, typed, plan) => {
+    proj = make();
+    const open = next(tools, proj, typed);
+    expect(open.ask_type, JSON.stringify(open).slice(0, 300)).toBe("new-work-routing");
+    expect(open.proposed_scope).toBe(plan);
+    const step = String(next(tools, proj, [WORDS]).message);
+    expect(step).toContain(`"Separate new piece of work": \`${open.new_intent_command}\``);
+    const others = step.slice(step.indexOf(OTHER_PLAN));
+    const named = [...others.slice(0, others.search(/; "|\. If they are asking/)).matchAll(/`([^`]+)`/g)].map((m) => m[1]);
+    expect(named).toEqual(open.scope_commands!.filter((row) => row.scope !== plan).map((row) => row.command));
+    if (typed.includes("--skip")) {
+      for (const command of named) expect(command).toContain("--learnings on");
+      // Every plan but infra runs Reverse Engineering, so every row but infra's skips it.
+      const runs = (scope: string): boolean => loadScopeMapping()[scope]?.stages["reverse-engineering"] === "EXECUTE";
+      for (const row of open.scope_commands!.filter((entry) => entry.scope !== plan)) {
+        expect(row.command.includes("--skip reverse-engineering"), row.command).toBe(runs(row.scope));
+      }
+      expect(runs("infra")).toBe(false);
+    }
+  });
+
+  test("claude code, work in progress, no plan proposed: the step names no plan's command beside the plan step", () => {
+    proj = activeProject();
+    const open = asked(CLAUDE_TOOLS, proj, []);
+    const step = String(next(CLAUDE_TOOLS, proj, [WORDS]).message);
+    expect(step).toContain(`"Separate new piece of work": \`${open.new_intent_command}\``);
+    expect(step).not.toContain(OTHER_PLAN);
+    expect(step).not.toContain("--new-intent --scope");
+  });
+});
+
+// A stage skipped or added with the plan typed for the request rides to the plan
+// the person names at the which-work question when that plan can make the
+// change, and starting a plan that cannot says so once, in one line: the change
+// it already makes. Before, it rode the proposed plan's row alone, so the plan
+// they named started with every stage, unsaid, and an agent that typed the skip
+// on by hand met a refusal for a stage that plan never runs.
+describe("t-plan-proposed-by-the-agent: a stage change typed with the plan rides to the plan named at the which-work question", () => {
+  const SKIP_DP = ["--scope", "bugfix", "--skip", "deployment-pipeline", "fix the logout bug"];
+  const LEAVES_OUT_DP = "The classic plan already leaves out Deployment Pipeline.";
+  const row = (open: Directive, scope: string): { scope: string; command: string; stages?: string } =>
+    open.scope_commands!.find((entry) => entry.scope === scope)!;
+  const routed = (tools: string, project: string, typed: string[]): Directive => {
+    const open = next(tools, project, typed);
+    expect(open.ask_type, JSON.stringify(open).slice(0, 300)).toBe("new-work-routing");
+    expect(open.proposed_scope).toBe("bugfix");
+    return open;
+  };
+  /** The `intent create` a creation print names, run as the agent runs it, its label filled. */
+  const runCreation = (tools: string, created: Directive): string => {
+    const args = /intent create ([^`]+)`/.exec(String(created.message))![1]
+      .replace('"<2-3 word kebab essence>"', "logout-bug").split(" ");
+    const made = spawnSync(process.execPath, [join(tools, "aidlc-utility.ts"), "intent-create", ...args, "--project-dir", proj], {
+      cwd: proj,
+      encoding: "utf-8",
+      env: { ...process.env, CLAUDE_PROJECT_DIR: proj },
+    });
+    expect(made.status, `${made.stdout}${made.stderr}`).toBe(0);
+    const record = readFileSync(join(proj, "aidlc", "spaces", "default", "intents", "active-intent"), "utf-8").trim();
+    return readFileSync(join(proj, "aidlc", "spaces", "default", "intents", record, "aidlc-state.md"), "utf-8");
+  };
+
+  test("kiro, work here and none selected: a plan with the stage carries the skip, counted, and starts with it skipped", () => {
+    proj = cloneWithWork(KIRO_TOOLS);
+    const open = routed(KIRO_TOOLS, proj, SKIP_DP);
+    const workshop = row(open, "workshop");
+    expect(workshop.command).toContain("--scope workshop");
+    expect(workshop.command).toContain("--skip deployment-pipeline");
+    // The step that reads a reply naming it names the same command.
+    expect(String(next(KIRO_TOOLS, proj, ["Separate work, but use the workshop plan"]).message)).toContain(`\`${workshop.command}\``);
+    // Its size is the plan its command creates, one stage fewer than workshop's own.
+    expect(creationSize(KIRO_TOOLS, proj, workshop.command)).toStartWith(`${workshop.stages}, `);
+    const plain = creationSize(KIRO_TOOLS, proj, workshop.command.replace(" --skip deployment-pipeline", ""));
+    expect(Number.parseInt(workshop.stages!, 10)).toBe(Number.parseInt(plain, 10) - 1);
+    const started = next(KIRO_TOOLS, proj, answerArgs(workshop.command));
+    expect(started.kind, JSON.stringify(started).slice(0, 300)).toBe("print");
+    expect(String(started.message)).toContain("--skip deployment-pipeline");
+    expect(String(started.narration ?? "")).not.toContain("already");
+    expect(String(started.narration ?? "")).not.toContain("left off");
+    expect(runCreation(KIRO_TOOLS, started)).toMatch(/^- \[.\] deployment-pipeline \u2014 SKIP/m);
+  });
+
+  // What a live agent did: the row typed again without its skip, for a plan
+  // that runs the stage. Nothing is put back (no list is also how the agent
+  // says no skip after all), and the creation says it was left off, once.
+  test("kiro, work here and none selected: a command that leaves off a skip the plan could take says so once as it starts", () => {
+    proj = cloneWithWork(KIRO_TOOLS);
+    const open = routed(KIRO_TOOLS, proj, SKIP_DP);
+    const started = next(KIRO_TOOLS, proj, answerArgs(row(open, "workshop").command.replace(" --skip deployment-pipeline", "")));
+    expect(started.kind, JSON.stringify(started).slice(0, 300)).toBe("print");
+    expect(String(started.message)).not.toContain("--skip");
+    const line = "Deployment Pipeline runs in this work: the skip you typed with the request was left off. Say so to skip it.";
+    expect(String(started.narration)).toContain(line);
+    expect(String(started.narration).split(line)).toHaveLength(2);
+    expect(runCreation(KIRO_TOOLS, started)).toMatch(/^- \[.\] deployment-pipeline \u2014 EXECUTE/m);
+  });
+
+  test("kiro, work here and none selected: a plan without the stage carries none and says so once as it starts", () => {
+    proj = cloneWithWork(KIRO_TOOLS);
+    const open = routed(KIRO_TOOLS, proj, SKIP_DP);
+    const classic = row(open, "classic");
+    expect(classic.command).not.toContain("--skip");
+    expect(String(next(KIRO_TOOLS, proj, ["Separate work, but use the classic plan"]).message)).toContain(`\`${classic.command}\``);
+    const started = next(KIRO_TOOLS, proj, answerArgs(classic.command));
+    expect(started.kind, JSON.stringify(started).slice(0, 300)).toBe("print");
+    expect(String(started.message)).toContain("intent create --scope classic");
+    expect(String(started.message)).not.toContain("--skip");
+    expect(String(started.narration)).toContain(LEAVES_OUT_DP);
+    expect(String(started.narration).split(LEAVES_OUT_DP)).toHaveLength(2);
+    expect(getField(runCreation(KIRO_TOOLS, started), "Scope")).toBe("classic");
+  });
+
+  // What live agents did: the skip typed back on by hand for a plan that never
+  // runs the stage. The creation leaves it off and says so, never refuses it.
+  test("claude code, work here and none selected: the skip typed on by hand for a plan without the stage is left off and said", () => {
+    proj = cloneWithWork(CLAUDE_TOOLS);
+    const open = routed(CLAUDE_TOOLS, proj, SKIP_DP);
+    const started = next(CLAUDE_TOOLS, proj, [...answerArgs(row(open, "classic").command), "--skip", "deployment-pipeline"]);
+    expect(started.kind, JSON.stringify(started).slice(0, 300)).toBe("print");
+    expect(String(started.message)).not.toContain("--skip");
+    expect(String(started.narration)).toContain(LEAVES_OUT_DP);
+    expect(getField(runCreation(CLAUDE_TOOLS, started), "Scope")).toBe("classic");
+  });
+
+  test("claude code, work here and none selected: an add rides a plan that does not run the stage, and one that runs it says so", () => {
+    proj = cloneWithWork(CLAUDE_TOOLS);
+    const open = routed(CLAUDE_TOOLS, proj, ["--scope", "bugfix", "--add", "user-stories", "fix the logout bug"]);
+    expect(open.new_intent_command).toContain("--add user-stories");
+    expect(row(open, "express").command).toContain("--add user-stories");
+    const classic = row(open, "classic");
+    expect(classic.command).not.toContain("--add");
+    const started = next(CLAUDE_TOOLS, proj, answerArgs(classic.command));
+    expect(String(started.message)).not.toContain("--add");
+    expect(String(started.narration)).toContain("The classic plan already runs User Stories.");
+  });
+
+  // The plan typed with the request follows the same rule: a change it already
+  // makes is left off its separate-work answer and said once, where creation
+  // refused it before.
+  test("kiro, work here and none selected: the typed plan's own change it already makes starts the work and is said", () => {
+    proj = cloneWithWork(KIRO_TOOLS);
+    const open = routed(KIRO_TOOLS, proj, ["--scope", "bugfix", "--skip", "user-stories", "fix the logout bug"]);
+    expect(open.new_intent_command).not.toContain("--skip");
+    expect(row(open, "classic").command).toContain("--skip user-stories");
+    const started = next(KIRO_TOOLS, proj, answerArgs(open.new_intent_command));
+    expect(String(started.message)).not.toContain("--skip");
+    expect(String(started.narration)).toContain("The bugfix plan already leaves out User Stories.");
+    expect(getField(runCreation(KIRO_TOOLS, started), "Scope")).toBe("bugfix");
+  });
+
+  // An empty folder starts as a new project without Reverse Engineering, which
+  // the start says on its own: a typed skip of it the command left off is not
+  // said to run.
+  test("kiro, work here and none selected, an empty folder: a skip of Reverse Engineering left off is not said to run", () => {
+    proj = cloneWithWork(KIRO_TOOLS);
+    const open = routed(KIRO_TOOLS, proj, ["--scope", "bugfix", "--skip", "reverse-engineering", "fix the logout bug"]);
+    const started = next(KIRO_TOOLS, proj, answerArgs(row(open, "classic").command.replace(" --skip reverse-engineering", "")));
+    expect(String(started.message)).not.toContain("--skip");
+    expect(String(started.narration)).toContain("without Reverse Engineering");
+    expect(String(started.narration)).not.toContain("left off");
+  });
+
+  // An initialization stage always runs: no plan takes its skip, and the start
+  // says so in the same line instead of refusing it.
+  test("kiro, work here and none selected: a skip of an initialization stage is said to always run", () => {
+    proj = cloneWithWork(KIRO_TOOLS);
+    const open = routed(KIRO_TOOLS, proj, ["--scope", "bugfix", "--skip", "workspace-detection", "fix the logout bug"]);
+    expect(open.new_intent_command).not.toContain("--skip");
+    const started = next(KIRO_TOOLS, proj, answerArgs(open.new_intent_command));
+    expect(String(started.narration)).toContain("The bugfix plan always runs Workspace Detection.");
+    expect(String(started.narration)).not.toContain("left off");
+    expect(getField(runCreation(KIRO_TOOLS, started), "Scope")).toBe("bugfix");
+  });
+
+  // Asked again (a reshape with no record named), the question keeps what was
+  // typed and hands it out the same way.
+  test("kiro, work here and none selected: the question asked again carries the skip to the plans that take it", () => {
+    proj = cloneWithWork(KIRO_TOOLS);
+    const open = routed(KIRO_TOOLS, proj, SKIP_DP);
+    const again = next(KIRO_TOOLS, proj, answerArgs(open.compose_command));
+    expect(again.ask_type, JSON.stringify(again).slice(0, 300)).toBe("new-work-routing");
+    expect(row(again, "workshop").command).toContain("--skip deployment-pipeline");
+    expect(row(again, "classic").command).not.toContain("--skip");
+    expect(again.new_intent_command).toContain("--skip deployment-pipeline");
   });
 });

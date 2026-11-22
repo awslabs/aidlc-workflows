@@ -270,6 +270,65 @@ describe("parseWorkspaceCommand", () => {
     });
   });
 
+  test("intent add-repo carries its --url, --reason and --person-words to the utility whole", () => {
+    const tokens = [
+      "intent", "add-repo", "payments",
+      "--url", "git@github.com:acme/payments.git",
+      "--reason", "the consent API",
+      "--person-words", "add payments",
+    ];
+    const command = parseWorkspaceCommand(tokens);
+    expect(command).toEqual({
+      kind: "add-repo",
+      noun: "intent",
+      name: "payments",
+      rest: tokens.slice(3),
+    });
+    expect(workspaceCommandUtilityArgv(command)).toEqual(tokens);
+  });
+
+  test("intent set-repos takes a list or --all and forwards verbatim", () => {
+    expect(parseWorkspaceCommand(["intent", "set-repos", "app-a,app-b"])).toEqual({
+      kind: "set-repos",
+      noun: "intent",
+      name: "app-a,app-b",
+      rest: [],
+    });
+    expect(workspaceCommandUtilityArgv({ kind: "set-repos", noun: "intent", name: "--all", rest: [] }))
+      .toEqual(["intent", "set-repos", "--all"]);
+    expect(parseWorkspaceCommand(["intent", "set-repos", "--all"])).toMatchObject({ kind: "set-repos", name: "--all" });
+    expect(parseWorkspaceCommand(["intent", "set-repos", "--json"])).toMatchObject({
+      kind: "error",
+      code: "missing-name",
+      verb: "set-repos",
+      message: "Usage: aidlc intent set-repos <name,...|--all>",
+    });
+  });
+
+  test("intent add-checkout / remove-checkout take a path and forward verbatim", () => {
+    expect(parseWorkspaceCommand(["intent", "add-checkout", ".claude/worktrees/app"])).toEqual({
+      kind: "add-checkout",
+      noun: "intent",
+      name: ".claude/worktrees/app",
+      rest: [],
+    });
+    expect(
+      workspaceCommandUtilityArgv({ kind: "add-checkout", noun: "intent", name: "../app feature", rest: [] }),
+    ).toEqual(["intent", "add-checkout", "../app feature"]);
+    expect(parseWorkspaceCommand(["intent", "remove-checkout", "../app"])).toEqual({
+      kind: "remove-checkout",
+      noun: "intent",
+      name: "../app",
+      rest: [],
+    });
+    expect(parseWorkspaceCommand(["intent", "add-checkout"])).toMatchObject({
+      kind: "error",
+      code: "missing-name",
+      verb: "add-checkout",
+      message: "Usage: aidlc intent add-checkout <path>",
+    });
+  });
+
   test("intent archive / unarchive parse as lifecycle commands that forward verbatim (issue #980)", () => {
     expect(parseWorkspaceCommand(["intent", "archive", "260903-old-spike"])).toEqual({
       kind: "archive",
@@ -373,6 +432,9 @@ describe("parseWorkspaceCommand", () => {
       "unarchive",
       "add-repo",
       "remove-repo",
+      "set-repos",
+      "add-checkout",
+      "remove-checkout",
     ]);
     for (const name of RESERVED_RECORD_NAME_LIST) {
       expect(RESERVED_RECORD_NAMES.has(name)).toBe(true);
@@ -562,7 +624,8 @@ describe("utility handlers and reservation chokepoints", () => {
   // the engine hands the agent the noun's verbs, the records there and the words
   // whole, to read what the person meant (a mistyped verb or name, or something
   // the noun cannot do) and run that command, or ask them once.
-  const INTENT_VERB_LIST = "list, switch <name>, create, archive <name>, unarchive <name>, add-repo <name>, remove-repo <name>";
+  const INTENT_VERB_LIST =
+    "list, switch <name>, create, archive <name>, unarchive <name>, add-repo <name>, remove-repo <name>, set-repos <name,...>, add-checkout <path>, remove-checkout <path>";
   const SPACE_VERB_LIST = "list, switch <name>, create <name>";
   function activeIntentCursor(projectDir: string): string {
     const path = join(projectDir, "aidlc", "spaces", "default", "intents", "active-intent");

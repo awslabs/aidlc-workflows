@@ -258,6 +258,11 @@ export function readJsonFile(path: string): unknown {
   return JSON.parse(withoutBom(readFileSync(path, "utf-8")));
 }
 
+/** The line ending a text uses: CRLF where Git checked it out that way (#2057). */
+export function newlineOf(text: string): "\r\n" | "\n" {
+  return text.includes("\r\n") ? "\r\n" : "\n";
+}
+
 // The JSON text AI-DLC writes for a file, with the byte order mark the file
 // had (`like` is its text before the write).
 export function jsonFileText(value: unknown, like = ""): string {
@@ -724,9 +729,18 @@ export function mergeBlock(
   }
   const beginAt = current.indexOf(begin);
   const endAt = current.indexOf(end);
-  const newline = current.includes("\r\n") ? "\r\n" : "\n";
+  const newline = newlineOf(current);
   const body = shipped.trim().replace(/\r?\n/g, newline);
   const block = `${begin}${newline}${body}${newline}${end}`;
+  // Written in the file's own line endings, the part keeps the hash recorded
+  // for it when that is the only difference (a CRLF checkout of a part
+  // recorded from LF), so a refresh never rewrites the record for it. The
+  // records are matched in order, this harness's own first, so another
+  // harness's record of the same part in other line endings never stands in.
+  const firstMatching = (text: string, known: readonly (string | undefined)[]): string =>
+    known.find((hash): hash is string => hash !== undefined && sha256Matching(text, [hash]) === hash) ??
+      sha256Bytes(text);
+  const blockHash = firstMatching(block, recorded);
   if (beginAt >= 0) {
     if (endAt < beginAt) return { error: "managed end marker precedes its begin marker" };
     const currentBlock = current.slice(beginAt, endAt + end.length);
@@ -738,10 +752,10 @@ export function mergeBlock(
       }`,
       // A part a space switch pointed at another space is still the one written.
       currentHash: [currentBlock, withSpace(currentBlock, "default")]
-        .map((text) => sha256Matching(text, [sha256Bytes(block), ...recorded]))
-        .find((hash) => hash === sha256Bytes(block) || recorded.includes(hash)) ??
-        sha256Matching(currentBlock, [sha256Bytes(block), ...recorded]),
-      nextHash: sha256Bytes(block),
+        .map((text) => firstMatching(text, [blockHash, ...recorded]))
+        .find((hash) => hash === blockHash || recorded.includes(hash)) ??
+        sha256Matching(currentBlock, [blockHash, ...recorded]),
+      nextHash: blockHash,
       // A .gitignore part with exactly the shipped entries is a release's own,
       // whatever notes an earlier release put between them.
       currentBlockShipped: currentBody === body ||
@@ -754,7 +768,7 @@ export function mergeBlock(
     const kept = path === ".gitignore" ? linesAboveOwnSection(current.trim(), body, newline) : "";
     return {
       value: `${kept ? `${kept}${newline}${newline}` : ""}${block}${newline}`,
-      nextHash: sha256Bytes(block),
+      nextHash: blockHash,
       adoptedLegacy: true,
       ...(kept ? { keptOwnLines: true } : {}),
     };
@@ -764,7 +778,7 @@ export function mergeBlock(
   const prefix = current.length === 0 || current.endsWith(newline) ? current : `${current}${newline}`;
   return {
     value: `${prefix}${prefix ? newline : ""}${block}${newline}`,
-    nextHash: sha256Bytes(block),
+    nextHash: blockHash,
   };
 }
 
@@ -858,6 +872,15 @@ export function sha256Matching(value: string | Buffer, known: readonly (string |
     if (known.includes(hash)) return hash;
   }
   return own;
+}
+
+// Whether a file, or AI-DLC's marked part of one, holds what config recorded
+// writing for it: line endings aside, or with include lines a space switch
+// pointed at another space put back. Doctor's changed-files rows and the
+// build's brought-files line both ask it.
+export function holdsRecordedWrite(content: string | Buffer, hash: string): boolean {
+  const text = typeof content === "string" ? content : content.toString("utf-8");
+  return sha256Matching(content, [hash]) === hash || sha256Matching(withSpace(text, "default"), [hash]) === hash;
 }
 
 export function sha256FileMatching(path: string, known: readonly (string | undefined)[]): string {
@@ -1266,6 +1289,16 @@ function jsoncNodeValue(text: string, node: JsoncNode): unknown {
   }
 }
 
+/**
+ * The value of a text that is exactly one JSONC value, comments and whitespace
+ * around it allowed; undefined otherwise. Bun.JSONC.parse alone stops at the
+ * first complete value and drops anything after it.
+ */
+export function jsoncDocumentValue(text: string): unknown {
+  const node = jsoncTree(text);
+  return node ? jsoncNodeValue(text, node) : undefined;
+}
+
 function plainObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -1339,6 +1372,14 @@ function insertJsoncEntry(
   const last = entries[entries.length - 1];
   if (last && last.end === last.valueEnd) next = `${next.slice(0, last.valueEnd)},${next.slice(last.valueEnd)}`;
   return next;
+}
+
+/** `value` after the last item of the root object's `key` array, in the layout around it; null when there is no such array. */
+export function appendJsoncArrayItem(text: string, key: string, value: unknown): string | null {
+  const root = jsoncTree(text);
+  const array = root?.kind === "object" ? root.members.findLast((member) => member.key === key)?.node : undefined;
+  if (!root || array?.kind !== "array") return null;
+  return insertJsoncEntry(text, jsonLayout(text, root), array, false, undefined, value, false);
 }
 
 function replaceJsoncNode(text: string, layout: JsonLayout, node: JsoncNode, value: unknown): string {
@@ -1620,8 +1661,9 @@ export function mergeJsonEntries(
   if (!plainObject(shippedValue)) return { conflict: "shipped JSON root must be an object" };
   const shipped = jsonEntriesOf(shippedValue);
   const all = Object.fromEntries(shipped.map((entry) => [entry.id, entry.hash]));
+  // The shipped file as the team's file has it: its byte order mark and its line endings.
   const bom = current.startsWith(BOM) ? BOM : "";
-  const asShipped = `${bom}${withoutBom(shippedText)}`;
+  const asShipped = `${bom}${withoutBom(shippedText).replace(/\r?\n/g, newlineOf(current))}`;
   if (current.trim() === "") return { text: asShipped, entries: all, whole: true };
   const root = jsoncTree(current);
   const currentValue = root ? jsoncNodeValue(current, root) : undefined;

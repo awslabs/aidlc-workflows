@@ -14,8 +14,8 @@ import {
   approved,
   cleanupJumpBackRuns,
   expectCodeGenerationFor,
-  followPrint,
   jumpAtGate,
+  jumpedTo,
   marksOf,
   toBuildAndTest,
   UNITS,
@@ -31,10 +31,11 @@ describe("a jump back to a whole stage after both Units are built", () => {
       const { run } = toBuildAndTest(policy, "gate");
       const { agent } = run;
       const marks = marksOf(agent);
-      const jump = followPrint(agent, jumpAtGate(agent, "Jump back to Code Generation and redo it", "code-generation"));
-      expect(jump.ran).toContain("--target code-generation");
-      expectCodeGenerationFor(jump.next);
-      expect(agent.drive(jump.next).kind).toBe("done");
+      // The `next --stage` the accepted jump names makes it and returns the step.
+      const landed = jumpAtGate(agent, "Jump back to Code Generation and redo it", "code-generation");
+      expect(jumpedTo(agent, marks)).toEqual(["code-generation"]);
+      expectCodeGenerationFor(landed);
+      expect(agent.drive(landed).kind).toBe("done");
       const moved = after(agent, marks);
       // No Functional Design pass or review: the person asked for Code Generation.
       expect(unitWork(moved.worked).sort()).toEqual(["code-generation/core", "code-generation/extra"]);
@@ -54,10 +55,10 @@ describe("a jump back to a whole stage after both Units are built", () => {
     const { run } = toBuildAndTest("off", "gate");
     const { agent } = run;
     const marks = marksOf(agent);
-    const jump = followPrint(agent, jumpAtGate(agent, "go back to Functional Design", "functional-design"));
-    expect(jump.ran).toContain("--target functional-design");
-    expect(jump.next.stage).toBe("functional-design");
-    expect(agent.drive(jump.next).kind).toBe("done");
+    const landed = jumpAtGate(agent, "go back to Functional Design", "functional-design");
+    expect(jumpedTo(agent, marks)).toEqual(["functional-design"]);
+    expect(landed.stage).toBe("functional-design");
+    expect(agent.drive(landed).kind).toBe("done");
     expect(unitWork(after(agent, marks).worked).sort()).toEqual([
       "code-generation/core", "code-generation/extra", "functional-design/core", "functional-design/extra",
     ]);

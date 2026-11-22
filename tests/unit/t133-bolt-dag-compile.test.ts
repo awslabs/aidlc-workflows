@@ -26,8 +26,7 @@
 //   dist/claude/.claude/tools/aidlc-sensor-required-sections.ts
 //     filename-gated extension: for unit-of-work-dependency.md, sets
 //          result.edge_block = parseBoltDag().reason (or "ok"); a non-ok block
-//          forces pass:false. Every other markdown keeps the generic ≥2-H2 check
-//          with NO edge_block field.
+//          forces pass:false. Every other markdown gets NO edge_block field.
 //   dist/claude/.claude/tools/aidlc-lib.ts
 //     parseBoltDag(body) - the single source of truth both consumers
 //          branch on: {ok,units,batches} | {ok:false, reason: absent|malformed|cyclic}.
@@ -318,8 +317,8 @@ describe("t133 edge-block sensor (aidlc-sensor-required-sections, units-generati
     expect(r.edge_block).toBe("absent");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  // ---- 10: non-target markdown keeps the generic check ---------------------
-  test("sensor: non-target markdown keeps generic H2 check (no edge_block) [.sh test 10]", () => {
+  // ---- 10: non-target markdown gets no edge-block check -------------------
+  test("sensor: non-target markdown has no edge_block [.sh test 10]", () => {
     const proj = makeProject();
     const other = join(
       recordRoot(proj),

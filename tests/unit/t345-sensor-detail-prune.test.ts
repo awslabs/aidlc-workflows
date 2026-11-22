@@ -21,8 +21,9 @@
 //     one artifact must not delete another artifact's live report;
 //   - it removes only files last modified BEFORE the fire began, so an
 //     overlapping fire's report survives.
-// The dispatcher calls it only on a verified pass. A noted pass (tool-unavailable,
-// script-error) or a budget override evaluated nothing, so it supersedes nothing.
+// The dispatcher calls it only on a verified pass. A noted pass (tool-unavailable),
+// a check that could not run or a budget override evaluated nothing, so it
+// supersedes nothing.
 //
 // Mechanism: cli - this file carries both halves of the contract. The helper
 // cases exercise pruneSupersededDetailFiles in-process against a temp
@@ -33,8 +34,9 @@
 // id is a documentation annotation, matching t251's and t237's convention.
 //
 // The behavioural cases drive the real `required-sections` sensor rather than a
-// stub: it fails on fewer than two H2 headings, so rewriting an output file
-// between fires produces a genuine FAILED -> PASSED pair. The noted-pass case
+// stub: with a team template for requirements.md it fails when the file lacks a
+// template heading, so rewriting an output file between fires produces a
+// genuine FAILED -> PASSED pair. The could-not-run case
 // swaps in a stub script through the AIDLC_SENSOR_SCRIPT_DIR seam for its
 // second fire only. The stage graph comes from AIDLC_SRC (the generated dist
 // tree) through the AIDLC_STAGE_GRAPH seam, exactly as t94 does.
@@ -53,6 +55,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { memoryTemplatesDir } from "../../core/tools/aidlc-graph.ts";
 import { pruneSupersededDetailFiles } from "../../core/tools/aidlc-sensor.ts";
 import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
@@ -233,10 +236,12 @@ const DISPATCHER = join(REPO_ROOT, "core", "tools", "aidlc-sensor.ts");
 const FRAMEWORK_GRAPH = join(AIDLC_SRC, "tools", "data", "stage-graph.json");
 const STAGE = "requirements-analysis";
 
-// required-sections fails below two H2 headings, so the same output file
-// rewritten between fires yields a real FAILED then a real PASSED.
+// required-sections fails an output missing a heading its template asks for, so
+// the same output file rewritten between fires yields a real FAILED then a real
+// PASSED.
 const ONE_H2 = "# Title\n\n## Only One\n\nbody\n";
 const THREE_H2 = "# Title\n\n## One\n\na\n\n## Two\n\nb\n\n## Three\n\nc\n";
+const REQUIREMENTS_TEMPLATE = "# Requirements\n\n## One\n\n## Two\n\n## Three\n";
 
 interface Fire {
 	result: string;
@@ -273,6 +278,9 @@ function setupProject(): {
 
 	const outputDir = join(record, "inception", STAGE);
 	mkdirSync(outputDir, { recursive: true });
+	const templates = memoryTemplatesDir(proj);
+	mkdirSync(templates, { recursive: true });
+	writeFileSync(join(templates, "requirements.md"), REQUIREMENTS_TEMPLATE, "utf-8");
 	const detailDir = join(record, ".aidlc-engine", "sensors", STAGE);
 
 	const fire = (outputPath: string, env: Record<string, string> = {}, extraArgs: string[] = []): Fire => {
@@ -371,7 +379,7 @@ describe("t345 the dispatcher clears a superseded detail file on a passing fire"
 		expect(passed[1]).not.toContain("**Unit**:");
 	});
 
-	test("a noted pass that evaluated nothing keeps the earlier report", () => {
+	test("a check that could not run evaluated nothing and keeps the earlier report", () => {
 		const { outputDir, fire } = setupProject();
 		const outputPath = join(outputDir, "requirements.md");
 		writeFileSync(outputPath, ONE_H2, "utf-8");
@@ -380,7 +388,7 @@ describe("t345 the dispatcher clears a superseded detail file on a passing fire"
 		expect(failed.result).toBe("failed");
 		expect(failed.detailFiles).toHaveLength(1);
 
-		// A crashing script degrades to `passed` with a script-error note.
+		// A crashing script is recorded as could not run, with its reason.
 		const scripts = makeTempDir("t345-scripts-");
 		writeFileSync(
 			join(scripts, "aidlc-sensor-required-sections.ts"),
@@ -389,7 +397,7 @@ describe("t345 the dispatcher clears a superseded detail file on a passing fire"
 		);
 		writeFileSync(outputPath, THREE_H2, "utf-8");
 		const noted = fire(outputPath, { AIDLC_SENSOR_SCRIPT_DIR: scripts });
-		expect(noted.result).toBe("passed");
+		expect(noted.result).toBe("could-not-run");
 		expect(noted.note).toBe("script-error: exit-3");
 		expect(noted.detailFiles).toEqual(failed.detailFiles);
 	});

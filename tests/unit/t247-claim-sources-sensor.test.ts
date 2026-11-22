@@ -78,6 +78,27 @@ function makeStageDir(): string {
   return dir;
 }
 
+// The agent's record of the Assumption Confirmation, as `log decision
+// --question-kind assumption-confirmation` and `log answer` write it (null: asked,
+// not answered yet). The sensor reads this, never the questions file's answer
+// line. `kind` false writes the row as a record from before the kind existed.
+function confirmOnRecord(dir: string, details: string | null, kind = true): void {
+  const block = (event: string, fields: Record<string, string>) => [
+    `## ${event}`, "**Timestamp**: 2026-10-23T00:00:00Z", `**Event**: ${event}`,
+    ...Object.entries(fields).map(([name, value]) => `**${name}**: ${value}`), "", "---", "",
+  ].join("\n");
+  mkdirSync(join(dir, "audit"), { recursive: true });
+  writeFileSync(join(dir, "audit", "t247.md"), [
+    "# AI-DLC Audit Log", "",
+    block("DECISION_RECORDED", {
+      Stage: "intent-capture", Decision: "Do you accept these assumptions?",
+      Options: "A. Accept assumptions,B. Convert to follow-up questions",
+      ...(kind ? { "Question Kind": "assumption-confirmation" } : {}),
+    }),
+    ...(details === null ? [] : [block("QUESTION_ANSWERED", { Stage: "intent-capture", Details: details })]),
+  ].join("\n"), "utf-8");
+}
+
 function run(dir: string, output = "intent-statement.md"): SensorResult {
   const result = spawnSync(
     process.execPath,
@@ -412,6 +433,7 @@ describe("t247 claim-sources sensor", () => {
       "None.",
       "- A procurement reviewer may be needed. [assumption]",
     );
+    confirmOnRecord(dir, null);
     const unconfirmed = run(dir, "stakeholder-map.md");
     expect(unconfirmed.pass).toBe(false);
     expect(unconfirmed.findings.join("\n")).toContain(
@@ -424,6 +446,7 @@ describe("t247 claim-sources sensor", () => {
       `${readFileSync(questionsPath, "utf-8")}\n\n## Assumption Confirmation\n\n- A procurement reviewer may be needed. [assumption]\n\nA. Accept assumptions\nB. Convert to follow-up questions\n\n[Answer]: A. Accept assumptions\n`,
       "utf-8",
     );
+    confirmOnRecord(dir, "Accept assumptions");
     const accepted = run(dir, "intent-capture-questions.md");
     expect(accepted.pass).toBe(true);
     expect(accepted.findings).toEqual([]);
@@ -444,6 +467,7 @@ describe("t247 claim-sources sensor", () => {
         "\n\n## Assumption <!-- heading -->Confirmation\n\n- A procurement reviewer may be needed. [assumption]\n\nA. Accept assumptions\nB. Convert to follow-up questions\n\n[Answer]: A. Accept <!-- answer -->assumptions\n",
       "utf-8",
     );
+    confirmOnRecord(dir, "Accept assumptions");
 
     const result = run(dir, "intent-capture-questions.md");
     expect(result.pass).toBe(true);
@@ -464,6 +488,7 @@ describe("t247 claim-sources sensor", () => {
       `${readFileSync(questionsPath, "utf-8")}\n\n## Assumption Confirmation\n\n- A legal reviewer may be needed. [assumption]\n\nA. Accept assumptions\nB. Convert to follow-up questions\n\n[Answer]: A. Accept assumptions\n`,
       "utf-8",
     );
+    confirmOnRecord(dir, "Accept assumptions");
     const result = run(dir);
     expect(result.pass).toBe(false);
     expect(result.findings.join("\n")).toContain(
@@ -485,6 +510,7 @@ describe("t247 claim-sources sensor", () => {
       `${readFileSync(questionsPath, "utf-8")}\n\n## Assumption Confirmation\n\n- A procurement reviewer may be needed for international purchases. [assumption]\n\nA. Accept assumptions\nB. Convert to follow-up questions\n\n[Answer]: A. Accept assumptions\n`,
       "utf-8",
     );
+    confirmOnRecord(dir, "Accept assumptions");
     const result = run(dir);
     expect(result.pass).toBe(false);
     expect(result.findings.join("\n")).toContain(
@@ -506,6 +532,7 @@ describe("t247 claim-sources sensor", () => {
       `${readFileSync(questionsPath, "utf-8")}\n\n## Assumption Confirmation\n\n- A procurement reviewer may be needed for all international\n  purchases over the annual threshold. [assumption]\n\nA. Accept assumptions\nB. Convert to follow-up questions\n\n[Answer]: A. Accept assumptions\n`,
       "utf-8",
     );
+    confirmOnRecord(dir, "Accept assumptions");
     const result = run(dir, "intent-capture-questions.md");
     expect(result.pass).toBe(true);
     expect(result.findings).toEqual([]);
@@ -525,6 +552,7 @@ describe("t247 claim-sources sensor", () => {
       `${readFileSync(questionsPath, "utf-8")}\n\n## Assumption Confirmation\n\n1. [assumption] A procurement reviewer may be needed for all international\n   purchases over the annual threshold.\n\n- A. Accept assumptions\n- B. Convert to follow-up questions\n\n[Answer]: A. Accept assumptions\n`,
       "utf-8",
     );
+    confirmOnRecord(dir, "Accept assumptions");
     const result = run(dir, "intent-capture-questions.md");
     expect(result.pass).toBe(true);
     expect(result.findings).toEqual([]);
@@ -549,6 +577,7 @@ describe("t247 claim-sources sensor", () => {
         `${readFileSync(questionsPath, "utf-8")}\n\n## Assumption Confirmation\n\n- A procurement reviewer may be needed. [assumption]\n${line}\n\nA. Accept assumptions\nB. Convert to follow-up questions\n\n[Answer]: A. Accept assumptions\n`,
         "utf-8",
       );
+      confirmOnRecord(dir, "Accept assumptions");
       const result = run(dir, "intent-capture-questions.md");
       expect(result.pass).toBe(true);
       expect(result.findings).toEqual([]);
@@ -569,6 +598,7 @@ describe("t247 claim-sources sensor", () => {
       `${readFileSync(questionsPath, "utf-8")}\n\n## Assumption Confirmation\n\n- A procurement reviewer may be needed. [assumption]\n| Option | Meaning |\n\n[Answer]: A. Accept assumptions\n`,
       "utf-8",
     );
+    confirmOnRecord(dir, "Accept assumptions");
 
     const result = run(dir);
     expect(result.pass).toBe(false);
@@ -591,6 +621,7 @@ describe("t247 claim-sources sensor", () => {
       `${readFileSync(questionsPath, "utf-8")}\n\n## Assumption Confirmation\n\n- A procurement reviewer may be needed. [assumption]\nA. Accept assumptions\nB. Convert to follow-up questions\n[Answer]: A. Accept assumptions\n`,
       "utf-8",
     );
+    confirmOnRecord(dir, "Accept assumptions");
     const result = run(dir, "intent-capture-questions.md");
     expect(result.pass).toBe(true);
     expect(result.findings).toEqual([]);
@@ -610,6 +641,7 @@ describe("t247 claim-sources sensor", () => {
       `${readFileSync(questionsPath, "utf-8")}\n\n## Assumption Confirmation\n\n- A procurement reviewer may be needed. [assumption]\n  Legal review stays optional.\n\nA. Accept assumptions\nB. Convert to follow-up questions\n\n[Answer]: A. Accept assumptions\n`,
       "utf-8",
     );
+    confirmOnRecord(dir, "Accept assumptions");
     const result = run(dir, "intent-capture-questions.md");
     expect(result.pass).toBe(false);
     expect(result.findings.join("\n")).toContain(
@@ -631,6 +663,7 @@ describe("t247 claim-sources sensor", () => {
       `${readFileSync(questionsPath, "utf-8")}\n\n## Assumption Confirmation\n\nA procurement reviewer may be needed. [assumption]\n\nA. Accept assumptions\nB. Convert to follow-up questions\n\n[Answer]: A. Accept assumptions\n`,
       "utf-8",
     );
+    confirmOnRecord(dir, "Accept assumptions");
     const result = run(dir, "intent-capture-questions.md");
     expect(result.pass).toBe(false);
     expect(result.findings.join("\n")).toContain(
@@ -638,30 +671,55 @@ describe("t247 claim-sources sensor", () => {
     );
   });
 
-  for (const answer of [
-    "A. Accept assumptions? No",
-    "A. Accept assumptions with caveats",
-  ]) {
-    test(`assumption confirmation rejects non-exact answer: ${answer}`, () => {
+  // The person may answer in the file in their own words; the agent records
+  // the choice it read. The record decides, under every Guard Policy.
+  for (const policy of ["off", "relaxed", "strict"]) {
+    const withPolicy = (dir: string): void => {
+      const state = join(dir, "aidlc-state.md");
+      writeFileSync(state, readFileSync(state, "utf-8").replace("- **Scope**: poc",
+        `- **Scope**: poc\n- **Guard Policy**: ${policy} (set by you)`), "utf-8");
+    };
+    const retained = (answerLine: string): string => {
       const dir = makeStageDir();
-      replaceInFile(
-        dir,
-        "stakeholder-map.md",
-        "None.",
-        "- A procurement reviewer may be needed. [assumption]",
-      );
+      withPolicy(dir);
+      replaceInFile(dir, "stakeholder-map.md", "None.", "- A procurement reviewer may be needed. [assumption]");
       const questionsPath = join(dir, "intent-capture-questions.md");
       writeFileSync(
         questionsPath,
-        `${readFileSync(questionsPath, "utf-8")}\n\n## Assumption Confirmation\n\n- A procurement reviewer may be needed. [assumption]\n\nA. Accept assumptions\nB. Convert to follow-up questions\n\n[Answer]: ${answer}\n`,
+        `${readFileSync(questionsPath, "utf-8")}\n\n## Assumption Confirmation\n\n- A procurement reviewer may be needed. [assumption]\n\nA. Accept assumptions\nB. Convert to follow-up questions\n\n[Answer]: ${answerLine}\n`,
         "utf-8",
       );
+      return dir;
+    };
 
+    test(`the person's own answer line counts when the record accepts (Guard Policy ${policy})`, () => {
+      const dir = retained("A");
+      confirmOnRecord(dir, "Accept assumptions");
+      const result = run(dir);
+      expect(result.findings).toEqual([]);
+      expect(result.pass).toBe(true);
+    });
+
+    test(`a record that converts them keeps the finding, whatever the line says (Guard Policy ${policy})`, () => {
+      const dir = retained("A. Accept assumptions");
+      confirmOnRecord(dir, "Convert to follow-up questions");
       const result = run(dir);
       expect(result.pass).toBe(false);
-      expect(result.findings.join("\n")).toContain(
-        "retained assumptions require",
-      );
+      expect(result.findings.join("\n")).toContain("retained assumptions require");
+    });
+
+    test(`with no Assumption Confirmation question on record, nothing is said about acceptance (Guard Policy ${policy})`, () => {
+      const dir = retained("");
+      const result = run(dir);
+      expect(result.findings.join("\n")).not.toContain("retained assumptions require");
+    });
+
+    test(`a question recorded before the kind existed is read by its two choices (Guard Policy ${policy})`, () => {
+      const dir = retained("A");
+      confirmOnRecord(dir, "A. Accept assumptions", false);
+      const result = run(dir);
+      expect(result.findings).toEqual([]);
+      expect(result.pass).toBe(true);
     });
   }
 
@@ -1166,6 +1224,7 @@ describe("t247 claim-sources sensor", () => {
       `${readFileSync(questionsPath, "utf-8")}\n\n## Assumption Confirmation\n\n- X [assumption]\n\nA. Accept assumptions\nB. Convert to follow-up questions\n\n[Answer]: A. Accept assumptions\n`,
       "utf-8",
     );
+    confirmOnRecord(dir, "Accept assumptions");
 
     const result = run(dir);
     expect(result.pass).toBe(false);
@@ -2104,6 +2163,7 @@ describe("t247 claim-sources sensor", () => {
         `${readFileSync(questionsPath, "utf-8")}\n\n## ✅ Assumption Confirmation\n\n- A procurement reviewer may be needed. [assumption]\n\nA. Accept assumptions\nB. Convert to follow-up questions\n\n[Answer]: A. Accept assumptions\n`,
         "utf-8",
       );
+      confirmOnRecord(dir, "Accept assumptions");
       const result = run(dir);
       expect(result.findings).toEqual([]);
       expect(result.pass).toBe(true);

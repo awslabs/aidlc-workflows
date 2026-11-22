@@ -70,6 +70,26 @@ export function assertToolCalled(result: DriveResult, toolName: string): void {
   }
 }
 
+/**
+ * The person's `--stage` or `--phase` jump took one engine call: the `next`
+ * that reached it returned the target's step, and no shell call ran the jump
+ * tool itself. Stop the drive with `stopAtStep(targetStage)` so the state and
+ * the record are read as that call left them.
+ */
+export function stopAtStep(targetStage: string): { toolName: "Bash"; resultIncludes: string } {
+  return { toolName: "Bash", resultIncludes: `"stage":"${targetStage}"` };
+}
+export function assertJumpInOneCall(result: DriveResult, targetStage: string): void {
+  const shell = result.toolResults.filter((t) => t.toolName === "Bash");
+  const ranJump = shell.find((t) => /aidlc-jump|engine jump/.test(String(t.input.command ?? "")));
+  if (ranJump) fail(`the agent ran the jump itself: ${truncate(String(ranJump.input.command), 240)}`);
+  const step = shell.find((t) => t.resultText.includes(stopAtStep(targetStage).resultIncludes));
+  if (!step) fail(`no engine call returned the ${targetStage} step (saw: ${summarizeToolNames(result)}).`);
+  if (!/\borchestrate(?:\.ts)? next\b/.test(String(step.input.command ?? ""))) {
+    fail(`the ${targetStage} step came from ${truncate(String(step.input.command), 240)}, not the person's next`);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Audit-event assertions
 // ---------------------------------------------------------------------------

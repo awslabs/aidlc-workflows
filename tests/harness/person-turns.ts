@@ -38,6 +38,7 @@ type AuditReader = Pick<
   | "DECISION_CLOSING_EVENTS"
   | "findStageBySlug"
   | "ANSWER_SOURCE_ON_INSTRUCTION"
+  | "personsWordsText"
 >;
 let reader: AuditReader | undefined;
 // The engine's own audit reader and question pairing, loaded on first use:
@@ -50,7 +51,7 @@ const auditBlockField = (block: string, field: string) => audit().auditBlockFiel
 
 type MessageStore = Pick<
   typeof import("../../dist/claude/.claude/tools/aidlc-message-store.ts"),
-  "holdsQuote" | "readMessage" | "messageIsReply" | "latestSpendingTimestamp"
+  "readMessage" | "messageIsReply" | "latestSpendingTimestamp"
 >;
 let messages: MessageStore | undefined;
 // The engine's own message store and checks, loaded on first use like the reader above.
@@ -58,8 +59,6 @@ function messageStore(): MessageStore {
   messages ??= require("../../dist/claude/.claude/tools/aidlc-message-store.ts") as MessageStore;
   return messages;
 }
-// The engine's own check that a quote is the person's words (log answer --on-instruction makes it too).
-const holdsQuote = (said: string, quoted: string) => messageStore().holdsQuote(said, quoted);
 
 /** Events in one audit shard, keyed by space, intent and shard name. */
 type AuditTrail = Map<string, AuditShardEvent[]>;
@@ -153,15 +152,14 @@ const gateItem = (row: AuditShardEvent) =>
  * can ask for: a stage reopened by a jump, a changed project type.
  *
  * A choice the person left to the agent (its row says Answer Source "chosen
- * by the agent as the person asked") is backed by a turn anywhere in the drive
- * that holds the words its Instruction quotes; the words, not the field, are
- * what back it.
+ * by the agent, reading their message") is backed by the message it names
+ * (Message Id), which the person may have sent before the question came; a
+ * row naming no message of theirs is backed by nothing.
  *
- * A project-type change that quotes the words the person said it in (Person
- * Words, which the engine takes from the request `next` was given) is backed
- * by any turn of this work that holds them: the drive's, or one the driver
- * sent earlier in this work (`earlier`), such as the opening request a later
- * chat's change stands on.
+ * A project-type change that names the message the person said it in (its
+ * Message Id) is backed by the turn of this work that sent it: the drive's, or
+ * one the driver sent earlier in this work (`earlier`), such as the opening
+ * request a later chat's change stands on.
  *
  * Which rows are the engine's own comes from the trail and the stage graph,
  * never from a field a row carries. An approval is the engine's when the
@@ -239,8 +237,8 @@ export function unbackedDecisions(
       let since: number | undefined;
       let reply = true;
       let answer = false;
-      let instruction: string | undefined;
-      // The words a project-type change quotes as the person's.
+      let leftToAgent = false;
+      // The message a project-type change names as the one the person said it in.
       let said: string | undefined;
       // Where a menu submission sent before a late-logged question may start.
       let menuSince: number | undefined;
@@ -250,12 +248,10 @@ export function unbackedDecisions(
         answer = true;
         if (pending) menuSince = settled;
         // A choice the person left to the agent, which they can say before the
-        // question comes: any turn of the drive that holds the words the row
-        // quotes backs it, a command included, and backs every answer it covers.
+        // question comes: the message the row names backs it, and backs every
+        // answer it covers.
         if (auditBlockField(row.block, "Answer Source") === audit().ANSWER_SOURCE_ON_INSTRUCTION) {
-          instruction = auditBlockField(row.block, "Instruction") ?? "";
-          since = -1;
-          reply = false;
+          leftToAgent = true;
           answer = false;
           menuSince = undefined;
         }
@@ -275,7 +271,7 @@ export function unbackedDecisions(
       } else if (row.event === "WORKSPACE_RECLASSIFIED") {
         since = workspace;
         reply = false;
-        said = auditBlockField(row.block, "Person Words") ?? undefined;
+        said = auditBlockField(row.block, "Message Id") ?? undefined;
       } else if (row.event === "AUTONOMY_MODE_SET" && auditBlockField(row.block, "Mode") === "autonomous") {
         since = resolved;
         reply = false;
@@ -283,19 +279,18 @@ export function unbackedDecisions(
       if (since !== undefined && index >= first && !sameAnswer) {
         const after = Math.max(since + 1, first);
         const needsReply = reply;
-        const quoted = instruction;
         const backs = (from: number, menuOnly: boolean) => turns.findIndex((turn, which) => {
           const at = turn.cursor.get(key) ?? 0;
           return which >= born && at >= from && at <= index && !(needsReply && isCommand(turn.words)) &&
             (!menuOnly || turn.selections !== undefined) &&
-            (!answer || used[which] < (turn.selections ?? openQuestions(events, at))) &&
-            (quoted === undefined || holdsQuote(turn.words, quoted));
+            (!answer || used[which] < (turn.selections ?? openQuestions(events, at)));
         });
-        let backing = quoted === "" ? -1 : backs(after, false);
+        let backing = leftToAgent ? -1 : backs(after, false);
         if (backing === -1 && menuSince !== undefined) backing = backs(Math.max(menuSince + 1, first), true);
-        if (backing === -1 && closes && quoted === undefined) backing = namedMessageTurn(projectDir, events, index, turns, born, key);
-        const quote = said;
-        const quotedBy = quote !== undefined && [...turns.map((turn) => turn.words), ...earlier].some((words) => holdsQuote(words, quote));
+        if (backing === -1 && closes) backing = namedMessageTurn(projectDir, events, index, turns, born, key);
+        const sent = said === undefined ? null : messageStore().readMessage(projectDir, said);
+        const quotedBy = sent !== null &&
+          [...turns.map((turn) => turn.words), ...earlier].some((words) => words.trim() === audit().personsWordsText(sent.text).trim());
         if (backing === -1 && !quotedBy) problems.push(describe(row, key, turns));
         else if (backing !== -1 && answer) used[backing]++;
       }
@@ -352,7 +347,7 @@ function namedMessageTurn(
   const chat = speaking === undefined ? null : auditBlockField(speaking.block, "Session");
   if (chat !== null && message.session !== chat) return -1;
   return turns.findLastIndex((turn, which) => which >= born && (turn.cursor.get(key) ?? 0) <= index &&
-    turn.words.trim() === message.text.trim() && !isCommand(turn.words));
+    turn.words.trim() === audit().personsWordsText(message.text).trim() && !isCommand(turn.words));
 }
 
 // The questions open when a turn arrived `at` this point of a shard: each one

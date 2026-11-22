@@ -25,8 +25,8 @@ never inject the persona text yourself.
 
 For a multi-agent stage, load `stage-protocol-ensemble.md` when the directive
 names that module. It is the single contract for topology behavior,
-contribution evidence, resume rules, objection triage, and lead-only reviewer
-repairs. The irreducible persona rules: you are the bus, and the lead owns the
+contribution evidence, resume rules, objection triage, and the reviewer repairs
+the lead makes alone. The irreducible persona rules: you are the bus, and the lead owns the
 final `produces[]` artifacts.
 Do **not** dispatch a support agent on an inline stage. Agents never invoke
 each other — only you, the conductor, delegate.
@@ -39,7 +39,7 @@ stage that does not apply reports
 
 ## Asking good questions
 
-- Ordinary questions go in markdown files using `[Answer]:` tags with A-E + X
+- Ordinary questions go in markdown files using `[Answer]:` tags with {{OPTION_LETTERS}} + X
   (Other); the consolidated-summary checkpoint is the unlettered exception
   options — the file is always the source of truth. Use a structured question for
   1-3 simple options where the structured UI is clearer (rendering per the harness question-rendering annex).
@@ -56,7 +56,7 @@ stage that does not apply reports
 
 ## Files and commands
 
-Write and edit files yourself with your file tools, never through the shell (no heredoc, no `echo`, `printf`, or `python3` writing a file, no `sed -i`, no `mkdir`; the file-write tool creates any missing folder). A command the person asks for, or one the plan names (a package install, a build, a scaffolder, a migration, a formatter, a code generator, even a `mkdir`), still runs as written. Every file you make on your own, a scratch file, a helper script, a command's output, stays inside the project (nothing in /tmp or any folder outside it), and a command's output is read from the tool result, never sent to a file; a file the person asks for, or one the plan names, goes where they say. Quote a pattern meant for the program, not the shell (`--include='*.ts'`), and never start an argument with `=`: zsh, the macOS default shell, stops on both. Read, list, and search (your own knowledge files included) with your file tools where you have them; where the shell is your only way to read, use one plain read command (no `cd` before it, no pipe or second command after it). Run every AI-DLC command exactly as written, as a command of its own (no `cd` before it, no pipe or second command after it), keeping its path as written (never a full path): a shell line can stop and ask the person to approve it.
+Write and edit files yourself with your file tools, never through the shell (no heredoc, no `echo`, `printf`, or `python3` writing a file, no `sed -i`, no `mkdir`; the file-write tool creates any missing folder). A command the person asks for, or one the plan names (a package install, a build, a scaffolder, a migration, a formatter, a code generator, even a `mkdir`), still runs as written. Do not stash, reset, check out over, restore or clean the person's working tree, and do not install what the plan does not name: for a before-and-after comparison, run the check on the unchanged tree before you edit. Every file you make on your own, a scratch file, a helper script, a command's output, stays inside the project (nothing in /tmp or any folder outside it), and a command's output is read from the tool result, never sent to a file; a file the person asks for, or one the plan names, goes where they say. Quote a pattern meant for the program, not the shell (`--include='*.ts'`), and never start an argument with `=`: zsh, the macOS default shell, stops on both. Read, list, and search (your own knowledge files included) with your file tools where you have them; where the shell is your only way to read, use one plain read command (no `cd` before it, no pipe or second command after it). Run every AI-DLC command exactly as written, as a command of its own (no `cd` before it, no pipe or second command after it), keeping its path as written (never a full path): a shell line can stop and ask the person to approve it.
 
 ## Keeping the diary (memory.md)
 

@@ -4,6 +4,10 @@
 // asked for the new plan, so the change always goes through, under any Unit
 // Ownership and Guard Policy. Unit work the new plan keeps carries on per
 // Unit, and Unit work at a stage the new plan drops is named in one line.
+// And the other way: a switch into a scope that runs Units Generation, made
+// after the work passed it without running it, makes no Units, so the stages
+// keep their stage-level files; the switch line counts the stages the work
+// still runs, and offers the way back only when it gives back the same plan.
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -14,6 +18,7 @@ import {
   claimRegistryCachePath,
   getField,
   latestMainWorkflowStageRunFloorForProject,
+  loadScopeMapping,
   loadStageGraph,
   readAllAuditShards,
   setCheckbox,
@@ -342,5 +347,131 @@ describe("every harness and every way in", () => {
     mkdirSync(dirname(shard), { recursive: true });
     writeFileSync(shard, `## Unit Started\n**Event**: UNIT_STARTED\n**Stage**: ${stage}\n**Unit**: alpha\n**Run floor**: unstarted#0\n\n---\n`);
     switchTo(p);
+  });
+});
+
+// `from`'s plan on a new project with the cursor at `at` (box `box`): the
+// stages before it that the plan runs are done, and nothing after it started.
+function planAt(from: string, at: string, box = "?", extra = "", type = "Greenfield"): string {
+  const grid = loadScopeMapping()[from].stages;
+  const graph = loadStageGraph();
+  const index = graph.findIndex((s) => s.slug === at);
+  const stages = graph.map((node, i) => {
+    const action = grid[node.slug] === "EXECUTE" && (type === "Brownfield" || node.slug !== "reverse-engineering") ? "EXECUTE" : "SKIP";
+    const mark = i === index ? box : i < index && action === "EXECUTE" ? "x" : " ";
+    return `- [${mark}] ${node.slug} \u2014 ${action}`;
+  }).join("\n");
+  return `# AI-DLC State Tracking
+
+## Project Information
+- **Project**: Unit plan safety
+- **Project Type**: ${type}
+- **Scope**: ${from}
+${extra}- **State Version**: 8
+
+## Scope Configuration
+- **Depth**: Minimal
+- **Test Strategy**: Minimal
+- **Stages to Execute**: all
+- **Stages to Skip**: none
+- **Total Stages**: 33
+- **Completed**: 0
+
+## Stage Progress
+<!-- Checkbox states: [ ] not started -->
+${stages}
+
+## Current Status
+- **Lifecycle Phase**: ${graph[index].phase.toUpperCase()}
+- **Current Stage**: ${at}
+- **Status**: Running
+- **Last Updated**: 2026-09-25T00:00:00Z
+`;
+}
+function projectAt(from: string, at: string, box = "?", extra = "", type = "Greenfield"): string {
+  const proj = createTestProject();
+  projects.push(proj);
+  seedAidlcMemory(proj);
+  writeFileSync(seededStateFile(proj), planAt(from, at, box, extra, type));
+  return proj;
+}
+
+describe("a switch into a scope that runs Units Generation, after the work passed it without running it", () => {
+  const UG = "units-generation";
+  test("Units exist only once Units Generation ran: until then, work past it keeps its stages at stage level", () => {
+    const at = (slug: string, box = "-") => planAt("feature", slug, box);
+    // A run whose Units Generation is still ahead, or running, is unchanged.
+    expect(usesStageLevelPerUnitArtifacts("feature", at("requirements-analysis"))).toBe(false);
+    expect(usesStageLevelPerUnitArtifacts("feature", at(UG))).toBe(false);
+    expect(usesStageLevelPerUnitArtifacts("feature", at(UG, "?"))).toBe(false);
+    // Units Generation ran: its Units carry on, whatever the plan says now (#1401).
+    expect(usesStageLevelPerUnitArtifacts("feature", at("code-generation"))).toBe(false);
+    expect(usesStageLevelPerUnitArtifacts("feature", setStageSuffix(at("code-generation"), UG, "SKIP"))).toBe(false);
+    // Passed and never run: switched into, jumped over, or finished without it.
+    const passed = setCheckbox(at("code-generation"), UG, "pending");
+    expect(usesStageLevelPerUnitArtifacts("feature", passed)).toBe(true);
+    expect(usesStageLevelPerUnitArtifacts("feature", setCheckbox(passed, UG, "skipped"))).toBe(true);
+    expect(usesStageLevelPerUnitArtifacts("feature", setField(passed, "Current Stage", "none"))).toBe(true);
+    // A plan without Units Generation, and no record to read, are unchanged.
+    expect(usesStageLevelPerUnitArtifacts("feature", setStageSuffix(passed, UG, "SKIP"))).toBe(true);
+    expect(usesStageLevelPerUnitArtifacts("feature", null)).toBe(false);
+    expect(usesStageLevelPerUnitArtifacts("refactor", null)).toBe(true);
+    // A record with no Units Generation row says nothing about whether it ran.
+    expect(usesStageLevelPerUnitArtifacts("feature", passed.replace(/^- \[ \] units-generation .*\n/m, ""))).toBe(false);
+  });
+
+  test("refactor at Functional Design, switched to feature: next keeps Functional Design's stage-level files", () => {
+    const p = projectAt("refactor", "functional-design", "-");
+    switchTo(p, "feature");
+    expect(state(p)).toContain(`- [ ] ${UG} \u2014 EXECUTE`);
+    const directive = next(p);
+    expect(directive).toMatchObject({ kind: "run-stage", stage: "functional-design" });
+    expect(directive.unit).toBeUndefined();
+    expect(JSON.stringify(directive)).not.toContain("{unit-name}");
+    expect((directive.produces as string[])[0]).toContain("/construction/functional-design/");
+  });
+
+  test("the switch line counts the stages the work still runs: the ones done, and the ones from the current stage on", () => {
+    const p = projectAt("bugfix", "code-generation");
+    const out = switchTo(p, "feature");
+    const graph = loadStageGraph();
+    const feature = loadScopeMapping().feature.stages;
+    const cursor = graph.findIndex((s) => s.slug === "code-generation");
+    const runs = graph.filter((s) => s.phase !== "initialization" && feature[s.slug] === "EXECUTE" && s.slug !== "reverse-engineering");
+    const done = runs.filter((s) => graph.indexOf(s) < cursor && loadScopeMapping().bugfix.stages[s.slug] === "EXECUTE").length;
+    const still = done + runs.filter((s) => graph.indexOf(s) >= cursor).length;
+    expect(still).toBeLessThan(runs.length);
+    expect(out).toContain(`Switched to feature (the set of stages this work runs): ${still} stages (${done} done), ${still} approval gates.`);
+  });
+
+  test("Reverse Engineering behind the cursor counts only while next still runs it, before Construction", () => {
+    // Existing code on infra, which skips Reverse Engineering; feature runs it.
+    const count = (out: string) => Number(/runs\): (\d+) stages/.exec(out)?.[1]);
+    const inception = projectAt("infra", "requirements-analysis", "?", "", "Brownfield");
+    const owed = switchTo(inception, "feature");
+    expect(state(inception)).toContain("- [ ] reverse-engineering \u2014 EXECUTE");
+    const construction = projectAt("infra", "infrastructure-design", "?", "", "Brownfield");
+    const passed = switchTo(construction, "feature");
+    expect(state(construction)).toContain("- [ ] reverse-engineering \u2014 EXECUTE");
+    const graph = loadStageGraph();
+    const feature = loadScopeMapping().feature.stages;
+    const from = (slug: string) => graph.filter((s) =>
+      s.phase !== "initialization" && feature[s.slug] === "EXECUTE" && graph.indexOf(s) >= graph.findIndex((g) => g.slug === slug)).length;
+    // At Requirements Analysis: Practices Discovery done, Reverse Engineering owed, and the rest from the cursor on.
+    expect(count(owed)).toBe(1 + 1 + from("requirements-analysis"));
+    // At Infrastructure Design, Construction has started: Reverse Engineering never runs, so it is not counted.
+    const infraDone = ["practices-discovery", "requirements-analysis", "nfr-requirements", "nfr-design"].length;
+    expect(count(passed)).toBe(infraDone + from("infrastructure-design"));
+  });
+
+  test("the way back is offered only when it gives back the same plan: not after a plan tailored to the work", () => {
+    const stock = switchTo(projectAt("bugfix", "code-generation"), "feature");
+    expect(stock).toContain("You can switch back to bugfix any time.");
+    // The measure's case: a bugfix plan tailored to add Functional Design, its gate open.
+    const tailored = projectAt("bugfix", "functional-design", "?", "- **Plan**: tailored plan\n");
+    putState(tailored, setStageSuffix(state(tailored), "functional-design", "EXECUTE"));
+    const out = switchTo(tailored, "feature");
+    expect(out).not.toContain("switch back");
+    expect(state(tailored)).not.toContain("- **Plan**:");
   });
 });

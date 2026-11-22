@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-sensor:fire, audit:SENSOR_FAILED
+// covers: subcommand:aidlc-sensor:fire, audit:SENSOR_FAILED, audit:SENSOR_COULD_NOT_RUN
 // covers: function:localEslintPath, function:invokeEslint
 //
 // CLI-contract port of tests/integration/t92-sensor-fire.sh (TAP plan 43),
@@ -20,8 +20,8 @@
 //
 // Tests 44-46 (Groups N + O + P) are additions beyond the original .sh's
 // plan-43, guarding the type-check status gate: test 44 covers the
-// config-load failure (tsc non-zero + zero parseable diagnostics ->
-// script-error: exit-<n>, not a false PASS); test 45 covers the cross-file
+// config-load failure (tsc non-zero + zero parseable diagnostics -> could
+// not run, script-error: exit-<n>, not a false PASS); test 45 covers the cross-file
 // edge (tsc non-zero with diagnostics for OTHER files but none for the
 // target -> per-file clean PASS, gate keys on allErrors not the filtered
 // errors); test 46 keeps monorepo package caches under the project record and
@@ -80,6 +80,7 @@ import {
   NATIVE_STARTUP_TIMEOUT_MS,
   remainingOperationTimeoutMs,
 } from "../harness/test-budget.ts";
+import { memoryTemplatesDir } from "../../dist/claude/.claude/tools/aidlc-graph.ts";
 import { auditLockDir, readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { resolveSensorScriptPath } from "../../dist/claude/.claude/tools/aidlc-sensor.ts";
 import { localEslintPath } from "../../dist/claude/.claude/tools/aidlc-sensor-linter.ts";
@@ -706,12 +707,15 @@ describe("t92 Group B: PASSED real round-trip per sensor", () => {
 // (t92-sensor-fire.sh)
 // ============================================================
 
-/** run_failed_md_real (t92-sensor-fire.sh). */
+/** run_failed_md_real (t92-sensor-fire.sh). A `template` is written as the
+ *  team's template for the output, which is what gives required-sections
+ *  headings to require; `detailSays` is a line the detail file must hold. */
 function runFailedMdReal(
   id: string,
   stage: string,
   fixtureMd: string,
   expectedFindings: string,
+  opts: { template?: string; detailSays?: string } = {},
 ): void {
   const proj = makeProj();
   // basename, not split("/"): on native Windows fixtureMd is an absolute path
@@ -719,6 +723,11 @@ function runFailedMdReal(
   // element and join(proj, ..., <abs-path>) yields C:\...\C:\... (ENOENT).
   const outname = basename(fixtureMd);
   copyFileSync(fixtureMd, join(proj, "aidlc-docs", outname));
+  if (opts.template !== undefined) {
+    const templates = memoryTemplatesDir(proj);
+    mkdirSync(templates, { recursive: true });
+    writeFileSync(join(templates, outname), opts.template);
+  }
   fire([id, "--stage", stage, "--output-path", join(proj, "aidlc-docs", outname)], {
     CLAUDE_PROJECT_DIR: proj,
   });
@@ -737,6 +746,9 @@ function runFailedMdReal(
   expect(findings).toBe(expectedFindings);
   expect(detailPath).toBe(`${RP}/.aidlc-engine/sensors/${stage}/${id}-${firedId}.md`);
   expect(existsSync(join(proj, detailPath))).toBe(true);
+  if (opts.detailSays !== undefined) {
+    expect(readFileSync(join(proj, detailPath), "utf-8")).toContain(opts.detailSays);
+  }
   expect(path).toBe(`aidlc-docs/${outname}`);
 }
 
@@ -775,12 +787,17 @@ function runFailedTsReal(
 }
 
 describe("t92 Group C: FAILED real round-trip per sensor", () => {
-  test("13: required-sections — failing markdown (0 H2s) -> Findings count=2", () => {
+  test("13: required-sections - markdown missing its template's 2 sections -> Findings count=2", () => {
     runFailedMdReal(
       "required-sections",
       "intent-capture",
       join(FIXTURES_ROOT, "failing-required-sections", "intent-statement.md"),
       "2",
+      {
+        template: "# Intent Statement\n\n## Problem Statement\n\n## Assumptions & Open Questions\n",
+        detailSays:
+          "intent-statement.md is missing 2 sections its template asks for: `## Problem Statement`, `## Assumptions & Open Questions`.",
+      },
     );
   });
 
@@ -1152,32 +1169,53 @@ describe("t92 Group D: tool-unavailable (exit 127 -> PASSED Note)", () => {
 });
 
 // ============================================================
-// Group E — Script-error fall-through (3): branches e (exit-N), f
-// (bad-output), and the detail-write-failed fallback.
+// Group E - Could not run (2): branches e (exit-N) and f (bad-output)
+// record SENSOR_COULD_NOT_RUN; the detail-write-failed fallback (a check
+// that ran) stays a noted pass.
 // (t92-sensor-fire.sh)
 // ============================================================
 
-describe("t92 Group E: script-error fall-through", () => {
-  test("19: exit 2 -> Note=script-error: exit-2", () => {
+// A check whose script crashed or gave no verdict checked nothing: it is
+// recorded as could not run, its own state, never as passed or failed.
+function verdictOf(out: string): Record<string, unknown> {
+  const line = out.split("\n").reverse().find((entry) => entry.startsWith("{\"fire_id\""));
+  expect(line, out).toBeDefined();
+  return JSON.parse(line as string) as Record<string, unknown>;
+}
+
+describe("t92 Group E: a script that crashes or gives no verdict could not run", () => {
+  test("19: exit 2 is recorded as could not run, never passed", () => {
     const proj = makeProj();
     writeFileSync(join(proj, "aidlc-docs", "test.md"), "stub\n", "utf-8");
     const sensors = makeForkSensors("required-sections", "bun .claude/tools/aidlc-sensor-stub-exit2.ts");
-    fire(["required-sections", "--stage", "intent-capture", "--output-path", join(proj, "aidlc-docs", "test.md")], {
+    const res = fire(["required-sections", "--stage", "intent-capture", "--output-path", join(proj, "aidlc-docs", "test.md")], {
       CLAUDE_PROJECT_DIR: proj,
       AIDLC_SENSORS_DIR: sensors,
     });
-    expect(auditField(proj, "SENSOR_PASSED", "Note")).toBe("script-error: exit-2");
+    expect(res.rc).toBe(0);
+    expect(auditEventCount(proj, "SENSOR_COULD_NOT_RUN")).toBe(1);
+    expect(auditEventCount(proj, "SENSOR_PASSED")).toBe(0);
+    expect(auditEventCount(proj, "SENSOR_FAILED")).toBe(0);
+    expect(auditField(proj, "SENSOR_COULD_NOT_RUN", "Note")).toBe("script-error: exit-2");
+    expect(auditField(proj, "SENSOR_COULD_NOT_RUN", "Fire id")).toBe(auditField(proj, "SENSOR_FIRED", "Fire id"));
+    expect(isInteger(auditField(proj, "SENSOR_COULD_NOT_RUN", "Duration ms"))).toBe(true);
+    const verdict = verdictOf(res.out);
+    expect(verdict.result).toBe("could-not-run");
+    expect(verdict.note).toBe("script-error: exit-2");
+    expect(verdict.detail_path).toBeNull();
   });
 
-  test("20: garbage stdout -> Note=script-error: bad-output", () => {
+  test("20: garbage stdout is recorded as could not run, never passed", () => {
     const proj = makeProj();
     writeFileSync(join(proj, "aidlc-docs", "test.md"), "stub\n", "utf-8");
     const sensors = makeForkSensors("required-sections", "bun .claude/tools/aidlc-sensor-stub-bad.ts");
-    fire(["required-sections", "--stage", "intent-capture", "--output-path", join(proj, "aidlc-docs", "test.md")], {
+    const res = fire(["required-sections", "--stage", "intent-capture", "--output-path", join(proj, "aidlc-docs", "test.md")], {
       CLAUDE_PROJECT_DIR: proj,
       AIDLC_SENSORS_DIR: sensors,
     });
-    expect(auditField(proj, "SENSOR_PASSED", "Note")).toBe("script-error: bad-output");
+    expect(auditEventCount(proj, "SENSOR_PASSED")).toBe(0);
+    expect(auditField(proj, "SENSOR_COULD_NOT_RUN", "Note")).toBe("script-error: bad-output");
+    expect(verdictOf(res.out).result).toBe("could-not-run");
   });
 
   test("21: blocked detail dir -> Note=script-error: detail-write-failed", () => {
@@ -1671,8 +1709,8 @@ describe("t92 Group M: upstream-coverage --consumes resolution", () => {
 // ============================================================
 // Group N — type-check status gate (1): tsc exited non-zero but
 // parseTscOutput found ZERO diagnostics (a config-load failure), so the
-// sensor must route to script-error: exit-<n> rather than a false clean
-// PASS. Regression guard for aidlc-sensor-type-check.ts's status gate
+// sensor must route to could not run (script-error: exit-<n>) rather than a
+// false clean PASS. Regression guard for aidlc-sensor-type-check.ts's status gate
 // (v0.5.16). Inputs are built inline (no committed fixture): a tsconfig
 // whose `include` points at a non-existent file makes tsc exit non-zero
 // with a TS18003 "No inputs were found" line that carries NO (line,col)
@@ -1681,13 +1719,13 @@ describe("t92 Group M: upstream-coverage --consumes resolution", () => {
 // a fixture manifest backstop, exercising the real dispatcher end-to-end.
 // The exact exit code is tsc's, not ours, and it varies across TypeScript
 // majors (tsc 6.x exits 2 for TS18003 under --incremental; tsc 7.x exits
-// 1). The contract under guard is "script-error: exit-<n>, never a bare
-// clean PASS, never FAILED" - so the Note assertion matches the shape,
+// 1). The contract under guard is "could not run, script-error: exit-<n>,
+// never a pass, never FAILED" - so the Note assertion matches the shape,
 // not a pinned digit.
 // ============================================================
 
 describe("t92 Group N: type-check status gate (config-load failure)", () => {
-  test("44: tsc non-zero + zero parseable diagnostics -> Note=script-error: exit-<n> (not false PASS)", () => {
+  test("44: tsc non-zero + zero parseable diagnostics -> could not run, Note=script-error: exit-<n> (not false PASS)", () => {
     const proj = makeProj();
     const sub = "config-error-type-check";
     mkdirSync(join(proj, sub), { recursive: true });
@@ -1708,12 +1746,13 @@ describe("t92 Group N: type-check status gate (config-load failure)", () => {
       CLAUDE_PROJECT_DIR: proj,
     });
     const f = proj;
-    // Gate routes to PASSED Note=script-error: exit-<n> - NOT a bare clean PASS,
+    // Gate routes to COULD_NOT_RUN Note=script-error: exit-<n> - NOT a pass,
     // NOT FAILED. The digit is tsc's own exit code and shifts across TypeScript
     // majors (6.x: 2, 7.x: 1), so match the shape rather than pin it.
-    expect(auditEventCount(f, "SENSOR_PASSED")).toBe(1);
+    expect(auditEventCount(f, "SENSOR_PASSED")).toBe(0);
     expect(auditEventCount(f, "SENSOR_FAILED")).toBe(0);
-    expect(auditField(f, "SENSOR_PASSED", "Note")).toMatch(/^script-error: exit-[1-9]\d*$/);
+    expect(auditEventCount(f, "SENSOR_COULD_NOT_RUN")).toBe(1);
+    expect(auditField(f, "SENSOR_COULD_NOT_RUN", "Note")).toMatch(/^script-error: exit-[1-9]\d*$/);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 

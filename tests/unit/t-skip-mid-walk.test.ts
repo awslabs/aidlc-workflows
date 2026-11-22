@@ -23,8 +23,15 @@ import {
   remainingOperationTimeoutMs,
 } from "../harness/test-budget.ts";
 import { cleanupTestProject, runOrchestrateNext, setupIntegrationProject } from "../harness/fixtures.ts";
-import { artifactFilename, readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  artifactFilename, auditBlockField, MESSAGE_FILL, MESSAGE_SLOT, readAllAuditShards, readAuditShardEvents,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { renderTestingContract, resolveTestingPosture } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
+
+// The stage's checks run once before its review or gate, and again at the gate
+// (completionChecksStep, t-checks-before-review); this file's fixture documents
+// are not written for them and its subject is not them, so they stay off here.
+process.env.AIDLC_DISABLE_SENSORS = "1";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS * 3);
 
@@ -65,8 +72,9 @@ function run(proj: string, tool: string, args: string[]): { status: number; out:
   return { status: res.status ?? -1, out: `${res.stdout ?? ""}${res.stderr ?? ""}` };
 }
 
-// What the person types, through the human-turn hook every harness uses.
-function says(proj: string, prompt: string): void {
+// What the person types, through the human-turn hook every harness uses; the
+// id of the message the hook kept.
+function says(proj: string, prompt: string): string | null {
   const res = spawnSync(process.execPath, [join(proj, ".claude", "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"], {
     cwd: proj,
     input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: SESSION, prompt }),
@@ -75,6 +83,8 @@ function says(proj: string, prompt: string): void {
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
   });
   expect(res.status, res.stderr).toBe(0);
+  const turn = readAuditShardEvents(proj).filter((row) => row.event === "HUMAN_TURN").at(-1);
+  return turn === undefined ? null : auditBlockField(turn.block, "Message Id");
 }
 
 function stateFile(proj: string): string {
@@ -188,6 +198,11 @@ function runNamed(proj: string, command: string): { status: number; out: string 
 
 const THIS_UNIT = `bun .claude/tools/aidlc-orchestrate.ts report --stage code-generation --unit alpha --result skipped --reason '${PERSON}'`;
 const EVERY_UNIT = `bun .claude/tools/aidlc.ts engine recompose --skip code-generation --reason '${PERSON}'`;
+// The walk's first stage is the record's Current Stage itself: skipped for one
+// Unit at its beat, and for every Unit from here by the stage's own skip.
+const FIRST_THIS_UNIT = `bun .claude/tools/aidlc-orchestrate.ts report --stage functional-design --unit alpha --result skipped --reason '${PERSON}'`;
+const FIRST_EVERY_UNIT = `bun .claude/tools/aidlc-orchestrate.ts report --stage functional-design --result skipped --reason '${PERSON}'`;
+const EVERY_FROM = "If they name no Unit, they mean every Unit from here";
 
 describe("a skip the person asks for while Construction walks Unit by Unit is carried out", () => {
   test("Code Generation for this Unit only: the Unit is skipped, owes no checkpoint, and the walk goes on to the next Unit", () => {
@@ -199,7 +214,8 @@ describe("a skip the person asks for while Construction walks Unit by Unit is ca
     expect(step.message).toContain(
       '"Skipped Code Generation for the alpha Unit; the other Units still get it. It can still be run for that Unit with `/aidlc --stage code-generation --unit alpha`."',
     );
-    expect(step.message).toContain('"Skip Code Generation for the alpha Unit only, or for every Unit from here?"');
+    // Words that name no Unit mean every Unit from here: the engine asks no question.
+    expect(step.message).not.toContain('only, or for every Unit from here?');
     const skipped = runNamed(proj, THIS_UNIT);
     expect(skipped.status, skipped.out).toBe(0);
     expect(skipped.out).toContain('for unit \\"alpha\\" only');
@@ -218,17 +234,17 @@ describe("a skip the person asks for while Construction walks Unit by Unit is ca
     expect(JSON.stringify(next(proj).kept_replies ?? null)).not.toContain("skip code generation");
   });
 
-  // A setting asked for in plain words beside the skip names their words, so
-  // it lands as theirs (t-set-by-you-needs-their-reply).
-  test("a setting asked for beside the skip names their words", () => {
+  // A setting asked for in plain words beside the skip names the message they
+  // asked in, so it lands as theirs (t-set-by-you-needs-their-reply).
+  test("a setting asked for beside the skip names their message", () => {
     const proj = walk(["alpha", "beta"]);
-    says(proj, "skip code generation for this unit, and turn the sensors off");
+    const id = says(proj, "skip code generation for this unit, and turn the sensors off");
+    expect(id).not.toBeNull();
     const step = next(proj, ["--skip", "code-generation", "--sensors", "off"]);
     expect(step.kind, JSON.stringify(step)).toBe("print");
-    expect(step.message).toContain(
-      "config set sensors off --person-words '<their words>'`, with <their words> the person's reply that asked for it, " +
-        "word for word, and print its output verbatim.",
-    );
+    expect(step.message).toContain(`config set sensors off --message '${MESSAGE_SLOT}'\`${MESSAGE_FILL} (${id}, sent `);
+    expect(step.message).toContain("and print its output verbatim.");
+    expect(step.message).not.toContain("--person-words");
   });
 
   test("this Unit only when the Unit's code files are already written: still skipped as the person asked", () => {
@@ -248,7 +264,11 @@ describe("a skip the person asks for while Construction walks Unit by Unit is ca
     const proj = walk(["alpha", "beta"]);
     const step = next(proj, ["--skip", "code-generation"]);
     expect(named(step)).toContain(EVERY_UNIT);
-    expect(step.message).toContain('"Skipped Code Generation for every Unit from here. You can undo that any time."');
+    expect(step.message).toContain('"Skipped Code Generation for every Unit from here. You can undo that until Build and Test starts."');
+    expect(step.message).toContain(
+      "If they later ask to undo skipping it for every Unit, run " +
+        "`bun .claude/tools/aidlc.ts engine recompose --add code-generation`.",
+    );
     const replanned = runNamed(proj, EVERY_UNIT);
     expect(replanned.status, replanned.out).toBe(0);
     expect(readFileSync(stateFile(proj), "utf-8")).toContain("- [ ] code-generation \u2014 SKIP");
@@ -257,6 +277,25 @@ describe("a skip the person asks for while Construction walks Unit by Unit is ca
     expect(after.stage).toBe("functional-design");
     expect(after.unit).toBe("beta");
     expect(after.construction_checkpoint ?? null).toBeNull();
+  });
+
+  // Current Stage stays on the walk's first step while the Units take the
+  // walk, so the undo of a walk step taken off the plan holds until the stage
+  // after the walk starts; at Build and Test it is behind the work.
+  test("Code Generation for every Unit from here: its undo holds until Build and Test starts, and is refused there", () => {
+    const proj = walk(["alpha", "beta"]);
+    const step = next(proj, ["--skip", "code-generation"]);
+    const undo = /If they later ask to undo skipping it for every Unit, run `([^`]*)`/.exec(String(step.message))?.[1] ?? "";
+    expect(undo, step.message).toContain("engine recompose --add code-generation");
+    expect(runNamed(proj, EVERY_UNIT).status).toBe(0);
+    const back = runNamed(proj, undo);
+    expect(back.status, back.out).toBe(0);
+    expect(runNamed(proj, EVERY_UNIT).status).toBe(0);
+    const jumped = run(proj, "aidlc-jump.ts", ["execute", "--target", "build-and-test", "--direction", "forward", "--scope", "feature"]);
+    expect(jumped.status, jumped.out).toBe(0);
+    const late = runNamed(proj, undo);
+    expect(late.status).not.toBe(0);
+    expect(late.out).toContain("--stage code-generation --single");
   });
 
   test("with no other Unit left to build it, one command skips it, the stage is marked skipped, and the line names the Unit", () => {
@@ -274,19 +313,38 @@ describe("a skip the person asks for while Construction walks Unit by Unit is ca
     expect(after.construction_checkpoint ?? null).toBeNull();
   });
 
+  // Marked skipped because every Unit skipped it, not skipped where it stood:
+  // its Units' skips, not its mark, say who owes it, so an add does not claim
+  // to put it back (the way back is the Unit's own run the skip line named).
+  test("a stage every Unit skipped, added again, is not said to be back on the plan, and its mark stays", () => {
+    const proj = walk(["alpha"]);
+    expect(runNamed(proj, THIS_UNIT).status).toBe(0);
+    const before = readFileSync(stateFile(proj), "utf-8");
+    expect(before).toContain("- [S] code-generation \u2014 EXECUTE");
+    const step = next(proj, ["--add", "code-generation"]);
+    expect(String(step.message), JSON.stringify(step)).not.toContain("back on the plan");
+    expect(String(step.message), JSON.stringify(step)).not.toContain("recompose --add");
+    const added = run(proj, "aidlc.ts", ["engine", "recompose", "--add", "code-generation"]);
+    expect(added.status, added.out).not.toBe(0);
+    expect(added.out).toContain("its checkbox is not pending ([skipped])");
+    expect(readFileSync(stateFile(proj), "utf-8")).toBe(before);
+  });
+
   test("Code Generation named while the Unit is still on its design: the step says it covers every Unit", () => {
     const proj = walk(["alpha", "beta"], false);
     const step = next(proj, ["--skip", "code-generation"]);
     expect(named(step)).toEqual([EVERY_UNIT]);
     expect(step.message).toContain("covers every Unit");
     expect(step.message).toContain('"Code Generation can be skipped for one Unit while that Unit is working on it; the alpha Unit is on Functional Design now."');
-    expect(step.message).toContain('"Skipped Code Generation for every Unit from here. You can undo that any time."');
+    expect(step.message).toContain('"Skipped Code Generation for every Unit from here. You can undo that until Build and Test starts."');
   });
 
   test("Build and Test said mid-walk is taken off the plan, and the Unit carries on", () => {
     const proj = walk(["alpha", "beta"]);
     const step = next(proj, ["--skip", "build-and-test"]);
     expect(named(step)).toEqual([`bun .claude/tools/aidlc.ts engine recompose --skip build-and-test --reason '${PERSON}'`]);
+    // Build and Test is no step of the walk: its undo holds until the work moves past it (t-skip-undo-window).
+    expect(step.message).toContain('"Skipped Build and Test. You can undo that until the work moves past it."');
     const replanned = runNamed(proj, named(step)[0]);
     expect(replanned.status, replanned.out).toBe(0);
     expect(readFileSync(stateFile(proj), "utf-8")).toContain("- [ ] build-and-test \u2014 SKIP");
@@ -386,19 +444,19 @@ describe("a skip the person asks for while Construction walks Unit by Unit is ca
   test("this Unit only, with another walk step and a stage after the walk named too: only the Unit's step is skipped for it, and the line names every change", () => {
     const proj = walk(["alpha", "beta"], 1);
     const message = String(next(proj, ["--skip", "nfr-requirements,code-generation,build-and-test"]).message);
-    const only = message.slice(message.indexOf("If their words mean the alpha Unit only"), message.indexOf("If they mean every Unit from here"));
+    const only = message.slice(message.indexOf("If their words mean the alpha Unit only"), message.indexOf(EVERY_FROM));
     expect(only, message).toContain("report --stage nfr-requirements --unit alpha --result skipped");
     expect(only).toContain(`engine recompose --skip build-and-test --reason '${PERSON}'`);
     expect(only).not.toMatch(/recompose --skip [^`]*code-generation/);
     expect(only).toContain(
       '"Skipped NFR Requirements for the alpha Unit and Build and Test; the other Units still get NFR Requirements. ' +
-        "It can still be run for that Unit with `/aidlc --stage nfr-requirements --unit alpha`. You can undo the rest any time. " +
+        "It can still be run for that Unit with `/aidlc --stage nfr-requirements --unit alpha`. You can undo the rest until the work moves past Build and Test. " +
         'Code Generation can be skipped for one Unit while that Unit is working on it."',
     );
-    const every = message.slice(message.indexOf("If they mean every Unit from here"));
+    const every = message.slice(message.indexOf(EVERY_FROM));
     expect(every).toContain(`engine recompose --skip nfr-requirements,code-generation,build-and-test --reason '${PERSON}'`);
     expect(every).toContain(
-      '"Skipped NFR Requirements and Code Generation for every Unit from here, and Build and Test. You can undo that any time."',
+      '"Skipped NFR Requirements and Code Generation for every Unit from here, and Build and Test. You can undo that until CI Pipeline starts."',
     );
   });
 
@@ -421,7 +479,7 @@ describe("a skip the person asks for while Construction walks Unit by Unit is ca
     expect(step.message).toContain(
       '"NFR Requirements can be skipped for one Unit while that Unit is working on it; the alpha Unit is paused on NFR Requirements now."',
     );
-    expect(step.message).toContain('"Skipped NFR Requirements for every Unit from here. You can undo that any time."');
+    expect(step.message).toContain('"Skipped NFR Requirements for every Unit from here. You can undo that until Build and Test starts."');
   });
 
   // With no other Unit left to take the step, the Unit's own step is skipped
@@ -430,21 +488,258 @@ describe("a skip the person asks for while Construction walks Unit by Unit is ca
     const proj = walk(["alpha"], 1);
     const message = String(next(proj, ["--skip", "nfr-requirements,code-generation"]).message);
     const unitSkip = `report --stage nfr-requirements --unit alpha --result skipped --reason '${PERSON}'`;
-    const only = message.slice(message.indexOf("If their words mean the alpha Unit only"), message.indexOf("If they mean every Unit from here"));
+    const only = message.slice(message.indexOf("If their words mean the alpha Unit only"), message.indexOf(EVERY_FROM));
     expect(only, message).toContain(unitSkip);
     expect(only).not.toMatch(/recompose --skip [^`]*code-generation/);
     expect(only).toContain(
       '"Skipped NFR Requirements for the alpha Unit. It can still be run for that Unit with `/aidlc --stage nfr-requirements --unit alpha`. ' +
         'Code Generation can be skipped for one Unit while that Unit is working on it."',
     );
-    const every = message.slice(message.indexOf("If they mean every Unit from here"));
+    const every = message.slice(message.indexOf(EVERY_FROM));
     expect(every).toContain(unitSkip);
     expect(every).toContain(`engine recompose --skip code-generation --reason '${PERSON}'`);
     expect(every).toContain(
       '"Skipped NFR Requirements for the alpha Unit, and Code Generation for every Unit from here. It can still be run for that Unit with ' +
-        '`/aidlc --stage nfr-requirements --unit alpha`. You can undo the rest any time."',
+        '`/aidlc --stage nfr-requirements --unit alpha`. You can undo the rest until Build and Test starts."',
     );
-    expect(message).toContain('"Skip Code Generation for the alpha Unit only, or for every Unit from here?"');
+    expect(message).not.toContain('only, or for every Unit from here?');
     expect(message).not.toContain("run nothing");
+  });
+});
+
+// The walk's first stage is the record's Current Stage itself, so the step for
+// a skip of it named the whole stage's report, which the skip check refuses
+// while a Unit is on that stage ("Cannot skip ... without naming its unit"). It
+// now names the two forms the later steps get: the Unit's own skip, or, for
+// every Unit from here, the stage's own skip where it stands.
+describe("a skip the person asks for at the walk's first stage, while a Unit is on it", () => {
+  const segment = (message: string, from: string, to?: string): { message: string } =>
+    ({ message: message.slice(message.indexOf(from), to === undefined ? undefined : message.indexOf(to)) });
+
+  test("this Unit only: skipped for alpha, which goes on to its NFR Requirements", () => {
+    const proj = walk(["alpha", "beta"], false);
+    says(proj, "skip functional design for this unit");
+    const step = next(proj, ["--skip", "functional-design"]);
+    expect(step.kind, JSON.stringify(step)).toBe("print");
+    const only = segment(String(step.message), "If their words mean the alpha Unit only", EVERY_FROM);
+    expect(named(only), String(step.message)).toEqual([FIRST_THIS_UNIT]);
+    expect(only.message).toContain(
+      '"Skipped Functional Design for the alpha Unit; the other Units still get it. It can still be run for that Unit with `/aidlc --stage functional-design --unit alpha`."',
+    );
+    const skipped = runNamed(proj, FIRST_THIS_UNIT);
+    expect(skipped.status, skipped.out).toBe(0);
+    expect(skipped.out).toContain('for unit \\"alpha\\" only');
+    const after = next(proj);
+    expect(`${after.kind} ${after.stage}/${after.unit}`, JSON.stringify(after)).toBe("run-stage nfr-requirements/alpha");
+  });
+
+  test("every Unit from here: the stage is skipped where it stands, alpha goes on, and beta never gets it", () => {
+    const proj = walk(["alpha", "beta"], false);
+    const step = next(proj, ["--skip", "functional-design"]);
+    const every = segment(String(step.message), EVERY_FROM);
+    expect(named(every), String(step.message)).toEqual([FIRST_EVERY_UNIT]);
+    expect(every.message).toContain(
+      '"Skipped Functional Design for every Unit from here. It can still be run on its own with `/aidlc --stage functional-design --single`."',
+    );
+    const skipped = runNamed(proj, FIRST_EVERY_UNIT);
+    expect(skipped.status, skipped.out).toBe(0);
+    expect(skipped.out).not.toContain('"kind":"error"');
+    const state = readFileSync(stateFile(proj), "utf-8");
+    expect(state).toContain("- [S] functional-design \u2014 EXECUTE");
+    expect(state).toContain("- **Current Stage**: nfr-requirements");
+    // alpha's other steps, each skipped for it as the person asks, then beta:
+    // its walk starts at NFR Requirements.
+    let at = next(proj);
+    for (const stage of ["nfr-requirements", "nfr-design", "infrastructure-design", "code-generation"]) {
+      expect(`${at.kind} ${at.stage}/${at.unit}`, JSON.stringify(at)).toBe(`run-stage ${stage}/alpha`);
+      const own = run(proj, "aidlc-orchestrate.ts", ["report", "--stage", stage, "--unit", "alpha", "--result", "skipped", "--reason", PERSON]);
+      expect(own.status, own.out).toBe(0);
+      at = next(proj);
+    }
+    expect(`${at.kind} ${at.stage}/${at.unit}`, JSON.stringify(at)).toBe("run-stage nfr-requirements/beta");
+  });
+
+  test("every Unit from here, then asked back as the next stage starts: it is back on the plan and alpha runs it next", () => {
+    const proj = walk(["alpha", "beta"], false);
+    next(proj, ["--skip", "functional-design"]);
+    expect(runNamed(proj, FIRST_EVERY_UNIT).status).toBe(0);
+    expect(readFileSync(stateFile(proj), "utf-8")).toContain("- **Current Stage**: nfr-requirements");
+    const step = next(proj, ["--add", "functional-design"]);
+    expect(String(step.message), JSON.stringify(step)).toContain("Put Functional Design back on the plan.");
+    const added = run(proj, "aidlc.ts", ["engine", "recompose", "--add", "functional-design"]);
+    expect(added.status, added.out).toBe(0);
+    expect(readFileSync(stateFile(proj), "utf-8")).toContain("- [ ] functional-design \u2014 EXECUTE");
+    const route = next(proj);
+    const jump = /`[^`]*aidlc-jump\.ts (execute --target functional-design --direction backward[^`]*)`/.exec(String(route.message))?.[1];
+    expect(jump, JSON.stringify(route)).toBeDefined();
+    const jumped = run(proj, "aidlc-jump.ts", String(jump).split(" "));
+    expect(jumped.status, jumped.out).toBe(0);
+    const at = next(proj);
+    expect(`${at.kind} ${at.stage}/${at.unit}`, JSON.stringify(at)).toBe("run-stage functional-design/alpha");
+  });
+
+  // A scope switch typed with the skip runs first; the walk's first stage is
+  // then skipped as the skip alone skips it, never sent to recompose.
+  test("with a scope switch in the same command: the switch runs first, then this Unit or every Unit from here", () => {
+    const proj = walk(["alpha", "beta"], false);
+    const step = next(proj, ["--scope", "refactor", "--skip", "functional-design"]);
+    expect(step.kind, JSON.stringify(step)).toBe("print");
+    const message = String(step.message);
+    expect(message).toStartWith("Run `bun .claude/tools/aidlc.ts engine scope change --scope refactor`");
+    expect(message).not.toContain("engine recompose --skip functional-design");
+    expect(named(segment(message, "If their words mean the alpha Unit only", EVERY_FROM)), message).toEqual([FIRST_THIS_UNIT]);
+    expect(named(segment(message, EVERY_FROM)), message).toEqual([FIRST_EVERY_UNIT]);
+    const switched = runNamed(proj, "bun .claude/tools/aidlc.ts engine scope change --scope refactor");
+    expect(switched.status, switched.out).toBe(0);
+    const skipped = runNamed(proj, FIRST_EVERY_UNIT);
+    expect(skipped.status, skipped.out).toBe(0);
+    const state = readFileSync(stateFile(proj), "utf-8");
+    expect(state).toContain("- **Scope**: refactor");
+    expect(state).toContain("- [S] functional-design — EXECUTE");
+  });
+
+  test("every Unit from here in the person's own words: the next stage's question is not handed them", () => {
+    const proj = walk(["alpha", "beta"], false);
+    says(proj, "skip functional design, we have the design already");
+    const step = next(proj, ["--skip", "functional-design"]);
+    const skipped = runNamed(proj, named(segment(String(step.message), EVERY_FROM))[0]);
+    expect(skipped.status, skipped.out).toBe(0);
+    const questions = join(dirname(stateFile(proj)), "construction", "alpha", "nfr-requirements", "nfr-requirements-questions.md");
+    mkdirSync(dirname(questions), { recursive: true });
+    writeFileSync(questions, "# NFR Requirements Questions\n\n## Question 1\nWhich latency target?\n\n[Answer]:\n");
+    const asked = next(proj);
+    expect(asked.stage, JSON.stringify(asked)).toBe("nfr-requirements");
+    expect(JSON.stringify(asked.kept_replies ?? null)).not.toContain("we have the design already");
+  });
+
+  test("with no other Unit left to take it, one command skips it for that Unit", () => {
+    const proj = walk(["alpha"], false);
+    const step = next(proj, ["--skip", "functional-design"]);
+    expect(named(step), String(step.message)).toEqual([FIRST_THIS_UNIT]);
+    expect(step.message).toContain(
+      '"Skipped Functional Design for the alpha Unit. It can still be run for that Unit with `/aidlc --stage functional-design --unit alpha`."',
+    );
+    const skipped = runNamed(proj, FIRST_THIS_UNIT);
+    expect(skipped.status, skipped.out).toBe(0);
+    const after = next(proj);
+    expect(`${after.kind} ${after.stage}/${after.unit}`, JSON.stringify(after)).toBe("run-stage nfr-requirements/alpha");
+  });
+
+  // NFR Requirements is still ahead while Functional Design is Current Stage:
+  // the plan change runs first, then the stage's own skip moves Current Stage.
+  test("with the next step named too, for every Unit from here: both commands are admitted in the order named", () => {
+    const proj = walk(["alpha", "beta"], false);
+    const step = next(proj, ["--skip", "functional-design,nfr-requirements"]);
+    const commands = named(segment(String(step.message), EVERY_FROM));
+    expect(commands, String(step.message)).toEqual([
+      `bun .claude/tools/aidlc.ts engine recompose --skip nfr-requirements --reason '${PERSON}'`,
+      FIRST_EVERY_UNIT,
+    ]);
+    for (const command of commands) {
+      const ran = runNamed(proj, command);
+      expect(ran.status, ran.out).toBe(0);
+      expect(ran.out).not.toContain('"kind":"error"');
+    }
+    const state = readFileSync(stateFile(proj), "utf-8");
+    expect(state).toContain("- [S] functional-design \u2014 EXECUTE");
+    expect(state).toContain("- [ ] nfr-requirements \u2014 SKIP");
+    const after = next(proj);
+    expect(`${after.kind} ${after.stage}/${after.unit}`, JSON.stringify(after)).toBe("run-stage nfr-design/alpha");
+    // The first step's own skip moved the work past NFR Requirements in the same
+    // request, so no undo window is offered for it, only the run on its own.
+    expect(segment(String(step.message), EVERY_FROM).message).toContain(
+      '"Skipped Functional Design and NFR Requirements for every Unit from here. Either one can still be run on its own with ' +
+        '`/aidlc --stage functional-design --single` or `/aidlc --stage nfr-requirements --single`."',
+    );
+    const undo = /If they later ask to undo skipping it for every Unit, run `([^`]*)`/.exec(String(step.message))?.[1] ?? "";
+    const late = runNamed(proj, undo);
+    expect(late.status).not.toBe(0);
+    expect(late.out).toContain("--stage nfr-requirements --single");
+  });
+
+  // With every stage after it named too, the first step's own skip finishes
+  // the work in the same reply: no undo window is left, only the run on its own.
+  test("with every stage after it named too, for every Unit from here: the line names the run on its own", () => {
+    const proj = walk(["alpha", "beta"], false);
+    const rows = readFileSync(stateFile(proj), "utf-8").split("\n")
+      .map((line) => /^- \[ \] ([a-z0-9-]+) \u2014 EXECUTE$/.exec(line)?.[1])
+      .filter((slug): slug is string => slug !== undefined);
+    const step = next(proj, ["--skip", ["functional-design", ...rows].join(",")]);
+    const every = segment(String(step.message), EVERY_FROM);
+    expect(every.message, String(step.message)).toContain(
+      "Any of them can still be run on its own with `/aidlc --stage functional-design --single`",
+    );
+    expect(every.message).not.toContain("You can undo");
+    for (const command of named(every)) {
+      const ran = runNamed(proj, command);
+      expect(ran.status, ran.out).toBe(0);
+    }
+    expect(readFileSync(stateFile(proj), "utf-8")).toContain("- **Status**: Completed");
+    const undo = /If they later ask to undo skipping it for every Unit, run `([^`]*)`/.exec(String(step.message))?.[1] ?? "";
+    const late = runNamed(proj, undo);
+    expect(late.status).not.toBe(0);
+    expect(late.out).toContain("this work is finished");
+  });
+
+  // Words that name another Unit are neither this Unit nor every Unit: that
+  // Unit's step is skipped for it while it works on it.
+  test("words naming another Unit skip nothing now, and the line says when that Unit's step can be skipped", () => {
+    for (const [designed, stage, name] of [[false, "functional-design", "Functional Design"], [1, "nfr-requirements", "NFR Requirements"]] as const) {
+      const proj = walk(["alpha", "beta"], designed);
+      const message = String(next(proj, ["--skip", stage]).message);
+      const other = message.slice(message.indexOf("If they name another Unit"), message.indexOf(EVERY_FROM));
+      expect(other, message).toContain(
+        `run nothing and tell them in one line: "${name} can be skipped for one Unit while that Unit is working on it; the alpha Unit is on ${name} now." and stop.`,
+      );
+      expect(named({ message: other })).toEqual([]);
+    }
+  });
+
+  // An earlier Unit's finished work for the stage keeps its approval: only the
+  // Units from here on are skipped, each on its own record.
+  test("every Unit from here after an earlier Unit did the stage: skipped for this Unit and the later ones only", () => {
+    const proj = walk(["alpha", "beta", "gamma"]);
+    const alphaCode = run(proj, "aidlc-orchestrate.ts", [
+      "report", "--stage", "code-generation", "--unit", "alpha", "--result", "skipped", "--reason", PERSON,
+    ]);
+    expect(alphaCode.status, alphaCode.out).toBe(0);
+    const onBeta = next(proj);
+    expect(`${onBeta.kind} ${onBeta.stage}/${onBeta.unit}`, JSON.stringify(onBeta)).toBe("run-stage functional-design/beta");
+    const step = next(proj, ["--skip", "functional-design"]);
+    const every = segment(String(step.message), EVERY_FROM);
+    const command = named(every);
+    expect(command, String(step.message)).toEqual([FIRST_EVERY_UNIT]);
+    expect(every.message).toContain(
+      '"Skipped Functional Design for every Unit from here. It can still be run for the beta Unit with ' +
+        '`/aidlc --stage functional-design --unit beta`, and for each Unit after it the same way."',
+    );
+    const skipped = runNamed(proj, command[0]);
+    expect(skipped.status, skipped.out).toBe(0);
+    expect(skipped.out).not.toContain('"kind":"error"');
+    expect(readFileSync(stateFile(proj), "utf-8")).toContain("- [-] functional-design \u2014 EXECUTE");
+    const audit = readAllAuditShards(proj);
+    for (const unit of ["beta", "gamma"]) {
+      expect(audit).toMatch(new RegExp(`\\*\\*Event\\*\\*: UNIT_SKIPPED\\n\\*\\*Stage\\*\\*: functional-design\\n\\*\\*Unit\\*\\*: ${unit}\\n`));
+    }
+    expect(audit).not.toMatch(/\*\*Event\*\*: UNIT_SKIPPED\n\*\*Stage\*\*: functional-design\n\*\*Unit\*\*: alpha\n/);
+    expect(audit).not.toMatch(/\*\*Event\*\*: STAGE_SKIPPED\n\*\*Stage\*\*: functional-design\n/);
+    const after = next(proj);
+    expect(`${after.kind} ${after.stage}/${after.unit}`, JSON.stringify(after)).toBe("run-stage nfr-requirements/beta");
+    // The way back the line names: that Unit's step reopened for it.
+    const back = next(proj, ["--stage", "functional-design", "--unit", "beta"]);
+    expect(back.kind, JSON.stringify(back)).toBe("print");
+    expect(back.message).toContain("reopen --target functional-design");
+    expect(back.message).toContain("--units beta");
+  });
+
+  test("the agent's own skip of the whole stage, naming no Unit, is still refused, naming the Unit's own skip", () => {
+    const proj = walk(["alpha", "beta"], false);
+    const before = readFileSync(stateFile(proj), "utf-8");
+    const own = run(proj, "aidlc-orchestrate.ts", [
+      "report", "--stage", "functional-design", "--result", "skipped", "--reason", "the design is already done",
+    ]);
+    expect(own.out).toContain('Cannot skip \\"functional-design\\" without naming its unit');
+    expect(own.out).toContain("--unit alpha --result skipped");
+    expect(readFileSync(stateFile(proj), "utf-8")).toBe(before);
   });
 });

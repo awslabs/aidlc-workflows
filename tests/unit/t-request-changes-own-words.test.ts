@@ -1,5 +1,5 @@
-// covers: function:recordGateWords, function:clearGateWords, function:gateWordsSincePresentation
-// covers: function:personsGateFeedback, function:GATE_WORDS_SPENT_BY, function:forgetGateWords
+// covers: function:recordGateWords, function:clearGateWords, function:personsGateReply
+// covers: function:GATE_WORDS_SPENT_BY, function:forgetGateWords
 //
 // Request Changes at a stage gate records what the person typed, not the
 // conductor's rewording of it. Observed live on Kiro IDE: the person typed
@@ -8,20 +8,21 @@
 // paraphrase. These cases drive the real human-turn hook (through the
 // dispatcher, as every harness does) and the real `report --result rejected`:
 //
-//   - the typed words are the Feedback, exactly, quotes and punctuation kept;
-//     the conductor's --reason is kept beside them as the Conductor Summary;
-//   - "Request Changes", then the answer to "What should change?", records the
-//     answer; several messages are joined in order;
+//   - every reply of theirs in this chat since the last decision is the
+//     Feedback, word for word and in order, quotes and punctuation kept: a
+//     bare pick ("2", "Request Changes"), a question and a remark before the
+//     gate included, since nothing they said is dropped for what it means; a
+//     reply an answer on record already names is that answer's, unless it is
+//     the latest; the conductor's --reason is kept beside them as the
+//     Conductor Summary, and the row names the latest message;
+//   - the report's step says their words are on the record, never repeating them;
 //   - with no recorded words (no prompt text, no session, a slash command or
-//     guard switch, words from before the gate or from another chat, words over
-//     the bound) the row is exactly what the conductor's text made before;
-//   - the kept words are cleared once a gate is presented or answered;
-//   - replies to other engine questions in between (a Construction
-//     checkpoint, a unit merge gate, a logged answer, a guard-recovery ask)
-//     are not this gate's feedback; a message that is only an option pick
-//     ("2", "Request Changes") is left out, and nothing else is dropped for
-//     what it means: a bare pick with nothing said still asks "What should
-//     change?".
+//     guard switch, another chat's words, a message over the bound) the row is
+//     the conductor's text;
+//   - a decision (an approval, a Construction checkpoint's, a unit merge
+//     gate's, an earlier change request) ends what the next one stands on;
+//   - the words the hook keeps for a Unit's checkpoint are cleared once a gate
+//     is presented or answered.
 
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
@@ -44,8 +45,6 @@ import {
   forgetGateWords,
   GATE_WORDS_SPENT_BY,
   GUARD_RECOVERY_ASK_TYPE,
-  gateWordsSincePresentation,
-  personsGateFeedback,
   readAuditShardEvents,
   recordGateWords,
   stateDigest,
@@ -134,6 +133,14 @@ const field = (proj: string, name: string, key: string) => {
   return auditBlockField(found[found.length - 1].block, key);
 };
 const wordsDir = (proj: string) => join(seededRecordDir(proj), ".aidlc-engine", "gate-words");
+// The texts the hook kept for this chat, in order.
+const keptTexts = (proj: string): string[] => {
+  if (!existsSync(wordsDir(proj))) return [];
+  const [name] = readdirSync(wordsDir(proj));
+  const record = JSON.parse(readFileSync(join(wordsDir(proj), name), "utf-8")) as { messages: Array<{ text: string }> };
+  return record.messages.map((message) => message.text);
+};
+const latestMessageId = (proj: string) => field(proj, "HUMAN_TURN", "Message Id");
 
 function rejectedBlock(proj: string): string[] {
   const found = rows(proj, "GATE_REJECTED");
@@ -165,7 +172,8 @@ describe("Request Changes records the person's own words", () => {
     expect(field(proj, "STAGE_REVISING", "Feedback")).toBe(words);
     expect(field(proj, "STAGE_REVISING", "Conductor Summary")).toBeNull();
     expect(directive.message).toStartWith(`Recorded rejected for "${slug}".`);
-    expect(directive.message).toContain(`revise from exactly what they said: ${JSON.stringify(words)}`);
+    expect(directive.message).toContain("in the person's own words");
+    expect(directive.message).not.toContain(words);
     expect(existsSync(wordsDir(proj))).toBe(false);
   });
 
@@ -174,17 +182,17 @@ describe("Request Changes records the person's own words", () => {
     says(proj, TYPED);
     const directive = rejectWith(proj, slug, []);
     expect(directive.kind, JSON.stringify(directive)).toBe("print");
-    expect(field(proj, "GATE_REJECTED", "Feedback")).toBe(TYPED);
+    expect(field(proj, "GATE_REJECTED", "Feedback")).toBe(`Request Changes\\n${TYPED}`);
     expect(field(proj, "GATE_REJECTED", "Conductor Summary")).toBeNull();
   });
 
-  test("Request Changes, then the answer to \"What should change?\", records the answer", () => {
+  test("Request Changes, then the answer to \"What should change?\", records both", () => {
     says(proj, "Request Changes");
     says(proj, TYPED);
     rejectWith(proj, slug, ["--reason", PARAPHRASE]);
-    expect(field(proj, "GATE_REJECTED", "Feedback")).toBe(TYPED);
+    expect(field(proj, "GATE_REJECTED", "Feedback")).toBe(`Request Changes\\n${TYPED}`);
     expect(field(proj, "GATE_REJECTED", "Conductor Summary")).toBe(PARAPHRASE);
-    expect(field(proj, "STAGE_REVISING", "Feedback")).toBe(TYPED);
+    expect(field(proj, "STAGE_REVISING", "Feedback")).toBe(`Request Changes\\n${TYPED}`);
   });
 
   test("several messages since the gate are joined in order, each verbatim", () => {
@@ -193,17 +201,20 @@ describe("Request Changes records the person's own words", () => {
     says(proj, "And keep done as it is.");
     rejectWith(proj, slug, ["--reason", PARAPHRASE]);
     // The renderer escapes the line break inside one audit field.
-    expect(field(proj, "GATE_REJECTED", "Feedback")).toBe("Rename the list command to todo ls.\\nAnd keep done as it is.");
+    expect(field(proj, "GATE_REJECTED", "Feedback")).toBe("2\\nRename the list command to todo ls.\\nAnd keep done as it is.");
   });
 
-  test("a conductor that passes the same words adds no Conductor Summary", () => {
+  // Nothing compares the agent's text with their words: the record keeps both,
+  // whatever the agent's text says.
+  test("a conductor that passes the same words: their words are the Feedback, its text the Conductor Summary", () => {
     says(proj, TYPED);
-    rejectWith(proj, slug, ["--reason", `  ${TYPED.replace(/ /g, "  ")} `]);
+    const passed = `  ${TYPED.replace(/ /g, "  ")} `;
+    rejectWith(proj, slug, ["--reason", passed]);
     expect(field(proj, "GATE_REJECTED", "Feedback")).toBe(TYPED);
-    expect(field(proj, "GATE_REJECTED", "Conductor Summary")).toBeNull();
+    expect(field(proj, "GATE_REJECTED", "Conductor Summary")).not.toBeNull();
   });
 
-  test("with no recorded words the row is the conductor's text, exactly as before", () => {
+  test("with no recorded words the row is the conductor's text, beside the message it stands on", () => {
     // A harness that passes no prompt text still mints the human turn.
     says(proj, "");
     const directive = rejectWith(proj, slug, ["--reason", PARAPHRASE]);
@@ -214,6 +225,7 @@ describe("Request Changes records the person's own words", () => {
       "**Event**: GATE_REJECTED",
       `**Stage**: ${slug}`,
       `**Feedback**: ${PARAPHRASE}`,
+      `**Message Id**: ${latestMessageId(proj)}`,
     ]);
     expect(field(proj, "STAGE_REVISING", "Feedback")).toBe(PARAPHRASE);
   });
@@ -283,7 +295,7 @@ describe("Request Changes records the person's own words", () => {
     expect(field(proj, "GATE_REJECTED", "Feedback")).toBe(PARAPHRASE);
   });
 
-  test("free text typed into the gate picker is the person's; a picked label is not", () => {
+  test("a label picked in the gate picker and free text typed into it are both the person's", () => {
     const question = "Requirements Analysis is ready. How would you like to proceed?";
     const picker = (answer: string) => typed(proj, {
       hook_event_name: "PostToolUse",
@@ -295,37 +307,34 @@ describe("Request Changes records the person's own words", () => {
     picker("Request Changes");
     picker(TYPED);
     rejectWith(proj, slug, ["--reason", PARAPHRASE]);
-    expect(field(proj, "GATE_REJECTED", "Feedback")).toBe(TYPED);
+    expect(field(proj, "GATE_REJECTED", "Feedback")).toBe(`Request Changes\\n${TYPED}`);
   });
 
-  test("approving spends the kept words and records the approval as before", () => {
+  test("approving clears the kept words and records the approval as the agent passed it", () => {
     says(proj, "looks good");
     expect(existsSync(wordsDir(proj))).toBe(true);
     const directive = report(proj, ["--stage", slug, "--result", "approved", "--user-input", "looks good"]);
     expect(directive.kind, JSON.stringify(directive)).toBe("done");
-    expect(field(proj, "GATE_APPROVED", "User Input")).toBe("Approve");
+    expect(field(proj, "GATE_APPROVED", "User Input")).toBe("looks good");
     expect(existsSync(wordsDir(proj))).toBe(false);
   });
 
   // Nothing the person said is dropped for what it means: a question is kept
   // with their words, and the agent, which read it, decides what to record.
-  test("a question is kept with their words; only a bare pick with nothing said asks what should change", () => {
+  test("a question is kept with their words", () => {
     says(proj, "can you show me the diff first?");
     const directive = rejectWith(proj, slug, []);
     expect(directive.kind, JSON.stringify(directive)).toBe("print");
     expect(field(proj, "GATE_REJECTED", "Feedback")).toBe("can you show me the diff first?");
   });
 
-  test("a bare pick with nothing said, and no --reason, asks what should change", () => {
+  // The agent read the pick and asks what should change while it revises.
+  test("a bare pick with nothing said, and no --reason, is the feedback as they typed it", () => {
     says(proj, "Request Changes");
-    const refused = rejectWith(proj, slug, []);
-    expect(refused.kind, JSON.stringify(refused)).toBe("print");
-    expect(refused.message).toContain(`The question for "${slug}" is still open.`);
-    expect(refused.message).toContain("What should change?");
-    expect(rows(proj, "GATE_REJECTED")).toHaveLength(0);
-    const withReason = rejectWith(proj, slug, ["--reason", PARAPHRASE]);
-    expect(withReason).toEqual({ kind: "print", message: `Recorded rejected for "${slug}".` });
-    expect(field(proj, "GATE_REJECTED", "Feedback")).toBe(PARAPHRASE);
+    const recorded = rejectWith(proj, slug, []);
+    expect(recorded.kind, JSON.stringify(recorded)).toBe("print");
+    expect(recorded.message).toStartWith(`Recorded rejected for "${slug}".`);
+    expect(field(proj, "GATE_REJECTED", "Feedback")).toBe("Request Changes");
     expect(field(proj, "GATE_REJECTED", "Conductor Summary")).toBeNull();
   });
 
@@ -346,11 +355,11 @@ describe("Request Changes records the person's own words", () => {
     "Make the TSV support an explicit flag instead of automatic.",
   ] as const;
 
-  test("the live sequence: every word they said is the feedback, the bare pick left out", () => {
+  test("the live sequence: every word they said is the feedback, the pick included", () => {
     for (const message of LIVE) says(proj, message);
     const directive = report(proj, ["--stage", slug, "--result", "rejected", "--user-input", "Request Changes"]);
     expect(directive.kind, JSON.stringify(directive)).toBe("print");
-    const said = `${LIVE[0]}\\n${LIVE[2]}`;
+    const said = LIVE.join("\\n");
     expect(field(proj, "GATE_REJECTED", "Feedback")).toBe(said);
     expect(field(proj, "GATE_REJECTED", "Conductor Summary")).toBeNull();
     expect(field(proj, "STAGE_REVISING", "Feedback")).toBe(said);
@@ -360,17 +369,17 @@ describe("Request Changes records the person's own words", () => {
     says(proj, "Make the list command todo ls.");
     says(proj, "Request Changes.");
     rejectWith(proj, slug, []);
-    expect(field(proj, "GATE_REJECTED", "Feedback")).toBe("Make the list command todo ls.");
+    expect(field(proj, "GATE_REJECTED", "Feedback")).toBe("Make the list command todo ls.\\nRequest Changes.");
   });
 
-  test("every message they said counts, in order, with the bare pick left out", () => {
+  test("every message they said counts, in order, the pick included", () => {
     says(proj, "Rename the done command.");
     says(proj, "Request Changes.");
     says(proj, "Make the list command todo ls.");
     says(proj, "also keep done as it is.");
     rejectWith(proj, slug, []);
     expect(field(proj, "GATE_REJECTED", "Feedback")).toBe(
-      "Rename the done command.\\nMake the list command todo ls.\\nalso keep done as it is.",
+      "Rename the done command.\\nRequest Changes.\\nMake the list command todo ls.\\nalso keep done as it is.",
     );
   });
 
@@ -379,7 +388,7 @@ describe("Request Changes records the person's own words", () => {
     says(proj, "2");
     says(proj, "can you show me the diff first?");
     rejectWith(proj, slug, []);
-    expect(field(proj, "GATE_REJECTED", "Feedback")).toBe("Make the list command todo ls.\\ncan you show me the diff first?");
+    expect(field(proj, "GATE_REJECTED", "Feedback")).toBe("Make the list command todo ls.\\n2\\ncan you show me the diff first?");
   });
 
   test("a change asked as a question is the feedback when it is the reply itself", () => {
@@ -390,7 +399,7 @@ describe("Request Changes records the person's own words", () => {
     expect(field(proj, "GATE_REJECTED", "Conductor Summary")).toBeNull();
   });
 
-  test("a Construction checkpoint reply before the reject is not this gate's feedback", () => {
+  test("a reply a Construction checkpoint's decision used is not this gate's feedback", () => {
     says(proj, "Looks right, go ahead with the skeleton.");
     // What aidlc-construction-checkpoints.ts writes when that reply approves it.
     appendAuditEntry("GATE_APPROVED", {
@@ -399,8 +408,8 @@ describe("Request Changes records the person's own words", () => {
     }, proj);
     says(proj, "Request Changes");
     rejectWith(proj, slug, ["--reason", PARAPHRASE]);
-    expect(field(proj, "GATE_REJECTED", "Feedback")).toBe(PARAPHRASE);
-    expect(field(proj, "GATE_REJECTED", "Conductor Summary")).toBeNull();
+    expect(field(proj, "GATE_REJECTED", "Feedback")).toBe("Request Changes");
+    expect(field(proj, "GATE_REJECTED", "Conductor Summary")).toBe(PARAPHRASE);
   });
 
   test("a unit merge reply before the gate feedback is left out of it", () => {
@@ -416,7 +425,8 @@ describe("Request Changes records the person's own words", () => {
     expect(auditBlockField(stageRows[0].block, "Feedback")).toBe(TYPED);
   });
 
-  test("an answer logged to a clarifying question is not the gate's feedback", () => {
+  // An answer uses no reply up, but its words stay on its own row: the change request keeps what they said for it.
+  test("an answer logged to a clarifying question stays on its own row, not the gate's feedback", () => {
     const log = (args: string[]) => run(LOG, [...args, "--project-dir", proj], SESSION);
     expect(log(["decision", "--stage", slug, "--decision", "Which output name?", "--options", "todo.json,out.json"]).rc).toBe(0);
     says(proj, "use todo.json for the name");
@@ -424,10 +434,13 @@ describe("Request Changes records the person's own words", () => {
     expect(answered.rc, answered.out).toBe(0);
     says(proj, TYPED);
     rejectWith(proj, slug, ["--reason", PARAPHRASE]);
+    expect(field(proj, "QUESTION_ANSWERED", "Person Reply")).toBe("use todo.json for the name");
     expect(field(proj, "GATE_REJECTED", "Feedback")).toBe(TYPED);
+    expect(field(proj, "GATE_REJECTED", "Message Ids")).toBeNull();
   });
 
-  test("a reply a guard-recovery ask for another stage consumed is not kept", () => {
+  // Every open question keeps a reply as typed; the agent reads which one it answers.
+  test("a reply to a guard-recovery ask for another stage is kept as typed, and rides along here", () => {
     const state = readFileSync(seededStateFile(proj), "utf-8");
     writeActiveDirectiveMarker(proj, {
       kind: "ask", ask_type: GUARD_RECOVERY_ASK_TYPE, stage: "functional-design", state_sha256: stateDigest(state),
@@ -437,14 +450,14 @@ describe("Request Changes records the person's own words", () => {
       ],
     });
     says(proj, "split the save-search flow into two steps");
-    expect(gateWordsSincePresentation(proj, SESSION, { stage: slug })).toBeNull();
+    expect(keptTexts(proj)).toEqual(["split the save-search flow into two steps"]);
     rmSync(join(seededRecordDir(proj), ".aidlc-engine", "active-directive.json"), { force: true });
     says(proj, TYPED);
     rejectWith(proj, slug, ["--reason", PARAPHRASE]);
-    expect(field(proj, "GATE_REJECTED", "Feedback")).toBe(TYPED);
+    expect(field(proj, "GATE_REJECTED", "Feedback")).toBe(`split the save-search flow into two steps\\n${TYPED}`);
   });
 
-  test("a revised gate starts fresh: only words after its re-presentation count", () => {
+  test("after a change request, the next one stands on every reply since it", () => {
     says(proj, "Rename the list command.");
     rejectWith(proj, slug, ["--reason", PARAPHRASE]);
     says(proj, "While you revise: also check the help text.");
@@ -454,11 +467,11 @@ describe("Request Changes records the person's own words", () => {
     const rejected = rows(proj, "GATE_REJECTED");
     expect(rejected).toHaveLength(2);
     expect(auditBlockField(rejected[0].block, "Feedback")).toBe("Rename the list command.");
-    expect(auditBlockField(rejected[1].block, "Feedback")).toBe(TYPED);
+    expect(auditBlockField(rejected[1].block, "Feedback")).toBe(`While you revise: also check the help text.\\n${TYPED}`);
   });
 });
 
-describe("the words are ordered against the gate row, not by time", () => {
+describe("the words are ordered against the decision rows, not by time", () => {
   let proj: string;
   let slug: string;
 
@@ -478,46 +491,45 @@ describe("the words are ordered against the gate row, not by time", () => {
     state(proj, ["checkbox", `${slug}=awaiting-approval`]);
   };
 
-  test("a message typed before the gate was presented is not used", () => {
+  test("a message typed before the gate was presented rides along with the reply after it", () => {
     says(proj, "Before you finish: keep it short.");
     presentWithoutClearing();
-    expect(gateWordsSincePresentation(proj, SESSION, { stage: slug })).toBeNull();
     says(proj, "Request Changes");
     rejectWith(proj, slug, ["--reason", PARAPHRASE]);
-    expect(field(proj, "GATE_REJECTED", "Feedback")).toBe(PARAPHRASE);
+    expect(field(proj, "GATE_REJECTED", "Feedback")).toBe("Before you finish: keep it short.\\nRequest Changes");
   });
 
-  test("of messages on both sides of the presentation, only the later count", () => {
-    says(proj, "Before you finish: keep it short.");
-    presentWithoutClearing();
+  // With every reply before the gate was shown, the agent names the one it read.
+  test("with only a message typed before the gate was presented, the agent names it", () => {
     says(proj, TYPED);
-    expect(gateWordsSincePresentation(proj, SESSION, { stage: slug })).toEqual([TYPED]);
+    const id = latestMessageId(proj) as string;
+    presentWithoutClearing();
+    const named = rejectWith(proj, slug, ["--reason", PARAPHRASE]);
+    expect(rows(proj, "GATE_REJECTED")).toHaveLength(0);
+    expect(named.message).toContain(`If their message ${id} (sent `);
+    expect(named.message).not.toContain(TYPED);
+    rejectWith(proj, slug, ["--reason", PARAPHRASE, "--message", id]);
+    expect(field(proj, "GATE_REJECTED", "Feedback")).toBe(TYPED);
+    expect(field(proj, "GATE_REJECTED", "Message Id")).toBe(id);
+  });
+
+  test("a gate never presented (the direct Active to Revising path) takes the words since the last decision", () => {
+    says(proj, TYPED);
     rejectWith(proj, slug, ["--reason", PARAPHRASE]);
     expect(field(proj, "GATE_REJECTED", "Feedback")).toBe(TYPED);
   });
 
-  test("a gate never presented (the direct Active to Revising path) has no words", () => {
-    says(proj, TYPED);
-    rejectWith(proj, slug, ["--reason", PARAPHRASE]);
-    expect(field(proj, "GATE_REJECTED", "Feedback")).toBe(PARAPHRASE);
-  });
-
-  test("the library reads: bare choices dropped, other chats and units apart, clear spends", () => {
+  test("the kept words: each message trimmed and in order, a broken record started again, clear safe twice", () => {
     presentWithoutClearing();
     appendAuditEntry("HUMAN_TURN", {}, proj);
     recordGateWords(proj, SESSION, "Request Changes");
     recordGateWords(proj, SESSION, `  ${TYPED}  `);
     recordGateWords(proj, SESSION, "cancel");
-    expect(gateWordsSincePresentation(proj, SESSION, { stage: slug })).toEqual(["Request Changes", TYPED, "cancel"]);
-    // The bare choice is dropped; "cancel" is the person's word, kept for the conductor to read.
-    expect(personsGateFeedback(proj, SESSION, { stage: slug })).toBe(`${TYPED}\ncancel`);
-    expect(personsGateFeedback(proj, OTHER_SESSION, { stage: slug })).toBeNull();
-    expect(personsGateFeedback(proj, null, { stage: slug })).toBeNull();
-    expect(personsGateFeedback(proj, SESSION, { stage: "some-other-stage" })).toBeNull();
-    expect(personsGateFeedback(proj, SESSION, { stage: slug, unit: "alpha" })).toBeNull();
+    expect(keptTexts(proj)).toEqual(["Request Changes", TYPED, "cancel"]);
     const file = join(wordsDir(proj), readdirSync(wordsDir(proj))[0]);
     writeFileSync(file, "{not json", "utf-8");
-    expect(personsGateFeedback(proj, SESSION, { stage: slug })).toBeNull();
+    recordGateWords(proj, SESSION, TYPED);
+    expect(keptTexts(proj)).toEqual([TYPED]);
     expect([...GATE_WORDS_SPENT_BY].sort()).toEqual([
       "GATE_APPROVED", "GATE_REJECTED", "STAGE_AWAITING_APPROVAL", "WORKFLOW_COMPLETED",
     ]);
@@ -539,20 +551,18 @@ describe("the words are ordered against the gate row, not by time", () => {
     expect(first).not.toBeNull();
     expect(new Set([first, second, third]).size).toBe(3);
     forgetGateWords(proj, SESSION, second as number);
-    expect(gateWordsSincePresentation(proj, SESSION, { stage: slug })).toEqual(["what does step 3 do?", TYPED]);
+    expect(keptTexts(proj)).toEqual(["what does step 3 do?", TYPED]);
     forgetGateWords(proj, SESSION, third as number);
-    expect(personsGateFeedback(proj, SESSION, { stage: slug })).toBe("what does step 3 do?");
-    // A later answer to another question moves the start past everything before it.
-    keep(TYPED);
-    appendAuditEntry("QUESTION_ANSWERED", { Stage: "some-other-stage", Details: "yes" }, proj);
-    expect(gateWordsSincePresentation(proj, SESSION, { stage: slug })).toBeNull();
+    expect(keptTexts(proj)).toEqual(["what does step 3 do?"]);
     expect(keep(`${"x".repeat(8001)}`)).toBeNull();
   });
 
-  test("the store keeps a bounded number of messages; older ones stop the words standing alone", () => {
+  test("the kept words hold a bounded number of messages, the newest", () => {
     presentWithoutClearing();
     appendAuditEntry("HUMAN_TURN", {}, proj);
     for (let i = 1; i <= 9; i++) recordGateWords(proj, SESSION, `change ${i}`);
-    expect(gateWordsSincePresentation(proj, SESSION, { stage: slug })).toBeNull();
+    const kept = keptTexts(proj);
+    expect(kept.length).toBeLessThan(9);
+    expect(kept.at(-1)).toBe("change 9");
   });
 });

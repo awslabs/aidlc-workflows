@@ -14,8 +14,9 @@
 //      survive: multi-line text, embedded JSON, Windows paths, non-ASCII.
 //   2. The shipped hook (subprocess): one line carrying `systemMessage` (for the
 //      person) and a PostToolUse `additionalContext` note (for the model) on
-//      Claude Code, Codex, and opencode; nothing on the harnesses with no
-//      hook-to-human PostToolUse channel; genuine engine output round-trips.
+//      Claude Code and Codex, the `systemMessage` alone on opencode; nothing on
+//      the harnesses with no hook-to-human PostToolUse channel; genuine engine
+//      output round-trips.
 //   3. The adapters (subprocess / in-process plugin): Codex forwards the line
 //      once (a duplicate delivery does not repeat it), opencode turns it into a
 //      TUI toast, and Kiro CLI, Kiro IDE, Copilot, and Cursor stay silent.
@@ -271,7 +272,11 @@ describe("t349 relay line per harness", () => {
     for (const name of ENGINE_ERROR_RELAY_HARNESSES) expect(names).toContain(name);
     for (const name of names) {
       const line = engineErrorRelayLine(SINGLE, name);
-      if (ENGINE_ERROR_RELAY_HARNESSES.has(name)) {
+      if (name === "opencode") {
+        // The plugin hands a line's note to the model, and the toast is transient,
+        // so opencode's line carries none and its skill still prints the error.
+        expect(line, name).toBe(`${JSON.stringify({ systemMessage: engineErrorRelayText(SINGLE) })}\n`);
+      } else if (ENGINE_ERROR_RELAY_HARNESSES.has(name)) {
         expect(line, name).toBe(relayLine(SINGLE));
         // A fixed label says whose words follow; the engine's message is unchanged after it.
         expect(JSON.parse(line ?? "").systemMessage).toBe(`${ENGINE_ERROR_RELAY_LABEL}\n> ${SINGLE}`);

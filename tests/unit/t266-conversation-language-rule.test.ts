@@ -82,8 +82,8 @@ const RULE_LABELS = [
  *  All of these were found by grepping the shipped engine during an end-to-end
  *  Japanese run, and several are exact `===`/`!==` comparisons rather than
  *  advisory shapes:
- *    - `A. Accept assumptions` — aidlc-sensor-claim-sources.ts compares the
- *      filled `[Answer]:` against this literal to set assumptionsAccepted.
+ *    - `A. Accept assumptions`: aidlc-sensor-claim-sources.ts tells the two
+ *      option lines from assumption text by this literal (CONFIRMATION_SCAFFOLD_RE).
  *    - `**Collaborator:** <agent-slug>` — compared with `!==` against a
  *      contribution file's first line in aidlc-orchestrate.ts, aidlc-state.ts,
  *      and aidlc-doctor-bundle.ts; a localized marker fails the stage outright.

@@ -51,7 +51,7 @@ type Options = {
   fallback?: string; fault?: Fault; code?: string; mode?: "probe" | "apply";
   failAfter?: number; warmup?: boolean; closeError?: boolean; cleanupError?: boolean;
   replaceOwner?: boolean; requestedRoot?: string; contender?: boolean; releaseRetry?: boolean;
-  pause?: "acquire" | "locked" | "release";
+  pause?: "acquire" | "locked" | "release"; letGo?: "lock" | "owner";
 };
 type Owner = {
   schemaVersion: number; pid: number; host: string; token: string; staging: string;
@@ -66,7 +66,7 @@ type Observation = {
   backend?: "directory" | "hardlink"; owner?: Owner; replacement?: string;
   faultHits: number; fallbackHits: number; probes: string[]; gates: string[];
   publicationCopies: number; preflightCompleted: boolean; pendingGate?: boolean;
-  stderr: string;
+  letGo: boolean; stderr: string;
 };
 function childEnv(): NodeJS.ProcessEnv {
   const env = { ...process.env };
@@ -93,10 +93,25 @@ function childSource(root: string, options: Options): string {
     const closeError = Object.assign(new Error("simulated close failure"), { code: "EIO" });
     const cleanupError = Object.assign(new Error("simulated cleanup failure"), { code: "EACCES" });
     const out = { error: null, faultHits: 0, fallbackHits: 0, probes: [], gates: [],
-      publicationCopies: 0, preflightCompleted: false };
+      publicationCopies: 0, preflightCompleted: false, letGo: false };
     const fds = new Map();
-    let armed = !cfg.warmup, paused = false;
+    let armed = !cfg.warmup, paused = false, held = false;
     const fail = () => { out.faultHits++; throw injected; };
+    // A holder outside the local gate lets the lock go while the waiter whose
+    // attempt found it held is still looking at it.
+    function found(p, attempt) {
+      try {
+        return attempt();
+      } catch (e) {
+        if (p === lock && e.code === "EEXIST") held = true;
+        throw e;
+      }
+    }
+    function letGo(moment) {
+      if (cfg.letGo !== moment || !held || out.letGo) return;
+      out.letGo = true;
+      fs.rmSync(lock, { recursive: true, force: true });
+    }
     function pause(phase) {
       if (cfg.pause !== phase || paused) return;
       paused = true;
@@ -119,14 +134,21 @@ function childSource(root: string, options: Options): string {
           out.fallbackHits++;
           throw linkError;
         }
-        return fs.linkSync(source, destination);
+        return found(destination, () => fs.linkSync(source, destination));
+      },
+      lstatSync(p, ...args) {
+        if (p === join(lock, "owner.json")) letGo("owner");
+        const stat = fs.lstatSync(p, ...args);
+        if (p === lock) letGo("lock");
+        return stat;
       },
       mkdirSync(p, ...args) {
         if (!onMount(p) && /^\\.aidlc-.*\\.lock$/.test(basename(p)))
           out.gates.push(p);
         if (armed && onMount(p) && cfg.fault === "lock-mkdir" && basename(p) === ${JSON.stringify(LOCK)}) fail();
-        if (armed && inProbe(p) && cfg.fault === "workflow" && basename(p) === "workflow-lock") fail();
-        return fs.mkdirSync(p, ...args);
+        // The workflow lock is built under a private candidate name and renamed into place.
+        if (armed && inProbe(p) && cfg.fault === "workflow" && basename(p).startsWith("workflow-lock.candidate.")) fail();
+        return found(p, () => fs.mkdirSync(p, ...args));
       },
       openSync(p, flags, ...args) {
         if (dirname(String(p)) === root && basename(String(p)).startsWith(".aidlc-lock-")) pause("acquire");
@@ -171,6 +193,9 @@ function childSource(root: string, options: Options): string {
         return fs.readFileSync(p, ...args);
       },
       renameSync(source, destination) {
+        // A local gate lock is published by renaming its stamped candidate into place.
+        if (!onMount(destination) && /^\\.aidlc-.*\\.lock$/.test(basename(destination)))
+          out.gates.push(destination);
         if (armed && inProbe(source) && fs.existsSync(source)) {
           if (cfg.fault === "directory-rename" && fs.lstatSync(source).isDirectory()) fail();
           if (cfg.fault === "file-rename" && !fs.lstatSync(source).isDirectory()) fail();
@@ -475,6 +500,39 @@ describe("t330 lock ownership", () => {
     });
   }
 
+  // A command killed between making the lock folder and finishing its stamp
+  // leaves no owner, an empty one or a cut-off one. Within the grace a live
+  // holder may still be stamping it; past it, the next command clears it.
+  for (const state of ["missing", "empty", "cut-off"]) {
+    test(`directory owner ${state} is cleared once past the grace`, () => {
+      const root = project(), lock = join(root, LOCK);
+      mkdirSync(lock);
+      if (state === "empty") writeFileSync(join(lock, "owner.json"), "");
+      if (state === "cut-off") writeFileSync(join(lock, "owner.json"), '{"schemaVersion":1,"pid":');
+      const fresh = observe(root, { fallback: "EMLINK" });
+      expect(fresh.error?.message).toContain("cannot verify");
+      expect(fresh.stderr).not.toContain(CLEARED);
+      expectProject(root, false, [LOCK]);
+      utimesSync(lock, LONG_AGO, LONG_AGO);
+      const aged = observe(root, { fallback: "EMLINK" });
+      expect(aged.error).toBeNull();
+      expect(aged.stderr).toContain(CLEARED);
+      expectProject(root, true);
+    });
+  }
+
+  test("a directory stamp that parses but names no valid owner stays refused past the grace", () => {
+    const root = project(), lock = join(root, LOCK), raw = '{"schemaVersion":1}';
+    mkdirSync(lock);
+    writeFileSync(join(lock, "owner.json"), raw);
+    utimesSync(lock, LONG_AGO, LONG_AGO);
+    const out = observe(root, { fallback: "EMLINK" });
+    expect(out.error?.message).toContain("cannot verify incomplete directory transaction lock");
+    expect(out.stderr).not.toContain(CLEARED);
+    expect(readFileSync(join(lock, "owner.json"), "utf8")).toBe(raw);
+    expectProject(root, false, [LOCK]);
+  });
+
   test("fallback probe and acquisition preserve a live legacy file lock", () => {
     const root = project(), lock = join(root, LOCK);
     const raw = JSON.stringify({ pid: process.pid, staging: ".aidlc-txn-live" });
@@ -510,6 +568,32 @@ describe("t330 lock ownership", () => {
         expect(readFileSync(lock, "utf8")).toBe(raw);
         expectProject(root, false, [LOCK]);
       }
+    });
+  }
+
+  // A holder outside the local gate (a release older than the gate, a command
+  // with another temp folder) can let its lock go while a waiter is still
+  // looking at it. Gone by the waiter's next look, the lock is free: the waiter
+  // takes it, as it would a moment later, and clears nothing.
+  for (const [fallback, moment] of [
+    [undefined, "lock"], ["EMLINK", "lock"], ["EMLINK", "owner"],
+  ] as const) {
+    const when = moment === "lock" ? "after the waiter's first look" : "before its owner is read";
+    test(`a ${fallback ? "directory" : "file"} lock let go ${when} is taken`, () => {
+      const root = project(), lock = join(root, LOCK);
+      const live = { pid: process.pid, processGeneration: processGeneration(process.pid) };
+      if (fallback) {
+        mkdirSync(lock);
+        writeFileSync(join(lock, "owner.json"), JSON.stringify({ ...owner(), ...live }));
+      } else {
+        writeFileSync(lock, `${JSON.stringify({ ...live, staging: ".aidlc-txn-held" })}\n`);
+      }
+      const out = observe(root, { fallback, letGo: moment });
+      expect(out.letGo).toBe(true);
+      expect(out.error).toBeNull();
+      expect(out.backend).toBe(fallback ? "directory" : "hardlink");
+      expect(out.stderr).not.toContain(CLEARED);
+      expectProject(root, true);
     });
   }
 

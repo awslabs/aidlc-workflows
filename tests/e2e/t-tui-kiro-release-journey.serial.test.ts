@@ -14,11 +14,13 @@
 // question, "Approve" at Reverse Engineering. Kiro starts on the aidlc agent
 // with its shipped tool permissions; a permission prompt gets the answer a
 // person gives by pressing Enter, and the report counts them. Every line the
-// person types must have a message record (Kiro ran AI-DLC's hooks), and doctor
-// must no longer say the hooks never ran. Pass/fail reads only what AI-DLC
-// recorded and doctor, never the agent's prose. The report (seconds per turn,
-// Kiro credits, permission prompts) lands in the test's log folder and its
-// one line is printed.
+// person types must have a message record (Kiro ran AI-DLC's hooks), their
+// files must stay as they were until "1" starts the work, and doctor must not
+// say the hooks never ran or stopped beating while the workflow went on.
+// Pass/fail reads only what AI-DLC recorded, doctor and the person's files,
+// never the agent's prose. The report (seconds per turn, Kiro credits,
+// permission prompts, and when it fails the records and the last screen) lands
+// in the test's log folder and its one line is printed.
 //
 // On Linux the person's Kiro home is a scratch HOME, so ~/.kiro is never read
 // or written; XDG_DATA_HOME stays the machine's, so the existing sign-in is
@@ -29,7 +31,7 @@
 // the selected terminal backend, and --production-guards. Not a hosted family:
 // Kiro needs a signed-in identity. SPENDS KIRO CREDITS. Serial.
 
-import { fileCleanupReserveMs, liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS, remainingCleanupTimeoutMs, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
+import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS, remainingCleanupTimeoutMs, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
@@ -39,13 +41,16 @@ import { REPO_ROOT } from "../harness/fixtures.ts";
 import {
   checkReleaseJourneyTurn,
   doctorChecks,
+  evidenceOf,
   expectPersonFirstInJourney,
   hooksRanProblems,
+  journeyBudgets,
   RELEASE_JOURNEY_TURNS,
   type ReleaseJourneyReport,
   releaseJourneyEvidence,
   runReleaseJourney,
   setupReleaseJourneyProject,
+  waitForTurn,
 } from "../harness/release-journey.ts";
 import { assertTuiDriveKill } from "../harness/tui-fixtures.ts";
 import { resolveTuiRuntime, tuiUnavailableReason } from "../harness/tui-runtime.ts";
@@ -55,22 +60,30 @@ const { bin: DRIVE_BIN, prefix: DRIVE_PREFIX } = resolveTuiRuntime(DRIVER);
 const TEST_TIMEOUT_MS = liveCaseTimeoutMs(LIVE_LONG_OPERATION_TIMEOUT_MS);
 let caseDeadlineMs: number;
 beforeEach(() => { caseDeadlineMs = Date.now() + TEST_TIMEOUT_MS; });
-function remainingWorkMs(): number {
-  return remainingOperationTimeoutMs(TEST_TIMEOUT_MS, {
-    deadlineMs: caseDeadlineMs, reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS), phase: "E2E live work",
-  })!;
-}
+// The journey's work keeps two minutes back for the screen a failed report
+// keeps, so a stall at startup or in a turn still shows what Kiro showed.
+const BUDGETS = journeyBudgets(() => caseDeadlineMs, TEST_TIMEOUT_MS, 120_000);
+const remainingWorkMs = BUDGETS.workMs;
 function remainingCleanupMs(): number {
   return remainingCleanupTimeoutMs(NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS, { deadlineMs: caseDeadlineMs, phase: "E2E terminal cleanup" });
 }
 
-function drive(args: string[]): { rc: number; stdout: string } {
-  const res = spawnSync(DRIVE_BIN, [...DRIVE_PREFIX, ...args], { timeout: args[0] === "kill" ? remainingCleanupMs() : remainingWorkMs(), encoding: "utf-8" });
-  return { rc: res.status ?? -1, stdout: res.stdout ?? "" };
+function drive(args: string[], timeout = args[0] === "kill" ? remainingCleanupMs() : remainingWorkMs()): { rc: number; stdout: string; timedOut: boolean } {
+  const res = spawnSync(DRIVE_BIN, [...DRIVE_PREFIX, ...args], { timeout, encoding: "utf-8" });
+  const timedOut = (res.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT";
+  return { rc: res.status ?? -1, stdout: res.stdout ?? "", timedOut };
 }
 function screen(session: string): string {
   return drive(["capture", "--session", session]).stdout;
 }
+/** The journey's last screen, read with the time kept back for it; a terminal already gone is an error. */
+function lastScreen(session: string): string {
+  const capture = drive(["capture", "--session", session], BUDGETS.screenMs());
+  if (capture.timedOut) throw new Error("the terminal capture did not finish in the time kept for it");
+  if (capture.rc !== 0) throw new Error(`the terminal could not be read (tui-drive capture exit ${capture.rc})`);
+  return capture.stdout;
+}
+const screenTail = (text: string) => text.split("\n").slice(-60).join("\n");
 function waitFor(session: string, pattern: string, timeoutMs: number, stableMs: number): boolean {
   return drive(["wait", "--session", session, "--pattern", pattern, "--timeout-ms", String(timeoutMs), "--stable-ms", String(stableMs)]).rc === 0;
 }
@@ -145,6 +158,7 @@ describe("t-tui-kiro-release-journey: a person's first day on Kiro CLI, before e
           : ["kiro-cli", "chat"];
         const report: ReleaseJourneyReport = { harness: tree, toolVersion: kiroVersion() ?? "?", turns: [], extra: {}, problems: [] };
         let prompts = 0;
+        let last: string | { unreadable: string } | undefined;
         try {
           runReleaseJourney(report, () => {
             expect(drive(["start", "--session", session, "--cwd", project.proj, "--width", "200", "--height", "50", "--", ...launch]).rc).toBe(0);
@@ -158,31 +172,31 @@ describe("t-tui-kiro-release-journey: a person's first day on Kiro CLI, before e
               const started = Date.now();
               type(session, line);
               // The turn ends when Kiro prints its credits line again and waits for the person.
-              let ended = false;
-              while (!ended && Date.now() < caseDeadlineMs) {
-                if (!waitFor(session, `${IDLE}|${PROMPT.source}`, remainingWorkMs(), 1500)) continue;
+              const ended = waitForTurn((waitMs) => {
+                if (!waitFor(session, `${IDLE}|${PROMPT.source}`, waitMs, 1500)) return false;
                 const now = screen(session);
                 const bottom = now.split("\n").slice(-14).join("\n");
                 if (PROMPT.test(bottom) && !bottom.includes(IDLE)) {
                   prompts++;
                   drive(["send", "--session", session, "--keys", "Enter", "--no-enter"]);
-                  continue;
+                  return false;
                 }
-                ended = (sessionCredits(now) ?? 0) > before;
-              }
-              if (!ended) report.problems.push(`"${line}" was still running when the journey's time ran out`);
+                return (sessionCredits(now) ?? 0) > before;
+              }, remainingWorkMs);
+              if (!ended) report.problems.push(`"${line}" had not ended when the journey's time ran out`);
               report.turns.push({ line, seconds: Math.round((Date.now() - started) / 1000) });
-              if (ended) checkReleaseJourneyTurn(report, project.proj, index + 1, line);
+              if (ended) checkReleaseJourneyTurn(report, project, index + 1, line);
               if (report.problems.length) break;
             }
             if (!report.problems.length) {
               report.problems.push(...hooksRanProblems(doctorChecks(project, { ...process.env, ...(process.platform === "linux" ? { HOME: kiroHome } : {}) })));
             }
-            const last = screen(session);
-            report.extra = { credits: sessionCredits(last) ?? 0, "permission prompts": prompts };
-            if (report.problems.length) {
-              report.extra.evidence = { ...releaseJourneyEvidence(project.proj), screen: last.split("\n").slice(-60).join("\n") };
-            }
+            last = evidenceOf(() => lastScreen(session));
+            // Credits are read off the last screen's credits line; without one they are left out.
+            report.extra = { credits: typeof last === "string" ? sessionCredits(last) : undefined, "permission prompts": prompts };
+          }, () => {
+            const final = last ?? evidenceOf(() => lastScreen(session));
+            return { ...releaseJourneyEvidence(project.proj), screen: typeof final === "string" ? screenTail(final) : final };
           });
         } finally {
           assertTuiDriveKill(drive(["kill", "--session", session]), session);

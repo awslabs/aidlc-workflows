@@ -14,7 +14,7 @@
 //
 // Exit-code contract (G5): always exit 0. Sensor verdicts surface
 // through the dispatcher's audit rows (SENSOR_FIRED + paired
-// SENSOR_PASSED|FAILED|BUDGET_OVERRIDE) and detail files. Blocking
+// SENSOR_PASSED|FAILED|COULD_NOT_RUN|BUDGET_OVERRIDE) and detail files. Blocking
 // semantics belong to aidlc-state.ts enforceBlockingGateSensors.
 
 import { spawnSync } from "node:child_process";

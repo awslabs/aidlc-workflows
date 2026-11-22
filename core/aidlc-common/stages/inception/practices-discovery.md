@@ -108,7 +108,7 @@ paths. No brief or context may contain a sibling's contribution: the spokes are
 mutually blind.
 
 **If `directive.support_agents` is empty, skip this step entirely** — the
-collaborators switch is off for this scope, so the stage runs lead-only
+collaborators switch is off for this scope, so the lead works alone
 (`stage-protocol-ensemble.md` §5): the lead's draft stands as the practices,
 the interview resolves them, and no spoke review runs. The full roster, when
 present, is:
@@ -169,8 +169,8 @@ following the standard non-gate question flow.
 ### Step 5: Lead Integration
 
 Delegate a final integration turn to `aidlc-pipeline-deploy-agent`. Pass the
-lead draft paths, every contribution path produced in Step 3 (none on a
-lead-only run), and the completed interview file. The lead alone updates the
+lead draft paths, every contribution path produced in Step 3 (none when the
+lead works alone), and the completed interview file. The lead alone updates the
 four declared artifacts:
 
 1. **team-practices.md** - five sections matching `memory/team.md`
@@ -245,7 +245,7 @@ The orchestrator does not edit active-space memory directly. Run:
 The subcommand resolves the active space and:
 
 - revalidates every effective support contribution and its identity marker
-  before any memory write (none on a lead-only run);
+  before any memory write (none when the lead works alone);
 - reads both drafts and
   `aidlc/spaces/<active-space>/memory/{team,project}.md`;
 - replaces the five matching sections in `team.md`;
@@ -269,8 +269,8 @@ After Step 7 prints `{"emitted":"PRACTICES_AFFIRMED",...}` and exits 0:
 
 Use the stage-protocol.md completion template:
 
-- summarize all four artifacts, any contribution files produced (none on a
-  lead-only run), and both promotion targets;
+- summarize all four artifacts, any contribution files produced (none when the
+  lead works alone), and both promotion targets;
 - use `<record>/inception/practices-discovery/` as the review path;
 - name the next stage from the gate-opening reply's `next_stage`, else `directive.next_stage`.
 
@@ -290,6 +290,6 @@ workspace do not count as missing coverage.
 
 When `directive.protocol_modules` lists `learnings`, follow
 `stage-protocol-learnings.md`: keep the diary at `directive.memory_path` while
-working and run the ritual before the approval gate, applying its bootstrap,
-`single: true`, per-unit, and gate-revision exemptions. When the module is absent,
-skip both the diary and the ritual.
+working, and take the learnings step before the approval gate; that module says
+when it asks the person anything. When the module is absent, skip both the diary
+and the step.

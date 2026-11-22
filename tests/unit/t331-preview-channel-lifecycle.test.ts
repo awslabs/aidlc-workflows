@@ -274,7 +274,7 @@ describe("t331 preview release channel", () => {
       "update", "--check", "--release-base-url", failing.baseUrl, "--release-api-url", failing.apiUrl, "--json",
     ], project, env);
     expect(unavailable.status, unavailable.stdout + unavailable.stderr).toBe(3);
-    expect(JSON.parse(unavailable.stdout).message).toContain("cached version");
+    expect(JSON.parse(unavailable.stdout).message).toContain(`latest known ${PREVIEW_CHANNEL} ${PREVIEW_2}`);
     expect(readFileSync(join(machine, "update-check.json"), "utf-8")).toBe(before);
     expect(failing.requests.some((path) => path.includes("/latest/download/"))).toBe(false);
 

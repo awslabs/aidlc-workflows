@@ -41,6 +41,7 @@ import {
 import {
   artifactFilename,
   consumeSharedDirectiveAsk,
+  recordGuardRecoveryChoice,
   evaluateGuardRefusal,
   guardRecoveryAskForRefusal,
   unitCompletedReceipts,
@@ -51,6 +52,11 @@ import {
   NATIVE_STARTUP_TIMEOUT_MS,
   remainingOperationTimeoutMs,
 } from "../harness/test-budget.ts";
+
+// The stage's checks run once before its review or gate, and again at the gate
+// (completionChecksStep, t-checks-before-review); this file's fixture documents
+// are not written for them and its subject is not them, so they stay off here.
+process.env.AIDLC_DISABLE_SENSORS = "1";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 resetAidlcEnv();
@@ -174,8 +180,9 @@ describe("a Unit done without its receipts is offered recording them", () => {
       operation: { kind: "record-unit-completion", stage: SLUG, unit: "alpha" },
     });
 
-    // The person picks it, as the human-turn hook records their reply.
+    // The person picks it; the hook keeps their reply, and the agent records the remedy it read.
     expect(consumeSharedDirectiveAsk(proj, "1")).toBe(true);
+    expect(recordGuardRecoveryChoice(proj, "record-unit-completion", false).op).toBe("record-unit-completion");
     const env = engineEnv();
     delete env.AIDLC_SKIP_ARTIFACT_GUARD;
     const done = spawnSync(

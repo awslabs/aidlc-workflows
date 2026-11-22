@@ -10,9 +10,10 @@
 //           it. Every line the person types has a message record (the hooks
 //           ran) and no other record holds words they never typed (a
 //           subagent's brief is no turn of theirs), the plan question waits
-//           for them, "1" starts the bugfix
-//           plan, Reverse Engineering asks for approval and "Approve"
-//           approves it, and doctor no longer says the hooks never ran.
+//           for them, their files stay as they were until "1" starts the
+//           bugfix plan, Reverse Engineering asks for approval and "Approve"
+//           approves it, and doctor no longer says the hooks never ran or
+//           stopped beating while the workflow went on.
 //   case 2: the folder is NOT trusted. `copilot -p` then skips the project's
 //           hooks without a word, which is how a workshop lost a morning: no
 //           message record may appear, and doctor must tell the person the
@@ -20,7 +21,8 @@
 //
 // The model is Copilot's own-model mode (BYOK): in CI the Full Suite points it
 // at the credential broker, so no GitHub sign-in or Copilot seat is involved.
-// Pass/fail reads only what AI-DLC recorded and doctor, never the agent's prose.
+// Pass/fail reads only what AI-DLC recorded, doctor and the person's files,
+// never the agent's prose.
 // The run's report (seconds per turn, hook runs by kind from Copilot's own
 // session record, tokens) lands in the test's log folder.
 //
@@ -141,7 +143,7 @@ describe("t-exec-copilot-release-journey: a person's first day on Copilot CLI, b
           report.turns.push({ line, seconds: Math.round((Date.now() - started) / 1000) });
           lastOut = turn.out;
           if (turn.rc !== 0) report.problems.push(`Copilot ended "${line}" with exit ${turn.rc}: ${turn.out.slice(-1500)}`);
-          checkReleaseJourneyTurn(report, project.proj, index + 1, line);
+          checkReleaseJourneyTurn(report, project, index + 1, line);
           if (report.problems.length) break;
         }
         // A subagent's brief reaches the hooks as a prompt too: only the lines
@@ -153,8 +155,7 @@ describe("t-exec-copilot-release-journey: a person's first day on Copilot CLI, b
         if (!report.problems.length) report.problems.push(...hooksRanProblems(doctorChecks(project, env)));
         const runs = hookRuns(copilotHome);
         report.extra = { "hook runs": Object.values(runs).reduce((sum, count) => sum + count, 0), ...tokens(usageFile), hooksByKind: runs };
-        if (report.problems.length) report.extra.evidence = { ...releaseJourneyEvidence(project.proj), output: lastOut.slice(-4000) };
-      });
+      }, () => ({ ...releaseJourneyEvidence(project.proj), output: lastOut.slice(-4000) }));
       expectPersonFirstInJourney(report);
       expect(report.problems).toEqual([]);
       rmSync(project.root, { recursive: true, force: true });

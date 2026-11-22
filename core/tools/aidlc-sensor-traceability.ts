@@ -1,16 +1,19 @@
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import {
+  asksForHelp,
   errorMessage,
   getField,
   parseCheckboxes,
   parseStateStageSuffixes,
+  printUsageAndExit,
   readStateFile,
   recordDir,
   resolveBoltDag,
   resolveProjectDir,
   usesStageLevelPerUnitArtifacts,
 } from "./aidlc-lib.ts";
+import { aidlcDispatcherInvocation, sensorFireUsage } from "./aidlc-runtime-paths.ts";
 
 const VALID_STATUSES = new Set(["OK", "GAP", "ORPHAN", "Deferred", "N/A"]);
 
@@ -43,6 +46,7 @@ interface Result {
 interface Flags {
   outputPath?: string;
   stage?: string;
+  writeUpstream?: boolean;
 }
 
 interface UnitContext {
@@ -51,12 +55,25 @@ interface UnitContext {
   unitIds: Map<string, string>;
 }
 
+type RequirementKind = "functional" | "non-functional";
+
+interface RecordedRequirement {
+  id: string;
+  kind: RequirementKind;
+  of?: string;
+}
+
 interface UpstreamResolution {
   ids: Set<string>;
   reasons: string[];
   extraGaps: string[];
   unitContext?: UnitContext;
   storyAssignments?: Map<string, Set<string>>;
+  recorded: Map<string, RecordedRequirement> | null;
+  // The requirement kinds requirements.md gave no ID of, for want of a record:
+  // the table lists them as written.
+  unrecorded: RequirementKind[];
+  requirementsFile: string;
 }
 
 const ID_PATTERNS = {
@@ -74,6 +91,7 @@ function parseFlags(argv: string[]): Flags {
     const arg = argv[i];
     if (arg === "--stage") out.stage = argv[++i];
     else if (arg === "--output-path") out.outputPath = argv[++i];
+    else if (arg === "--write-upstream") out.writeUpstream = true;
   }
   return out;
 }
@@ -195,14 +213,63 @@ function tracedParent(id: string): string | undefined {
 
 // A requirement whose sub-requirements are traced too (FR1 beside FR1.1, or at
 // Code Generation NFR1 beside the Unit's NFR1.1) is traced through them, so it
-// needs no row of its own; a sub-requirement left out is still reported.
-function withoutTracedParents(ids: Set<string>): Set<string> {
+// needs no row of its own; a sub-requirement left out is still reported. A
+// recorded ID's requirement is its `of`; an ID the record does not hold (an
+// NFRx.y from NFR Requirements) is read by its form.
+function withoutTracedParents(ids: Set<string>, recorded: Map<string, RecordedRequirement> | null = null): Set<string> {
   const parents = new Set<string>();
   for (const id of ids) {
-    const parent = tracedParent(id);
+    const parent = recorded?.has(id) ? recorded.get(id)?.of : tracedParent(id);
     if (parent) parents.add(parent);
   }
   return new Set([...ids].filter((id) => !parents.has(id)));
+}
+
+// The FR and NFR IDs Requirements Analysis recorded in its own traceability.json,
+// spelled as requirements.md spells them, or null when it recorded none (work
+// begun before it did) or the record's shape is not exact. Every reader then
+// takes a table's requirements as the table lists them, and the ones the FR and
+// NFR patterns find in requirements.md, as every check read them before the
+// record.
+function recordedRequirements(docsDir: string): Map<string, RecordedRequirement> | null {
+  const read = readText(join(docsDir, "inception", "requirements-analysis", "traceability.json"));
+  const value = read.content === null ? undefined : parseJson(read.content);
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
+  const ids = (value as { ids?: unknown }).ids;
+  if (!Array.isArray(ids)) return null;
+  const recorded = new Map<string, RecordedRequirement>();
+  for (const entry of ids) {
+    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) return null;
+    const { id, kind, of } = entry as Record<string, unknown>;
+    if (typeof id !== "string" || id.trim() === "" || recorded.has(id.trim())) return null;
+    if (kind !== "functional" && kind !== "non-functional") return null;
+    if (of !== undefined && (typeof of !== "string" || of.trim() === "")) return null;
+    recorded.set(id.trim(), { id: id.trim(), kind, ...(typeof of === "string" ? { of: of.trim() } : {}) });
+  }
+  for (const entry of recorded.values()) {
+    if (entry.of !== undefined && (entry.of === entry.id || !recorded.has(entry.of))) return null;
+  }
+  return recorded;
+}
+
+const KIND_PATTERN: Record<RequirementKind, RegExp> = { functional: ID_PATTERNS.FR, "non-functional": ID_PATTERNS.NFR };
+
+// The requirements of these kinds a stage traces: the recorded ones, or without
+// a record the ones the table lists, as written, and the ones the pattern finds
+// in requirements.md. Its reasons are not said: a team's own form (FR-1) finds
+// none and is the table's to list.
+function addRequirements(result: UpstreamResolution, kinds: RequirementKind[], declared: readonly string[]): Set<string> {
+  if (result.recorded === null) {
+    const ids = new Set(declared);
+    for (const kind of kinds) {
+      const written = idsFromFile(result.requirementsFile, [KIND_PATTERN[kind]], "requirements.md").ids;
+      if (written.size === 0 && !result.unrecorded.includes(kind)) result.unrecorded.push(kind);
+      for (const id of written) ids.add(id);
+    }
+    return addSource(result, { ids });
+  }
+  const ids = [...result.recorded.values()].filter((entry) => kinds.includes(entry.kind)).map((entry) => entry.id);
+  return addSource(result, { ids: new Set(ids) });
 }
 
 // A criterion `AC{g}.{s}.{c}` belongs to the story `US{g}.{s}`.
@@ -256,9 +323,10 @@ function readPlanState(projectDir: string): string | null {
   }
 }
 
-// The engine places per-Unit artifacts at stage level whenever the approved
-// plan skips Units Generation, and then ignores any Unit DAG left on disk (for
-// example after a scope change). Follow the plan when the state records it.
+// The engine places per-Unit artifacts at stage level whenever the work has no
+// Units (the approved plan skips Units Generation, or the work passed it
+// without running it), and then ignores any Unit DAG left on disk (for example
+// after a scope change). Follow the plan when the state records it.
 function planSkipsUnits(stateContent: string | null): boolean {
   if (stateContent === null || !parseStateStageSuffixes(stateContent).has("units-generation")) return false;
   return usesStageLevelPerUnitArtifacts(getField(stateContent, "Scope"), stateContent);
@@ -412,14 +480,14 @@ function addUnitRows(result: UpstreamResolution, storyMap: string, context: Unit
 // NFR Design traces NFR Requirements' NFRx.y IDs; Infrastructure Design traces
 // NFR Design's, or NFR Requirements' when NFR Design did not run. Without NFR
 // Requirements no NFRx.y IDs exist, so both trace the NFRn IDs in
-// requirements.md, as nfr-requirements itself does. A source stage that ran
-// but left no artifacts still fails closed.
+// Requirements Analysis' record, as nfr-requirements itself does. A source
+// stage that ran but left no artifacts still fails closed.
 function resolveNfrUpstream(
   result: UpstreamResolution,
   stage: "nfr-design" | "infrastructure-design",
   docsDir: string,
   unit: string,
-  requirements: string,
+  declared: readonly string[],
   stateContent: string | null,
 ): void {
   const requirementsDir = constructionDir(docsDir, unit, "nfr-requirements");
@@ -437,12 +505,12 @@ function resolveNfrUpstream(
     if (source.ran) {
       result.reasons.push(`required upstream ${source.label} artifacts are missing under ${source.dir}`);
     } else {
-      addSource(result, idsFromFile(requirements, [ID_PATTERNS.NFR], "requirements.md"));
+      addRequirements(result, ["non-functional"], declared);
     }
     return;
   }
   if (!requirementsRan) {
-    addSource(result, idsFromFile(requirements, [ID_PATTERNS.NFR], "requirements.md"));
+    addRequirements(result, ["non-functional"], declared);
     return;
   }
   for (const id of source.ids) result.ids.add(id);
@@ -451,36 +519,34 @@ function resolveNfrUpstream(
   }
 }
 
-function resolveUpstream(stage: string, projectDir: string, outputPath: string): UpstreamResolution {
-  const result: UpstreamResolution = { ids: new Set(), reasons: [], extraGaps: [] };
+// `declared` is the table's own upstream_ids: with requirements.md's own, the
+// requirements it traces when Requirements Analysis recorded none.
+function resolveUpstream(stage: string, projectDir: string, outputPath: string, declared: readonly string[]): UpstreamResolution {
+  const result: UpstreamResolution = { ids: new Set(), reasons: [], extraGaps: [], recorded: null, unrecorded: [], requirementsFile: "" };
   const docsDir = recordDir(projectDir);
   if (!docsDir) {
     result.reasons.push("cannot resolve the active intent record directory");
     return result;
   }
-  const requirements = join(docsDir, "inception", "requirements-analysis", "requirements.md");
+  result.recorded = recordedRequirements(docsDir);
+  result.requirementsFile = join(docsDir, "inception", "requirements-analysis", "requirements.md");
   const stories = join(docsDir, "inception", "user-stories", "stories.md");
   const storyMap = join(docsDir, "inception", "units-generation", "unit-of-work-story-map.md");
 
   if (stage === "user-stories") {
-    addSource(result, idsFromFile(requirements, [ID_PATTERNS.FR, ID_PATTERNS.NFR], "requirements.md"));
+    addRequirements(result, ["functional", "non-functional"], declared);
     return result;
   }
   if (stage === "domain-design") {
-    addSource(
-      result,
-      existsSync(stories)
-        ? idsFromFile(stories, [ID_PATTERNS.US], "stories.md")
-        : idsFromFile(requirements, [ID_PATTERNS.FR], "requirements.md"),
-    );
+    if (existsSync(stories)) addSource(result, idsFromFile(stories, [ID_PATTERNS.US], "stories.md"));
+    else addRequirements(result, ["functional"], declared);
     return result;
   }
   if (stage === "units-generation") {
     const hasStories = existsSync(stories);
-    const source = hasStories
-      ? idsFromFile(stories, [ID_PATTERNS.US], "stories.md")
-      : idsFromFile(requirements, [ID_PATTERNS.FR], "requirements.md");
-    const sourceIds = addSource(result, source);
+    const sourceIds = hasStories
+      ? addSource(result, idsFromFile(stories, [ID_PATTERNS.US], "stories.md"))
+      : addRequirements(result, ["functional"], declared);
     const dag = resolveBoltDag(projectDir);
     if (dag.state === "malformed") {
       result.reasons.push(`unit-of-work-dependency.md is ${dag.reason}: ${dag.detail}`);
@@ -503,8 +569,11 @@ function resolveUpstream(stage: string, projectDir: string, outputPath: string):
     const mapped = storyAssignments(storyMap, context.units, context.unitIds, joinPatterns);
     if (mapped.reason) result.reasons.push(mapped.reason);
     result.storyAssignments = mapped.assignments;
-    for (const id of withoutTracedParents(sourceIds)) {
-      if (!mapped.assignments.has(id)) result.extraGaps.push(id);
+    // A requirement no Unit implements is a gap only against a list of them.
+    if (hasStories || result.recorded !== null) {
+      for (const id of withoutTracedParents(sourceIds, result.recorded)) {
+        if (!mapped.assignments.has(id)) result.extraGaps.push(id);
+      }
     }
     return result;
   }
@@ -542,7 +611,7 @@ function resolveUpstream(stage: string, projectDir: string, outputPath: string):
     } else if (unit && existsSync(storyMap)) {
       addUnitRows(result, storyMap, resolvedUnit.context, [ID_PATTERNS.FR]);
     } else {
-      addSource(result, idsFromFile(requirements, [ID_PATTERNS.FR], "requirements.md"));
+      addRequirements(result, ["functional"], declared);
     }
     return result;
   }
@@ -557,11 +626,11 @@ function resolveUpstream(stage: string, projectDir: string, outputPath: string):
       }
       if (result.ids.size > 0) return result;
     }
-    addSource(result, idsFromFile(requirements, [ID_PATTERNS.NFR], "requirements.md"));
+    addRequirements(result, ["non-functional"], declared);
     return result;
   }
   if (stage === "nfr-design" || stage === "infrastructure-design") {
-    resolveNfrUpstream(result, stage, docsDir, unit, requirements, stateContent);
+    resolveNfrUpstream(result, stage, docsDir, unit, declared, stateContent);
     return result;
   }
   if (stage === "code-generation") {
@@ -585,7 +654,7 @@ function resolveUpstream(stage: string, projectDir: string, outputPath: string):
     } else if (unit && existsSync(storyMap)) {
       addUnitRows(result, storyMap, resolvedUnit.context, [ID_PATTERNS.FR, ID_PATTERNS.NFR]);
     } else {
-      addSource(result, idsFromFile(requirements, [ID_PATTERNS.FR, ID_PATTERNS.NFR], "requirements.md"));
+      addRequirements(result, ["functional", "non-functional"], declared);
     }
     for (const id of detailedNfrIds(constructionDir(docsDir, unit, "nfr-requirements"), NFR_REQUIREMENT_FILES) ?? []) {
       result.ids.add(id);
@@ -720,8 +789,11 @@ function readTable(path: string, label: string): { data?: TraceabilityData; reas
   return validated.ok ? { data: validated.data } : { reason: `${label}: ${validated.reason}` };
 }
 
-// Build and Test's cross-Unit coverage: every requirement in requirements.md and,
-// when User Stories ran, every criterion in stories.md, each built by an `OK`
+// Build and Test's cross-Unit coverage: every requirement Requirements Analysis
+// recorded (without a record, every one the FR and NFR patterns find in
+// requirements.md and every one User Stories traced, or when it did not run
+// every one a Code Generation table lists) and, when User Stories ran,
+// every criterion in stories.md, each built by an `OK`
 // row whose file exists in some Code Generation table. A requirement with
 // sub-requirements (NFR1 over a Unit's NFR1.1) is built when each Unit has built
 // its own, and a row for the parent alone does not cover them; else it is built
@@ -739,13 +811,10 @@ function finalCoverage(projectDir: string): FinalCoverage {
     return { pass: false, uncovered: [], reason: "cannot resolve the active intent record directory", coverage: [] };
   }
   const reasons: string[] = [];
-  const requirements = idsFromFile(
-    join(docsDir, "inception", "requirements-analysis", "requirements.md"),
-    [ID_PATTERNS.FR, ID_PATTERNS.NFR],
-    "requirements.md",
-  );
-  if (requirements.reason) reasons.push(requirements.reason);
-  const reported = [...withoutTracedParents(requirements.ids)];
+  const recorded = recordedRequirements(docsDir);
+  const criteria: string[] = [];
+  const tracedByStories: string[] = [];
+  const tracedByCode: string[] = [];
 
   // Per ID, the latest stage's `N/A` reasons, or null when a row there is not one.
   const notApplicable = new Map<string, { rank: number; reasons: string[] | null }>();
@@ -766,9 +835,10 @@ function finalCoverage(projectDir: string): FinalCoverage {
     const read = readText(storiesPath);
     if (read.reason) reasons.push(read.reason);
     storyContent = read.content;
-    if (storyContent !== null) reported.push(...extractIds(storyContent, [ID_PATTERNS.AC]));
+    if (storyContent !== null) criteria.push(...extractIds(storyContent, [ID_PATTERNS.AC]));
     const table = readTable(join(docsDir, "inception", "user-stories", "traceability.json"), "User Stories traceability.json");
     if (table.reason) reasons.push(table.reason);
+    tracedByStories.push(...(table.data?.upstream_ids ?? []));
     for (const entry of table.data?.coverage ?? []) {
       traced(0, "user-stories", entry);
       if (entry.status !== "OK") continue;
@@ -819,6 +889,7 @@ function finalCoverage(projectDir: string): FinalCoverage {
       if (read.reason) reasons.push(read.reason);
       continue;
     }
+    tracedByCode.push(...read.data.upstream_ids);
     for (const id of [...read.data.upstream_ids, ...read.data.coverage.map((entry) => entry.id)]) {
       if (tracedParent(id)) children.add(id);
     }
@@ -837,6 +908,12 @@ function finalCoverage(projectDir: string): FinalCoverage {
     }
   }
   if (tables === 0) reasons.push(`no Code Generation traceability.json under ${construction}`);
+  // Without a record requirements.md's reasons are not said, as in addRequirements.
+  const requirementIds = recorded !== null ? [...recorded.keys()] : [
+    ...idsFromFile(join(docsDir, "inception", "requirements-analysis", "requirements.md"), [ID_PATTERNS.FR, ID_PATTERNS.NFR], "requirements.md").ids,
+    ...(storyContent !== null ? tracedByStories : tracedByCode),
+  ];
+  const reported = [...new Set([...withoutTracedParents(new Set(requirementIds), recorded), ...criteria])];
 
   // A story with no criteria cannot show it is built, so it stands for itself.
   const criteriaOrStory = (story: string): string[] => {
@@ -898,8 +975,112 @@ function uniqueSorted(values: string[]): string[] {
   return [...new Set(values)].sort();
 }
 
+// Why `path` is not this stage's own table inside the active record, or null.
+function tableWhere(docsDir: string, stage: string, path: string): string | null {
+  if (basename(path) !== "traceability.json" || basename(dirname(path)) !== stage) {
+    return `nothing written: the table this writes is the ${stage} stage's own traceability.json`;
+  }
+  const inside = (root: string, candidate: string): boolean => {
+    const rel = relative(root, candidate);
+    return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+  };
+  try {
+    let existing = dirname(path);
+    while (!existsSync(existing) && dirname(existing) !== existing) existing = dirname(existing);
+    const root = realpathSync(docsDir);
+    if (!inside(root, realpathSync(existing)) || (existsSync(path) && !inside(root, realpathSync(path)))) {
+      return "nothing written: the table goes inside the active intent's record";
+    }
+    if (existsSync(path) && !statSync(path).isFile()) return "nothing written: the table's path is not a file";
+  } catch (error) {
+    return `nothing written: ${errorMessage(error)}`;
+  }
+  return null;
+}
+
+function unrecordedNote(kinds: RequirementKind[]): string[] {
+  if (kinds.length === 0) return [];
+  const which = kinds.length === 2 ? "FR and NFR ID" : kinds[0] === "functional" ? "FR ID" : "NFR ID";
+  return [
+    `Requirements Analysis recorded no requirement IDs, so none are listed here: add every ${which} ` +
+      "requirements.md defines to upstream_ids, as written, each with a coverage row",
+  ];
+}
+
+// The table a later stage starts with, written by the tool from the resolver
+// the check uses: every ID the check asks this stage for goes in
+// `upstream_ids`, each with a `GAP` row until the agent sets its status and
+// target, so none is left out. What the table already holds stays as it is,
+// and nothing is written when nothing is missing, so running it again never
+// changes what a review covered.
+function writeUpstream(stage: string, rawOutputPath: string): void {
+  const reply = (fields: { written: boolean; upstream_ids?: unknown[]; added?: string[]; reason?: string }): void => {
+    process.stdout.write(`${JSON.stringify({ path: rawOutputPath, upstream_ids: [], added: [], ...fields })}\n`);
+  };
+  const projectDir = resolveProjectDir();
+  const docsDir = recordDir(projectDir);
+  const path = resolve(normalizePath(rawOutputPath));
+  const refusal = docsDir ? tableWhere(docsDir, stage, path) : "nothing written: cannot resolve the active intent record directory";
+  if (refusal) {
+    reply({ written: false, reason: refusal });
+    return;
+  }
+  let table: Record<string, unknown> = {};
+  if (existsSync(path)) {
+    const value = parseJson(readFileSync(path, "utf-8"));
+    if (value === null || typeof value !== "object" || Array.isArray(value)) {
+      reply({ written: false, reason: "nothing written: traceability.json is not a JSON object" });
+      return;
+    }
+    table = value as Record<string, unknown>;
+  }
+  const declared = table.upstream_ids ?? [];
+  const coverage = table.coverage ?? [];
+  if (!Array.isArray(declared) || !declared.every((id) => typeof id === "string") || !Array.isArray(coverage)) {
+    reply({ written: false, reason: "nothing written: upstream_ids must be an array of strings and coverage an array" });
+    return;
+  }
+  const upstream = resolveUpstream(stage, projectDir, path, declared);
+  const required = [...withoutTracedParents(upstream.ids, upstream.recorded)];
+  const rows = new Set(coverage.map((entry) => (entry as { id?: unknown } | null)?.id));
+  const newIds = required.filter((id) => !declared.includes(id));
+  const newRows = required.filter((id) => !rows.has(id));
+  const upstreamIds = [...declared, ...newIds];
+  const written = newIds.length > 0 || newRows.length > 0;
+  if (written) {
+    const unit = extractUnitName(path);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, `${JSON.stringify({
+      stage,
+      ...(unit ? { unit } : {}),
+      ...table,
+      upstream_ids: upstreamIds,
+      coverage: [...coverage, ...newRows.map((id) => ({ id, status: "GAP" }))],
+    }, null, 2)}\n`);
+  }
+  const reasons = [...upstream.reasons, ...unrecordedNote(upstream.unrecorded)];
+  reply({
+    written,
+    upstream_ids: upstreamIds,
+    added: [...new Set([...newIds, ...newRows])],
+    ...(reasons.length > 0 ? { reason: uniqueSorted(reasons).join("; ") } : {}),
+  });
+}
+
 export function main(argv: string[]): void {
+  if (asksForHelp(argv)) {
+    printUsageAndExit(
+      `Usage: ${sensorFireUsage("traceability")}\n` +
+        `       ${aidlcDispatcherInvocation("sensor-traceability --stage build-and-test")}`,
+    );
+  }
   const flags = parseFlags(argv);
+  if (flags.writeUpstream) {
+    if (!flags.stage) fail("--stage is required with --write-upstream");
+    if (!flags.outputPath) fail("--output-path is required");
+    writeUpstream(flags.stage, flags.outputPath);
+    return;
+  }
   if (flags.stage === "build-and-test" && !flags.outputPath) {
     process.stdout.write(`${JSON.stringify(finalCoverage(resolveProjectDir()))}\n`);
     return;
@@ -933,8 +1114,8 @@ export function main(argv: string[]): void {
   const invalidEntries: string[] = [];
   const reasons: string[] = [];
   const declared = new Set(data.upstream_ids);
-  const upstream = resolveUpstream(stage, projectDir, outputPath);
-  const required = withoutTracedParents(upstream.ids);
+  const upstream = resolveUpstream(stage, projectDir, outputPath, data.upstream_ids);
+  const required = withoutTracedParents(upstream.ids, upstream.recorded);
 
   for (const [field, entries] of [["coverage", data.coverage], ["reverse", data.reverse]] as const) {
     for (const entry of entries) {
@@ -956,7 +1137,7 @@ export function main(argv: string[]): void {
   }
 
   const covered = new Set(data.coverage.map((entry) => entry.id));
-  const missingFromTable = [...withoutTracedParents(declared)].filter((id) => !covered.has(id));
+  const missingFromTable = [...withoutTracedParents(declared, upstream.recorded)].filter((id) => !covered.has(id));
   for (const entry of data.coverage) {
     if (!declared.has(entry.id)) invalidEntries.push(`coverage:${entry.id}: id is absent from upstream_ids`);
   }

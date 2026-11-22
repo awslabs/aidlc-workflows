@@ -19,7 +19,9 @@
 //   - complete-workflow: final phase -> Verified.
 //   - jump forward: source phase -> Verified, jumped-over phases -> Skipped,
 //     target -> Active. jump backward: reset phases with EXECUTE stages ->
-//     Pending, target -> Active.
+//     Pending, target -> Active. The audit matches: only a forward jump
+//     records the phase it leaves as completed and verified, and each phase
+//     it passes over that the plan runs as skipped.
 //   - scope-change / recompose: re-derive only Pending/Skipped rows against
 //     the new plan; Verified/Active rows are history and stay untouched.
 //   - a state file WITHOUT the section still transitions cleanly (the flip is
@@ -57,6 +59,7 @@ import {
   seedStateFile,
   sedReplaceInFile,
 } from "../harness/fixtures.ts";
+import { auditBlockField, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -133,8 +136,22 @@ function phaseProgressSection(proj: string): string {
   return m ? m[0] : "(no section)";
 }
 
-function runIntentCreate(proj: string, scope: string): RunResult {
-  return run(UTILITY_TOOL, proj, ["intent-create", "--scope", scope]);
+/** The record's PHASE_* rows, each with the phase it starts or leaves. */
+function phaseRows(proj: string): string[] {
+  return readAuditShardEvents(proj)
+    .filter((row) => row.event.startsWith("PHASE_"))
+    .map((row) => `${row.event} ${auditBlockField(row.block, "Phase") ?? auditBlockField(row.block, "From phase") ?? ""}`.trim());
+}
+
+/** Each PHASE_SKIPPED row as `<phase>: <reason>`. */
+function phaseSkips(proj: string): string[] {
+  return readAuditShardEvents(proj)
+    .filter((row) => row.event === "PHASE_SKIPPED")
+    .map((row) => `${auditBlockField(row.block, "Phase")}: ${auditBlockField(row.block, "Reason")}`);
+}
+
+function runIntentCreate(proj: string, scope: string, extra: string[] = []): RunResult {
+  return run(UTILITY_TOOL, proj, ["intent-create", "--scope", scope, ...extra]);
 }
 
 function recordRequiredReview(proj: string, slug: string): void {
@@ -276,6 +293,7 @@ describe("t232 Phase Progress - jump + complete-workflow", () => {
 
   test("forward jump: source Verified, jumped-over Skipped, target Active", () => {
     expect(created.rc).toBe(0);
+    const before = phaseRows(proj).length;
     const res = run(JUMP_TOOL, proj, [
       "execute", "--target", "deployment-pipeline", "--direction", "forward",
     ]);
@@ -284,9 +302,21 @@ describe("t232 Phase Progress - jump + complete-workflow", () => {
     expect(rowStatus(proj, "Inception")).toBe("Skipped");
     expect(rowStatus(proj, "Construction")).toBe("Skipped");
     expect(rowStatus(proj, "Operation")).toBe("Active");
+    // Each whole phase the jump passed over is recorded as skipped by it,
+    // between the phase it left and the one it entered.
+    expect(phaseRows(proj).slice(before)).toEqual([
+      "PHASE_COMPLETED ideation", "PHASE_VERIFIED",
+      "PHASE_SKIPPED inception", "PHASE_SKIPPED construction",
+      "PHASE_STARTED operation",
+    ]);
+    expect(phaseSkips(proj)).toEqual([
+      "inception: Skipped by jump to deployment-pipeline (forward)",
+      "construction: Skipped by jump to deployment-pipeline (forward)",
+    ]);
   });
 
   test("backward jump: reset phases with EXECUTE stages return to Pending", () => {
+    const before = phaseRows(proj).length;
     const res = run(JUMP_TOOL, proj, [
       "execute", "--target", "practices-discovery", "--direction", "backward",
     ]);
@@ -296,6 +326,9 @@ describe("t232 Phase Progress - jump + complete-workflow", () => {
     expect(rowStatus(proj, "Operation")).toBe("Pending");
     // History before the target is not rewritten.
     expect(rowStatus(proj, "Ideation")).toBe("Verified");
+    // The person left Operation unfinished: the record starts Inception again
+    // and never says the phase they left was completed or verified.
+    expect(phaseRows(proj).slice(before)).toEqual(["PHASE_STARTED inception"]);
   });
 
   test("complete-workflow flips the final phase to Verified", () => {
@@ -308,6 +341,47 @@ describe("t232 Phase Progress - jump + complete-workflow", () => {
       run(STATE_TOOL, proj, ["complete-workflow", "feedback-optimization"]).rc,
     ).toBe(0);
     expect(rowStatus(proj, "Operation")).toBe("Verified");
+  });
+});
+
+describe("t232 Phase Progress - a forward jump records only the phases it passes over", () => {
+  test("a jump into the next phase records no phase as skipped", () => {
+    const proj = createTestProject();
+    tempDirs.push(proj);
+    expect(runIntentCreate(proj, "feature").rc).toBe(0);
+    const before = phaseRows(proj).length;
+    const res = run(JUMP_TOOL, proj, [
+      "execute", "--target", "practices-discovery", "--direction", "forward",
+    ]);
+    expect(res.rc).toBe(0);
+    expect(rowStatus(proj, "Inception")).toBe("Active");
+    expect(phaseRows(proj).slice(before)).toEqual([
+      "PHASE_COMPLETED ideation", "PHASE_VERIFIED", "PHASE_STARTED inception",
+    ]);
+  });
+
+  test("a phase the plan leaves out keeps creation's one row", () => {
+    const proj = createTestProject();
+    tempDirs.push(proj);
+    const inception = [
+      "reverse-engineering", "practices-discovery", "requirements-analysis",
+      "user-stories", "refined-mockups", "domain-design", "units-generation",
+      "contract-design", "delivery-planning",
+    ];
+    expect(
+      runIntentCreate(proj, "feature", ["--skip", inception.join(","), "--plan-name", "no-inception"]).rc,
+    ).toBe(0);
+    expect(phaseSkips(proj)).toEqual(["inception: this plan excludes inception"]);
+    const before = phaseRows(proj).length;
+    const res = run(JUMP_TOOL, proj, [
+      "execute", "--target", "functional-design", "--direction", "forward",
+    ]);
+    expect(res.rc).toBe(0);
+    expect(rowStatus(proj, "Inception")).toBe("Skipped");
+    expect(phaseRows(proj).slice(before)).toEqual([
+      "PHASE_COMPLETED ideation", "PHASE_VERIFIED", "PHASE_STARTED construction",
+    ]);
+    expect(phaseSkips(proj)).toEqual(["inception: this plan excludes inception"]);
   });
 });
 

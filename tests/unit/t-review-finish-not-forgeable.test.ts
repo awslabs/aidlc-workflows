@@ -1,9 +1,9 @@
 // covers: cli:aidlc-audit(append-reserved,append-batch-reserved), hook:aidlc-log-subagent,
-// function:handleReview, function:noAgentFinishedSinceReview, audit:SUBAGENT_COMPLETED,
+// function:handleReview, function:noReviewerFinishedSinceReview, audit:SUBAGENT_COMPLETED,
 // audit:REVIEW_COMPLETED
 //
 // A verdict recorded with no agent finished since its request is marked
-// `Reviewer Finished Before Verdict: no` (#2427, issue #943). Any
+// `Reviewer Finished Before Verdict: no` (#2427, issue #943). The reviewer's
 // SUBAGENT_COMPLETED row since the request clears that mark, so the row has
 // to come from the host: the SubagentStop hook that saw an agent finish. The
 // public audit CLI is the main agent's own shell command, so it must not be

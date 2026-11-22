@@ -69,6 +69,8 @@ import {
   memoryGuardPolicyDeclarations,
   memoryStrictHoldsGuardPolicy,
   memorySectionBody,
+  MESSAGE_FILL,
+  MESSAGE_SLOT,
   parseChangeControl,
   parseChangeControlStateLine,
   parseGuardPolicy,
@@ -161,6 +163,26 @@ function recordHumanPrompt(proj: string, prompt: string, env: NodeJS.ProcessEnv 
   });
   expect(result.exitCode, result.stderr.toString()).toBe(0);
   return result.stdout.toString();
+}
+
+// The id of the message the human-turn hook kept for the latest turn on the
+// selected work: what the agent names with `--message` for a setting the person
+// asked for in it.
+function lastMessageId(proj: string, intent?: string, space?: string): string {
+  const turn = readAuditShardEvents(proj, intent, space).filter((row) => row.event === "HUMAN_TURN").at(-1);
+  const id = turn === undefined ? null : auditBlockField(turn.block, "Message Id");
+  expect(id, "the latest HUMAN_TURN row names the message it kept").not.toBeNull();
+  return id as string;
+}
+
+// A typed prompt on the work that applies nothing: the hook hands the agent at
+// most the id of the message it kept (never its words), so a setting the agent
+// runs for it can name that message.
+function appliedNothing(out: string, proj: string): void {
+  if (out === "") return;
+  const id = lastMessageId(proj);
+  expect((JSON.parse(out) as { hookSpecificOutput?: { additionalContext?: string } }).hookSpecificOutput?.additionalContext)
+    .toBe(`This message of the person's is on record as ${id}: a decision you record from it can name it with --message ${id}.`);
 }
 
 function utilityError(stderr: string): string {
@@ -663,6 +685,25 @@ describe("t333 (3) resolution precedence", () => {
     expect(resolveGuardPolicy(proj).source).toBe("scope enterprise");
   });
 
+  // The learnings tool once wrote its visible date after the text of every
+  // line it kept, a `Mode:` line too. Such a line already in memory declares
+  // its value, under either heading; anything else after the value is still
+  // refused.
+  test("a Mode line the learnings tool wrote with its date declares its value", () => {
+    const { proj } = project("classic");
+    declareMemoryMode(proj, "project", "strict (learned 2026-10-26) <!-- cid:unscoped:user-stories:3c289971 -->");
+    expect(memoryGuardPolicyDeclarations(proj)).toEqual([
+      { layer: "project", path: memoryFile(proj, "project"), heading: "## Guard Policy", value: "strict" },
+    ]);
+    expect(resolveGuardPolicy(proj).value).toBe("strict");
+    const legacy = project("classic");
+    declareLegacyMemoryMode(legacy.proj, "team", "relaxed (learned 2026-10-26)");
+    expect(memoryGuardPolicyDeclarations(legacy.proj).map((d) => d.value)).toEqual(["relaxed"]);
+    const other = project("classic");
+    declareMemoryMode(other.proj, "team", "strict (learned yesterday)");
+    expect(() => resolveGuardPolicy(other.proj)).toThrow('Invalid Guard Policy Mode "strict (learned yesterday)"');
+  });
+
   test("an invalid memory value is a validation error naming the file, the section, and the allowed values", () => {
     const { proj } = project("classic");
     declareMemoryMode(proj, "team", "sometimes");
@@ -681,7 +722,7 @@ describe("t333 (3) resolution precedence", () => {
     const content = readFileSync(state, "utf-8");
     expect(memoryStrictHoldsGuardPolicy(proj, content)).toBe(false);
     expect(fenceSwitchSentence(proj, "review-freeze", content)).toContain(
-      "guard.review-freeze off --person-words '<their words>'` yourself",
+      `guard.review-freeze off --message '${MESSAGE_SLOT}'\` yourself${MESSAGE_FILL}`,
     );
     const memory = memoryFile(proj, "project");
     rmSync(memory);
@@ -1308,6 +1349,7 @@ describe("t333 (4) config-change, the slash flag, and the status line", () => {
     const { proj, state } = project("classic");
     expect(getField(readFileSync(state, "utf-8"), GUARD_POLICY_FIELD)).toBe("off (from scope classic)");
     recordHumanPrompt(proj, "carry on");
+    const carryOn = lastMessageId(proj);
     appendAuditEntry("QUESTION_ANSWERED", { Stage: "requirements-analysis", Answer: "Carry on" }, proj);
     const dispatcher = join(AIDLC_SRC, "tools", "aidlc.ts");
     const raised = run(dispatcher, ["engine", "config", "set", "guard-policy", "relaxed"], proj, FENCE_ENV_CLEAR);
@@ -1315,22 +1357,36 @@ describe("t333 (4) config-change, the slash flag, and the status line", () => {
     // "carry on" asked for no setting, so the raise is the command's.
     expect(getField(readFileSync(state, "utf-8"), GUARD_POLICY_FIELD)).toBe("relaxed (set by a command)");
     expect(guardPolicyRows(proj).map((row) => auditBlockField(row.block, "New Value"))).toEqual(["relaxed"]);
-    // Going back down to off is a lowering: the person's message since the last
-    // decision stands for it; the answer the agent recorded from it is not a
-    // second decision, so the agent carries out what it read in their words.
-    const lowered = run(dispatcher, ["engine", "config", "set", "guard-policy", "off"], proj, FENCE_ENV_CLEAR);
+    // Going back down to off is a lowering: the message the agent names stands
+    // for it; the answer the agent recorded from it is the one decision it gave,
+    // so the agent carries out what it read in their words.
+    const lowered = run(dispatcher, [
+      "engine", "config", "set", "guard-policy", "off", "--message", carryOn,
+    ], proj, FENCE_ENV_CLEAR);
     expect(lowered.status, lowered.stderr).toBe(0);
-    expect(getField(readFileSync(state, "utf-8"), GUARD_POLICY_FIELD)).toBe("off (set by a command)");
-    // Once another decision has used their message up, a lowering waits for their word.
+    expect(getField(readFileSync(state, "utf-8"), GUARD_POLICY_FIELD)).toBe("off (set by you)");
+    // A message stands beside the one decision it gave; once a second decision
+    // has used it up, a lowering waits for their word. A row in the same second
+    // as the message is no decision after it.
     const raisedAgain = run(dispatcher, ["engine", "config", "set", "guard-policy", "relaxed"], proj, FENCE_ENV_CLEAR);
     expect(raisedAgain.status, raisedAgain.stderr).toBe(0);
+    Bun.sleepSync(1100);
     appendAuditEntry("GATE_REJECTED", { Stage: "requirements-analysis" }, proj);
+    Bun.sleepSync(1100);
+    appendAuditEntry("GATE_APPROVED", { Stage: "requirements-analysis", "User Input": "Approve" }, proj);
     const refused = run(dispatcher, ["engine", "config", "set", "guard-policy", "off"], proj, FENCE_ENV_CLEAR);
     expect(refused.status).not.toBe(0);
     expect(refusalError(refused.stderr)).toContain("Setting Guard Policy off lowers fences, which is the person's call.");
+    expect(refusalError(refused.stderr)).not.toContain("If their message");
+    const spent = run(dispatcher, [
+      "engine", "config", "set", "guard-policy", "off", "--message", carryOn,
+    ], proj, FENCE_ENV_CLEAR);
+    expect(spent.status).not.toBe(0);
+    expect(refusalError(spent.stderr)).toContain(`message ${carryOn} arrived before the last approval or decision`);
+    expect(getField(readFileSync(state, "utf-8"), GUARD_POLICY_FIELD)).toBe("relaxed (set by a command)");
     recordHumanPrompt(proj, "put the guards back off");
     const asked = run(dispatcher, [
-      "engine", "config", "set", "guard-policy", "off", "--person-words", "put the guards back off",
+      "engine", "config", "set", "guard-policy", "off", "--message", lastMessageId(proj),
     ], proj, FENCE_ENV_CLEAR);
     expect(asked.status, asked.stderr).toBe(0);
     expect(getField(readFileSync(state, "utf-8"), GUARD_POLICY_FIELD)).toBe("off (set by you)");
@@ -1521,6 +1577,62 @@ describe("t333 (6) a memory edit observed by a governed check", () => {
     expect(resolved.value).toBe("strict");
     mkdirSync(join(proj, "nothing"), { recursive: true });
     expect(existsSync(join(proj, "aidlc", "spaces", "default", "intents", "audit"))).toBe(false);
+  });
+
+  // A teammate's clone keeps its own shard, and shards are read in filename
+  // order, which is not the order the rows were written in.
+  const stamp = () => new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+  function nextSecond(): void {
+    const second = Math.floor(Date.now() / 1000);
+    while (Math.floor(Date.now() / 1000) === second) {}
+  }
+  function teammateRow(proj: string, fields: Record<string, string>, timestamp: string): void {
+    const ours = readAuditShardEvents(proj).at(-1)!.shard;
+    const shard = isAbsolute(ours) ? ours : join(proj, ours);
+    const body = Object.entries(fields).map(([key, value]) => `**${key}**: ${value}\n`).join("");
+    // "~" sorts after ".", so the teammate's shard is read after ours.
+    writeFileSync(shard.replace(/\.md$/, "~teammate.md"),
+      `\n## Guard Policy Set\n**Timestamp**: ${timestamp}\n**Event**: GUARD_POLICY_SET\n${body}\n---\n`);
+  }
+  const ours = (proj: string) => guardPolicyRows(proj).filter((row) => !row.shard.endsWith("~teammate.md"));
+
+  test("the person's newer setting is the value a governed check starts from, though a teammate's older one is read last", () => {
+    const { proj, state } = project("enterprise");
+    teammateRow(proj, { "Old Value": "off", "New Value": "strict", Source: "you" }, stamp());
+    nextSecond();
+    writeFileSync(state, setField(readFileSync(state, "utf-8"), GUARD_POLICY_FIELD, "off (set by you)"));
+    appendAuditEntry("GUARD_POLICY_SET", { "Old Value": "strict", "New Value": "off", Source: "you" }, proj);
+    expect(guardPolicyRows(proj).at(-1)!.shard).toEndWith("~teammate.md");
+    expect(governedGuardPolicy(proj)).toMatchObject({ value: "off", source: "you" });
+    governedGuardPolicy(proj);
+    expect(ours(proj)).toHaveLength(1);
+    const status = run(UTILITY, ["status"], proj);
+    expect(status.stdout).toContain(`${STATUS_POLICY}off (set by you)\n`);
+  });
+
+  test("a memory edit undone is recorded, though a teammate's older setting naming the same value is read last", () => {
+    const { proj } = project("classic");
+    teammateRow(proj, { "Old Value": "strict", "New Value": "off", Source: "scope classic" }, stamp());
+    nextSecond();
+    declareMemoryMode(proj, "team", "strict");
+    expect(governedGuardPolicy(proj).value).toBe("strict");
+    const path = memoryFile(proj, "team");
+    writeFileSync(path, readFileSync(path, "utf-8").replace("Mode: strict\n", ""));
+    expect(governedGuardPolicy(proj).value).toBe("off");
+    const rows = ours(proj);
+    expect(rows).toHaveLength(2);
+    expect(auditBlockField(rows[1].block, "Old Value")).toBe("strict");
+    expect(auditBlockField(rows[1].block, "New Value")).toBe("off");
+    expect(auditBlockField(rows[1].block, "Source")).toBe("scope classic");
+  });
+
+  test("two settings in the same second in two shards: the record cannot tell, so the intent's own line is where it starts", () => {
+    const { proj, state } = project("enterprise");
+    writeFileSync(state, setField(readFileSync(state, "utf-8"), GUARD_POLICY_FIELD, "relaxed (set by you)"));
+    appendAuditEntry("GUARD_POLICY_SET", { "Old Value": "strict", "New Value": "relaxed", Source: "you" }, proj);
+    teammateRow(proj, { "Old Value": "relaxed", "New Value": "strict", Source: "you" }, guardPolicyRows(proj).at(-1)!.timestamp);
+    expect(governedGuardPolicy(proj).value).toBe("relaxed");
+    expect(ours(proj)).toHaveLength(1);
   });
 });
 
@@ -2048,7 +2160,7 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
     // Nobody asked, so the raise is the command's.
     expect(run(dispatcher, ["engine", "config", "set", "guard.review-freeze", "on"], proj, FENCE_ENV_CLEAR).status).toBe(0);
     expect(getField(readFileSync(state, "utf-8"), GUARDS_ON_FIELD)).toBe("review-freeze (set by a command)");
-    // With no word of the person's since the last decision, the agent cannot.
+    // With no message of theirs named, the agent cannot.
     const refused = run(UTILITY, ["config-change", "--guard-policy", "off"], proj, FENCE_ENV_CLEAR);
     expect(refused.status).not.toBe(0);
     // The agent runs it when they ask: no command is handed to them to type.
@@ -2109,8 +2221,8 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
     expect(rowsOf(proj, "GUARD_RESTORED")).toHaveLength(0);
   });
 
-  const fenceRefusal = "Turning the state-transition check off is the person's call. No reply from the person has arrived since the last decision: run it when they ask for it.";
-  const policyRefusal = "Setting Guard Policy relaxed lowers fences, which is the person's call. No reply from the person has arrived since the last decision: run it when they ask for it.";
+  const fenceRefusal = "Turning the state-transition check off is the person's call. Run it with --message <id>, the message they asked in, when they ask for it.";
+  const policyRefusal = "Setting Guard Policy relaxed lowers fences, which is the person's call. Run it with --message <id>, the message they asked in, when they ask for it.";
 
   // Human turns and refusals may be logged without mutating workflow facts.
   function mutationRows(proj: string, intent?: string, space?: string) {
@@ -2216,8 +2328,9 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
     expect(readFileSync(state, "utf-8")).toBe(lowered);
   });
 
-  // The person asks in their own words; the agent runs the setter, which their
-  // reply on record backs. With no reply on record it refuses.
+  // The person asks in their own words; the agent runs the setter naming the
+  // message they asked in, which the setter proves theirs. With no message
+  // named it refuses.
   test.each<{ operation: string; args: string[]; refusal: string; field: string; lowered: string; event: string; line: string }>([
     {
       operation: "fence setter",
@@ -2249,19 +2362,20 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
     expect(readFileSync(state, "utf-8")).toBe(before);
     const asked = 'please relax the  "state" checks for this piece of work';
     recordHumanPrompt(proj, asked);
-    const changed = run(UTILITY, [...args, "--person-words", asked], proj, FENCE_ENV_CLEAR);
+    const id = lastMessageId(proj);
+    const changed = run(UTILITY, [...args, "--message", id], proj, FENCE_ENV_CLEAR);
     expect(changed.status, changed.stderr).toBe(0);
     expect(getField(readFileSync(state, "utf-8"), field)).toBe(lowered);
     // One line, in their words, with the way back; the record keeps the words as delivered.
     expect(changed.stdout).toContain(line);
     expect(changed.stdout).not.toMatch(/The state transition check is off for this piece of work \(logged|Fence state-transition|Guard Policy changed:/);
     expect(auditBlockField(rowsOf(proj, event)[0].block, "Person Reply")).toBe(asked);
+    expect(auditBlockField(rowsOf(proj, event)[0].block, "Message Id")).toBe(id);
   });
 
-  // Creation follows the same rule as the setters above: the person's turn is the
-  // authority, whoever runs the command, so the work it creates records the
-  // lowering as theirs. Before, a CLI creation refused whatever the person had
-  // said and told the agent to create the work and run the setter afterwards.
+  // Creation follows the same rule as the setters above: the message the agent
+  // names is the authority, whoever runs the command, so the work it creates
+  // records the lowering as theirs.
   test("a CLI intent creation lowers fences after the person asked, and not before", () => {
     const args = [
       "intent-create", "--scope", "enterprise", "--arguments", "unapproved lowering",
@@ -2274,8 +2388,7 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
     const registry = readFileSync(join(intents, "intents.json"), "utf-8");
     const active = readFileSync(join(intents, "active-intent"), "utf-8");
     const records = readdirSync(intents).sort();
-    // With nothing of theirs on record since the last decision, it refuses, and
-    // creates nothing.
+    // With no message of theirs named, it refuses, and creates nothing.
     const refused = run(UTILITY, args, proj, FENCE_ENV_CLEAR);
     expect(refused.status).toBe(1);
     expect(JSON.parse(refused.stderr)).toEqual({ error: policyRefusal });
@@ -2284,10 +2397,10 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
     expect(readFileSync(join(intents, "intents.json"), "utf-8")).toBe(registry);
     expect(readFileSync(join(intents, "active-intent"), "utf-8")).toBe(active);
     expect(readdirSync(intents).sort()).toEqual(records);
-    // Their turn, then the same command: the new work starts with it, as theirs,
-    // and the work already open is untouched.
+    // Their message, then the same command naming it: the new work starts with
+    // it, as theirs, and the work already open is untouched.
     recordHumanPrompt(proj, "please relax the checks for the next piece of work");
-    const created = run(UTILITY, [...args, "--person-words", "please relax the checks for the next piece of work"], proj, FENCE_ENV_CLEAR);
+    const created = run(UTILITY, [...args, "--message", lastMessageId(proj)], proj, FENCE_ENV_CLEAR);
     expect(created.status, created.stderr).toBe(0);
     const createdActive = readFileSync(join(intents, "active-intent"), "utf-8").trim();
     const createdState = join(intents, createdActive, "aidlc-state.md");
@@ -2309,7 +2422,7 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
     const { proj, state } = project("enterprise");
     const before = readFileSync(state, "utf-8");
     const ledger = mutationRows(proj);
-    expect(recordHumanPrompt(proj, prompt)).toBe("");
+    appliedNothing(recordHumanPrompt(proj, prompt), proj);
     expect(readFileSync(state, "utf-8")).toBe(before);
     expect(mutationRows(proj)).toEqual(ledger);
   });
@@ -2333,14 +2446,16 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
 
   test("the CLI can raise Guard Policy after the agent's setter lowered it for them", () => {
     const { proj, state } = project("enterprise");
-    // Their words, then the setter the agent runs for them: the prompt itself
+    // Their message, then the setter the agent runs naming it: the prompt itself
     // changes nothing.
     const before = readFileSync(state, "utf-8");
     const ledger = mutationRows(proj);
-    expect(recordHumanPrompt(proj, "Guard policy off.")).toBe("");
+    appliedNothing(recordHumanPrompt(proj, "Guard policy off."), proj);
     expect(readFileSync(state, "utf-8")).toBe(before);
     expect(mutationRows(proj)).toEqual(ledger);
-    const lowered = run(UTILITY, ["config-change", "--guard-policy", "off", "--person-words", "Guard policy off."], proj, FENCE_ENV_CLEAR);
+    const lowered = run(
+      UTILITY, ["config-change", "--guard-policy", "off", "--message", lastMessageId(proj)], proj, FENCE_ENV_CLEAR,
+    );
     expect(lowered.status, lowered.stderr).toBe(0);
     expect(recordHumanPrompt(proj, "/aidlc --guard-policy strict")).toBe("");
     expect(getField(readFileSync(state, "utf-8"), GUARD_POLICY_FIELD)).toBe("off (set by you)");
@@ -2375,12 +2490,12 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
   ])("a policy prompt is recorded and applies nothing until the agent runs the setter: $prompt", ({ prompt, value }) => {
     const { proj, state } = project("enterprise");
     const before = readFileSync(state, "utf-8");
-    expect(recordHumanPrompt(proj, prompt)).toBe("");
+    appliedNothing(recordHumanPrompt(proj, prompt), proj);
     expect(readFileSync(state, "utf-8")).toBe(before);
     expect(guardPolicyRows(proj)).toHaveLength(0);
-    // Typed, the line is theirs; in plain words, the agent names their words.
-    const words = /^[/$]aidlc /.test(prompt) ? [] : ["--person-words", prompt];
-    const lowered = run(UTILITY, ["config-change", "--guard-policy", value, ...words], proj, FENCE_ENV_CLEAR);
+    // Typed, the line is theirs; in plain words, the agent names their message.
+    const named = /^[/$]aidlc /.test(prompt) ? [] : ["--message", lastMessageId(proj)];
+    const lowered = run(UTILITY, ["config-change", "--guard-policy", value, ...named], proj, FENCE_ENV_CLEAR);
     expect(lowered.status, lowered.stderr).toBe(0);
     expect(getField(readFileSync(state, "utf-8"), GUARD_POLICY_FIELD)).toBe(`${value} (set by you)`);
     const rows = guardPolicyRows(proj);
@@ -2596,14 +2711,14 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
     expect(readdirSync(intents).sort()).toEqual(records);
   });
 
-  test("scope-change refuses lowering with no person on record, and carries combined switches once they have spoken", () => {
+  test("scope-change refuses lowering with no message named, and carries combined switches on the message they asked in", () => {
     const { proj, state } = project("enterprise");
     const args = ["scope-change", "--scope", "classic", "--guard-policy", "relaxed", "--guard.state-transition", "off"];
     const before = readFileSync(state, "utf-8");
     const ledger = mutationRows(proj);
     const refused = run(UTILITY, args, proj, FENCE_ENV_CLEAR);
     expect(refused.status).toBe(1);
-    expect(JSON.parse(refused.stderr).error).toContain("No reply from the person has arrived since the last decision");
+    expect(JSON.parse(refused.stderr).error).toContain("Run it with --message <id>, the message they asked in, when they ask for it.");
     expect(readFileSync(state, "utf-8")).toBe(before);
     expect(mutationRows(proj)).toEqual(ledger);
     recordHumanPrompt(
@@ -2613,9 +2728,7 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
     // Plain chat is never a command: the hook records the words and applies nothing.
     expect(readFileSync(state, "utf-8")).toBe(before);
     expect(rowsOf(proj, "GUARD_DISABLED")).toHaveLength(0);
-    const changed = run(UTILITY, [
-      ...args, "--person-words", "aidlc --scope classic --guard-policy relaxed --guard.state-transition off",
-    ], proj, FENCE_ENV_CLEAR);
+    const changed = run(UTILITY, [...args, "--message", lastMessageId(proj)], proj, FENCE_ENV_CLEAR);
     expect(changed.status, changed.stderr).toBe(0);
     expect(getField(readFileSync(state, "utf-8"), GUARD_POLICY_FIELD)).toBe("relaxed (set by you)");
     expect(getField(readFileSync(state, "utf-8"), "Scope")).toBe("classic");

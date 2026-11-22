@@ -97,11 +97,19 @@ function currentStage(state: string): string {
 
 type AnswerMode = { mode: string | null; ask: boolean; reused_from: string | null; notice: string };
 
+// The mode the engine resolved for the stage, after checking the step hands the
+// agent only the note made from it: its branch (ask, or reuse) and its notice.
 function runStageAnswerMode(proj: string): AnswerMode {
   const next = runOrchestrateNext(ORCHESTRATE, proj, [], { cwd: proj, env: cliEnv() });
   expect(next.status, next.out).toBe(0);
   expect(next.directive?.kind, next.out).toBe("run-stage");
-  return next.directive!.answer_mode as AnswerMode;
+  const step = next.directive as Record<string, unknown>;
+  expect("answer_mode" in step, next.out).toBe(false);
+  const mode = resolveStageAnswerMode(proj) as AnswerMode;
+  const note = String(step.answer_mode_note ?? "");
+  expect(note, next.out).toContain(mode.notice);
+  expect(note.includes("ask the person once how they want to answer them"), note).toBe(mode.ask);
+  return mode;
 }
 
 function askModeQuestion(proj: string, stage: string, reply: string, extra: string[] = []): void {

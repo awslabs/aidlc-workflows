@@ -41,7 +41,7 @@ import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { copilotToolResults, copilotTurn, trustCopilotFolder } from "../harness/exec-drive.ts";
+import { copilotReplies, copilotToolResults, copilotTurn, trustCopilotFolder } from "../harness/exec-drive.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import {
   driveTyped,
@@ -137,7 +137,7 @@ describe("t-exec-copilot-journey-golden-bugfix: fix existing code on Copilot CLI
           const unbacked = ledger.unbacked();
           if (unbacked.length > 0) throw unbackedFailure(`The Copilot turn "${line}"`, unbacked);
           tokens[tokens.length - 1] = sessionTokens(usageFile);
-          return copilotToolResults(turn.out);
+          return { results: copilotToolResults(turn.out), words: copilotReplies(turn.out, true) };
         });
         problems.push(...run.problems, ...goldenPathProblems(journey, run));
         const recorded = recordedPersonLines(proj);

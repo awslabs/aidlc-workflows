@@ -53,6 +53,7 @@ import {
   selectShard,
   shardConfigForPlatform,
   type ShardConfig,
+  unitFileWorkers,
 } from "./lib/test-sharding.ts";
 import type { E2eWorker } from "./lib/e2e-workers.ts";
 import { createE2eNativeRoot, createE2eTemporaryRoot } from "./lib/e2e-workers.ts";
@@ -169,7 +170,10 @@ OUTPUT MODIFIERS (combinable with any tier/profile):
   --exclude PAT   Leave out tests whose filename matches PAT (the same names
                   --filter matches); the rest run as an ordinary tier.
   --parallel N    Run up to N test files concurrently within a tier (alias: -P N).
-                  Default: 1 (serial). Smoke and unit tiers always run serially.
+                  Default: 1 (serial). Smoke runs serially, and so does unit
+                  except a --shard run on a platform capped under "parallel"
+                  in tests/unit-shard-weights.json (macOS), or with
+                  AIDLC_TEST_UNIT_PARALLEL=<n> set for a trial.
                   Recommended range: 1-8. See docs/reference/09-testing.md.
   --shard N/M     Run one duration-balanced unit or integration shard.
                   Requires --unit or --integration with no other level/profile.
@@ -1293,9 +1297,7 @@ function levelFiles(level: Level, excludes: string[] = []): string[] {
     }));
   }
   if (level === "unit" && args.shard) {
-    const config = shardConfigForPlatform(
-      JSON.parse(readFileSync(UNIT_SHARD_CONFIG, "utf8")) as ShardConfig, process.platform,
-    );
+    const config = unitShardConfig();
     const names = files.map((file) => basename(file));
     try {
       const selected = new Set(selectShard(names, args.shard, config));
@@ -1332,6 +1334,11 @@ function levelFiles(level: Level, excludes: string[] = []): string[] {
     }
   }
   return files.filter(kept);
+}
+
+/** The unit shard weights, with this platform's measurements over the fallback. */
+function unitShardConfig(): ShardConfig {
+  return shardConfigForPlatform(JSON.parse(readFileSync(UNIT_SHARD_CONFIG, "utf8")) as ShardConfig, process.platform);
 }
 
 function remainingRunMs(): number {
@@ -1455,14 +1462,20 @@ async function runFilesPartitioned(
   effectiveParallel: number,
   excludes: string[] = [],
 ): Promise<void> {
-  const pinnedSerial = level === "smoke" || level === "unit";
+  const unit = level === "unit" && effectiveParallel > 1 ? unitShardConfig() : undefined;
+  // Side by side, an affinity group runs first and alone, in its order: t238 builds
+  // what t249 reads, and its release packaging (scripts/package-release.ts)
+  // regenerates the shared dist/ in place.
+  const alone = unit?.affinityGroups.flat() ?? [];
   const serialFiles: string[] = [];
   const parallelFiles: string[] = [];
   const liveSerialFiles: string[] = [];
   const liveParallelFiles: string[] = [];
 
-  for (const file of levelFiles(level, excludes)) {
-    const serial = pinnedSerial || basename(file).includes(".serial.");
+  const files = levelFiles(level, excludes);
+  for (const file of files) {
+    if (alone.includes(basename(file))) continue;
+    const serial = basename(file).includes(".serial.");
     if (serial) {
       (isClaudeRequiredFile(file) ? liveSerialFiles : serialFiles).push(file);
     } else {
@@ -1470,8 +1483,11 @@ async function runFilesPartitioned(
     }
   }
 
+  serialFiles.push(...alone.flatMap((name) => files.filter((file) => basename(file) === name)));
+
   const order = level === "integration" && effectiveParallel > 1 ? integrationOrderWeights() : undefined;
-  const admit = (files: string[]): string[] => order ? orderLongestFirst(files, legacyResultName, order) : files;
+  const admit = (files: string[]): string[] => unit ? orderLongestFirst(files, (file) => basename(file), unit)
+    : order ? orderLongestFirst(files, legacyResultName, order) : files;
   await runFileBand(effectiveParallel, serialFiles, admit(parallelFiles));
   await runFileBand(effectiveParallel, liveSerialFiles, admit(liveParallelFiles));
 }
@@ -1492,7 +1508,11 @@ function integrationOrderWeights(): OrderWeights | undefined {
 }
 
 async function runTier(level: Level, label: string): Promise<void> {
-  const effectiveParallel = level === "smoke" || level === "unit" ? 1 : args.parallel;
+  // Unit files run one at a time unless a shard has a cap: the weights file's entry
+  // for this platform, or AIDLC_TEST_UNIT_PARALLEL.
+  const effectiveParallel = level === "unit" && args.shard
+    ? unitFileWorkers(unitShardConfig(), process.platform, args.parallel, process.env.AIDLC_TEST_UNIT_PARALLEL)
+    : level === "smoke" || level === "unit" ? 1 : args.parallel;
   const modifiers: string[] = [];
   if (effectiveParallel > 1) modifiers.push(`parallel=${effectiveParallel}`);
   if (level === "unit" && args.shard) {

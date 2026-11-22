@@ -28,7 +28,7 @@ Load this module when the engine lists `summary` in `directive.protocol_modules`
 
   [Answer]:
   ```
-  This confirmation entry is the exception to ordinary file-backed A-E/X
+  This confirmation entry is the exception to ordinary file-backed {{OPTION_LETTERS}}/X
   labels. Fill its tag only after the user responds, storing exactly
   `[Answer]: Looks correct` or `[Answer]: Request changes`. Strip any source
   letter, chat number, punctuation, or option description before writing;
@@ -50,10 +50,10 @@ Load this module when the engine lists `summary` in `directive.protocol_modules`
   to change>'`, single-quoted as below) using the same `--unit` / `--single`
   identity (see "Reading the person's reply at a checkpoint" in stage-protocol.md section 1). The tool refuses a
   self-selected answer, a response without a matching prompt record or with no
-  reply of theirs since their last answer, or a questions file whose stored
-  choice differs from the one you record. Their reply counts even when you
-  recorded the prompt after showing it; when the receipt output carries `say`,
-  tell the person that line once.
+  reply of theirs since you recorded it, or a questions file whose stored
+  choice differs from the one you record. When they replied before you recorded
+  the prompt (you showed the summary first), add `--message <id>` naming the
+  message that answered it, without asking them again.
   An **Other** selection with no words of their own follows the Other-escape
   rule in stage-protocol.md section 1: discuss it, re-present the confirmation, and leave the tag
   and receipt untouched. Every other reply follows the reply-reading rule there.

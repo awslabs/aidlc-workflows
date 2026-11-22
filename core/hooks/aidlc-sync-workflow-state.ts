@@ -11,6 +11,9 @@
 // Receives JSON on stdin from the adapter / Claude Code.
 import { existsSync } from "node:fs";
 import {
+  auditBlockField,
+  type AuditShardEvent,
+  gateStagesFromBlock,
   hookStandsOutside,
   enterHookWorkflow,
   type ClaudeCodeHookInput,
@@ -21,13 +24,31 @@ import {
   isClaudeCodeHookInput,
   isoTimestamp,
   latestStartedStageSlug,
+  maximalAttemptEvents,
   parseCheckboxes,
+  readActiveDirectiveMarker,
   readAllAuditShards,
+  readAuditShardEvents,
   readStateFile,
   resolveProjectDirFromHook,
   stateFilePath,
 } from "../tools/aidlc-lib.ts";
 import { setStatus } from "../tools/aidlc-utility.ts";
+
+// Whether Current Stage `stage` is where a Unit reopen moved the work back to,
+// with no main-workflow STAGE_STARTED definitely after it. `aidlc-jump.ts
+// reopen` marks its GATE_REJECTED rows `Moved From` only when it moved Current
+// Stage back from a later stage, a move that writes no start of its own, so the
+// latest start still names the stage the work left. Rows two clones wrote in
+// the same second are unordered, and then the move holds.
+function unitReopenMovedTo(rows: readonly AuditShardEvent[], stage: string): boolean {
+  const moves = rows.filter((row) =>
+    (row.event === "STAGE_STARTED" && !auditBlockField(row.block, "Workflow")?.startsWith("single-stage:")) ||
+    (row.event === "GATE_REJECTED" && auditBlockField(row.block, "Reopen") !== null &&
+      (auditBlockField(row.block, "Moved From") ?? "") !== ""));
+  return maximalAttemptEvents(moves).some((row) =>
+    row.event === "GATE_REJECTED" && gateStagesFromBlock(row.block).includes(stage));
+}
 
 export async function run(input: string): Promise<number> {
   const projectDir = resolveProjectDirFromHook(import.meta.url);
@@ -114,6 +135,17 @@ if (source === "ide-audit-sync") {
     });
     return noop();
   }
+  // (d) Current Stage is where a Unit reopen moved the work back to, after
+  //     that start: the reopen writes no STAGE_STARTED of its own, so the last
+  //     start names the stage the work left. Syncing would put Current Stage
+  //     back on it while the Units redo their step.
+  if (unitReopenMovedTo(readAuditShardEvents(projectDir), current)) {
+    hookDebug(projectDir, "sync-workflow-state", "skip: a Unit reopen after the last start", {
+      auditSlug,
+      current,
+    });
+    return noop();
+  }
   slug = auditSlug;
 } else {
   // Claude Code / Kiro CLI path: TaskUpdate → in_progress with "[slug]" suffix.
@@ -123,6 +155,9 @@ if (source === "ide-audit-sync") {
   if (!activeForm) return 0;
   const slugMatch = activeForm.match(/\[([a-z][a-z0-9-]*)\]$/);
   if (!slugMatch) return 0;
+  // The step in hand belongs to an isolated `--single` run: its plan step names
+  // that run, not the workflow's place.
+  if (readActiveDirectiveMarker(projectDir, readStateFile(projectDir))?.single === true) return 0;
   slug = slugMatch[1];
 }
 

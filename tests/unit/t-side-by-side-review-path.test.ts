@@ -1,21 +1,23 @@
-// covers: subcommand:aidlc-log:review
+// covers: subcommand:aidlc-log:review, subcommand:aidlc-testing-posture:brief, subcommand:aidlc-swarm:finalize
 //
 // In a side-by-side build the conductor requests a Unit's review from the
 // project's main folder with --project-dir naming the Unit's worktree, and the
 // reviewer it dispatches runs in that main folder too. The request hands the
 // reviewer the review file's absolute path inside the worktree, so the review
-// a reviewer writes from the main folder is the one the verdict reads. A
-// one-at-a-time build keeps its project-relative path.
+// a reviewer writes from the main folder is the one the verdict reads. The
+// worker's brief names its worktree and the Unit's record folder inside it the
+// same way, and finalize names the manifest there. A one-at-a-time build keeps
+// its project-relative paths.
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { cpSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { stateDigest, toPosix, writeActiveDirectiveMarker } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { codeGenerationRecordDir } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 import { seededStateFile } from "../harness/fixtures.ts";
 import {
-  CHECK, cleanupCheckpointFixtures, fixture, prepare, runCheckpointTool, STAGE, swarm, wt,
+  CHECK, cleanupCheckpointFixtures, fixture, prepare, reviewRevisedSource, runCheckpointTool, STAGE, swarm, wt,
 } from "../harness/swarm-checkpoint.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
@@ -34,11 +36,21 @@ function built(dir: string): void {
     JSON.stringify({ stage: STAGE, unit: "alpha", version: 1, writes: [{ path: "src/alpha.ts" }] }));
 }
 
+function brief(pd: string): string {
+  const result = runCheckpointTool(pd, "tools/aidlc-testing-posture.ts", ["brief", "--unit", "alpha"]);
+  expect(result.code, `${result.out}\n${result.err}`).toBe(0);
+  return result.out;
+}
+
+// A request comes back as the agent's step when the stage's checks found
+// something in its documents (completionChecksStep); the agent runs it again.
 function review(cwd: string, projectDir: string, verdict?: string) {
-  return runCheckpointTool(cwd, "tools/aidlc-log.ts", [
+  const run = () => runCheckpointTool(cwd, "tools/aidlc-log.ts", [
     "review", "--stage", STAGE, "--unit", "alpha", "--reviewer", REVIEWER, "--iteration", "1",
     ...(verdict ? ["--verdict", verdict] : []), "--project-dir", projectDir,
   ]);
+  const first = run();
+  return verdict === undefined && first.out.includes("Before the review, this stage's checks ran") ? run() : first;
 }
 
 describe("a side-by-side Unit's reviewer writes the review the verdict reads", () => {
@@ -82,5 +94,75 @@ describe("a side-by-side Unit's reviewer writes the review the verdict reads", (
     const request = review(pd, pd);
     expect(request.code, `${request.out}\n${request.err}`).toBe(0);
     expect(JSON.parse(request.out).reviewFile).toMatch(/^aidlc\/spaces\/[^/]+\/intents\/[^/]+\/\.aidlc-engine\/reviews\//);
+  });
+});
+
+describe("a side-by-side Unit's worker writes its records where AI-DLC reads them", () => {
+  for (const repo of [null, "app"]) {
+    test(`after prepare the brief names the worktree and its record folder, ${repo === null ? "one repository" : "a sibling repository"}`, () => {
+      const pd = fixture(["alpha"], CHECK, false, repo);
+      const prepared = repo === null
+        ? prepare(pd)
+        : swarm(pd, ["prepare", "--batch", "1", "--units", "alpha", "--base", "main", "--repo", repo]);
+      expect(prepared.code, `${prepared.out}\n${prepared.err}`).toBe(0);
+      const child = wt(pd);
+      const records = toPosix(codeGenerationRecordDir(child, "alpha"));
+      const text = brief(pd);
+      expect(text).toContain(
+        `Your worktree is \`${toPosix(child)}\`: write this Unit's code there, and its records ` +
+          `(code-summary.md, source-manifest.json, traceability.json) in \`${records}\`.`,
+      );
+      expect(isAbsolute(records)).toBe(true);
+      const files = text.slice(text.indexOf("## Files and commands"), text.indexOf("## The plan file"));
+      expect(files).toContain(records);
+    });
+  }
+
+  // The parallel-build protocol takes the brief before prepare, and the worker gets it at fan-out, after prepare.
+  test("a batch Unit's brief taken before prepare names the worktree prepare then makes, and its record folder", () => {
+    const pd = fixture(["alpha"], CHECK);
+    const early = brief(pd);
+    const prepared = prepare(pd);
+    expect(prepared.code, `${prepared.out}\n${prepared.err}`).toBe(0);
+    const child = wt(pd);
+    const line = `Your worktree is \`${toPosix(child)}\`: write this Unit's code there, and its records ` +
+      `(code-summary.md, source-manifest.json, traceability.json) in \`${toPosix(codeGenerationRecordDir(child, "alpha"))}\`.`;
+    expect(early).toContain(line);
+    expect(brief(pd)).toContain(line);
+  });
+
+  test("a one-at-a-time build's brief names no worktree and keeps the project-relative plan", () => {
+    const pd = fixture(["alpha"], CHECK);
+    writeActiveDirectiveMarker(pd, {
+      kind: "run-stage", stage: STAGE, unit: "alpha",
+      state_sha256: stateDigest(readFileSync(seededStateFile(pd), "utf-8")),
+    });
+    const text = brief(pd);
+    expect(text).not.toContain("Your worktree is");
+    expect(text).not.toContain(".aidlc/worktrees");
+    const plan = toPosix(relative(pd, join(codeGenerationRecordDir(pd, "alpha"), "code-generation-plan.md")));
+    expect(text).toContain(`Tick each step's box in \`${plan}\` as you finish the step.`);
+  });
+
+  test("under strict, finalize names the manifest in the worktree's record folder", () => {
+    const pd = fixture(["alpha"], CHECK);
+    const prepared = prepare(pd);
+    expect(prepared.code, `${prepared.out}\n${prepared.err}`).toBe(0);
+    const child = wt(pd);
+    writeFileSync(join(child, "src", "alpha.ts"), "export const alpha = 2;\n");
+    // A worker that put its manifest at the worktree's root instead of in the record folder.
+    const stray = join(child, "construction", "alpha", "code-generation");
+    mkdirSync(stray, { recursive: true });
+    writeFileSync(join(stray, "source-manifest.json"),
+      JSON.stringify({ stage: STAGE, unit: "alpha", version: 1, writes: [{ path: "src/alpha.ts" }] }));
+    const checked = swarm(pd, ["check", "alpha"]);
+    expect(checked.code, `${checked.out}\n${checked.err}`).toBe(0);
+    reviewRevisedSource(pd, "alpha");
+
+    const finalized = swarm(pd, ["finalize", "--batch", "1", "--units", "alpha", "--claimed", "alpha"]);
+    expect(finalized.code, `${finalized.out}\n${finalized.err}`).toBe(2);
+    const { detail } = (JSON.parse(finalized.out) as { units: { detail: string }[] }).units[0];
+    expect(detail).toContain("outside unit \"alpha\"'s source manifest (construction/alpha/code-generation/source-manifest.json)");
+    expect(detail).toContain(`update ${toPosix(join(codeGenerationRecordDir(child, "alpha"), "source-manifest.json"))},`);
   });
 });

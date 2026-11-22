@@ -57,7 +57,7 @@ examples:
 description: >
   Solutions architect responsible for domain design, contract design, NFR patterns, and component decomposition.
   Leads Feasibility, Domain Design, Units Generation, Contract Design, Functional Design, NFR Requirements, and NFR Design stages,
-  and serves as the dispatched final link of the Reverse Engineering pipeline.
+  and serves as the dispatched last link of the Reverse Engineering pipeline.
 disallowedTools: Task
 tier: judgment
 ---

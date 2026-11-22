@@ -23,6 +23,7 @@ import {
   NATIVE_STARTUP_TIMEOUT_MS,
   remainingOperationTimeoutMs,
 } from "../harness/test-budget.ts";
+import kiroManifest from "../../harness/kiro/manifest.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -242,7 +243,7 @@ describe.skipIf(SKIP_REASON !== null)("a native install runs every Claude Code h
       hooks?: Record<string, Array<{ command?: string }>>;
     };
     const prompt = agent.hooks?.userPromptSubmit?.[0]?.command ?? "";
-    expect(prompt).toBe("aidlc engine adapter kiro verb-intercept");
+    expect(prompt).toBe(`aidlc engine adapter kiro verb-intercept${kiroManifest.hookCommandSuffix}`);
     const r = sh(prompt, JSON.stringify({ cwd: project, hook_event_name: "userPromptSubmit", prompt: "/aidlc --doctor" }));
     expect(r.status, r.stderr).toBe(0);
     expect(r.stdout + r.stderr).not.toMatch(/command not found|unknown command/);

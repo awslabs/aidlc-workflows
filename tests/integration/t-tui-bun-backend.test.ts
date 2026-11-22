@@ -715,6 +715,54 @@ setTimeout(() => process.exit(99), ${PROGRAM_BACKSTOP_MS});
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // Kiro CLI 2.33.1 paints its V3 offer before the chat, with the caret on
+  // "Switch to V3 and upgrade my configs"; the live Kiro files only wait.
+  // After the answer the offer stays painted while Kiro starts its chat, whose
+  // first screen (the trust-all-tools warning) takes a stray Enter as "No, exit".
+  test("Kiro's V3 offer at launch is answered Remind me later before the wait matches", async () => {
+    const session = `kiro-v3-${randomUUID()}`;
+    const picked = join(root, `${session}-picked`);
+    const unexpected = join(root, `${session}-unexpected`);
+    const program = join(root, `${session}.ts`);
+    writeFileSync(program, `
+import { writeFileSync } from "node:fs";
+process.stdin.setRawMode(true);
+process.stdin.resume();
+const esc = String.fromCharCode(27);
+const options = ["Switch to V3 and upgrade my configs", "Remind me later", "Don't ask again"];
+let caret = 0, answered = false;
+const paint = () => process.stdout.write(esc+"[2J"+esc+"[H"+"You're using Kiro CLI V2. Switch to V3 today.\\r\\n"+
+  "V3 adds workflows, cloud sessions, and specs. To try it in a new session, run kiro-cli --v3. Learn more: https://kiro.dev/docs/cli/v3/\\r\\n"+
+  options.map((option, index) => (index === caret ? "❯ " : "  ")+option).join("\\r\\n"));
+paint();
+process.stdin.on("data", bytes => {
+  const key = String(bytes).replaceAll(esc+"O", esc+"[");
+  if (answered) writeFileSync(${JSON.stringify(unexpected)}, "after the answer:"+JSON.stringify(key));
+  else if (key === esc+"[B" && caret < 2) { caret++; paint(); }
+  else if (key === esc+"[A" && caret > 0) { caret--; paint(); }
+  else if (key === "\\r") {
+    answered = true;
+    writeFileSync(${JSON.stringify(picked)}, options[caret]);
+    setTimeout(() => process.stdout.write(esc+"[2J"+esc+"[H"+"›  ask a question or describe a task ↵"), 1500);
+  } else writeFileSync(${JSON.stringify(unexpected)}, JSON.stringify(key));
+});
+setTimeout(() => process.exit(99), ${PROGRAM_BACKSTOP_MS});
+`);
+    sessions.add(session);
+    try {
+      await ok(["start", "--session", session, "--cwd", root, "--width", "200", "--height", "50",
+        "--", process.execPath, program]);
+      // The answer takes about two settles; the bound keeps a red run short.
+      const waited = await drive(["wait", "--session", session, "--pattern", "ask a question or describe a task",
+        "--stable-ms", "0", "--timeout-ms", "120000"]);
+      expect(waited.code, waited.stderr).toBe(0);
+      expect(existsSync(picked) ? readFileSync(picked, "utf8") : null).toBe("Remind me later");
+      expect(existsSync(unexpected) ? readFileSync(unexpected, "utf8") : null).toBeNull();
+    } finally {
+      if (sessions.has(session)) await stop(session);
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("plain/ANSI/cell capture, literal/named input, bracketed paste, and real resize", async () => {
     const session = await start("interaction");
     try {

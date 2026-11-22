@@ -123,6 +123,7 @@ import {
   elevatedUninstallWarning,
   recoverWindowsUninstallContinuations,
   scheduleWindowsUninstall as scheduleWindowsUninstallContinuation,
+  windowsUninstallStillFinishingLine,
 } from "./aidlc-windows-uninstall.ts";
 import {
   compiledExecutable,
@@ -170,7 +171,9 @@ type PublicLifecycleGrammar = {
   positionals: number;
 };
 
-const PUBLIC_LIFECYCLE_GRAMMARS: Readonly<
+// Exported so t230 can prove command help names every flag this grammar
+// accepts: the parser is the owner of what is legal, help must not lag it.
+export const PUBLIC_LIFECYCLE_GRAMMARS: Readonly<
   Record<PublicLifecycleCommand, PublicLifecycleGrammar>
 > = {
   update: {
@@ -2244,11 +2247,7 @@ function uninstallCommand(argv: string[]): CommandResult {
       );
     }
     if (recovery.running > 0) {
-      return failure(
-        "a Windows uninstall cleanup is still running",
-        EXIT.failure,
-        "wait for it to finish, then run doctor",
-      );
+      return failure(windowsUninstallStillFinishingLine(recovery.finishesAt, Date.now(), "uninstall"), EXIT.failure);
     }
   }
   const version = activeVersion();

@@ -34,7 +34,6 @@ aidlc/spaces/<space>/intents/<YYMMDD>-<label>/   # one record dir per intent
     source-review/                 # Local reviewed-source snapshots
     hooks-health/                  # Hook heartbeats and drop counters
     plan.json                      # Derived scope plan
-    recovery.md                    # Compaction recovery breadcrumb
     state-writes.json              # Recent state writes, for doctor
     stop-hook/                     # No-progress guard counters
     human-turn                     # Last human prompt marker
@@ -133,8 +132,9 @@ aidlc/spaces/default/intents/261013-inventory-api/
 level up, in the space-level per-repo CodeKB —
 `aidlc/spaces/<space>/codekb/<repo>/` — one store per repo rather than a copy
 per intent. When the project folder is itself the repo, `<repo>` starts as the
-folder's name (the main checkout's name in a linked git worktree) and stays with
-the store: a moved, renamed or copied project folder keeps reading the same
+folder's name (the main checkout's name in a linked git worktree), with each
+character other than a letter, a digit, `.`, `_` or `-` made a hyphen (`portal app` is `portal-app`;
+the folder keeps its name), and stays with the store: a moved, renamed or copied project folder keeps reading the same
 store. The exception is a space holding two or more stores that no intent
 records as its repo: there the current folder name is used, and the next step
 can warn that completed stage results have drifted. On each applicable
@@ -169,10 +169,11 @@ under an optional `aidlc-shared/` and per-agent subdirectories. See
 also keeps a committed `memory.md` alongside its artifacts (e.g.
 `<record>/inception/requirements-analysis/memory.md`). It is the
 stage's observation diary — created by the engine from a template when it emits
-the run-stage directive, maintained by the orchestrator during the stage, and
-read by the §13 Learnings Ritual at the approval gate. It is never hand-edited.
-See [Rules and the Learning Loop](09-rules-and-the-learning-loop.md) for how the
-diary feeds the learning loop.
+the run-stage directive and maintained by the orchestrator during the stage, as
+the stage's record of the agent's reasoning; nothing in it is offered to you as
+something to keep. It is never hand-edited. See
+[Rules and the Learning Loop](09-rules-and-the-learning-loop.md) for the
+learning loop, which keeps the corrections you make.
 
 **Code lives in sibling repos, not the record dir.** The `aidlc/` tree holds only
 method, state, audit, and artifacts — never application code. Generated code lands
@@ -289,7 +290,7 @@ The four design stages (3.1-3.4) prune their artifacts to each unit's **kind** (
 
 ## Question Files
 
-Every stage that collects user input produces a co-located question file named `{stage-name}-questions.md`. Questions use lettered options (A-E) plus a mandatory `X. Other (please specify)` option, with `[Answer]:` tags for recording responses. In a file the agent creates, each ordinary question's heading names who would usually answer it (`## Q3. [Developer] ...`), and each person's questions are kept together unless one has to wait for another person's answer. A question added later goes at the end. Confirmation, change-request and approval sections carry no label. An existing file keeps its questions as they were, unless you ask to redo the stage from scratch, which replaces it with a new one.
+Every stage that collects user input produces a co-located question file named `{stage-name}-questions.md`. Questions use lettered options (A-E, or A-D on Claude Code, whose question box shows four) plus a mandatory `X. Other (please specify)` option, with `[Answer]:` tags for recording responses. In a file the agent creates, each ordinary question's heading names who would usually answer it (`## Q3. [Developer] ...`), and each person's questions are kept together unless one has to wait for another person's answer. A question added later goes at the end. Confirmation, change-request and approval sections carry no label. An existing file keeps its questions as they were, unless you ask to redo the stage from scratch, which replaces it with a new one.
 
 You choose how to answer at each stage:
 
@@ -312,7 +313,7 @@ settings, and machine-local derived state are ignored.
 | Commit | Gitignore |
 |--------|-----------|
 | `aidlc-state.md` | `aidlc/active-space`, `intents/active-intent` (per-user cursors) |
-| `audit/*.md` (per-clone shards) | `.aidlc-engine/` (framework state, including recovery breadcrumbs) |
+| `audit/*.md` (per-clone shards) | `.aidlc-engine/` (framework state) |
 | All stage artifacts | `runtime-graph.json` (re-derivable from the audit shards) |
 | `verification/` phase check results | `aidlc/.aidlc-clone-id` (names this clone's shard; must stay machine-local) |
 | Space-level `aidlc/spaces/<space>/knowledge/` team knowledge files | `aidlc/.aidlc-sessions/` (per-session UUID stamps, workflow bindings, PID ancestry map) |

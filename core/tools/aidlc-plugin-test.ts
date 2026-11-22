@@ -2,6 +2,7 @@
 // Offline compose-tier test for an authored AIDLC plugin.
 
 import { LONG_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
+import { isCompiledExecutable } from "./aidlc-runtime-paths.ts";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import {
@@ -128,6 +129,15 @@ const CANDIDATE_PATH_ENV_KEYS = [
 function candidateProcessEnv(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env };
   for (const key of CANDIDATE_PATH_ENV_KEYS) delete env[key];
+  // In the compiled binary (`aidlc plugin test`) process.execPath is aidlc,
+  // which reads a script path as an unknown command. BUN_BE_BUN makes it run
+  // the hook and the candidate's tools as Bun would. Without
+  // AIDLC_COMPILED_EXECUTABLE compose spawns those tools by path too; its
+  // native spelling (`aidlc engine ...`) would reach Bun as a file name.
+  if (isCompiledExecutable()) {
+    env.BUN_BE_BUN = "1";
+    delete env.AIDLC_COMPILED_EXECUTABLE;
+  }
   return env;
 }
 
@@ -872,7 +882,10 @@ function parseArgs(argv: string[]): ParsedArgs {
   }
   if (!pluginRoot || !installRoot) {
     throw new PluginTestUsageError(
-      "<plugin-root> and --install <project-root> are required",
+      [
+        ...(pluginRoot ? [] : ["<plugin-root>"]),
+        ...(installRoot ? [] : ["--install <project-root>"]),
+      ].join(" and ") + (pluginRoot || installRoot ? " is required" : " are required"),
     );
   }
   return {
@@ -884,7 +897,9 @@ function parseArgs(argv: string[]): ParsedArgs {
   };
 }
 
-export function main(argv: string[]): number {
+// The `aidlc plugin test` verb passes its own usage line, so a usage error
+// names the command the person ran.
+export function main(argv: string[], usage = USAGE): number {
   if (argv.includes("--help") || argv.includes("-h")) {
     process.stdout.write(
       `${USAGE}\n\n--dist <version> is reserved until RFC #722 milestone 2.\n`,
@@ -896,7 +911,7 @@ export function main(argv: string[]): number {
     args = parseArgs(argv);
   } catch (error) {
     process.stderr.write(
-      `${USAGE}\n${error instanceof Error ? error.message : String(error)}\n`,
+      `${usage}\n${error instanceof Error ? error.message : String(error)}\n`,
     );
     return 2;
   }
@@ -920,7 +935,7 @@ export function main(argv: string[]): number {
     return result.valid ? 0 : 1;
   } catch (error) {
     if (error instanceof PluginTestUsageError) {
-      process.stderr.write(`${USAGE}\n${error.message}\n`);
+      process.stderr.write(`${usage}\n${error.message}\n`);
       return 2;
     }
     process.stderr.write(

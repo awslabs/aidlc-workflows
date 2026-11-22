@@ -51,43 +51,43 @@
 - [x] state-init — EXECUTE
 
 ### IDEATION PHASE
-- [S] intent-capture — SKIP (bugfix scope)
-- [S] market-research — SKIP (bugfix scope)
-- [S] feasibility — SKIP (bugfix scope)
-- [S] scope-definition — SKIP (bugfix scope)
-- [S] team-formation — SKIP (bugfix scope)
-- [S] rough-mockups — SKIP (bugfix scope)
-- [S] approval-handoff — SKIP (bugfix scope)
+- [ ] intent-capture — SKIP (bugfix scope)
+- [ ] market-research — SKIP (bugfix scope)
+- [ ] feasibility — SKIP (bugfix scope)
+- [ ] scope-definition — SKIP (bugfix scope)
+- [ ] team-formation — SKIP (bugfix scope)
+- [ ] rough-mockups — SKIP (bugfix scope)
+- [ ] approval-handoff — SKIP (bugfix scope)
 
 ### INCEPTION PHASE
 - [x] reverse-engineering — EXECUTE
-- [S] practices-discovery — SKIP (bugfix scope)
+- [ ] practices-discovery — SKIP (bugfix scope)
 - [-] requirements-analysis — EXECUTE
-- [S] user-stories — SKIP (bugfix scope)
-- [S] refined-mockups — SKIP (bugfix scope)
-- [S] domain-design — SKIP (bugfix scope)
-- [S] units-generation — SKIP (bugfix scope)
-- [S] contract-design — SKIP (bugfix scope)
-- [S] delivery-planning — SKIP (bugfix scope)
+- [ ] user-stories — SKIP (bugfix scope)
+- [ ] refined-mockups — SKIP (bugfix scope)
+- [ ] domain-design — SKIP (bugfix scope)
+- [ ] units-generation — SKIP (bugfix scope)
+- [ ] contract-design — SKIP (bugfix scope)
+- [ ] delivery-planning — SKIP (bugfix scope)
 
 ### CONSTRUCTION PHASE
 Per unit: [unit-name]
-- [S] functional-design — SKIP (bugfix scope)
-- [S] nfr-requirements — SKIP (bugfix scope)
-- [S] nfr-design — SKIP (bugfix scope)
-- [S] infrastructure-design — SKIP (bugfix scope)
+- [ ] functional-design — SKIP (bugfix scope)
+- [ ] nfr-requirements — SKIP (bugfix scope)
+- [ ] nfr-design — SKIP (bugfix scope)
+- [ ] infrastructure-design — SKIP (bugfix scope)
 - [ ] code-generation — EXECUTE
 - [ ] build-and-test — EXECUTE
-- [S] ci-pipeline — SKIP (bugfix scope)
+- [ ] ci-pipeline — SKIP (bugfix scope)
 
 ### OPERATION PHASE
 - [ ] deployment-pipeline — EXECUTE
-- [S] environment-provisioning — SKIP (bugfix scope)
+- [ ] environment-provisioning — SKIP (bugfix scope)
 - [ ] deployment-execution — EXECUTE
-- [S] observability-setup — SKIP (bugfix scope)
-- [S] incident-response — SKIP (bugfix scope)
-- [S] performance-validation — SKIP (bugfix scope)
-- [S] feedback-optimization — SKIP (bugfix scope)
+- [ ] observability-setup — SKIP (bugfix scope)
+- [ ] incident-response — SKIP (bugfix scope)
+- [ ] performance-validation — SKIP (bugfix scope)
+- [ ] feedback-optimization — SKIP (bugfix scope)
 
 ## Current Status
 - **Lifecycle Phase**: INCEPTION

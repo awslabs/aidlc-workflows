@@ -6,7 +6,7 @@
 // multi-process contention.
 //
 // WHY CLI (process-boundary, not in-process): the subject IS concurrency — the
-// reaper steal (aidlc-lib.ts reapStaleLock) only fires when independent OS
+// reaper steal (aidlc-locks.ts reapStaleLock) only fires when independent OS
 // processes race to reclaim the SAME stale lock dir. bun:test runs serially
 // inside one process, so an in-process loop could never overlap two reapers'
 // decide->steal windows. This test adds the real-concurrency dimension.
@@ -25,7 +25,7 @@
 // gate. Every generation still carries its own token so a moved candidate can be
 // verified exactly before deletion or restoration.
 //
-// SOURCE UNDER TEST (core/tools/aidlc-lib.ts):
+// SOURCE UNDER TEST (core/tools/aidlc-locks.ts):
 //   reapStaleLock — recoverable reap-gate election + private retire/restore.
 //   acquireAuditLock — mkdir-or-reap loop that calls it.
 //

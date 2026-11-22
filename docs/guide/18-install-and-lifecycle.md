@@ -746,7 +746,7 @@ Recorded Bedrock answers apply through the normal staged config transaction:
 
 | Harness | Recorded answer application |
 |---------|-----------------------------|
-| Claude Code | Enables Bedrock and writes `AWS_REGION` plus optional `AWS_PROFILE` in `.claude/settings.json`; also keeps the AWS MCP URL and `AWS_REGION` metadata in `.mcp.json` on the same region |
+| Claude Code | Enables Bedrock and writes `AWS_REGION` plus optional `AWS_PROFILE` in your own `.claude/settings.local.json` (git ignores it; the profile is not recorded in `harness.json`); also keeps the AWS MCP URL and `AWS_REGION` metadata in `.mcp.json` on the same region |
 | Codex CLI | Records the choice and instructs the user to keep provider, credentials, and model in `~/.codex/config.toml` |
 | Kiro CLI | No provider answer; model access comes with Kiro |
 | Kiro IDE | No provider answer; model access comes with Kiro |
@@ -770,14 +770,23 @@ the configuration clean. `--provider other` records a manually configured
 non-Bedrock provider and reports that setup as pending until `--acknowledge` is
 supplied. `--reset` removes exact legacy AI-DLC Bedrock defaults or values written
 for the previous recorded answer from Claude, Codex, and opencode project files;
-unproven values are preserved.
+unproven values are preserved. On Claude Code, `--provider current`, `--provider other` and `--reset` also
+take the Bedrock switch and region out of your `.claude/settings.local.json`; an
+`AWS_PROFILE` there stays, and the command says so.
+
+On Claude Code each person's Bedrock answer is their own. A teammate's clone
+carries the project's record but none of your settings, and `aidlc config providers
+--check` and doctor warn them once that Bedrock is recorded but not turned on
+for them. A project set up by an earlier release keeps the answer in the shared
+`.claude/settings.json` until someone answers `aidlc config providers` again,
+which moves it to their own file and says so; a refresh or update leaves it.
 
 The question is worded for the harness in front of you, so each install offers
 the two paths that actually exist for it:
 
 | Harness | `amazon-bedrock` records |
 |---------|--------------------------|
-| Claude Code | the AWS region and profile in `settings.json`, and the AWS MCP region in `.mcp.json` when present |
+| Claude Code | the AWS region and profile in your own `settings.local.json`, and the AWS MCP region in `.mcp.json` when present |
 | Codex CLI | the AWS region and profile in the project record, then guides user-level provider setup in `$CODEX_HOME/config.toml` |
 | OpenCode | the AWS region and profile, and offers to write them to `opencode.json` |
 | GitHub Copilot | that you set the Copilot BYOK provider variables yourself |
@@ -822,8 +831,8 @@ actions can still be completed with `--mark-done`.
 
 `aidlc config trust` reads and verifies host-native trust. It never regenerates
 trust seeds, permission rules, or IDE settings; its only writes outside the
-project are Kiro IDE's Workflows switch and Kiro IDE's default terminal on
-Windows, and only when you ask for them.
+project are Kiro IDE's and Kiro CLI's Workflows switches and Kiro IDE's
+default terminal on Windows, and only when you ask for them.
 
 ```bash
 aidlc config trust --show
@@ -831,6 +840,7 @@ aidlc config trust --check
 aidlc config trust --acknowledge --yes
 aidlc config trust --reset --yes
 aidlc config trust --kiro-workflows off --yes   # Kiro IDE; or: on
+aidlc config trust --kiro-cli-workflows off --yes   # Kiro CLI; or: on
 aidlc config trust --kiro-terminal powershell --yes   # Kiro IDE on Windows
 ```
 
@@ -844,7 +854,13 @@ setup asks once and `aidlc config --yes` turns it off; your answer is kept in
 again. When that settings file has an error AI-DLC cannot read past, Kiro may
 still read Workflows as on, so `--show` says it could not be read, `--check`
 and setup warn until the file reads again (whatever you answered before), and
-the next Kiro IDE chat tells you once; fix the error in that file. See [Kiro's Workflows feature](harnesses/kiro-ide.md#kiros-workflows-feature-stops-ai-dlcs-reviews-and-helpers).
+the next Kiro IDE chat tells you once; fix the error in that file. On the same
+Kiro row, `--show` and `--check` also read Kiro CLI's own Workflows switch
+(`chat.enableWorkflows` in your Kiro CLI settings, read through `kiro-cli
+settings`), which takes the same tools away in Kiro CLI chats;
+`--kiro-cli-workflows off|on` sets it through Kiro CLI, and its answer is kept
+in `kiro-cli-workflows`, apart from Kiro IDE's. With no Kiro CLI answering, it
+is not shown. See [Kiro's Workflows feature](harnesses/kiro-ide.md#kiros-workflows-feature-stops-ai-dlcs-reviews-and-helpers).
 
 On Windows, Kiro IDE runs its agent's commands in your default terminal profile
 (`terminal.integrated.defaultProfile.windows` in Kiro's user settings). While
@@ -1032,8 +1048,9 @@ If `.aidlc-version` exists, config
 requires a source at that exact version with the matching project harness.
 
 Config recognizes directories containing `.git`, `package.json`, `Cargo.toml`,
-`go.mod`, or `pyproject.toml`. Outside those shapes, interactive mode asks for
-confirmation and non-interactive mode requires `--project-dir`.
+`go.mod`, or `pyproject.toml`, or an AI-DLC harness tree already set up there.
+Outside those shapes, interactive mode asks for confirmation and
+non-interactive mode requires `--project-dir`.
 
 Claude's optional MCP integration defaults to `none` without a TTY. A human
 TTY is prompted when no prior choice exists. `--yes` and `--json` do not grant
@@ -1657,9 +1674,15 @@ The native release client honors `HTTPS_PROXY` / `https_proxy` and
 `curl.exe`.
 
 Bare help and management listings never refresh the network. They may display
-a valid cached update notice. Interactive human `aidlc doctor` may refresh
-stale or absent metadata within 750 ms. Non-TTY, `--json`, and `--quiet`
-doctor runs are cache-only unless `--check-updates` is explicit.
+a valid cached update notice. Interactive human `aidlc doctor`, and
+`aidlc doctor --export` with or without a terminal, may refresh stale or
+absent metadata within 750 ms. Other non-TTY, `--json`, and `--quiet` doctor
+runs are cache-only unless `--check-updates` is explicit. A doctor update row
+read from a check older than 24 hours names the version as the latest known
+one and says how long ago it was checked. On a machine that has never checked,
+a refresh that fails inside that budget leaves the row passing as not checked
+yet, naming `aidlc update --check`; only an explicit `--check-updates` reports
+the failed check.
 `doctor --check-updates` and `update --check` use a five-minute metadata
 backstop. Preview discovery and metadata downloads share the same deadline;
 looking up the preview release does not restart the timeout.
@@ -1754,7 +1777,11 @@ yes, and the file is kept beside it as `aidlc.bak-<time>`.
 
 `aidlc --help` prints exactly the six public commands. Each public command also
 has side-effect-free command help: `aidlc <command> --help` (or `-h`) for
-`config`, `doctor`, `version`, `update`, `use`, and `uninstall`. Config-level
+`config`, `doctor`, `version`, `update`, `use`, and `uninstall`. Command help
+names every option that command accepts, with a one-line meaning for each,
+grouped so download and mirror options and the options that only shape output
+read separately from the rest; `use` also describes the version it takes. The
+intent is that you can run a command correctly from its help alone. Config-level
 help names all six policy sections; `aidlc config <section> --help` keeps the
 section-specific help. `aidlc help --all` reveals the hidden `engine` and
 `system` namespaces and points to
@@ -1938,7 +1965,171 @@ and plugin projections locally. Neither generated root is committed. Direct
 `bun .../tools/*.ts` calls remain source/development and debugging mechanisms,
 not a second native lifecycle interface.
 
+## Remove AI-DLC from a Project
+
+No command removes AI-DLC from one project. `aidlc uninstall` removes the
+machine install, for every project on this machine, and leaves project files
+alone. The steps below take a project back
+to how it was before AI-DLC was added to it. They keep your own harness files and
+settings, which share folders and files with AI-DLC (a `.kiro/` you had before,
+your own `.claude/settings.json` entries, your part of `AGENTS.md`). Close the
+harness in the project first.
+
+### 1. Keep your records
+
+If the project is pinned (it has a `.aidlc-version` file), unpin it first,
+while AI-DLC is still installed: `aidlc config --unpin`, or in a copied project
+`bun <harness folder>/tools/aidlc.ts config --unpin`. That also clears the
+machine's record of the pin, which deleting the file does not.
+
+On Claude Code, turn AI-DLC's status line off too, while AI-DLC is still
+installed: `aidlc config --statusline off`, or in a copied project
+`bun .claude/tools/aidlc.ts config --statusline off`. When AI-DLC's status line
+replaced one of your own, that is the only step that puts yours back: AI-DLC
+keeps it in `aidlc.settings.local.json`, which you delete below.
+
+`aidlc/` holds your work: each intent's state, artifacts and audit trail, and
+the space's memory and knowledge. Archive it before you delete it. In a POSIX
+shell:
+
+```bash
+tar -czf aidlc-records.tar.gz aidlc && rm -rf aidlc
+```
+
+In PowerShell (Windows 10 and later include `tar`):
+
+```powershell
+tar -czf aidlc-records.tar.gz aidlc; if ($?) { Remove-Item -Recurse -Force aidlc }
+```
+
+Delete these too if they are there: `aidlc.settings.json`,
+`aidlc.settings.local.json`, and the `aidlc.settings.local.json` line config
+may have added to `.git/info/exclude`.
+
+### 2. Delete AI-DLC's own files
+
+`aidlc config` records what it installed in
+`<harness folder>/tools/data/aidlc-manifest.json`: every file with its SHA-256,
+and the shared files it added its part to. This script reads that record and
+deletes only the files it lists whose content still matches, counting a file
+whose only difference is its line endings (a CRLF checkout) as unchanged. It
+keeps and lists a file you changed, never deletes a file the record does not
+list apart from the few AI-DLC generates while it runs, and removes only the
+folders it emptied. Save it as `remove-aidlc.cjs` in the folder that holds the
+project, next to the project folder rather than inside it:
+
+```js
+// Usage, from the project root: node <path to>/remove-aidlc.cjs <harness folder>   (Bun works too)
+const fs = require("node:fs");
+const path = require("node:path");
+const { createHash } = require("node:crypto");
+const dir = process.argv[2];
+const manifestPath = path.join(dir, "tools", "data", "aidlc-manifest.json");
+const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+if (manifest.shippedOnly !== true) {
+  console.log(`${manifestPath} predates the shipped-files-only record. Refresh it first with aidlc config --harness <harness>, then run this again.`);
+  process.exit(1);
+}
+const sha = (bytes) => "sha256:" + createHash("sha256").update(bytes).digest("hex");
+// A file whose only difference is its line endings (a CRLF checkout) is unchanged.
+const unchanged = (file, hash) => {
+  const bytes = fs.readFileSync(file);
+  const lf = bytes.toString("latin1").replaceAll("\r\n", "\n");
+  return [bytes, Buffer.from(lf, "latin1"), Buffer.from(lf.replaceAll("\n", "\r\n"), "latin1")].some((form) => sha(form) === hash);
+};
+const roots = manifest.rootContributions ?? {};
+const shared = new Set([...Object.keys(manifest.entries ?? {}), ...Object.keys(roots)]);
+const owned = Object.entries(manifest.files).filter(([file]) => !shared.has(file));
+for (const [file, part] of Object.entries(roots)) if (part.policy === "whole-file") owned.push([file, part.hash]);
+const removed = [];
+for (const [file, hash] of owned) {
+  if (!fs.existsSync(file)) continue;
+  if (unchanged(file, hash)) { fs.rmSync(file); removed.push(file); }
+  else console.log(`kept, changed since install: ${file}`);
+}
+// Files AI-DLC generates while it runs, which the record does not list.
+for (const file of ["harness.json", "scope-grid.json", "stage-graph.json"].map((name) => path.join(dir, "tools", "data", name))
+  .concat(path.join(dir, "steering", "aidlc-active-memory.md"), manifestPath)) {
+  if (fs.existsSync(file)) { fs.rmSync(file); removed.push(file); }
+}
+// Remove only the folders this emptied, never one that holds anything else.
+for (const file of removed) {
+  for (let folder = path.dirname(file); folder !== "." && folder !== path.dirname(folder); folder = path.dirname(folder)) {
+    try { fs.rmdirSync(folder); } catch { break; }
+  }
+}
+for (const file of shared) if (fs.existsSync(file)) console.log(`edit by hand: ${file}`);
+```
+
+Run it from the project root with Node.js or Bun, once for each harness folder
+in the project. The same commands work in a POSIX shell and in PowerShell:
+
+| Harness | Run |
+|---------|-----|
+| Claude Code | `node ../remove-aidlc.cjs .claude` |
+| Kiro CLI, Kiro IDE | `node ../remove-aidlc.cjs .kiro` |
+| Codex CLI | `node ../remove-aidlc.cjs .codex` |
+| Cursor | `node ../remove-aidlc.cjs .cursor` |
+| OpenCode, GitHub Copilot | `node ../remove-aidlc.cjs .aidlc` |
+
+If it says the record predates the shipped-files-only record, an earlier
+release wrote it: refresh with `aidlc config --harness <name>` first (in a
+copied project, `bun <harness folder>/tools/aidlc.ts config --harness <name>`),
+then run the script again. Review any file it kept: it is an AI-DLC file you edited, so
+keep it only if you still want your edit.
+
+### 3. Take AI-DLC's part out of shared files
+
+The script lists each shared file still holding AI-DLC's part. If git has the
+project from before AI-DLC was added, restoring them from that commit is the
+quickest way, for example
+`git checkout <commit> -- .gitignore AGENTS.md .claude/settings.json`. That also
+undoes any change you made to them since, so check `git diff --cached` before
+you commit. Otherwise remove AI-DLC's part by hand. Remove a value only while it
+still holds what AI-DLC wrote; a value your team changed is yours, so keep it:
+
+| File | Remove |
+|------|--------|
+| `.gitignore` | The lines from `# BEGIN AI-DLC:gitignore` to `# END AI-DLC:gitignore`, and the blank line above them. Several harnesses share this one block. |
+| `AGENTS.md` | The lines from `<!-- BEGIN AI-DLC:agents -->` to `<!-- END AI-DLC:agents -->`, and the blank line above them. |
+| `.claude/settings.json` | `companyAnnouncements`, unless your team set its own. `statusLine` when its command runs `aidlc`. Every hook group whose command runs `aidlc` (`aidlc engine hook ...`, or `bun "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts" engine hook ...` in a copied project). The `permissions.allow` entries that name `aidlc`, and `Edit(/**)`, `Task` and `WebSearch` unless you added them. `env` keys that start with `AIDLC_` or `AWS_AIDLC_`, and any provider keys you chose in `aidlc config providers`. |
+| `.claude/settings.local.json` | A `statusLine` whose command runs `aidlc`; AI-DLC's status line lands here when it is turned on. Step 1's `--statusline off` takes it out. |
+| `.mcp.json` (Claude Code), `.kiro/settings/mcp.json` (Kiro CLI) | The MCP servers AI-DLC ships (`context7`, `aws-mcp`, `aws-pricing`, `aws-iac`, `aws-serverless`), unless you set one up yourself. Kiro CLI gets them by default, turned off; Claude Code gets them when you turned them on, by answering yes when `aidlc config` asked at a terminal or with `config project --mcp defaults`. |
+| `.codex/config.toml` | `developer_instructions`, `sandbox_mode`, `suppress_unstable_features_warning` and `tool_output_token_limit`; AI-DLC's keys in `[shell_environment_policy]` (`set`, holding `AIDLC_RULES_DIR`), `[sandbox_workspace_write]` (`network_access`), `[agents]` (`max_depth`), `[features]` (`default_mode_request_user_input`), `[tools]` (`experimental_request_user_input`) and `[tui]` (`status_line`); the `#` comments directly above them; and any of those tables left empty. Keep keys you set yourself, also inside those tables. |
+| `opencode.json` (or `opencode.jsonc`) | `$schema` unless it is yours; `.aidlc/skills` in `skills.paths`; the `instructions` entries under `.aidlc/` and `aidlc/`; and AI-DLC's `permission` rules: the ones naming `.aidlc/`, `"aidlc engine *": "allow"` under `bash` (a native install), its asks before `rm -r*` and `git push *`, and the `"*"` rules earlier releases added under `edit` and `bash`, unless you wrote the same rule yourself. |
+| `.vscode/settings.json` (Copilot) | `chat.agent.maxRequests` (`200`) and `chat.useHooks` (`true`), unless you set them yourself. |
+
+Delete a file when nothing of yours is left in it: AI-DLC created it. Cursor's
+root `install.ts` and the other whole files AI-DLC wrote at the project root are
+deleted by the script in step 2. Codex keeps its trust for the project's hooks
+outside the project, in `$CODEX_HOME/config.toml` (`~/.codex/config.toml` by
+default); remove the project's entries there if you want Codex to forget them.
+
+### 4. Check
+
+`git status` shows AI-DLC's files deleted and your shared files back to what they
+held before. Searching each shared file from step 3 for `AI-DLC` and `aidlc`
+should find nothing of AI-DLC's left:
+
+```bash
+grep -n "AI-DLC\|aidlc" .gitignore AGENTS.md
+```
+
+```powershell
+Select-String -Path .gitignore, AGENTS.md -Pattern 'AI-DLC|aidlc'
+```
+
+A project copied from `aidlc-copy-runtime-X.Y.Z.tar.gz` gets the manifest when
+its setup command runs (see [Copy Channel](#copy-channel)). If that command never
+ran, there is no manifest: delete the files that are byte-identical to the
+`runtime/<harness>/` folder you copied, then follow steps 3 and 4. Copying also
+replaces files of the same name that the project already had (such as your own
+`.claude/settings.json`); restore those from git or your backup.
+
 ## Uninstall
+
+`aidlc uninstall` removes the machine install. To remove AI-DLC from one
+project, see [Remove AI-DLC from a Project](#remove-ai-dlc-from-a-project).
 
 ```bash
 aidlc uninstall

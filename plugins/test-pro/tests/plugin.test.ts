@@ -1,8 +1,13 @@
 // The test-pro plugin's own content validation.
 //
 // Distinct from the framework compose guard: this checks the plugin's authored
-// content, and its doctor check in a composed install. Copy this shape for your
-// own plugin.
+// content, and its doctor check in a composed install. It is this repository's
+// shape: it imports tests/harness/plugin-kit.ts and the dist/ trees by relative
+// path, so it runs only inside this checkout. A plugin in its own repository
+// runs the shipped verbs in CI instead, from a native install: `aidlc plugin
+// validate`, `aidlc plugin test --install <project>` and `aidlc plugin build
+// <harness>` (docs/harness-engineering/10-authoring-a-plugin.md, "In your
+// plugin's repository").
 //
 // Run: bun test plugins/test-pro/tests/plugin.test.ts
 

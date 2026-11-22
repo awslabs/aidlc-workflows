@@ -204,7 +204,8 @@ describes can never be separated.
 **The content may be a PARTIAL extraction.** Extraction is capped (50
 PDF pages, 200,000 characters of output); past the cap the text is cut
 and the row records `truncated`. `show` prints a `truncated  yes` line
-above the content (and `--json` carries the flag inside `extraction`),
+(`after page 50` for the page cap) above the content (and `--json`
+carries the flag inside `extraction`, with `pages_kept` for a page cut),
 so check for it before answering a question from the text — "the
 document does not mention X" is not a safe conclusion from a truncated
 extraction.

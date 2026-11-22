@@ -1,24 +1,27 @@
-// covers: function:lowerFenceRemedy, function:lowerFenceSentence, function:personSpokeSinceGate, function:evaluateGuardRefusal
+// covers: function:lowerFenceRemedy, function:lowerFenceSentence, function:personTurnStands, function:evaluateGuardRefusal
 //
 // The person drives. When a guard offers turning a check off and the person
 // picks it, or asks for it in their own words, the agent runs the existing
-// setter itself and says in one line what changed. The setter accepts it
-// because a person's turn is on record; nothing is printed for the person to
-// type. A team's memory-held strict Guard Policy still wins, with its one-line
-// reason, and with no person on record the setter refuses.
+// setter itself, naming the message they asked in (--message), and says in
+// one line what changed. The setter accepts it on that message; nothing is
+// printed for the person to type. A team's memory-held strict Guard Policy
+// still wins, with its one-line reason, and with no message named the setter
+// refuses.
 
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+  auditBlockField,
   evaluateGuardRefusal,
   getField,
   guardRecoveryAskForRefusal,
   lowerFenceSentence,
-  personSpokeSinceGate,
+  MESSAGE_FILL,
   readAuditShardEvents,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { personTurnStands } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
 import { guardOperationMatchesCommand } from "../../dist/claude/.claude/tools/aidlc-guard-operation.ts";
 import { validateDirective } from "../../dist/claude/.claude/tools/aidlc-directive.ts";
 import { SWITCHABLE_GUARD_FENCES } from "../../dist/claude/.claude/tools/aidlc-guard-fences.ts";
@@ -55,7 +58,9 @@ function run(tool: string, args: string[], proj: string): { status: number | nul
   return { status: result.exitCode, stdout: result.stdout.toString(), stderr: result.stderr.toString() };
 }
 
-function says(proj: string, prompt: string): void {
+// The person types `prompt`; the human-turn hook keeps it. Returns the id of
+// the message it kept.
+function says(proj: string, prompt: string): string {
   const result = Bun.spawnSync({
     cmd: [BUN, join(AIDLC_SRC, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
     cwd: proj,
@@ -65,6 +70,10 @@ function says(proj: string, prompt: string): void {
     stderr: "pipe",
   });
   expect(result.exitCode, result.stderr.toString()).toBe(0);
+  const turn = readAuditShardEvents(proj).filter((row) => row.event === "HUMAN_TURN").at(-1);
+  const id = turn === undefined ? null : auditBlockField(turn.block, "Message Id");
+  expect(id).not.toBeNull();
+  return id as string;
 }
 
 function project(): { proj: string; state: string } {
@@ -110,7 +119,9 @@ describe("a guard's turn-it-off choice is a command the agent runs", () => {
     });
     expect(guardOperationMatchesCommand(remedy.operation!, remedy.command!)).toBe(true);
     expect(remedy.action).toStartWith("Turn the review-freeze check off for this piece of work:");
-    expect(remedy.action).toContain("tell the person in one line");
+    // The setter's own output says its line to the person; the choice asks for no wording of the agent's.
+    expect(remedy.action).toEndWith("After the command succeeds, retry what was refused.");
+    expect(remedy.action).not.toContain("in one line");
     expect(remedy.action).not.toMatch(/\/aidlc|\$aidlc|typ(e|ing)|yourself/);
   });
 
@@ -169,20 +180,25 @@ describe("a guard's turn-it-off choice is a command the agent runs", () => {
     const sentence = lowerFenceSentence("state-transition");
     expect(sentence).toContain("offer to turn the state-transition check off for this piece of work");
     expect(sentence).toMatch(
-      /run `[^`]+(config-change --guard|config set guard)\.state-transition off --person-words '<their words>'` yourself/,
+      /run `[^`]+(config-change --guard|config set guard)\.state-transition off --message '<id>'` yourself/,
     );
+    expect(sentence).toContain(`yourself${MESSAGE_FILL}`);
     // No slash command for the person to type (the setter's own path is fine).
     expect(sentence).not.toMatch(/(^|[\s`])[/$]aidlc\b/);
   });
 });
 
 describe("the setter carries out the person's choice", () => {
-  test("with the person's turn on record, the agent's setter turns the check off", () => {
+  test("with the person's message named, the agent's setter turns the check off", () => {
     const { proj, state } = project();
-    expect(personSpokeSinceGate(proj)).toBe(false);
-    says(proj, "yes, turn the review freeze off for this");
-    expect(personSpokeSinceGate(proj)).toBe(true);
-    const lowered = run(UTILITY, turnOff, proj);
+    expect(personTurnStands(proj, "request")).toBe(false);
+    const id = says(proj, "yes, turn the review freeze off for this");
+    expect(personTurnStands(proj, "request")).toBe(true);
+    // Their turn alone carries nothing: the refusal names the retry with their message.
+    const bare = run(UTILITY, turnOff, proj);
+    expect(bare.status).toBe(1);
+    expect(refusalError(bare.stderr)).toContain(`If their message ${id} (sent `);
+    const lowered = run(UTILITY, [...turnOff, "--message", id], proj);
     expect(lowered.status, lowered.stderr).toBe(0);
     expect(getField(readFileSync(state, "utf-8"), "Guards Off")).toContain("review-freeze");
     expect(readAuditShardEvents(proj).some((row) => row.event === "GUARD_DISABLED")).toBe(true);
@@ -194,7 +210,8 @@ describe("the setter carries out the person's choice", () => {
     const refused = run(UTILITY, turnOff, proj);
     expect(refused.status).toBe(1);
     expect(refusalError(refused.stderr)).toContain(
-      "Turning the review-freeze check off is the person's call. No reply from the person has arrived since the last decision",
+      "Turning the review-freeze check off is the person's call. Run it with --message <id>, the message they asked in, " +
+        "when they ask for it.",
     );
     expect(readFileSync(state, "utf-8")).toBe(before);
   });

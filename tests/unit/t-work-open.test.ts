@@ -149,6 +149,7 @@ describe("what the person lost when they carried their work on after the update"
     hookFailures: [],
     blockedHandoffs: [],
     changed: [],
+    toldChanged: [],
   };
 
   test("nothing, when the gate came back, they approved and the next stage started", () => {
@@ -176,6 +177,12 @@ describe("what the person lost when they carried their work on after the update"
       "a hook failed: Stop: y",
       "the turn could not end when the person was asked: approval z: carry on",
       "a file of the person's changed: AGENTS.md changed outside AI-DLC's marked part",
+    ]);
+  });
+
+  test("a change they were told of that they did not make", () => {
+    expect(resumeProblems({ ...clean, toldChanged: ["The Requirements Analysis documents changed after they were reviewed; carrying on."] })).toEqual([
+      "after the update the person was told of a change they did not make: The Requirements Analysis documents changed after they were reviewed; carrying on.",
     ]);
   });
 });

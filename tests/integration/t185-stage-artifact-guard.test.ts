@@ -83,6 +83,11 @@ import {
   summaryConfirmationContentHash,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
+// The stage's checks run once before its review or gate, and again at the gate
+// (completionChecksStep, t-checks-before-review); this file's fixture documents
+// are not written for them and its subject is not them, so they stay off here.
+process.env.AIDLC_DISABLE_SENSORS = "1";
+
 const BUN = process.execPath;
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -1901,6 +1906,7 @@ X. Other (please specify)
     // (satisfies layer 1) but NO source code.
     function stageCodeGenDocsOnly(): void {
       guarded(proj, ["set", "Current Stage=code-generation"]);
+      guarded(proj, ["checkbox", "units-generation=completed"]);
       guarded(proj, ["checkbox", "code-generation=in-progress"]);
       writeRecordDoc(proj, `construction/${UNIT}/code-generation/code-generation-plan.md`);
       writeRecordDoc(proj, `construction/${UNIT}/code-generation/unit-test-instructions.md`);
@@ -1965,7 +1971,8 @@ X. Other (please specify)
       const r = guarded(proj, ["approve", "reverse-engineering", "--user-input", "ok"]);
       expect(r.rc).not.toBe(0);
       expect((JSON.parse(r.out) as { error: string }).error).toContain(
-        'Cannot complete "reverse-engineering": none of its declared artifacts exist',
+        `Cannot complete "reverse-engineering": required artifacts are missing (${basename(proj)}: all 9 files). ` +
+          "Write them, then run the same report again.",
       );
     });
 
@@ -1991,7 +1998,26 @@ X. Other (please specify)
       const r = guarded(proj, ["gate-start", "reverse-engineering"]);
       expect(r.rc).not.toBe(0);
       expect((JSON.parse(r.out) as { error: string }).error).toContain(
-        'Cannot present "reverse-engineering" for approval: none of its declared artifacts exist',
+        'Cannot present "reverse-engineering" for approval: required artifacts are missing (repo-b: dependencies.md). ' +
+          "Write them, then run the same report again.",
+      );
+    });
+
+    test("REFUSES many repos naming the first five repositories' missing files, then how many more", () => {
+      const repos = ["repo-a", "repo-b", "repo-c", "repo-d", "repo-e", "repo-f", "repo-g", "repo-h"];
+      rewriteIntentRepos(proj, repos);
+      guarded(proj, ["set", "Current Stage=reverse-engineering"]);
+      guarded(proj, ["checkbox", "reverse-engineering=in-progress"]);
+      writeCodekbSet(proj, "repo-a");
+      for (const repo of repos.slice(1)) writeCodekbSet(proj, repo, "architecture");
+      completePipelineReceipts(proj, repos);
+
+      const r = guarded(proj, ["gate-start", "reverse-engineering"]);
+      expect(r.rc).not.toBe(0);
+      expect((JSON.parse(r.out) as { error: string }).error).toContain(
+        'Cannot present "reverse-engineering" for approval: required artifacts are missing (' +
+          "repo-b: architecture.md; repo-c: architecture.md; repo-d: architecture.md; repo-e: architecture.md; " +
+          "repo-f: architecture.md; and 2 more repositories). Write them, then run the same report again.",
       );
     });
 
@@ -2058,6 +2084,7 @@ X. Other (please specify)
     }
     function stageCodeGenDocsOnly(): void {
       guarded(proj, ["set", "Current Stage=code-generation"]);
+      guarded(proj, ["checkbox", "units-generation=completed"]);
       guarded(proj, ["checkbox", "code-generation=in-progress"]);
       appendAuditEntry(
         "STAGE_STARTED",
@@ -2221,6 +2248,7 @@ X. Other (please specify)
     }
     function stageCodeGenDocsOnly(): void {
       guarded(proj, ["set", "Current Stage=code-generation"]);
+      guarded(proj, ["checkbox", "units-generation=completed"]);
       guarded(proj, ["checkbox", "code-generation=in-progress"]);
       appendAuditEntry(
         "STAGE_STARTED",
@@ -2408,6 +2436,7 @@ X. Other (please specify)
 
     function seedSwarm(converged: string[]): void {
       guarded(proj, ["set", "Current Stage=code-generation"]);
+      guarded(proj, ["checkbox", "units-generation=completed"]);
       guarded(proj, ["checkbox", "code-generation=in-progress"]);
       // Autonomy grant: append the field beside Scope (fixture ships without it).
       const statePath = seededStateFile(proj);

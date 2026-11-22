@@ -53,10 +53,14 @@ const spacePaths = ["aidlc/spaces/**", ".aidlc/worktrees/*/aidlc/spaces/**"];
 const quoted = (paths: readonly string[]) =>
   paths.map((path) => `        - "${path}"`);
 
+// The name a plugin's agent stands under here: the guard admits it no role of
+// its own, so its deny is the one most personas carry.
+const PLUGIN_AGENT = "plugin-agent";
+
 // Each persona's shell deny admits what the guard admits that persona, and
 // refuses a risky shell form on any AI-DLC command.
 const copyShellDeny = new Map<string, string[]>(
-  DELEGATION_AGENTS.map((agent) => [agent, [
+  [...DELEGATION_AGENTS, PLUGIN_AGENT].map((agent) => [agent, [
     ...shellDenyLines(copyChannelDelegateShellDeny(".kiro", agent)),
     ...riskyFormDenyLines(["bun .kiro/tools/aidlc"]),
   ]]),
@@ -391,6 +395,7 @@ const manifest: HarnessManifest = {
     file: `agents/${agent}.md`,
     lines: personaFrontmatter(agent),
   })),
+  pluginAgentFrontmatter: personaFrontmatter(PLUGIN_AGENT),
   // The native release keys the persona shell deny on the `aidlc engine`
   // routes its conductor allow covers (delegate-shell-deny.ts), one rule per
   // distinct persona deny.

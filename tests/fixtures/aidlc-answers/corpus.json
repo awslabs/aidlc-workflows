@@ -6,12 +6,12 @@
   "via": "chat",
   "input": "1",
   "meaning": "the person means: pick option 1 (Approve)",
-  "reader": "tool",
+  "reader": "agent",
   "expected": {
    "engine": {
-    "recorded": "Approve",
+    "recorded": "none",
     "words": "1",
-    "step": "recorded",
+    "step": "none",
     "no_ask": true
    },
    "end": {
@@ -31,12 +31,12 @@
   "via": "chat",
   "input": "2",
   "meaning": "the person means: ask for changes to the requirements (option 2, Request Changes); the agent asks what should change, once, because they did not say",
-  "reader": "tool",
+  "reader": "agent",
   "expected": {
    "engine": {
-    "recorded": "Request Changes",
+    "recorded": "none",
     "words": "2",
-    "step": "recorded",
+    "step": "none",
     "no_ask": true
    },
    "end": {
@@ -58,12 +58,12 @@
   "via": "chat",
   "input": "2.",
   "meaning": "the person means: ask for changes to the requirements (option 2 with a trailing dot); the agent asks what should change, once, because they did not say",
-  "reader": "tool",
+  "reader": "agent",
   "expected": {
    "engine": {
-    "recorded": "Request Changes",
+    "recorded": "none",
     "words": "2.",
-    "step": "recorded",
+    "step": "none",
     "no_ask": true
    },
    "end": {
@@ -85,12 +85,12 @@
   "via": "chat",
   "input": "option 1",
   "meaning": "the person means: pick option 1 (Approve)",
-  "reader": "tool",
+  "reader": "agent",
   "expected": {
    "engine": {
-    "recorded": "Approve",
+    "recorded": "none",
     "words": "option 1",
-    "step": "recorded",
+    "step": "none",
     "no_ask": true
    },
    "end": {
@@ -110,12 +110,12 @@
   "via": "chat",
   "input": "Approve",
   "meaning": "the person means: approve (the label as shown)",
-  "reader": "tool",
+  "reader": "agent",
   "expected": {
    "engine": {
-    "recorded": "Approve",
+    "recorded": "none",
     "words": "Approve",
-    "step": "recorded",
+    "step": "none",
     "no_ask": true
    },
    "end": {
@@ -135,12 +135,12 @@
   "via": "chat",
   "input": "approve",
   "meaning": "the person means: approve (the label in lower case)",
-  "reader": "tool",
+  "reader": "agent",
   "expected": {
    "engine": {
-    "recorded": "Approve",
+    "recorded": "none",
     "words": "approve",
-    "step": "recorded",
+    "step": "none",
     "no_ask": true
    },
    "end": {
@@ -160,12 +160,12 @@
   "via": "chat",
   "input": "Approve (Recommended)",
   "meaning": "the person means: approve (the label with its recommendation tag, as a picker returns it)",
-  "reader": "tool",
+  "reader": "agent",
   "expected": {
    "engine": {
-    "recorded": "Approve",
+    "recorded": "none",
     "words": "Approve (Recommended)",
-    "step": "recorded",
+    "step": "none",
     "no_ask": true
    },
    "end": {
@@ -185,12 +185,12 @@
   "via": "chat",
   "input": "1. Approve",
   "meaning": "the person means: approve (the numbered line as shown)",
-  "reader": "tool",
+  "reader": "agent",
   "expected": {
    "engine": {
-    "recorded": "Approve",
+    "recorded": "none",
     "words": "1. Approve",
-    "step": "recorded",
+    "step": "none",
     "no_ask": true
    },
    "end": {
@@ -210,12 +210,12 @@
   "via": "chat",
   "input": "Request Changes",
   "meaning": "the person means: ask for changes to the requirements (the label as shown); the agent asks what should change, once, because they did not say",
-  "reader": "tool",
+  "reader": "agent",
   "expected": {
    "engine": {
-    "recorded": "Request Changes",
+    "recorded": "none",
     "words": "Request Changes",
-    "step": "recorded",
+    "step": "none",
     "no_ask": true
    },
    "end": {
@@ -237,13 +237,13 @@
   "via": "chat",
   "input": "1",
   "meaning": "the person means: the first option (Approve); the picker showed no numbers, so this is read from the order the options had",
-  "reader": "tool",
+  "reader": "agent",
   "unsure": true,
   "expected": {
    "engine": {
-    "recorded": "Approve",
+    "recorded": "none",
     "words": "1",
-    "step": "recorded",
+    "step": "none",
     "no_ask": true
    },
    "end": {
@@ -1315,12 +1315,12 @@
   "via": "aidlc",
   "input": "2",
   "meaning": "the person means: ask for changes to the requirements (option 2, typed after /aidlc); the agent asks what should change, once, because they did not say",
-  "reader": "tool",
+  "reader": "agent",
   "expected": {
    "engine": {
-    "recorded": "Request Changes",
+    "recorded": "none",
     "words": "2",
-    "step": "recorded",
+    "step": "reading-step",
     "no_ask": true
    },
    "end": {
@@ -1369,12 +1369,12 @@
   "via": "aidlc",
   "input": "Approve",
   "meaning": "the person means: approve (the label, typed after /aidlc)",
-  "reader": "tool",
+  "reader": "agent",
   "expected": {
    "engine": {
-    "recorded": "Approve",
+    "recorded": "none",
     "words": "Approve",
-    "step": "recorded",
+    "step": "reading-step",
     "no_ask": true
    },
    "end": {
@@ -1454,7 +1454,7 @@
   "via": "picker",
   "input": "Approve",
   "meaning": "the person means: approve (picked in the question box)",
-  "reader": "tool",
+  "reader": "agent",
   "picker": {
    "question": "Requirements Analysis complete. How would you like to proceed?",
    "options": [
@@ -1465,9 +1465,9 @@
   },
   "expected": {
    "engine": {
-    "recorded": "Approve",
+    "recorded": "none",
     "words": "Approve",
-    "step": "recorded",
+    "step": "none",
     "no_ask": true
    },
    "end": {
@@ -1487,12 +1487,12 @@
   "via": "picker",
   "input": "Request Changes (Recommended)",
   "meaning": "the person means: ask for changes to the requirements (picked in the box, the recommended one); the agent asks what should change, once, because they did not say",
-  "reader": "tool",
+  "reader": "agent",
   "expected": {
    "engine": {
-    "recorded": "Request Changes",
+    "recorded": "none",
     "words": "Request Changes (Recommended)",
-    "step": "recorded",
+    "step": "none",
     "no_ask": true
    },
    "end": {
@@ -1589,12 +1589,12 @@
   "via": "chat",
   "input": "1",
   "meaning": "the person means: pick option 1 (Approve)",
-  "reader": "tool",
+  "reader": "agent",
   "expected": {
    "engine": {
-    "recorded": "Approve",
+    "recorded": "none",
     "words": "1",
-    "step": "recorded",
+    "step": "none",
     "no_ask": true
    },
    "end": {
@@ -1614,12 +1614,12 @@
   "via": "chat",
   "input": "2",
   "meaning": "the person means: ask for changes to the requirements (option 2, Request Changes); the agent asks what should change, once, because they did not say",
-  "reader": "tool",
+  "reader": "agent",
   "expected": {
    "engine": {
-    "recorded": "Request Changes",
+    "recorded": "none",
     "words": "2",
-    "step": "recorded",
+    "step": "none",
     "no_ask": true
    },
    "end": {
@@ -1641,12 +1641,12 @@
   "via": "chat",
   "input": "Approve",
   "meaning": "the person means: approve (the label as shown)",
-  "reader": "tool",
+  "reader": "agent",
   "expected": {
    "engine": {
-    "recorded": "Approve",
+    "recorded": "none",
     "words": "Approve",
-    "step": "recorded",
+    "step": "none",
     "no_ask": true
    },
    "end": {
@@ -1666,12 +1666,12 @@
   "via": "chat",
   "input": "Request Changes",
   "meaning": "the person means: ask for changes to the requirements (the label as shown); the agent asks what should change, once, because they did not say",
-  "reader": "tool",
+  "reader": "agent",
   "expected": {
    "engine": {
-    "recorded": "Request Changes",
+    "recorded": "none",
     "words": "Request Changes",
-    "step": "recorded",
+    "step": "none",
     "no_ask": true
    },
    "end": {
@@ -1693,12 +1693,12 @@
   "via": "chat",
   "input": "Accept as-is",
   "meaning": "the person means: accept the requirements as they are and move on",
-  "reader": "tool",
+  "reader": "agent",
   "expected": {
    "engine": {
-    "recorded": "Accept as-is",
+    "recorded": "none",
     "words": "Accept as-is",
-    "step": "recorded",
+    "step": "none",
     "no_ask": true
    },
    "end": {
@@ -1718,12 +1718,12 @@
   "via": "chat",
   "input": "3",
   "meaning": "the person means: pick option 3 (Accept as-is): accept the requirements as they are and move on",
-  "reader": "tool",
+  "reader": "agent",
   "expected": {
    "engine": {
-    "recorded": "Accept as-is",
+    "recorded": "none",
     "words": "3",
-    "step": "recorded",
+    "step": "none",
     "no_ask": true
    },
    "end": {
@@ -2224,12 +2224,12 @@
   "via": "aidlc",
   "input": "2",
   "meaning": "the person means: ask for changes to the requirements (option 2, typed after /aidlc); the agent asks what should change, once, because they did not say",
-  "reader": "tool",
+  "reader": "agent",
   "expected": {
    "engine": {
-    "recorded": "Request Changes",
+    "recorded": "none",
     "words": "2",
-    "step": "recorded",
+    "step": "reading-step",
     "no_ask": true
    },
    "end": {
@@ -2251,7 +2251,7 @@
   "via": "picker",
   "input": "Approve",
   "meaning": "the person means: approve (picked in the question box)",
-  "reader": "tool",
+  "reader": "agent",
   "picker": {
    "question": "Requirements Analysis, this is revision cycle 3. How would you like to proceed?",
    "options": [
@@ -2263,9 +2263,9 @@
   },
   "expected": {
    "engine": {
-    "recorded": "Approve",
+    "recorded": "none",
     "words": "Approve",
-    "step": "recorded",
+    "step": "none",
     "no_ask": true
    },
    "end": {
@@ -2285,12 +2285,12 @@
   "via": "chat",
   "input": "1",
   "meaning": "the person means: pick option 1 (Approve Plan)",
-  "reader": "tool",
+  "reader": "agent",
   "expected": {
    "engine": {
-    "recorded": "Approve Plan",
+    "recorded": "none",
     "words": "1",
-    "step": "recorded",
+    "step": "none",
     "no_ask": true
    },
    "end": {
@@ -2310,12 +2310,12 @@
   "via": "chat",
   "input": "2",
   "meaning": "the person means: ask for changes to the code plan (option 2, Request Changes); the agent asks what should change, once, because they did not say",
-  "reader": "tool",
+  "reader": "agent",
   "expected": {
    "engine": {
-    "recorded": "Request Changes",
+    "recorded": "none",
     "words": "2",
-    "step": "recorded",
+    "step": "none",
     "no_ask": true
    },
    "end": {
@@ -2337,12 +2337,12 @@
   "via": "chat",
   "input": "2.",
   "meaning": "the person means: ask for changes to the code plan (option 2 with a trailing dot); the agent asks what should change, once, because they did not say",
-  "reader": "tool",
+  "reader": "agent",
   "expected": {
    "engine": {
-    "recorded": "Request Changes",
+    "recorded": "none",
     "words": "2.",
-    "step": "recorded",
+    "step": "none",
     "no_ask": true
    },
    "end": {
@@ -2364,12 +2364,12 @@
   "via": "chat",
   "input": "option 1",
   "meaning": "the person means: pick option 1 (Approve Plan)",
-  "reader": "tool",
+  "reader": "agent",
   "expected": {
    "engine": {
-    "recorded": "Approve Plan",
+    "recorded": "none",
     "words": "option 1",
-    "step": "recorded",
+    "step": "none",
     "no_ask": true
    },
    "end": {
@@ -2389,12 +2389,12 @@
   "via": "chat",
   "input": "Approve Plan",
   "meaning": "the person means: approve plan (the label as shown)",
-  "reader": "tool",
+  "reader": "agent",
   "expected": {
    "engine": {
-    "recorded": "Approve Plan",
+    "recorded": "none",
     "words": "Approve Plan",
-    "step": "recorded",
+    "step": "none",
     "no_ask": true
    },
    "end": {
@@ -2414,12 +2414,12 @@
   "via": "chat",
   "input": "approve plan",
   "meaning": "the person means: approve plan (the label in lower case)",
-  "reader": "tool",
+  "reader": "agent",
   "expected": {
    "engine": {
-    "recorded": "Approve Plan",
+    "recorded": "none",
     "words": "approve plan",
-    "step": "recorded",
+    "step": "none",
     "no_ask": true
    },
    "end": {
@@ -2439,12 +2439,12 @@
   "via": "chat",
   "input": "Approve Plan (Recommended)",
   "meaning": "the person means: approve plan (the label with its recommendation tag, as a picker returns it)",
-  "reader": "tool",
+  "reader": "agent",
   "expected": {
    "engine": {
-    "recorded": "Approve Plan",
+    "recorded": "none",
     "words": "Approve Plan (Recommended)",
-    "step": "recorded",
+    "step": "none",
     "no_ask": true
    },
    "end": {
@@ -2464,12 +2464,12 @@
   "via": "chat",
   "input": "1. Approve Plan",
   "meaning": "the person means: approve plan (the numbered line as shown)",
-  "reader": "tool",
+  "reader": "agent",
   "expected": {
    "engine": {
-    "recorded": "Approve Plan",
+    "recorded": "none",
     "words": "1. Approve Plan",
-    "step": "recorded",
+    "step": "none",
     "no_ask": true
    },
    "end": {
@@ -2489,12 +2489,12 @@
   "via": "chat",
   "input": "Request Changes",
   "meaning": "the person means: ask for changes to the code plan (the label as shown); the agent asks what should change, once, because they did not say",
-  "reader": "tool",
+  "reader": "agent",
   "expected": {
    "engine": {
-    "recorded": "Request Changes",
+    "recorded": "none",
     "words": "Request Changes",
-    "step": "recorded",
+    "step": "none",
     "no_ask": true
    },
    "end": {
@@ -2516,12 +2516,12 @@
   "via": "chat",
   "input": "I'll edit the files",
   "meaning": "the person means: edit the plan files themselves, and say done when finished",
-  "reader": "tool",
+  "reader": "agent",
   "expected": {
    "engine": {
-    "recorded": "I'll edit the files",
+    "recorded": "none",
     "words": "I'll edit the files",
-    "step": "recorded",
+    "step": "none",
     "no_ask": true
    },
    "end": {
@@ -2541,12 +2541,12 @@
   "via": "chat",
   "input": "3",
   "meaning": "the person means: pick option 3 (I'll edit the files): edit the plan files themselves, and say done when finished",
-  "reader": "tool",
+  "reader": "agent",
   "expected": {
    "engine": {
-    "recorded": "I'll edit the files",
+    "recorded": "none",
     "words": "3",
-    "step": "recorded",
+    "step": "none",
     "no_ask": true
    },
    "end": {
@@ -2566,13 +2566,13 @@
   "via": "chat",
   "input": "1",
   "meaning": "the person means: the first option (Approve Plan); the picker showed no numbers, so this is read from the order the options had",
-  "reader": "tool",
+  "reader": "agent",
   "unsure": true,
   "expected": {
    "engine": {
-    "recorded": "Approve Plan",
+    "recorded": "none",
     "words": "1",
-    "step": "recorded",
+    "step": "none",
     "no_ask": true
    },
    "end": {
@@ -3594,12 +3594,12 @@
   "via": "aidlc",
   "input": "2",
   "meaning": "the person means: ask for changes to the code plan (option 2, typed after /aidlc); the agent asks what should change, once, because they did not say",
-  "reader": "tool",
+  "reader": "agent",
   "expected": {
    "engine": {
-    "recorded": "Request Changes",
+    "recorded": "none",
     "words": "2",
-    "step": "recorded",
+    "step": "reading-step",
     "no_ask": true
    },
    "end": {
@@ -3648,12 +3648,12 @@
   "via": "aidlc",
   "input": "Approve Plan",
   "meaning": "the person means: approve plan (the label, typed after /aidlc)",
-  "reader": "tool",
+  "reader": "agent",
   "expected": {
    "engine": {
-    "recorded": "Approve Plan",
+    "recorded": "none",
     "words": "Approve Plan",
-    "step": "recorded",
+    "step": "reading-step",
     "no_ask": true
    },
    "end": {
@@ -3698,7 +3698,7 @@
   "via": "aidlc",
   "input": "I'll edit the files",
   "meaning": "the person means: edit the plan files themselves, and say done when finished (typed after /aidlc with an apostrophe; Kiro CLI and Kiro IDE split it their own way and the words stay whole)",
-  "reader": "tool",
+  "reader": "agent",
   "argv": {
    "kiro-cli": [
     "I'll",
@@ -3712,9 +3712,9 @@
   },
   "expected": {
    "engine": {
-    "recorded": "I'll edit the files",
+    "recorded": "none",
     "words": "I'll edit the files",
-    "step": "recorded",
+    "step": "reading-step",
     "no_ask": true
    },
    "end": {
@@ -3873,12 +3873,12 @@
   "via": "chat",
   "input": "1",
   "meaning": "the person means: pick option 1 (Approve all)",
-  "reader": "tool",
+  "reader": "agent",
   "expected": {
    "engine": {
-    "recorded": "Approve all",
+    "recorded": "none",
     "words": "1",
-    "step": "recorded",
+    "step": "none",
     "no_ask": true
    },
    "end": {
@@ -3925,12 +3925,12 @@
   "via": "chat",
   "input": "Approve all",
   "meaning": "the person means: approve all (the label as shown)",
-  "reader": "tool",
+  "reader": "agent",
   "expected": {
    "engine": {
-    "recorded": "Approve all",
+    "recorded": "none",
     "words": "Approve all",
-    "step": "recorded",
+    "step": "none",
     "no_ask": true
    },
    "end": {
@@ -3977,12 +3977,12 @@
   "via": "chat",
   "input": "I'll edit the files",
   "meaning": "the person means: edit the plan files themselves, and say done when finished",
-  "reader": "tool",
+  "reader": "agent",
   "expected": {
    "engine": {
-    "recorded": "I'll edit the files",
+    "recorded": "none",
     "words": "I'll edit the files",
-    "step": "recorded",
+    "step": "none",
     "no_ask": true
    },
    "end": {
@@ -4002,12 +4002,12 @@
   "via": "chat",
   "input": "3",
   "meaning": "the person means: pick option 3 (I'll edit the files): edit the plan files themselves, and say done when finished",
-  "reader": "tool",
+  "reader": "agent",
   "expected": {
    "engine": {
-    "recorded": "I'll edit the files",
+    "recorded": "none",
     "words": "3",
-    "step": "recorded",
+    "step": "none",
     "no_ask": true
    },
    "end": {
@@ -4544,12 +4544,12 @@
   "via": "chat",
   "input": "1",
   "meaning": "the person means: pick option 1 (Approve)",
-  "reader": "tool",
+  "reader": "agent",
   "expected": {
    "engine": {
-    "recorded": "Approve",
+    "recorded": "none",
     "words": "1",
-    "step": "recorded",
+    "step": "none",
     "no_ask": true
    },
    "end": {
@@ -4569,12 +4569,12 @@
   "via": "chat",
   "input": "2",
   "meaning": "the person means: ask for changes to the Unit u1-login (option 2, Request Changes); the agent asks what should change, once, because they did not say",
-  "reader": "tool",
+  "reader": "agent",
   "expected": {
    "engine": {
-    "recorded": "Request Changes",
+    "recorded": "none",
     "words": "2",
-    "step": "recorded",
+    "step": "none",
     "no_ask": true
    },
    "end": {
@@ -4596,12 +4596,12 @@
   "via": "chat",
   "input": "Approve",
   "meaning": "the person means: approve (the label as shown)",
-  "reader": "tool",
+  "reader": "agent",
   "expected": {
    "engine": {
-    "recorded": "Approve",
+    "recorded": "none",
     "words": "Approve",
-    "step": "recorded",
+    "step": "none",
     "no_ask": true
    },
    "end": {
@@ -4621,12 +4621,12 @@
   "via": "chat",
   "input": "Request Changes",
   "meaning": "the person means: ask for changes to the Unit u1-login (the label as shown); the agent asks what should change, once, because they did not say",
-  "reader": "tool",
+  "reader": "agent",
   "expected": {
    "engine": {
-    "recorded": "Request Changes",
+    "recorded": "none",
     "words": "Request Changes",
-    "step": "recorded",
+    "step": "none",
     "no_ask": true
    },
    "end": {
@@ -4724,12 +4724,12 @@
   "via": "chat",
   "input": "approve",
   "meaning": "the person means: approve the Unit u1-login (the label, in lower case: an exact pick)",
-  "reader": "tool",
+  "reader": "agent",
   "expected": {
    "engine": {
-    "recorded": "Approve",
+    "recorded": "none",
     "words": "approve",
-    "step": "recorded",
+    "step": "none",
     "no_ask": true
    },
    "end": {
@@ -5130,12 +5130,12 @@
   "via": "aidlc",
   "input": "2",
   "meaning": "the person means: ask for changes to the Unit u1-login (option 2, typed after /aidlc); the agent asks what should change, once, because they did not say",
-  "reader": "tool",
+  "reader": "agent",
   "expected": {
    "engine": {
-    "recorded": "Request Changes",
+    "recorded": "none",
     "words": "2",
-    "step": "recorded",
+    "step": "reading-step",
     "no_ask": true
    },
    "end": {
@@ -5225,12 +5225,12 @@
   "via": "chat",
   "input": "1",
   "meaning": "the person means: pick option 1 (Approve)",
-  "reader": "tool",
+  "reader": "agent",
   "expected": {
    "engine": {
-    "recorded": "Approve",
+    "recorded": "none",
     "words": "1",
-    "step": "recorded",
+    "step": "none",
     "no_ask": true
    },
    "end": {
@@ -5250,12 +5250,12 @@
   "via": "chat",
   "input": "2",
   "meaning": "the person means: ask for changes to the batch of two Units (option 2, Request Changes); the agent asks what should change, once, because they did not say",
-  "reader": "tool",
+  "reader": "agent",
   "expected": {
    "engine": {
-    "recorded": "Request Changes",
+    "recorded": "none",
     "words": "2",
-    "step": "recorded",
+    "step": "none",
     "no_ask": true
    },
    "end": {
@@ -5277,12 +5277,12 @@
   "via": "chat",
   "input": "Approve",
   "meaning": "the person means: approve (the label as shown)",
-  "reader": "tool",
+  "reader": "agent",
   "expected": {
    "engine": {
-    "recorded": "Approve",
+    "recorded": "none",
     "words": "Approve",
-    "step": "recorded",
+    "step": "none",
     "no_ask": true
    },
    "end": {
@@ -5302,12 +5302,12 @@
   "via": "chat",
   "input": "Request Changes",
   "meaning": "the person means: ask for changes to the batch of two Units (the label as shown); the agent asks what should change, once, because they did not say",
-  "reader": "tool",
+  "reader": "agent",
   "expected": {
    "engine": {
-    "recorded": "Request Changes",
+    "recorded": "none",
     "words": "Request Changes",
-    "step": "recorded",
+    "step": "none",
     "no_ask": true
    },
    "end": {
@@ -5405,12 +5405,12 @@
   "via": "chat",
   "input": "approve",
   "meaning": "the person means: approve the batch of two Units (the label, in lower case: an exact pick)",
-  "reader": "tool",
+  "reader": "agent",
   "expected": {
    "engine": {
-    "recorded": "Approve",
+    "recorded": "none",
     "words": "approve",
-    "step": "recorded",
+    "step": "none",
     "no_ask": true
    },
    "end": {
@@ -5811,12 +5811,12 @@
   "via": "aidlc",
   "input": "2",
   "meaning": "the person means: ask for changes to the batch of two Units (option 2, typed after /aidlc); the agent asks what should change, once, because they did not say",
-  "reader": "tool",
+  "reader": "agent",
   "expected": {
    "engine": {
-    "recorded": "Request Changes",
+    "recorded": "none",
     "words": "2",
-    "step": "recorded",
+    "step": "reading-step",
     "no_ask": true
    },
    "end": {
@@ -5871,12 +5871,12 @@
   "via": "chat",
   "input": "1",
   "meaning": "the person means: pick option 1 (Approve)",
-  "reader": "tool",
+  "reader": "agent",
   "expected": {
    "engine": {
-    "recorded": "Approve",
+    "recorded": "none",
     "words": "1",
-    "step": "recorded",
+    "step": "none",
     "no_ask": true
    },
    "end": {
@@ -5896,12 +5896,12 @@
   "via": "chat",
   "input": "2",
   "meaning": "the person means: ask for changes to the verification command (option 2, Request Changes); the agent asks what should change, once, because they did not say",
-  "reader": "tool",
+  "reader": "agent",
   "expected": {
    "engine": {
-    "recorded": "Request Changes",
+    "recorded": "none",
     "words": "2",
-    "step": "recorded",
+    "step": "none",
     "no_ask": true
    },
    "end": {
@@ -5923,12 +5923,12 @@
   "via": "chat",
   "input": "Approve",
   "meaning": "the person means: approve (the label as shown)",
-  "reader": "tool",
+  "reader": "agent",
   "expected": {
    "engine": {
-    "recorded": "Approve",
+    "recorded": "none",
     "words": "Approve",
-    "step": "recorded",
+    "step": "none",
     "no_ask": true
    },
    "end": {
@@ -5948,12 +5948,12 @@
   "via": "chat",
   "input": "Request Changes",
   "meaning": "the person means: ask for changes to the verification command (the label as shown); the agent asks what should change, once, because they did not say",
-  "reader": "tool",
+  "reader": "agent",
   "expected": {
    "engine": {
-    "recorded": "Request Changes",
+    "recorded": "none",
     "words": "Request Changes",
-    "step": "recorded",
+    "step": "none",
     "no_ask": true
    },
    "end": {
@@ -6051,12 +6051,12 @@
   "via": "chat",
   "input": "approve",
   "meaning": "the person means: approve the verification command (the label, in lower case: an exact pick)",
-  "reader": "tool",
+  "reader": "agent",
   "expected": {
    "engine": {
-    "recorded": "Approve",
+    "recorded": "none",
     "words": "approve",
-    "step": "recorded",
+    "step": "none",
     "no_ask": true
    },
    "end": {
@@ -6457,12 +6457,12 @@
   "via": "aidlc",
   "input": "2",
   "meaning": "the person means: ask for changes to the verification command (option 2, typed after /aidlc); the agent asks what should change, once, because they did not say",
-  "reader": "tool",
+  "reader": "agent",
   "expected": {
    "engine": {
-    "recorded": "Request Changes",
+    "recorded": "none",
     "words": "2",
-    "step": "recorded",
+    "step": "reading-step",
     "no_ask": true
    },
    "end": {
@@ -6517,12 +6517,12 @@
   "via": "chat",
   "input": "1",
   "meaning": "the person means: pick option 1 (Approve)",
-  "reader": "tool",
+  "reader": "agent",
   "expected": {
    "engine": {
-    "recorded": "Approve",
+    "recorded": "none",
     "words": "1",
-    "step": "recorded",
+    "step": "none",
     "no_ask": true
    },
    "end": {
@@ -6542,12 +6542,12 @@
   "via": "chat",
   "input": "2",
   "meaning": "the person means: ask for changes to the Construction change (option 2, Request Changes); the agent asks what should change, once, because they did not say",
-  "reader": "tool",
+  "reader": "agent",
   "expected": {
    "engine": {
-    "recorded": "Request Changes",
+    "recorded": "none",
     "words": "2",
-    "step": "recorded",
+    "step": "none",
     "no_ask": true
    },
    "end": {
@@ -6569,12 +6569,12 @@
   "via": "chat",
   "input": "Approve",
   "meaning": "the person means: approve (the label as shown)",
-  "reader": "tool",
+  "reader": "agent",
   "expected": {
    "engine": {
-    "recorded": "Approve",
+    "recorded": "none",
     "words": "Approve",
-    "step": "recorded",
+    "step": "none",
     "no_ask": true
    },
    "end": {
@@ -6594,12 +6594,12 @@
   "via": "chat",
   "input": "Request Changes",
   "meaning": "the person means: ask for changes to the Construction change (the label as shown); the agent asks what should change, once, because they did not say",
-  "reader": "tool",
+  "reader": "agent",
   "expected": {
    "engine": {
-    "recorded": "Request Changes",
+    "recorded": "none",
     "words": "Request Changes",
-    "step": "recorded",
+    "step": "none",
     "no_ask": true
    },
    "end": {
@@ -6697,12 +6697,12 @@
   "via": "chat",
   "input": "approve",
   "meaning": "the person means: approve the Construction change (the label, in lower case: an exact pick)",
-  "reader": "tool",
+  "reader": "agent",
   "expected": {
    "engine": {
-    "recorded": "Approve",
+    "recorded": "none",
     "words": "approve",
-    "step": "recorded",
+    "step": "none",
     "no_ask": true
    },
    "end": {
@@ -7076,12 +7076,12 @@
   "via": "aidlc",
   "input": "2",
   "meaning": "the person means: ask for changes to the Construction change (option 2, typed after /aidlc); the agent asks what should change, once, because they did not say",
-  "reader": "tool",
+  "reader": "agent",
   "expected": {
    "engine": {
-    "recorded": "Request Changes",
+    "recorded": "none",
     "words": "2",
-    "step": "recorded",
+    "step": "reading-step",
     "no_ask": true
    },
    "end": {
@@ -9178,12 +9178,12 @@
   "via": "chat",
   "input": "1",
   "meaning": "the person means: pick option 1 (Part of the active work)",
-  "reader": "tool",
+  "reader": "agent",
   "expected": {
    "engine": {
-    "recorded": "Part of the active work",
+    "recorded": "none",
     "words": "1",
-    "step": "recorded",
+    "step": "reading-step",
     "no_ask": true
    },
    "end": {
@@ -9203,12 +9203,12 @@
   "via": "chat",
   "input": "Part of the active work",
   "meaning": "the person means: Part of the active work (the label as shown)",
-  "reader": "tool",
+  "reader": "agent",
   "expected": {
    "engine": {
-    "recorded": "Part of the active work",
+    "recorded": "none",
     "words": "Part of the active work",
-    "step": "recorded",
+    "step": "reading-step",
     "no_ask": true
    },
    "end": {
@@ -9228,12 +9228,12 @@
   "via": "chat",
   "input": "part of the active work",
   "meaning": "the person means: Part of the active work (the label in another case)",
-  "reader": "tool",
+  "reader": "agent",
   "expected": {
    "engine": {
-    "recorded": "Part of the active work",
+    "recorded": "none",
     "words": "part of the active work",
-    "step": "recorded",
+    "step": "reading-step",
     "no_ask": true
    },
    "end": {
@@ -9253,12 +9253,12 @@
   "via": "chat",
   "input": "2",
   "meaning": "the person means: pick option 2 (Separate new piece of work)",
-  "reader": "tool",
+  "reader": "agent",
   "expected": {
    "engine": {
-    "recorded": "Separate new piece of work",
+    "recorded": "none",
     "words": "2",
-    "step": "recorded",
+    "step": "reading-step",
     "no_ask": true
    },
    "end": {
@@ -9278,12 +9278,12 @@
   "via": "chat",
   "input": "2. Separate new piece of work",
   "meaning": "the person means: Separate new piece of work (the numbered line as shown)",
-  "reader": "tool",
+  "reader": "agent",
   "expected": {
    "engine": {
-    "recorded": "Separate new piece of work",
+    "recorded": "none",
     "words": "2. Separate new piece of work",
-    "step": "recorded",
+    "step": "reading-step",
     "no_ask": true
    },
    "end": {
@@ -9481,7 +9481,7 @@
   "shown": "numbered",
   "via": "chat",
   "input": "yes",
-  "meaning": "ambiguous: yes answers none of the three options of a where-does-this-belong question (matching it to the option whose detail starts with Yes would be a lexical rule standing in for reading); the agent asks once",
+  "meaning": "ambiguous: yes answers none of the three options of a where-does-this-belong question; the agent asks once",
   "reader": "agent",
   "ambiguous": true,
   "expected": {
@@ -9609,12 +9609,12 @@
   "via": "aidlc",
   "input": "2",
   "meaning": "the person means: separate new work (typed after /aidlc); the engine reads the number itself and sets the work up",
-  "reader": "tool",
+  "reader": "agent",
   "expected": {
    "engine": {
-    "recorded": "Separate new piece of work",
+    "recorded": "none",
     "words": "2",
-    "step": "recorded",
+    "step": "reading-step",
     "no_ask": true
    },
    "end": {
@@ -9634,12 +9634,12 @@
   "via": "aidlc",
   "input": "Separate new piece of work",
   "meaning": "the person means: separate new work (the label, typed after /aidlc); the engine reads the label itself",
-  "reader": "tool",
+  "reader": "agent",
   "expected": {
    "engine": {
-    "recorded": "Separate new piece of work",
+    "recorded": "none",
     "words": "Separate new piece of work",
-    "step": "recorded",
+    "step": "reading-step",
     "no_ask": true
    },
    "end": {
@@ -11590,12 +11590,12 @@
   "via": "chat",
   "input": "1",
   "meaning": "the person means: pick option 1 (Finish the revision and show the gate again)",
-  "reader": "tool",
+  "reader": "agent",
   "expected": {
    "engine": {
-    "recorded": "Finish the revision and show the gate again",
+    "recorded": "none",
     "words": "1",
-    "step": "recorded",
+    "step": "none",
     "no_ask": true
    },
    "end": {
@@ -11615,12 +11615,12 @@
   "via": "chat",
   "input": "Finish the revision and show the gate again",
   "meaning": "the person means: Finish the revision and show the gate again (the label as shown)",
-  "reader": "tool",
+  "reader": "agent",
   "expected": {
    "engine": {
-    "recorded": "Finish the revision and show the gate again",
+    "recorded": "none",
     "words": "Finish the revision and show the gate again",
-    "step": "recorded",
+    "step": "none",
     "no_ask": true
    },
    "end": {
@@ -11640,12 +11640,12 @@
   "via": "chat",
   "input": "finish the revision and show the gate again",
   "meaning": "the person means: Finish the revision and show the gate again (the label in another case)",
-  "reader": "tool",
+  "reader": "agent",
   "expected": {
    "engine": {
-    "recorded": "Finish the revision and show the gate again",
+    "recorded": "none",
     "words": "finish the revision and show the gate again",
-    "step": "recorded",
+    "step": "none",
     "no_ask": true
    },
    "end": {
@@ -11665,12 +11665,12 @@
   "via": "chat",
   "input": "2",
   "meaning": "the person means: pick option 2 (Request Changes)",
-  "reader": "tool",
+  "reader": "agent",
   "expected": {
    "engine": {
-    "recorded": "Request Changes",
+    "recorded": "none",
     "words": "2",
-    "step": "recorded",
+    "step": "none",
     "no_ask": true
    },
    "end": {
@@ -11690,12 +11690,12 @@
   "via": "chat",
   "input": "2. Request Changes",
   "meaning": "the person means: Request Changes (the numbered line as shown)",
-  "reader": "tool",
+  "reader": "agent",
   "expected": {
    "engine": {
-    "recorded": "Request Changes",
+    "recorded": "none",
     "words": "2. Request Changes",
-    "step": "recorded",
+    "step": "none",
     "no_ask": true
    },
    "end": {
@@ -11948,14 +11948,14 @@
   "via": "chat",
   "input": "finish-revision",
   "meaning": "the person means: the first remedy, named by its internal op name (shown only as a label); the engine reads the op name as a pick today",
-  "reader": "tool",
+  "reader": "agent",
   "after": "pending",
   "unsure": true,
   "expected": {
    "engine": {
-    "recorded": "Finish the revision and show the gate again",
+    "recorded": "none",
     "words": "finish-revision",
-    "step": "recorded",
+    "step": "none",
     "no_ask": true
    },
    "end": {

@@ -123,10 +123,11 @@ sub-number, such as `NFR4.1` and `NFR4.2`. Carry these IDs on every requirement
 row.
 
 Create
-`<record>/construction/{unit-name}/nfr-requirements/traceability.json`.
-Enumerate every inception `NFR{n}` in `requirements.md`, or, when User Stories
+`<record>/construction/{unit-name}/nfr-requirements/traceability.json` by running
+`{{INVOKE}} engine sensor-traceability --stage nfr-requirements --output-path <that path> --write-upstream`:
+it lists every inception `NFR{n}` Requirements Analysis recorded, or, when User Stories
 did not run and `unit-of-work-story-map.md` gives this Unit NFR rows, the NFRs
-on those rows. Target the derived `NFRx.y` IDs; one that does not apply to this
+on those rows, each with a `GAP` row. Target the derived `NFRx.y` IDs; one that does not apply to this
 Unit is `N/A` in `coverage`, with the reason as its target:
 
 ```json
@@ -179,6 +180,6 @@ per-Unit `NFRx.y` requirements.
 
 When `directive.protocol_modules` lists `learnings`, follow
 `stage-protocol-learnings.md`: keep the diary at `directive.memory_path` while
-working and run the ritual before the approval gate, applying its bootstrap,
-`single: true`, per-unit, and gate-revision exemptions. When the module is absent,
-skip both the diary and the ritual.
+working, and take the learnings step before the approval gate; that module says
+when it asks the person anything. When the module is absent, skip both the diary
+and the step.

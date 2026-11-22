@@ -39,7 +39,7 @@ import {
 } from "../harness/test-budget.ts";
 import { afterAll, beforeAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
@@ -47,6 +47,7 @@ import {
   createOrchestrationTestProject,
   createTestProject,
   FIXTURES_DIR,
+  intentsDirOf,
   proposalFollowUp,
   removeWorkspaceRecord,
   REPO_ROOT,
@@ -66,14 +67,6 @@ const TOOL = join(
   ".claude",
   "tools",
   "aidlc-orchestrate.ts",
-);
-const JUMP_TOOL = join(
-  REPO_ROOT,
-  "dist",
-  "claude",
-  ".claude",
-  "tools",
-  "aidlc-jump.ts",
 );
 
 const tempDirs: string[] = [];
@@ -154,20 +147,17 @@ function emitScopeStage(scope: string, stage: string): EmitResult {
 }
 
 interface FingerprintLoopResult {
-  print: Directive; // STEP 1: the print naming `execute --target <fp> --direction forward`
-  printRaw: string;
-  runStage: Directive; // STEP 3: the run-stage the engine lands on after the commit
+  runStage: Directive; // the run-stage the one `next --stage <fp>` lands on
   runStageRaw: string;
+  currentStage: string | undefined; // Current Stage after that call
 }
 
-// Drive the FULL jump-commit loop for one scope's fingerprint. A WITH-STATE jump
-// is a MUTATION the conductor commits, so the loop is THREE steps:
-//   (1) `next --stage <fp>` emits a `print` naming `execute --target <fp>
-//       --direction forward` (Current Stage is pivoted to the last init stage
-//       state-init so every post-init fingerprint resolves forward, never redo);
-//   (2) run `aidlc-jump.ts execute` to commit the jump (mutating state);
-//   (3) bare `next` then reads the pivoted state and emits the run-stage for the
-//       fingerprint — the exact stage|phase|gate of the frozen golden.
+// Drive the jump for one scope's fingerprint. A WITH-STATE jump is a MUTATION
+// the person asked for, so `next --stage <fp>` makes it (Current Stage is
+// pivoted to the last init stage state-init first, so every post-init
+// fingerprint resolves forward, never redo) and routes on from the state it
+// wrote: the run-stage for the fingerprint, with the exact stage|phase|gate of
+// the frozen golden, comes back from that one call.
 function emitScopeFingerprintLoop(scope: string, fp: string): FingerprintLoopResult {
   const proj = createOrchestrationTestProject();
   tempDirs.push(proj);
@@ -181,25 +171,13 @@ function emitScopeFingerprintLoop(scope: string, fp: string): FingerprintLoopRes
   );
   md = md.replace(/^- \*\*Current Stage\*\*:.*$/m, "- **Current Stage**: state-init");
   writeFileSync(statePath, md, "utf-8");
-  // STEP 1: the print naming the execute delegate.
-  const step1 = runOrchestrateNext(TOOL, proj, ["--stage", fp], {
-    env: cleanEnv(),
-  });
-  // STEP 2: commit the jump the print named (mutating state).
-  spawnSync(
-    BUN,
-    [JUMP_TOOL, "execute", "--target", fp, "--direction", "forward", "--scope", scope, "--project-dir", proj],
-    { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: cleanEnv() },
-  );
-  // STEP 3: re-run `next` over the pivoted state — the landed run-stage.
-  const step3 = runOrchestrateNext(TOOL, proj, [], {
+  const step = runOrchestrateNext(TOOL, proj, ["--stage", fp], {
     env: cleanEnv(),
   });
   return {
-    print: parseDirective(step1.stdout),
-    printRaw: step1.out,
-    runStage: parseDirective(step3.stdout),
-    runStageRaw: step3.out,
+    runStage: parseDirective(step.stdout),
+    runStageRaw: step.out,
+    currentStage: /^- \*\*Current Stage\*\*: (.*)$/m.exec(readFileSync(statePath, "utf-8"))?.[1],
   };
 }
 
@@ -302,27 +280,22 @@ const GOLDEN: GoldenRow[] = [
 ];
 
 describe("t118 engine differential corpus — aidlc-orchestrate next (migrated from t118-engine-differential.sh, plan 24)", () => {
-  // --- Diff A: fingerprint stage in scope -> print->execute->run-stage (11 cases) ---
-  // A WITH-STATE jump is a MUTATION the conductor commits, so the differential runs
-  // END-TO-END through the loop (emitScopeFingerprintLoop):
-  //   A1: STEP 1 — `next --stage <fp>` emits a `print` naming `execute --target
-  //       <fp> --direction forward` (Current Stage pivoted to state-init so the
-  //       fingerprint resolves forward for every scope).
-  //   A2: after the conductor runs that execute and re-runs `next`, the engine
-  //       lands on the fingerprint run-stage with the exact stage|phase|GATE of
+  // --- Diff A: fingerprint stage in scope -> jump + run-stage in one call (11 cases) ---
+  // A WITH-STATE jump is a MUTATION the person asked for, which `next --stage <fp>`
+  // makes itself (emitScopeFingerprintLoop):
+  //   A1: the one call moves Current Stage forward to <fp> (pivoted to state-init
+  //       first so the fingerprint resolves forward for every scope).
+  //   A2: and returns the fingerprint run-stage with the exact stage|phase|GATE of
   //       the frozen golden. gate is true for every fingerprint (no scope's first
   //       post-init EXECUTE stage is an initialization stage).
   describe("diff A — per-scope fingerprint -> run-stage gate:true [golden diff]", () => {
     for (const row of GOLDEN) {
       test(`scope '${row.scope}' fingerprint -> run-stage ${row.fingerprint} (${row.phase}) gate:true`, () => {
         const r = emitScopeFingerprintLoop(row.scope, row.fingerprint);
-        // A1: STEP 1 print names the execute delegate (forward).
-        expect(r.print.kind).toBe("print");
-        expect(r.print.message ?? "").toContain(
-          `execute --target ${row.fingerprint} --direction forward --scope ${row.scope}`,
-        );
-        // A2: after the commit + re-run, the engine lands on the fingerprint.
-        expect(r.runStage.kind).toBe("run-stage");
+        // A1: the one call made the jump forward to the fingerprint.
+        expect(r.currentStage).toBe(row.fingerprint);
+        // A2: and landed on the fingerprint's run-stage.
+        expect(r.runStage.kind, r.runStageRaw).toBe("run-stage");
         expect(r.runStage.stage).toBe(row.fingerprint);
         expect(r.runStage.phase).toBe(row.phase);
         // Assert the real JSON boolean, not the rendered "true" token. gate is the
@@ -485,24 +458,53 @@ describe("t118 engine differential corpus — aidlc-orchestrate next (migrated f
     });
 
     // (3) Bare `next`, no state and NO explicitly named scope (env/default
-    // resolution is not a creation signal): the engine cannot read a position to
-    // advance from and creating one is intent create's (mutating) job, so it emits
-    // the no-state error rather than guessing. The wording names the two explicit
-    // moves that DO start a workflow — it must never be the circular "Start a
-    // workflow with /aidlc <scope>" clause.
-    test("no-state bare next -> error directive (no position to advance from)", () => {
+    // resolution is not a creation signal): nothing is created, and this is the
+    // normal first step in a new project, so the person is asked what to build,
+    // never shown an error (on Claude Code an error is relayed as "The workflow
+    // stopped with this error").
+    test("no-state bare next -> asks what to build, never an error", () => {
       const r = emitNextNoState();
-      expect(r.directive.kind).toBe("error");
-      // Pin the no-state wording so a regression emitting an error of a DIFFERENT
-      // cause reds.
-      expect(r.directive.message ?? "").toContain("No workflow state found");
-      // Pin the guidance wording exactly: describe-what-to-build or
-      // describe-what-to-build and name-a-scope both create intents; there is no
-      // --init. A regression back to the
-      // circular clause (or a re-introduced --init) reds here.
-      expect(r.directive.message ?? "").toContain(
-        'Start one by describing what to build (/aidlc "build the auth service") or by naming a scope (/aidlc --scope <scope>).',
-      );
+      expect(r.directive.kind, r.raw).toBe("print");
+      expect(r.directive.narration).toBe("Tell me what to build and I'll start it.");
+      expect(r.directive.message ?? "").toContain('when they say what to build, run that as their request (/aidlc "<their words>")');
+      expect(r.directive.message ?? "").not.toContain("No workflow state found");
+    });
+
+    // (3b) Work created here whose state file is gone is not a new project: it
+    // keeps the error, which the Kiro IDE Plan Approval recovery reads as
+    // failing closed (t218).
+    test("no-state bare next over a registered record with no state file -> error", () => {
+      const proj = createTestProject();
+      tempDirs.push(proj);
+      const res = spawnSync(BUN, [TOOL, "next", "--project-dir", proj], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        encoding: "utf-8",
+        env: cleanEnv(),
+      });
+      const directive = parseDirective(res.stdout ?? "");
+      expect(directive.kind, `${res.stdout}${res.stderr}`).toBe("error");
+      expect(directive.message ?? "").toContain("No workflow state found");
+    });
+
+    // (3c) A space whose only work was archived has nothing in progress, as a
+    // new project does: the person starting new work is asked what to build.
+    test("no-state bare next where the only work is archived -> asks what to build", () => {
+      const proj = createTestProject();
+      tempDirs.push(proj);
+      const intents = intentsDirOf(proj, "default");
+      writeFileSync(seededStateFile(proj), readFileSync(join(FIXTURES_DIR, "state-brownfield-feature.md"), "utf-8"));
+      const rows = JSON.parse(readFileSync(join(intents, "intents.json"), "utf-8")) as { status: string }[];
+      writeFileSync(join(intents, "intents.json"), JSON.stringify(rows.map((row) => ({ ...row, status: "archived" }))));
+      // Archiving clears the cursor (intent archive), so nothing is selected.
+      unlinkSync(join(intents, "active-intent"));
+      const res = spawnSync(BUN, [TOOL, "next", "--project-dir", proj], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        encoding: "utf-8",
+        env: cleanEnv(),
+      });
+      const directive = parseDirective(res.stdout ?? "");
+      expect(directive.kind, `${res.stdout}${res.stderr}`).toBe("print");
+      expect(directive.narration).toBe("Tell me what to build and I'll start it.");
     });
 
     // (4) Conflicting explicit namings: `next bugfix --scope mvp` names TWO

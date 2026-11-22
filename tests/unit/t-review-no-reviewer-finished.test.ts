@@ -1,4 +1,4 @@
-// covers: function:handleReview, function:noAgentFinishedSinceReview, function:hostRecordsAgentFinishes,
+// covers: function:handleReview, function:noReviewerFinishedSinceReview, function:hostRecordsAgentFinishes,
 // function:reviewCompletionWithoutReviewer, function:noReviewerNotice, hook:aidlc-log-subagent,
 // hook:aidlc-deliver-stage-rules, subcommand:aidlc-state:gate-start, audit:REVIEW_COMPLETED,
 // audit:SUBAGENT_COMPLETED
@@ -10,10 +10,14 @@
 // with no agent finished since its request was recorded before any reviewer
 // finished. `log review --verdict` still records it, refuses nothing, and marks
 // the row `Reviewer Finished Before Verdict: no`; the person hears one line with
-// the verdict, and the approval gate says it once more under strict. Every doubt
-// says nothing: another host, any agent that finished since (of any name), a
-// background agent sent since, a completion hook that ran since, a delegated
-// worktree. A missing row on a host that does not declare it is no evidence.
+// the verdict, and the approval gate says it once more under strict. Only the
+// reviewer finishing counts: its SUBAGENT_COMPLETED row, carrying the digest of
+// the request's review file; another agent finishing is not it (see
+// t-review-reviewer-finish-needs-the-reviewer). Every doubt says nothing:
+// another host, a completion row that names no agent, a background agent sent
+// since, a completion hook that ran since and left no row, a failure that hook
+// recorded since, a delegated worktree. A missing row on a host that does not
+// declare it is no evidence.
 //
 // Mechanism: the shipped hooks and the real log and state tools spawned over a
 // real ledger (DIST tree), plus the pure helpers in-process.
@@ -33,7 +37,7 @@ import {
   GUARD_POLICY_FIELD,
   hooksHealthDir,
   hostRecordsAgentFinishes,
-  noAgentFinishedSinceReview,
+  noReviewerFinishedSinceReview,
   noReviewerNotice,
   readAllAuditShards,
   resolveWorkflowSelection,
@@ -223,15 +227,16 @@ describe("every doubt says nothing", () => {
     expect(gateStart(p)).not.toContain(LINE);
   });
 
-  test("any other agent finished after the request, named or not: no mark", () => {
-    for (const agent of ["general-purpose", ""]) {
-      const p = project();
-      writes(request(p));
-      finishes(p, agent);
-      const { notices, completion } = verdict(p);
-      expect(notices, agent).toEqual([]);
-      expect(completion, agent).not.toContain(REVIEWER_FINISHED_FIELD);
-    }
+  // #2427 expected any agent's completion to clear the mark. A named agent
+  // that is not the reviewer now leaves it (an unrelated dispatch is the main
+  // agent's own step, #943); a row naming no agent stays a doubt.
+  test("an agent that finished after the request with no agent type: no mark", () => {
+    const p = project();
+    writes(request(p));
+    finishes(p, "");
+    const { notices, completion } = verdict(p);
+    expect(notices).toEqual([]);
+    expect(completion).not.toContain(REVIEWER_FINISHED_FIELD);
   });
 
   test("outside a host that declares it (no Claude Code shell): no mark", () => {
@@ -280,45 +285,74 @@ describe("the pure helpers", () => {
     }
   }
 
-  test("noAgentFinishedSinceReview: rows of any agent, a cross-shard tie, the heartbeat and the host", () => {
+  test("noReviewerFinishedSinceReview: the reviewer's row with the digest, a nameless row, a cross-shard tie, the heartbeat, the drops and the host", () => {
     const p = project();
     const selection = resolveWorkflowSelection(p);
+    const reviewFile = ".aidlc-engine/reviews/requirements-analysis/stage/a1/1.r1.review.md";
     const requested = row("REVIEW_REQUESTED", { Stage: STAGE, Reviewer: REVIEWER }, 5, "a", "2026-10-13T01:00:00Z");
-    const before = row("SUBAGENT_COMPLETED", { "Agent Type": REVIEWER }, 2, "a", "2026-10-13T00:59:00Z");
+    const open = { reviewer: REVIEWER, reviewFile, row: requested };
+    const digest = { "Review File Digest": `${reviewFile}=${"a".repeat(64)}` };
+    const before = row("SUBAGENT_COMPLETED", { "Agent Type": REVIEWER, ...digest }, 2, "a", "2026-10-13T00:59:00Z");
+    const after = (fields: Record<string, string>, shard = "a", timestamp = "2026-10-13T01:00:10Z") =>
+      row("SUBAGENT_COMPLETED", fields, shard === "a" ? 6 : 1, shard, timestamp);
     inClaudeShell(() => {
       expect(hostRecordsAgentFinishes()).toBe(true);
-      expect(noAgentFinishedSinceReview(p, [before, requested], requested, selection)).toBe(true);
-      expect(noAgentFinishedSinceReview(p, [requested, row("SUBAGENT_COMPLETED", { "Agent Type": "unknown" }, 6)], requested, selection)).toBe(false);
-      // Another shard in the same second is not definitely before the request.
-      expect(noAgentFinishedSinceReview(
+      expect(noReviewerFinishedSinceReview(p, [before, requested], open, selection)).toBe(true);
+      // The reviewer finished this review.
+      expect(noReviewerFinishedSinceReview(p, [requested, after({ "Agent Type": REVIEWER, ...digest })], open, selection)).toBe(false);
+      // A reviewer that left the file unwritten still finished.
+      expect(noReviewerFinishedSinceReview(p, [requested, after({ "Agent Type": REVIEWER, "Review File Digest": `${reviewFile}=absent` })], open, selection)).toBe(false);
+      // Another agent, the reviewer without the digest, or the digest of another review: not this reviewer finishing.
+      expect(noReviewerFinishedSinceReview(p, [requested, after({ "Agent Type": "general-purpose", ...digest })], open, selection)).toBe(true);
+      expect(noReviewerFinishedSinceReview(p, [requested, after({ "Agent Type": REVIEWER })], open, selection)).toBe(true);
+      expect(noReviewerFinishedSinceReview(
         p,
-        [requested, row("SUBAGENT_COMPLETED", { "Agent Type": REVIEWER }, 1, "b", "2026-10-13T01:00:00Z")],
-        requested,
+        [requested, after({ "Agent Type": REVIEWER, "Review File Digest": `.aidlc-engine/reviews/other.review.md=${"b".repeat(64)}` })],
+        open,
+        selection,
+      )).toBe(true);
+      // A row that names no agent could be the reviewer's.
+      expect(noReviewerFinishedSinceReview(p, [requested, after({ "Agent Type": "unknown" })], open, selection)).toBe(false);
+      // Another shard in the same second is not definitely before the request.
+      expect(noReviewerFinishedSinceReview(
+        p,
+        [requested, after({ "Agent Type": REVIEWER, ...digest }, "b", "2026-10-13T01:00:00Z")],
+        open,
         selection,
       )).toBe(false);
-      // The completion hook ran since the request but left no row.
       const health = hooksHealthDir(p, selection.intent ?? undefined, selection.space);
       mkdirSync(health, { recursive: true });
+      // The completion hook ran since the request but left no row.
       writeFileSync(join(health, "log-subagent.last"), "2026-10-13T01:00:30Z");
-      expect(noAgentFinishedSinceReview(p, [requested], requested, selection)).toBe(false);
+      expect(noReviewerFinishedSinceReview(p, [requested], open, selection)).toBe(false);
+      // That run's row is there (another agent's): the heartbeat is accounted for.
+      expect(noReviewerFinishedSinceReview(p, [requested, after({ "Agent Type": "general-purpose" }, "a", "2026-10-13T01:00:30Z")], open, selection)).toBe(true);
+      expect(noReviewerFinishedSinceReview(p, [requested, after({ "Agent Type": "general-purpose" }, "a", "2026-10-13T01:00:29Z")], open, selection)).toBe(false);
       writeFileSync(join(health, "log-subagent.last"), "2026-10-13T00:58:00Z");
-      expect(noAgentFinishedSinceReview(p, [requested], requested, selection)).toBe(true);
+      expect(noReviewerFinishedSinceReview(p, [requested], open, selection)).toBe(true);
       writeFileSync(join(health, "log-subagent.last"), "not a time");
-      expect(noAgentFinishedSinceReview(p, [requested], requested, selection)).toBe(false);
+      expect(noReviewerFinishedSinceReview(p, [requested], open, selection)).toBe(false);
+      writeFileSync(join(health, "log-subagent.last"), "2026-10-13T00:58:00Z");
+      // A failure the completion hook recorded since the request is a doubt; an older one is not.
+      writeFileSync(join(health, "log-subagent.drops"), "2026-10-13T00:50:00Z\tolder failure\n");
+      expect(noReviewerFinishedSinceReview(p, [requested], open, selection)).toBe(true);
+      writeFileSync(join(health, "log-subagent.drops"), "2026-10-13T00:50:00Z\tolder failure\n2026-10-13T01:00:20Z\tappend failed\n");
+      expect(noReviewerFinishedSinceReview(p, [requested], open, selection)).toBe(false);
     });
     expect(hostRecordsAgentFinishes()).toBe(false);
-    expect(noAgentFinishedSinceReview(p, [requested], requested, selection)).toBe(false);
+    expect(noReviewerFinishedSinceReview(p, [requested], open, selection)).toBe(false);
   });
 
   test("a chat whose hooks do not write into this record (a teammate's record in a fresh clone) says nothing", () => {
     const p = project();
     const selection = resolveWorkflowSelection(p);
     const requested = row("REVIEW_REQUESTED", { Stage: STAGE, Reviewer: REVIEWER }, 5, "a", "2026-10-13T01:00:00Z");
+    const open = { reviewer: REVIEWER, reviewFile: ".aidlc-engine/reviews/r.review.md", row: requested };
     inClaudeShell(() => {
-      expect(noAgentFinishedSinceReview(p, [requested], requested, selection)).toBe(true);
+      expect(noReviewerFinishedSinceReview(p, [requested], open, selection)).toBe(true);
       // No cursor of this machine names the record: its completion rows would not be written here.
       rmSync(join(p, "aidlc", "spaces", "default", "intents", "active-intent"));
-      expect(noAgentFinishedSinceReview(p, [requested], requested, resolveWorkflowSelection(p))).toBe(false);
+      expect(noReviewerFinishedSinceReview(p, [requested], open, resolveWorkflowSelection(p))).toBe(false);
     });
   });
 

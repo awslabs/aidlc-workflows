@@ -9,8 +9,10 @@
 //   report --stage functional-design --unit u2-note-tags --result rejected ...
 // which the engine refuses outside team ownership ("--unit gate reporting
 // requires Unit Ownership: team."), and the agent quoted that error to the
-// person. A solo walk reports the stage; only a team-owned Unit gate reports
-// with --unit. The same holds for finishing a revision.
+// person. A solo walk never reports with --unit: a refusal about one Unit's
+// step sends back that step with `next --stage <stage> --unit <unit> --change`,
+// and the Unit on the step reports the stage; only a team-owned Unit gate
+// reports with --unit. The same holds for finishing a revision.
 
 import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { readFileSync, writeFileSync } from "node:fs";
@@ -91,24 +93,50 @@ describe("Request Changes from a recovery question names the report to run", () 
   const expectStageReport = (message: string) => {
     expect(message).toMatch(/orchestrate(\.ts)? report --stage "?functional-design"? --result rejected --user-input ['"]Request Changes['"]/);
     expect(message).not.toContain("--unit");
-    expect(message).toContain("--reason");
+    // Their words reach the rejection from their messages: the step asks for no copy of them.
+    expect(message).toContain("their messages go on the record as what should change");
+    expect(message).not.toContain("--reason");
   };
 
-  test("a bare pick: ask what should change, then run the stage's report with their words", () => {
+  // A refusal about a Unit that is not the one on the step sends back that
+  // Unit's step only: the Unit reopen with their words, never a stage report
+  // with a guessed --unit.
+  const expectUnitChange = (message: string) => {
+    expect(message).toMatch(/orchestrate(\.ts)? next --stage "?functional-design"? --unit "?u2-note-tags"? --change/);
+    expect(message).not.toContain("report --stage");
+    expect(message).toContain("their messages go on the record as what should change");
+    expect(message).not.toContain("--reason");
+  };
+
+  test("a bare pick: ask what should change, then send back that Unit's step with their words", () => {
     ask();
     expect(consumeSharedDirectiveAsk(proj, "1")).toBe(true);
     const r = answer(proj, "request-changes");
     expect(r.status, r.stderr).toBe(0);
     expect(r.message).toContain('Ask "What should change?" and end the turn');
-    expectStageReport(r.message);
+    expectUnitChange(r.message);
   });
 
-  test("a pick that already says what should change: run the stage's report with those words", () => {
+  test("a pick that already says what should change: send back that Unit's step with those words", () => {
     ask();
     expect(consumeSharedDirectiveAsk(proj, 'change "tags" to "labels" in the first heading')).toBe(true);
     const r = answer(proj, 'request-changes: change "tags" to "labels" in the first heading');
     expect(r.status, r.stderr).toBe(0);
     expect(r.message).not.toContain("What should change?");
+    expectUnitChange(r.message);
+  });
+
+  test("the Unit on the step itself: run the stage's report with their words", () => {
+    const statePath = seededStateFile(proj);
+    content = content.replace(
+      "## Runtime State\n",
+      `## Runtime State\n- **Active Unit**: ${UNIT}\n- **Unit Stage**: ${STAGE}\n- **Unit State**: in-progress\n`,
+    );
+    writeFileSync(statePath, content);
+    ask();
+    expect(consumeSharedDirectiveAsk(proj, "1")).toBe(true);
+    const r = answer(proj, "request-changes");
+    expect(r.status, r.stderr).toBe(0);
     expectStageReport(r.message);
   });
 });

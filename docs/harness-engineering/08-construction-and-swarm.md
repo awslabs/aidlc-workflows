@@ -397,11 +397,17 @@ territory:
   `finalize` subcommands. Protected Code Generation prepare, for legacy autonomy
   and new checkpoints alike, first validates every Unit's approved Testing
   Contract, fingerprint, and committed parent source; only then does it fork
-  worktrees. `--resume-existing` keeps the rejected revision whether its child
+  worktrees. Each new worktree starts with the intent's records as the project
+  has them, committed or not (the records finalize brings home), so a worker
+  reads its Unit's functional design. `--resume-existing` keeps the rejected revision whether its child
   survives or must be recreated after verified native source landing. The remaining commands run the verdict, re-verify every claimed
   Unit before merge (the lying-conductor guard), snapshot and land reviewed
-  record artifacts plus the bound source manifest, serialise AIDLC metadata
-  merge-back, and emit the six referee-owned `SWARM_*` events. The conductor
+  record artifacts plus the bound source manifest, bring the worker's other
+  record edits (a contract, a business rule its plan updates) into the main
+  record line by line as an inline build would leave them, serialise AIDLC
+  metadata merge-back, and emit the six referee-owned `SWARM_*` events. A
+  record edit git cannot merge leaves the project's copy as it is, is saved in
+  the Unit's stage folder under `not-merged/`, and is said in one line. The conductor
   then invokes `aidlc-worktree merge` for each converged Unit; that separate
   immutable source landing emits `SWARM_SOURCE_MERGED`.
 - **The engine** `aidlc-orchestrate.ts` - the deterministic router with exactly

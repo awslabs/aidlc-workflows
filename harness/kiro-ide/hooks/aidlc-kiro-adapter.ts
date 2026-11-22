@@ -181,6 +181,7 @@ import { normalizeRetiredGuardPolicyField } from "../tools/aidlc-guard-switch.ts
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { aidlcEngineCommand, aidlcInvocation } from "../tools/aidlc-runtime-paths.ts";
 import { aidlcEntryWords } from "../tools/aidlc-reply-reader.ts";
+import { kiroDefaultAgentName } from "../tools/aidlc-kiro-chat-record.ts";
 import { terminalDispatcherArgv } from "../tools/aidlc.ts";
 import { forgetRulesDelivered, kiroIdeTurnOpen, noteKiroIdeTurn } from "../tools/aidlc-rules-held.ts";
 import {
@@ -544,7 +545,8 @@ function legacyRecoveryBlockReason(
   if (recovery.recoveryRequired) {
     return (
       "Legacy Plan Approval recovery requires a human response. " +
-      "Present exactly `Recover Plan Approval`, end the turn, then retry recovery. " +
+      "Ask the directive's question in plain words and end the turn; when the person says yes, in any words, " +
+      "run its choice's command, then retry recovery. " +
       `The unknown original shell command remains blocked. Directive: ${recovery.detail}`
     );
   }
@@ -2116,6 +2118,27 @@ function notePromptCapability(sessionId: string): void {
   );
 }
 
+// Kiro IDE opens every new chat on its Default agent, where Kiro asks the
+// person to approve each AI-DLC command: an /aidlc request there hears once per
+// chat the step that stops those cards. Nothing on any other agent, and nothing
+// when the person chose Always allow for AI-DLC's commands (kiroDefaultAgentName).
+function noteDefaultAgent(sessionId: string): void {
+  const noted = join(terminalSessionDir(sessionId), "default-agent-noted");
+  if (aidlcEntryWords(ide.prompt ?? "") === null || existsSync(noted)) return;
+  const name = kiroDefaultAgentName(ide.sessionId?.trim(), `${aidlcInvocation()} engine orchestrate next`);
+  if (name === "") return;
+  try {
+    writeFileSync(noted, "", { flag: "wx" });
+  } catch {
+    return;
+  }
+  process.stdout.write(
+    `Tell the person this once, in their language, then go on with their request: "This chat is on Kiro's ${name} ` +
+      `agent, so Kiro asks you to approve each AI-DLC command. To stop those approval cards for AI-DLC's own commands, ` +
+      `pick aidlc in the agent menu under the chat box (it says ${name} now)."\n`,
+  );
+}
+
 // The step that works now comes first: the recorded kill switch is the
 // person's own terminal command, and recording it refreshes no project files,
 // so it also covers the work running now. An updated build carries the typed
@@ -2376,6 +2399,14 @@ if (target === NOTE_CALL) {
       const path = isAbsolute(rawPath) ? rawPath : resolve(projectDir, rawPath);
       writePendingCall(projectDir, { kind: "write", at: Date.now(), session, tool, path, before: fileSnapshot(path) });
     }
+  } else if (isKiroDelegationTool(toolName) && toolName !== "subagent_response") {
+    // The record that each helper was sent, which its completion closes: Kiro IDE
+    // runs no dispatch hook of AI-DLC's, so one is forwarded per delegate, once
+    // the guard card let the call through.
+    const targets = kiroDelegationTargets(toolName, toolArgs);
+    for (const t of targets.length > 0 ? targets : [{ agent: "" }]) {
+      runCore("aidlc-log-subagent.ts", { hook_event_name: "SubagentStart", session_id: session, agent_type: t.agent });
+    }
   }
   return 0;
 }
@@ -2489,6 +2520,7 @@ if (target === "verb-intercept") {
   const invocation = promptTerminalInvocation(ide.prompt ?? "");
   const command = classifyTerminalCommand(invocation.args, projectDir, ide.sessionId?.trim() || undefined);
   if (command === null) {
+    noteDefaultAgent(sessionId);
     const step = await firstStepLine(ide.prompt ?? "", projectDir, ide.sessionId?.trim() || sessionId);
     if (step !== "") process.stdout.write(`${step}\n`);
     return 0;
@@ -2913,8 +2945,8 @@ function buildForward(): Forward {
       }
       const eventSessionId = ide.sessionId?.trim();
       // Who sent the turn (kiroTurnOrigin): a message Kiro's own chat record
-      // marks as its own, or one of Kiro's fixed workflow sentences (a Kiro
-      // Workflows step's brief opens with one), is the host's; a session other
+      // marks as its own, or a Kiro Workflows brief (Kiro leaves it unmarked;
+      // its opening sentence says whose it is), is the host's; a session other
       // than the chat's decides nothing by itself, so a message typed in another
       // chat tab stays the person's. A host's turn is a side worker's: it starts no session here, is not
       // remembered as the chat, opens no turn, and the core hook records it as
@@ -2991,6 +3023,11 @@ function buildForward(): Forward {
           // verb-intercept, beside this hook, runs a command the person typed
           // and hands the agent its output itself.
           relays_terminal_output: true,
+          // Kiro IDE draws a card in the chat for every command hook it runs,
+          // and whether the card shows this hook's output to the person is not
+          // measured, so the hook keeps its message-id line to itself here;
+          // the reply steps of `next` name the ids instead.
+          context_may_reach_person: true,
         },
       };
     }

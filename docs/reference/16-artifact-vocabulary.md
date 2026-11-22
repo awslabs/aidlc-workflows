@@ -62,8 +62,8 @@ Things that are **not** artifacts in this registry:
   "Filesystem mapping" below.
 - **Filenames.** The on-disk `.md` file and the canonical name don't have
   to match (they usually do, except at collisions).
-- **State plumbing.** `aidlc-state.md`, the `audit/` shards, and
-  `.aidlc-engine/recovery.md` are managed by tools (`aidlc-state.ts`, hook
+- **State plumbing.** `aidlc-state.md` and the `audit/` shards
+  are managed by tools (`aidlc-state.ts`, hook
   scripts), not by stages via `produces[]`. They never appear in the
   registry.
 - **Runtime values.** Strings like "user's prose answer" or
@@ -133,9 +133,10 @@ same consumed concept is emitted by two stages, pick distinct names that
 disambiguate.
 
 Shared names are valid when no stage consumes them. The shipped `traceability`
-artifact follows this pattern: eight stages each write their own
+artifact follows this pattern: nine stages each write their own
 `traceability.json` under their own record directory, and no downstream stage
-resolves `traceability` through `producersOf()`.
+resolves `traceability` through `producersOf()` (the traceability check reads
+Requirements Analysis' record by its path).
 
 Today's one example: both `build-and-test` (Construction) and
 `performance-validation` (Operation) write a file called `test-results.md`.
@@ -143,8 +144,10 @@ The canonical names are split so the two never collide on the wire:
 
 - `build-test-results` — emitted by `build-and-test`. Pairs with
   sibling names in that stage: `build-instructions`,
-  `integration-test-instructions`, `performance-test-instructions`,
-  `security-test-instructions`, `build-and-test-summary`.
+  `build-and-test-summary`, and the strategy-dependent
+  `integration-test-instructions`, `performance-test-instructions` and
+  `security-test-instructions`, which that stage declares under
+  `optional_produces`.
 - `unit-test-instructions` is produced per-unit by `code-generation` and
   consumed by `build-and-test`.
 - `source-manifest.json` is the engine-required per-unit companion to
@@ -207,7 +210,7 @@ review, with the engine-owned findings list as of that review in place of the
 reviewer's report, at `<stage dir>/reviews/review-NN.md` beside the reviewed artifact;
 the copy is for people, is not an artifact, and is never read back. The stage's `review_artifact` names which declared
 artifact the review is about (the gate's `**Review:**` path and the
-`--reject-finding` / `--reopen-finding <artifact>#R-NN` selector key); the reviewer never writes to
+`--reject-finding` / `--reopen-finding` / `--fix-finding <artifact>#R-NN` selector key); the reviewer never writes to
 it. A terminal `## Review` section inside an artifact is a review recorded
 before review records existed: readable for migration, never written anew.
 
@@ -232,7 +235,12 @@ every intent in the space, keyed by repo rather than by intent. The path is
 resolved outside the record-relative rule via the `isCodekb` branch in
 `resolveArtifactPath` (`core/tools/aidlc-orchestrate.ts`), and
 the same directory is printed by the read-only native route
-`aidlc engine workspace codekb`.
+`aidlc engine workspace codekb`. In a piece of work that records more than one
+repo, a step names each of these artifacts once, as
+`aidlc/spaces/<space>/codekb/{repo}/<name>.md`, and its `repos_note` says which
+repos `{repo}` stands for (`resolveArtifactPaths`), so a workspace of any size
+fits in one step; the completion check and the sensors still read every repo's
+files.
 
 **Canonical name ≠ filename for collisions.** Where a collision is split
 (see above), the on-disk filename may keep the pre-split form

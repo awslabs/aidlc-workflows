@@ -1,13 +1,13 @@
-// covers: function:notePlanApprovalAskReply, function:publishPlanApprovalAsk, function:engineQuestionHoldsReplies,
+// covers: function:notePlanApprovalAskReply, function:publishPlanApprovalAsk,
 // hook:aidlc-record-human-turn, function:recordProtectedHumanResponse
 //
 // While the code plan question is open, the person asks for a verification
-// command first and the agent asks about it. Their pick at that question
-// answers it, never the plan question beneath: "1" there records the command,
-// no plan approval, and the plan question still waits for its own answer.
-// A picker names its own question, and a plan question shown again is the
-// newest one on screen in the chat it is shown in: another chat showing it
-// leaves this chat's question the newest here.
+// command first and the agent asks about it. A typed reply is the agent's to
+// read against the question it showed: "1" there records nothing at the hook,
+// the agent records the command, and the plan question still waits for its own
+// answer, which the agent records when the person gives it. A pick in a
+// question box names its own question and is recorded where it lands, in this
+// chat or while another chat shows the plan question.
 
 import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -123,8 +123,16 @@ function commandAskedOverThePlan(chat?: string): string {
   return proj;
 }
 
-// The command is recorded from the pick alone; the plans keep waiting, and the
-// plan question, shown again, takes the person's next pick as its own.
+// The agent's record of the plan answer it read from the person's reply.
+function agentApprovesPlan(proj: string): void {
+  expect(planApprovals(proj)).toBe(0);
+  const approved = log(proj, ["answer", "--stage", "code-generation", "--checkpoint", "plan-approval", "--details", "Approve Plan"]);
+  expect(approved.code, approved.out).toBe(0);
+  expect(planApprovals(proj)).toBe(1);
+}
+
+// The agent records the command it read; the plans keep waiting, and the plan
+// question, shown again, has the person's next reply for the agent to record.
 function pickAnsweredTheCommand(proj: string): void {
   expect(planApprovals(proj)).toBe(0);
   const recorded = log(proj, ["answer", ...command, "--details", "Approve"]);
@@ -136,11 +144,11 @@ function pickAnsweredTheCommand(proj: string): void {
   expect(next(proj)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
   laterSecond();
   say(proj, "1");
-  expect(planApprovals(proj)).toBe(1);
+  agentApprovesPlan(proj);
   expect(next(proj)).toMatchObject({ plan_approval: { status: "approved" } });
 }
 
-test("a number typed at the command question answers it, not the code plan question beneath it", () => {
+test("a number typed at the command question is the agent's to read; the code plan question beneath it records nothing", () => {
   const proj = commandAskedOverThePlan();
   say(proj, "1");
   pickAnsweredTheCommand(proj);
@@ -159,16 +167,16 @@ test("a picker pick at the code plan question approves the plan while the comman
   expect(log(proj, ["answer", ...command, "--details", "Approve"]).out).toContain("none is on record yet");
 });
 
-test("the code plan question shown again after the command question takes the next typed pick", () => {
+test("the code plan question shown again after the command question: the agent records the next reply as its answer", () => {
   const proj = commandAskedOverThePlan();
   expect(next(proj)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
   laterSecond();
   say(proj, "1");
-  expect(planApprovals(proj)).toBe(1);
+  agentApprovesPlan(proj);
   expect(next(proj)).toMatchObject({ plan_approval: { status: "approved" } });
 });
 
-test("a number typed at the command question answers it while another chat shows the code plan question", () => {
+test("a number typed at the command question while another chat shows the code plan question is the agent's to read", () => {
   const proj = commandAskedOverThePlan(SESSION);
   expect(next(proj, OTHER_CHAT)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
   laterSecond();
@@ -176,10 +184,10 @@ test("a number typed at the command question answers it while another chat shows
   pickAnsweredTheCommand(proj);
 });
 
-test("the code plan question shown again in the same chat takes its next typed pick", () => {
+test("the code plan question shown again in the same chat: the agent records the next reply as its answer", () => {
   const proj = commandAskedOverThePlan(SESSION);
   expect(next(proj, SESSION)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
   laterSecond();
   say(proj, "1");
-  expect(planApprovals(proj)).toBe(1);
+  agentApprovesPlan(proj);
 });

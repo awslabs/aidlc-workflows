@@ -180,7 +180,8 @@ the project.
 - **Forwarding-loop enforcement is advisory.** The Stop seam is the
   `session.idle` event — reactive, not blocking. When the core stop hook
   answers `block`, the plugin re-engages the loop by injecting a nudge prompt
-  (marked with a sentinel so it never mints human presence). The nudge is a
+  (it knows the nudge by the id of the part it sent, so the nudge never counts
+  as your turn). The nudge is a
   synthetic part: the agent reads it, and your chat does not show it. When you
   stop a turn with Esc, or reject a command the agent asked to run, no nudge
   follows until you write again. A chatting or
@@ -188,6 +189,10 @@ the project.
 - **`/aidlc` shows what you typed.** opencode would show the command's whole
   template as your message; the plugin keeps the template for the agent and
   shows your `/aidlc ...` line instead.
+- **Only what you type is your reply.** When opencode adds your editor's open
+  file or selection to a message (in Zed's terminal, or in VS Code's with the
+  editor extension), the agent still sees it, and AI-DLC keeps only what you
+  typed as your words.
 - **Personas are native subagents** (`mode: subagent`); the conductor adopts
   them inline for most stages and delegates via the `task` tool for the two
   subagent stages (2.1 reverse-engineering, 3.5 code-generation). Their native

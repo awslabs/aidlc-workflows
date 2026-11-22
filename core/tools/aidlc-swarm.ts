@@ -12,7 +12,7 @@
 // this tool owns the convergence verdict + merge + audit (determinism); the human
 // grants autonomy and takes the baton on the envelope (judgement).
 //
-// THREE SUBCOMMANDS (no retry counter or retry cap):
+// FOUR SUBCOMMANDS (no retry counter or retry cap):
 //   prepare  --batch <n> --units <a,b,c> [--base <branch>] [--concurrency <n>]
 //            [--degraded-from <subagent|ultracode>] [--repo <name>] [--resume-existing]
 //       Fork an isolated git worktree per unit (aidlc-worktree create +
@@ -60,6 +60,11 @@
 //       budget-exhausted / cap-exhausted — recorded faithfully (the conductor
 //       judges WHY a unit gave up; the tool only records it, never for a claimed
 //       unit, whose reason is always the tool's own re-verify verdict).
+//   allow-change <file>... --message <id>
+//       The person asked for files in the main checkout to change while the
+//       Units are built, which a strict Guard Policy holds for the landings:
+//       proves the message, records MAIN_CHECKOUT_CHANGE_ALLOWED with their
+//       words for the current attempt, and prints the one line they hear.
 //
 // WHY STATELESS / NO CAP CONSTANT. "The cap" is three jobs on three concerns — the
 // verdict (determinism -> check), the retry decision (knowledge -> the conductor,
@@ -84,7 +89,7 @@
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS, LONG_SUBPROCESS_TIMEOUT_MS, EXTENDED_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync } from "node:fs";
+import { type Dirent, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, posix, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -96,6 +101,8 @@ import {
   auditBlockField,
   auditShardDir,
   authorizedVerificationCommand,
+  boltWorktreeBaseCommit,
+  ENGINE_DIR,
   unitPlainName,
   withdrawProtectedQuestions,
   boltSlugForUnit,
@@ -112,9 +119,14 @@ import {
   latestMainWorkflowStageRunFloor,
   latestMainWorkflowStageRunFloorForProject,
   legacyBoltIdentity,
+  mainCheckoutChangeRefusal,
+  mainCheckoutChangeRunFloor,
+  mainCheckoutHeldByTeam,
+  mainCheckoutPathKey,
   maximalAttemptEvents,
   parseArgs,
   parseRefsList,
+  personsWordsText,
   parseSourceListing,
   readAuditShardEvents,
   readActiveDirectiveMarker,
@@ -146,6 +158,7 @@ import {
   sourceClaimCovers,
   sourceListingEntriesEqual,
   type SourceClaimModel,
+  toPosix,
   UNBINDABLE_FINGERPRINT,
   validateUnitName,
   verificationCommandDetails,
@@ -167,6 +180,9 @@ import {
   committedTextSha256,
   currentFingerprintForm,
 } from "./aidlc-lib.ts";
+import { proveMessage } from "./aidlc-message-store.ts";
+import { codeGenerationPlanNamedPaths } from "./aidlc-plan-approval-ask.ts";
+import { quoted } from "./aidlc-recorded-switches.ts";
 import { compiledExecutable } from "./aidlc-runtime-paths.ts";
 import {
   beginCodeGeneration,
@@ -205,7 +221,7 @@ interface UnitResult {
   reason?: FailureReason;
   detail?: string;
   tampered?: boolean;
-  /** Lines for the person: a change kept under relaxed or off. */
+  /** Lines for the person: a change kept under relaxed or off, a record edit that could not be merged. */
   change_notices?: string[];
 }
 
@@ -230,8 +246,18 @@ interface ReviewedRecordSnapshotEntry {
   bytes: Buffer | null;
 }
 
+/** A record file the worker changed outside the stage folders, as it started and as the Unit left it. */
+interface RecordEdit {
+  logicalPath: string;
+  base: Buffer | null;
+  unit: Buffer | null;
+}
+
 interface ReviewedRecordSnapshot {
   entries: ReviewedRecordSnapshotEntry[];
+  edits: RecordEdit[];
+  /** The Unit's own stage folder, where a version that could not be merged is saved. */
+  stageFolder: string;
 }
 
 interface SwarmAttemptStamp {
@@ -809,8 +835,8 @@ function reviewerReceiptError(
         return {
           error:
             `claimed converged but the worktree wrote application-source paths outside unit "${unit}"'s ` +
-            `source manifest (${rendered}); update construction/${unit}/code-generation/source-manifest.json ` +
-            `in the worktree, re-run the reviewer there, and record a fresh verdict before finalizing`,
+            `source manifest (${rendered}); update ${toPosix(join(codeGenerationRecordDir(wt, unit), "source-manifest.json"))}, ` +
+            `re-run the reviewer in the worktree, and record a fresh verdict before finalizing`,
         };
       }
     } finally {
@@ -828,6 +854,7 @@ function reviewerReceiptError(
 }
 
 function captureReviewedRecordSnapshot(
+  projectDir: string,
   identity: BoltIdentity,
   unit: string,
   stage: NonNullable<ReturnType<typeof resolveStage>>,
@@ -989,13 +1016,215 @@ function captureReviewedRecordSnapshot(
     );
   }
 
-  return { snapshot: { entries } };
+  const edits = workerRecordEdits(projectDir, wt, stage.slug);
+  if (edits === null) {
+    return { error: `cannot read the record edits unit "${unit}" made outside its stage folder` };
+  }
+  return { snapshot: { entries, edits, stageFolder: `construction/${unit}/${stage.slug}` } };
 }
 
+// The intent's records a side-by-side Unit carries, by path in the record (a
+// folder asked with a trailing slash): all but the state and the audit, which
+// have their own merges, the runtime graph and `.aidlc-*` files, which are the
+// engine's own, and every Unit's own folder for the stage, which lands through
+// its snapshot. Prepare copies these into a new Unit folder, and finalize
+// brings the Unit's edits to them home.
+function unitCarriesRecord(path: string, stageSlug: string): boolean {
+  const segments = path.split("/");
+  return !(
+    path === "aidlc-state.md" || path === "runtime-graph.json" || segments[0] === "audit" ||
+    segments.some((segment) => segment.startsWith(".aidlc-")) ||
+    (segments[0] === "construction" && segments.length > 3 && segments[2] === stageSlug)
+  );
+}
+
+/** The regular files under `root` a Unit carries, by posix path; a link is never followed. */
+function carriedRecordFiles(root: string, stageSlug: string): string[] {
+  const found: string[] = [];
+  const walk = (dir: string, prefix: string): void => {
+    let entries: Dirent[];
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const path = `${prefix}${entry.name}`;
+      if (entry.isDirectory() && unitCarriesRecord(`${path}/`, stageSlug)) walk(join(dir, entry.name), `${path}/`);
+      else if (entry.isFile() && unitCarriesRecord(path, stageSlug)) found.push(path);
+    }
+  };
+  walk(root, "");
+  return found;
+}
+
+const UNIT_START_RECORDS = "unit-start-records.json";
+
+// A new Unit folder holds the records as last committed, or none in a
+// workspace of several repositories, while a team may leave them uncommitted.
+// So the folder gets the intent's records as the project has them: each that
+// differs is written, or taken out where the project has none. What the Unit
+// started with for those is kept in its record's engine folder, written last
+// so a failed copy leaves none, and finalize measures the Unit's edits to them
+// from there. A link, a folder or a file either side cannot read stays as it
+// is. Nothing is copied unless the folder's record is the one finalize reads.
+function copyIntentRecords(projectDir: string, selection: WorkflowSelection, wt: string, stageSlug: string): void {
+  const intent = selection.intent ?? undefined;
+  const from = recordDir(projectDir, intent, selection.space);
+  const prefix = relativeRecordDir(projectDir, intent, selection.space);
+  const to = recordDir(wt);
+  if (from === null || prefix === null || to === null || resolve(to) !== resolve(wt, ...prefix.split("/"))) return;
+  if (!existsSync(from) || !existsSync(to)) return;
+  const fromAnchor = realpathSync(from);
+  const toAnchor = realpathSync(to);
+  const started: Record<string, string | null> = {};
+  const paths = new Set([...carriedRecordFiles(from, stageSlug), ...carriedRecordFiles(to, stageSlug)]);
+  for (const path of [...paths].sort()) {
+    let project: Buffer | null;
+    let target: string;
+    let unit: Buffer | null;
+    try {
+      project = presentRecordBytes(assertNoSymlinkInChainOrThrow(fromAnchor, path), path);
+      target = assertNoSymlinkInChainOrThrow(toAnchor, path);
+      unit = presentRecordBytes(target, path);
+    } catch {
+      continue;
+    }
+    if (sameRecordBytes(project, unit)) continue;
+    if (process.env.AIDLC_TEST === "1" && process.env.AIDLC_TEST_RECORD_COPY_FAIL === path) {
+      throw new Error(`injected copy failure for ${path}`);
+    }
+    if (project === null) {
+      rmSync(target, { force: true });
+    } else {
+      mkdirSync(dirname(target), { recursive: true });
+      writeBufferAtomic(target, project);
+    }
+    started[path] = project === null ? null : project.toString("base64");
+  }
+  if (Object.keys(started).length === 0) return;
+  const startFile = assertNoSymlinkInChainOrThrow(toAnchor, `${ENGINE_DIR}/${UNIT_START_RECORDS}`);
+  mkdirSync(dirname(startFile), { recursive: true });
+  writeBufferAtomic(startFile, Buffer.from(`${JSON.stringify({ version: 1, records: started })}\n`, "utf-8"));
+}
+
+/** What the Unit started with for the records prepare copied, by path; none when nothing was copied. */
+function unitStartRecords(anchor: string): Map<string, Buffer | null> {
+  const started = new Map<string, Buffer | null>();
+  try {
+    const path = assertNoSymlinkInChainOrThrow(anchor, `${ENGINE_DIR}/${UNIT_START_RECORDS}`);
+    const parsed = JSON.parse(readRegularFileNoFollowOrThrow(path, "unit start records").toString("utf-8")) as {
+      version?: unknown;
+      records?: Record<string, unknown>;
+    };
+    if (parsed.version !== 1 || typeof parsed.records !== "object" || parsed.records === null) return started;
+    for (const [logicalPath, bytes] of Object.entries(parsed.records)) {
+      if (bytes === null || typeof bytes === "string") {
+        started.set(logicalPath, bytes === null ? null : Buffer.from(bytes, "base64"));
+      }
+    }
+  } catch {
+    // Nothing copied, or a file nobody can read: the Unit's edits are measured from git.
+  }
+  return started;
+}
+
+// The worker's edits to the rest of the intent's record, which an inline build
+// of the same plan would have made on main. Git says what changed, ignored
+// records included (a team may ignore its records), against the commit the
+// Unit and the project share: prepare's approval transfer may fast-forward a
+// kept worktree past its recorded base commit, and counting the project's own
+// commits as the Unit's would clash where git merges cleanly. The recorded base
+// stands in where the project checkout is not the Unit's repository (a
+// workspace of several repositories). A record prepare copied into the folder
+// is measured from what the Unit started with instead.
+function workerRecordEdits(projectDir: string, wt: string, stageSlug: string): RecordEdit[] | null {
+  const record = recordDir(wt);
+  if (record === null || !existsSync(record)) return [];
+  const git = (args: string[]) => spawnSync("git", ["-C", record, ...args], { maxBuffer: 512 * 1024 * 1024 });
+  const projectHead = spawnSync("git", ["-C", projectDir, "rev-parse", "--verify", "HEAD^{commit}"], { encoding: "utf-8" });
+  const shared = projectHead.status === 0 ? git(["merge-base", "HEAD", projectHead.stdout.trim()]) : null;
+  const base = shared?.status === 0 ? shared.stdout.toString().trim() : boltWorktreeBaseCommit(wt);
+  if (!base) return [];
+  const changed = git(["diff", "--name-only", "-z", "--no-renames", "--relative", base, "--", "."]);
+  const added = git(["ls-files", "-z", "--others", "--", "."]);
+  if (changed.status !== 0 || added.status !== 0) return null;
+  const anchor = realpathSync(record);
+  const started = unitStartRecords(anchor);
+  const paths = new Set([
+    ...`${changed.stdout.toString()}\0${added.stdout.toString()}`.split("\0").filter(Boolean),
+    ...started.keys(),
+  ]);
+  const edits: RecordEdit[] = [];
+  for (const path of [...paths].sort()) {
+    if (!unitCarriesRecord(path, stageSlug)) continue;
+    let baseBytes = started.get(path) ?? null;
+    if (!started.has(path)) {
+      // As a checkout writes it, so a CRLF checkout compares and merges as on
+      // disk; none when the base has no file there (nothing, a folder, or a file
+      // git cannot show).
+      const kind = git(["cat-file", "-t", `${base}:./${path}`]);
+      const shown = kind.status === 0 && kind.stdout.toString().trim() === "blob"
+        ? git(["cat-file", "--filters", `${base}:./${path}`])
+        : null;
+      baseBytes = shown?.status === 0 ? shown.stdout : null;
+    }
+    let unitBytes: Buffer | null;
+    try {
+      unitBytes = presentRecordBytes(assertNoSymlinkInChainOrThrow(anchor, path), path);
+    } catch {
+      continue; // A link, a folder or a file that cannot be read is no edit to carry.
+    }
+    if (sameRecordBytes(baseBytes, unitBytes)) continue;
+    edits.push({ logicalPath: path, base: baseBytes, unit: unitBytes });
+  }
+  return edits;
+}
+
+/** The file's bytes, null when nothing is there; throws when it is not a regular file. */
+function presentRecordBytes(path: string, logicalPath: string): Buffer | null {
+  try {
+    lstatSync(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+  return readRegularFileNoFollowOrThrow(path, `record file ${logicalPath}`);
+}
+
+function sameRecordBytes(left: Buffer | null, right: Buffer | null): boolean {
+  return left === null ? right === null : right !== null && left.equals(right);
+}
+
+// The project's copy with the Unit's edit merged in, line by line as git
+// merges: "same" when it already holds the Unit's version, null to remove it,
+// undefined when the two clash.
+function mergedRecord(edit: RecordEdit, current: Buffer | null): Buffer | null | "same" | undefined {
+  if (sameRecordBytes(current, edit.unit)) return "same";
+  if (sameRecordBytes(current, edit.base)) return edit.unit;
+  if (current === null || edit.unit === null) return undefined;
+  const dir = mkdtempSync(join(tmpdir(), "aidlc-record-merge-"));
+  try {
+    const [ours, base, theirs] = ["project", "base", "unit"].map((name) => join(dir, name));
+    writeFileSync(ours, current);
+    writeFileSync(base, edit.base ?? Buffer.alloc(0));
+    writeFileSync(theirs, edit.unit);
+    const merged = spawnSync("git", ["merge-file", "-p", ours, base, theirs], { maxBuffer: 512 * 1024 * 1024 });
+    return merged.status === 0 ? merged.stdout : undefined;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+// Lands the snapshot in the main record as one transaction and returns null, or
+// what failed. A worker's edit that cannot be merged leaves the project's copy as
+// it is, saves the Unit's version in its stage folder and adds a line for the
+// person to `notices`; that is not a failure.
 function mergeReviewedRecordSnapshot(
   projectDir: string,
   unit: string,
   snapshot: ReviewedRecordSnapshot,
+  notices: string[],
 ): string | null {
   const record = recordDir(projectDir);
   if (record === null) return `cannot resolve the main record directory for unit "${unit}"`;
@@ -1042,6 +1271,51 @@ function mergeReviewedRecordSnapshot(
         `${error instanceof Error ? error.message : String(error)}`
       );
     }
+  }
+
+  const shown = (logicalPath: string) => toPosix(relative(projectDir, join(record, logicalPath)));
+  const lines: string[] = [];
+  for (const edit of snapshot.edits) {
+    let target: string | null;
+    let current: Buffer | null = null;
+    try {
+      target = assertNoSymlinkInChainOrThrow(root, edit.logicalPath);
+      current = presentRecordBytes(target, edit.logicalPath);
+    } catch {
+      target = null; // Not a plain file in the project: it stays as it is.
+    }
+    const merged = target === null ? undefined : mergedRecord(edit, current);
+    if (merged === "same") continue;
+    if (merged !== undefined) {
+      operations.push({ target: target!, logicalPath: edit.logicalPath, next: merged, previous: current });
+      continue;
+    }
+    if (edit.unit === null) {
+      lines.push(
+        `The ${unitPlainName(unit)} Unit removed ${shown(edit.logicalPath)}, but your project's copy differs ` +
+          "from what the Unit started with, so it stays as it is.",
+      );
+      continue;
+    }
+    const savedPath = `${snapshot.stageFolder}/not-merged/${edit.logicalPath}`;
+    try {
+      const savedTarget = assertNoSymlinkInChainOrThrow(root, savedPath);
+      operations.push({
+        target: savedTarget,
+        logicalPath: savedPath,
+        next: edit.unit,
+        previous: presentRecordBytes(savedTarget, savedPath),
+      });
+    } catch (error) {
+      return (
+        `record artifact preflight failed for ${savedPath}: ` +
+        `${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+    lines.push(
+      `The ${unitPlainName(unit)} Unit's version of ${shown(edit.logicalPath)} could not be merged into your ` +
+        `project's copy, so your copy is unchanged; the Unit's version is saved at ${shown(savedPath)}.`,
+    );
   }
 
   const applied: typeof operations = [];
@@ -1100,6 +1374,7 @@ function mergeReviewedRecordSnapshot(
         : "")
     );
   }
+  notices.push(...lines);
   return null;
 }
 
@@ -1805,6 +2080,7 @@ function emitSwarmStarted(
   attempt: SwarmAttemptStamp,
   resumed: Record<string, string> = {},
   resumeFingerprints: Record<string, string> = {},
+  landingBranch: string | null = null,
 ): void {
   appendAuditEntry(
     "SWARM_STARTED",
@@ -1815,6 +2091,7 @@ function emitSwarmStarted(
       "Concurrency cap": concurrency,
       Stage: attempt.stage,
       "Run floor": attempt.floor,
+      ...(landingBranch ? { "Landing branch": landingBranch } : {}),
       ...(Object.keys(resumed).length ? {
         "Resumed": "true",
         "Checkpoint": "swarm-batch",
@@ -2265,13 +2542,8 @@ function validateSwarmResume(
   const childState = recovering && !existsSync(childStatePath) ? "" :
     readRegularFileNoFollowOrThrow(childStatePath, "preserved worktree state").toString("utf-8");
   if (getField(childState, "Merge-Held") === "true") throw new Error(`${unit}: resolve its held merge before resuming.`);
-  const resumedFingerprint = swarmStart
-    ? resumedRevision(swarmStart, unit, "Resume execution fingerprints") ??
-      resumedRevision(swarmStart, unit, "Resume approvals")
-    : null;
-  if (alreadyResumed && resumedFingerprint !== executionFingerprint) {
-    throw new Error(`${unit}: this revision was already resumed under a different plan; preserve the active work and request a new checkpoint revision.`);
-  }
+  // A plan approved again after this revision resumed is prepare's to hand to
+  // the resumed build, as for a build prepared in this attempt.
   const discardedSha256 = matchingJournal ? journal?.discardedSha256 : undefined;
   if (!alreadyResumed) validateCodeGenerationWorktreeApproval(pd, worktree, unit, discardedSha256);
   return {
@@ -2279,6 +2551,42 @@ function validateSwarmResume(
     creation: checkpointRevision(creation), approvalFingerprint: executionFingerprint,
     ...(discardedSha256 ? { discardedSha256 } : {}),
   };
+}
+
+// A plan revised and approved again since the build was prepared or resumed:
+// prepare hands it to the build, as the first prepare did, so the worker builds
+// the plan the person approved last. An unchanged approval leaves the build
+// exactly as it is.
+function buildHoldsEarlierPlan(projectDir: string, unit: string, worktree: string): boolean {
+  const parentFingerprint = evaluateCodeGenerationApproval(projectDir, { unit }).approvalFingerprint;
+  const childQuestions = join(codeGenerationRecordDir(worktree, unit), "code-generation-questions.md");
+  const childFingerprint = existsSync(childQuestions)
+    ? questionsFileApprovalFingerprint(readFileSync(childQuestions, "utf-8")) : null;
+  return !!parentFingerprint && parentFingerprint !== childFingerprint;
+}
+
+// The build's work has moved away from the main code the new approval
+// describes (its worker wrote code, a peer landed first, or main changed), so
+// the new plan cannot be handed to it in place. Nothing is changed; the person
+// chooses between the work it holds and the plan they approved. Keeping it is
+// offered only where its landing runs: work that converged in this attempt
+// lands by the same merge run again, and any other work only through the
+// build's own check, which refuses while the build holds the earlier plan.
+function planNotHandedOver(
+  projectDir: string, batch: string, unit: string, worktree: string, attempt: SwarmAttemptStamp, error: unknown,
+): string {
+  let landsAsItIs = mergedBackConvergence(projectDir, batch, unit, swarmBoltSlug(unit), attempt) !== null;
+  if (!landsAsItIs) {
+    try {
+      landsAsItIs = readCodeGenerationWorktreeSourceBaseline(worktree, unit) !== null;
+    } catch {
+      // The check's refusal: the landing would stop on it.
+    }
+  }
+  return `Unit ${unit}: the plan approved again could not be handed to its existing build, ` +
+    `whose work no longer lines up with the main code (${error instanceof Error ? error.message : String(error)}). ` +
+    "The build and its work are kept. To build the new plan, set this Unit's current work aside (abort and discard it) " +
+    (landsAsItIs ? "and run prepare again; to keep the current work instead, land it as it is." : "and run prepare again.");
 }
 
 function archiveSwarmResume(resume: SwarmResume): string {
@@ -2486,7 +2794,11 @@ function handlePrepare(rest: string[]): void {
     fail(e instanceof Error ? e.message : String(e));
   }
 
-  const base = flags.base ?? currentBranch(repoCwd);
+  // The Units land on the branch checked out here, whatever base they fork
+  // from; a detached checkout names none.
+  const checkedOut = currentBranch(repoCwd);
+  const landingBranch = checkedOut === "HEAD" ? null : checkedOut;
+  const base = flags.base ?? checkedOut;
   const concurrency =
     flags.concurrency && /^[1-9][0-9]*$/.test(flags.concurrency)
       ? flags.concurrency
@@ -2561,6 +2873,8 @@ function handlePrepare(rest: string[]): void {
       });
     }
   }
+  // The commit each Unit forks from, as the preflight below decides it.
+  const forkBases = new Map<string, string>();
   if (requiresExecutionAllowance) {
     try {
       // Validate the entire batch before the first fork or generation receipt.
@@ -2569,10 +2883,10 @@ function handlePrepare(rest: string[]): void {
         if (identityErrors.has(unit) || retained.has(unit)) continue;
         if (!resumes.has(unit) || resumes.get(unit)!.recreate) {
           const resume = resumes.get(unit) ?? discardedPreparations.get(unit);
-          validateCodeGenerationForkApproval(
+          forkBases.set(unit, validateCodeGenerationForkApproval(
             projectDir, unit, repoCwd, repoName,
             resume?.approvedBaseCommit ?? base, resume?.discardedSha256,
-          );
+          ));
         }
       }
     } catch (error) {
@@ -2605,6 +2919,7 @@ function handlePrepare(rest: string[]): void {
     unit: string;
     ok: boolean;
     worktree_path?: string;
+    base_commit?: string;
     resumed?: boolean;
     retained?: boolean;
     approval_transferred?: boolean;
@@ -2627,35 +2942,18 @@ function handlePrepare(rest: string[]): void {
     const identity = identities.get(unit)!;
     const kept = retained.get(unit);
     if (kept !== undefined) {
-      // A plan revised and approved again since the worktree was prepared is
-      // transferred to it, as the first prepare did, so the worker builds the
-      // plan the person approved last. An unchanged approval leaves the
-      // worktree exactly as it is.
       let transferred = false;
-      if (requiresExecutionAllowance) {
-        const parentFingerprint = evaluateCodeGenerationApproval(projectDir, { unit }).approvalFingerprint;
-        const childQuestions = join(codeGenerationRecordDir(kept, unit), "code-generation-questions.md");
-        const childFingerprint = existsSync(childQuestions)
-          ? questionsFileApprovalFingerprint(readFileSync(childQuestions, "utf-8")) : null;
-        if (parentFingerprint && parentFingerprint !== childFingerprint) {
-          try {
-            swarmChangeNotices.push(...beginCodeGeneration(projectDir, { unit }));
-            bindCodeGenerationWorktreeApproval(projectDir, kept, unit);
-            transferred = true;
-          } catch (error) {
-            // Its work has moved away from the main code the new approval
-            // describes (a peer landed first, or main changed), so the new plan
-            // cannot be handed to this build in place. Nothing is changed; the
-            // person chooses between the work it holds and the plan they approved.
-            prepared.push({
-              unit, ok: false, worktree_path: kept, retained: true,
-              error: `Unit ${unit}: the plan approved again could not be handed to its existing build, ` +
-                `whose work no longer lines up with the main code (${error instanceof Error ? error.message : String(error)}). ` +
-                "The build and its work are kept. To build the new plan, set this Unit's current work aside (abort and discard it) " +
-                "and run prepare again; to keep the current work instead, land it as it is.",
-            });
-            continue;
-          }
+      if (requiresExecutionAllowance && buildHoldsEarlierPlan(projectDir, unit, kept)) {
+        try {
+          swarmChangeNotices.push(...beginCodeGeneration(projectDir, { unit }));
+          bindCodeGenerationWorktreeApproval(projectDir, kept, unit);
+          transferred = true;
+        } catch (error) {
+          prepared.push({
+            unit, ok: false, worktree_path: kept, retained: true,
+            error: planNotHandedOver(projectDir, flags.batch, unit, kept, attempt, error),
+          });
+          continue;
         }
       }
       prepared.push({ unit, ok: true, worktree_path: kept, retained: true, ...(transferred ? { approval_transferred: true } : {}) });
@@ -2663,6 +2961,24 @@ function handlePrepare(rest: string[]): void {
     }
     const resume = resumes.get(unit);
     const discarded = resume ?? discardedPreparations.get(unit);
+    if (resume && !resume.recreate && resume.alreadyResumed && requiresExecutionAllowance &&
+      buildHoldsEarlierPlan(projectDir, unit, resume.worktree)) {
+      // Its Code Generation start was published by the batch's beginCodeGeneration
+      // pass, which covers every Unit not retained.
+      try {
+        bindCodeGenerationWorktreeApproval(projectDir, resume.worktree, unit, resume.discardedSha256);
+      } catch (error) {
+        prepared.push({
+          unit, ok: false, worktree_path: resume.worktree, resumed: true,
+          error: planNotHandedOver(projectDir, flags.batch, unit, resume.worktree, attempt, error),
+        });
+        continue;
+      }
+      prepared.push({
+        unit, ok: true, worktree_path: resume.worktree, resumed: true, revision: resume.revision, approval_transferred: true,
+      });
+      continue;
+    }
     if (resume && !resume.recreate) {
       let archive: string | undefined;
       try {
@@ -2743,7 +3059,7 @@ function handlePrepare(rest: string[]): void {
         "--slug",
         boltSlug,
         "--base",
-        discarded?.approvedBaseCommit ?? base,
+        forkBases.get(unit) ?? discarded?.approvedBaseCommit ?? base,
         "--swarm-unit",
         unit,
         "--swarm-batch",
@@ -2766,8 +3082,9 @@ function handlePrepare(rest: string[]): void {
       continue;
     }
     let worktreeDir: string;
+    let baseCommit: string | undefined;
     try {
-      worktreeDir = JSON.parse(created.stdout).worktree_path;
+      ({ worktree_path: worktreeDir, base_commit: baseCommit } = JSON.parse(created.stdout));
     } catch {
       prepared.push({
         unit,
@@ -2801,6 +3118,18 @@ function handlePrepare(rest: string[]): void {
       });
       continue;
     }
+    try {
+      copyIntentRecords(projectDir, selected, worktreeDir, stageDefinition?.slug ?? stage);
+    } catch (error) {
+      if (!resume) releasePreparationRegistration(projectDir, unit);
+      prepared.push({
+        unit, ok: false, worktree_path: worktreeDir,
+        error: `copying the intent's records into the worktree failed: ${error instanceof Error ? error.message : String(error)}; ${
+          resume ? "retry prepare --resume-existing to recover this revision" :
+            `source was preserved; run aidlc-worktree discard --slug ${boltSlug} before retrying prepare`}`,
+      });
+      continue;
+    }
     if (requiresExecutionAllowance) {
       try {
         bindCodeGenerationWorktreeApproval(projectDir, worktreeDir, unit, discarded?.discardedSha256);
@@ -2823,7 +3152,7 @@ function handlePrepare(rest: string[]): void {
       }
     }
     prepared.push({
-      unit, ok: true, worktree_path: worktreeDir,
+      unit, ok: true, worktree_path: worktreeDir, base_commit: baseCommit,
       ...(resume ? { resumed: true, revision: resume.revision } : {}),
     });
   }
@@ -2845,6 +3174,7 @@ function handlePrepare(rest: string[]): void {
       attempt,
       Object.fromEntries(readyUnits.filter((unit) => resumes.has(unit)).map((unit) => [unit, resumes.get(unit)!.revision])),
       Object.fromEntries(readyUnits.filter((unit) => resumes.has(unit)).map((unit) => [unit, resumes.get(unit)!.approvalFingerprint])),
+      landingBranch,
     );
   }
 
@@ -2853,6 +3183,7 @@ function handlePrepare(rest: string[]): void {
       {
         batch: flags.batch,
         base,
+        ...(landingBranch ? { landing_branch: landingBranch } : {}),
         concurrency: Number(concurrency),
         units: prepared,
         ...(swarmChangeNotices.length > 0 ? { change_notices: swarmChangeNotices } : {}),
@@ -3080,6 +3411,7 @@ function handleFinalize(rest: string[]): void {
         } else {
           const captured = stageDefinition
             ? captureReviewedRecordSnapshot(
+                projectDir,
                 identity,
                 unit,
                 stageDefinition,
@@ -3163,6 +3495,15 @@ function handleFinalize(rest: string[]): void {
   for (const unit of [...genuine].sort()) {
     const boltSlug = swarmBoltSlug(unit);
     const recordSnapshot = recordSnapshots.get(unit);
+    // A record edit that could not be merged is said on the Unit's row.
+    const landRecords = (): string | null => {
+      if (!recordSnapshot) return `reviewed record snapshot is missing for unit "${unit}"`;
+      const lines: string[] = [];
+      const error = mergeReviewedRecordSnapshot(projectDir, unit, recordSnapshot, lines);
+      const row = results.find((result) => result.unit === unit)!;
+      if (lines.length > 0) row.change_notices = [...(row.change_notices ?? []), ...lines];
+      return error;
+    };
     const mergedBack = mergedBackConvergence(projectDir, batch, unit, boltSlug, preparedAttempts.get(unit));
     if (mergedBack !== null) {
       const fresh = convergedRowFields(
@@ -3172,15 +3513,11 @@ function handleFinalize(rest: string[]): void {
         mergedBefore.add(unit);
         continue;
       }
-      const refreshError = recordSnapshot
-        ? mergeReviewedRecordSnapshot(projectDir, unit, recordSnapshot)
-        : `reviewed record snapshot is missing for unit "${unit}"`;
+      const refreshError = landRecords();
       if (refreshError !== null) mergeFailures.push({ unit, detail: refreshError });
       continue;
     }
-    const recordMergeError = recordSnapshot
-      ? mergeReviewedRecordSnapshot(projectDir, unit, recordSnapshot)
-      : `reviewed record snapshot is missing for unit "${unit}"`;
+    const recordMergeError = landRecords();
     if (recordMergeError !== null) {
       mergeFailures.push({ unit, detail: recordMergeError });
       continue;
@@ -3236,12 +3573,17 @@ function handleFinalize(rest: string[]): void {
   const failedCount = failedResults.length;
   emitSwarmCompleted(projectDir, batch, convergedCount, failedCount);
 
+  const landingRows = readAuditShardEvents(projectDir);
   const envelope = {
     batch,
-    units: results.map((result) => ({
-      ...result,
-      bolt_slug: swarmBoltSlug(result.unit),
-    })),
+    units: results.map((result) => {
+      const landingBranch = result.status === "converged" ? preparedLandingBranch(landingRows, batch, result.unit) : null;
+      return {
+        ...result,
+        bolt_slug: swarmBoltSlug(result.unit),
+        ...(landingBranch ? { landing_branch: landingBranch } : {}),
+      };
+    }),
     converged: convergedCount,
     failed: failedCount,
     merge_failures: mergeFailures,
@@ -3294,6 +3636,17 @@ function currentSwarmAttempt(projectDir: string): SwarmAttemptStamp | null {
   } catch {
     return null;
   }
+}
+
+// The branch a Unit's landing goes onto: the one checked out in its repo's main
+// checkout when prepare started it, from the newest SWARM_STARTED row naming
+// the Unit in this batch. Null for a row that names none (a detached checkout,
+// or an earlier release).
+function preparedLandingBranch(rows: readonly AuditShardEvent[], batch: string, unit: string): string | null {
+  const started = latestResumeRow(rows.filter((row) => row.event === "SWARM_STARTED" &&
+    auditBlockField(row.block, "Batch number") === batch &&
+    splitCsv(auditBlockField(row.block, "Unit names") ?? "").includes(unit)));
+  return started === null ? null : auditBlockField(started.block, "Landing branch");
 }
 
 function preparedSwarmAttempt(
@@ -3462,6 +3815,51 @@ function currentBranch(projectDir: string): string {
   return (r.stdout ?? "main").trim() || "main";
 }
 
+// The person asked for files in the main checkout to change while the Units
+// are built in parallel ("also fix the typo in the README"): the agent names
+// the message they asked in, the tool proves it and records the files with
+// their words, and the guard and the landings read that record
+// (mainCheckoutChangeAllowed). It reads no words.
+function handleAllowChange(rest: string[]): void {
+  const { flags, positional } = parseArgs(rest);
+  const projectDir = resolveProjectDir(flags["project-dir"]);
+  resolveSwarmSelection(projectDir, flags);
+  if (positional.length === 0) fail("allow-change requires the files the person asked to change: allow-change <file>... --message <id>");
+  if (!flags.message || flags.message === "true") fail("allow-change requires --message <id>: the person's message that asked for the change");
+  const state = readStateFile(projectDir);
+  if ((getField(state, "Current Stage") ?? "").trim().toLowerCase().replace(/\s+/g, "-") !== "code-generation") {
+    fail("Nothing holds a change in the main checkout now: allow-change is for while Code Generation builds the Units in parallel.");
+  }
+  const held = mainCheckoutHeldByTeam(projectDir);
+  if (held !== null) fail(held);
+  const paths: string[] = [];
+  for (const target of positional) {
+    const key = mainCheckoutPathKey(projectDir, target);
+    if (key === null) fail(`${target} is not a file in this project.`);
+    if (!paths.includes(key)) paths.push(key);
+  }
+  const marker = readActiveDirectiveMarker(projectDir, state);
+  const building = marker?.kind === "invoke-swarm" ? marker.units ?? [] : [];
+  const refusal = mainCheckoutChangeRefusal(projectDir, paths, building, (unit) => codeGenerationPlanNamedPaths(projectDir, unit));
+  if (refusal !== null) fail(refusal);
+  const proof = proveMessage(projectDir, flags.message, "request", { request: true });
+  if ("refusal" in proof) fail(proof.refusal);
+  const words = personsWordsText(proof.message.words ?? proof.message.text);
+  appendAuditEntry("MAIN_CHECKOUT_CHANGE_ALLOWED", {
+    Stage: "code-generation",
+    "Run floor": mainCheckoutChangeRunFloor(projectDir),
+    Paths: JSON.stringify(paths),
+    ...(words ? { "Person Reply": words } : {}),
+    "Message Id": proof.message.id,
+  }, projectDir);
+  const why = words ? `because you said: "${quoted(words)}"` : "as you asked in the chat";
+  console.log(JSON.stringify({
+    allowed: paths,
+    // Said once, while a batch is out or after the last landing: the landings or stage completion keep it.
+    notice: `${renderChangedPaths(paths)} can change during this Code Generation, ${why}. It is kept.`,
+  }));
+}
+
 function fail(msg: string): never {
   console.error(JSON.stringify({ error: msg }));
   process.exit(1);
@@ -3498,10 +3896,13 @@ export function main(argv: string[]): void {
     case "finalize":
       handleFinalize(rest);
       break;
+    case "allow-change":
+      handleAllowChange(rest);
+      break;
     default:
       console.error(
         JSON.stringify({
-          error: `Unknown subcommand: ${subcommand ?? "(none)"}. Valid: prepare, check, finalize`,
+          error: `Unknown subcommand: ${subcommand ?? "(none)"}. Valid: prepare, check, finalize, allow-change`,
         })
       );
       process.exit(1);

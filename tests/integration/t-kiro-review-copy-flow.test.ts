@@ -1,11 +1,14 @@
-// covers: subcommand:aidlc-log:review, function:prepareReviewCopy, function:removeReviewCopy, function:reviewRequestNote, hook:aidlc-log-subagent
+// covers: subcommand:aidlc-log:review, function:prepareReviewCopy, function:removeReviewCopy, function:sweepReviewCopies, function:reviewRequestNote, hook:aidlc-log-subagent, hook:aidlc-session-start
 //
 // The reviewer read-scope copy on Kiro (kiro-ide), end to end on an installed
 // tree of a stable release: a Unit's review request writes a copy of the
 // installed reviewer that carries the review's read scope and hands its name
 // back; the completion Kiro reports under the copy's name is the reviewer's;
 // the verdict removes the copy. With the reviewer read-scope check off, the
-// request is the request it was.
+// request is the request it was. A review that is over without its verdict (the
+// person approved the Unit over it) leaves its copy only until the next chat
+// starts or the next review is asked for; its request stays open for a verdict
+// that comes in later.
 // Kiro itself is not driven here: that a delegated agent's fs_read deny with an
 // exclude is enforced was measured on Kiro CLI 2.31.0 and Kiro IDE 1.3.0.
 
@@ -13,16 +16,32 @@ import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
-import { auditBlockField, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import {
+  artifactFilename,
+  auditBlockField,
+  findStageBySlug,
+  latestMainWorkflowStageRunFloorForProject,
+  openReviewRequests,
+  readAuditShardEvents,
+  reviewArtifactFingerprint,
+  sourceBaselineAuditFields,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   cleanupTestProject,
   createTestProject,
   REPO_ROOT,
+  seededAuditDir,
   seedAidlcMemory,
   seedBoltDag,
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
+
+// The stage's checks run once before its review or gate, and again at the gate
+// (completionChecksStep, t-checks-before-review); this file's fixture documents
+// are not written for them and its subject is not them, so they stay off here.
+process.env.AIDLC_DISABLE_SENSORS = "1";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -226,5 +245,232 @@ describe("the reviewer read-scope copy on Kiro", () => {
     expect(requested.dispatchAgent).toBeUndefined();
     expect(String(requested.agent_note)).toStartWith(`Dispatch ${REVIEWER} as a subagent and have it write`);
     expect(p.agents()).toEqual(shippedAgents);
+  });
+});
+
+// --- A Unit approved over its unfinished review (Code Generation, Unit checkpoints on). ---
+
+const CG = "code-generation";
+const CG_REVIEWER = findStageBySlug(CG)!.reviewer!;
+const SESSION = "01995000-7a11-7000-8000-00000000a584";
+const DASH = "\u2014"; // the state file's stage-line separator
+
+class KiroUnitCheckpoint extends KiroUnitReview {
+  constructor() {
+    super();
+    this.env.AIDLC_UNATTENDED = "0";
+    for (const key of ["AIDLC_SKIP_HUMAN_PRESENCE_GUARD", "AIDLC_SESSION_OVERRIDE_SOURCE"]) delete this.env[key];
+    const skipped = ["functional-design", "nfr-requirements", "nfr-design", "infrastructure-design"];
+    writeFileSync(seededStateFile(this.dir), [
+      "# AI-DLC State Tracking",
+      "## Project Information",
+      "- **Project**: Kiro reviewer copy after an approval",
+      "- **Project Type**: Greenfield",
+      "- **Project Type Source**: you",
+      "- **Scope**: classic",
+      "- **State Version**: 8",
+      "## Runtime State",
+      "- **Revision Count**: 0",
+      "- **Skeleton Stance**: off",
+      "- **Construction Iteration**: unit-major",
+      "- **Construction Checkpoints**: enabled",
+      "- **Construction Execution**: serial",
+      "- **Construction Autonomy Mode**: gated",
+      // Classic's default stands the read-scope check aside; set by the person, it holds.
+      "- **Guard Policy**: strict (set by you)",
+      "- **Review Override**: advisory",
+      "## Scope Configuration",
+      "- **Stages to Execute**: all",
+      "- **Stages to Skip**: none",
+      "- **Depth**: Standard",
+      "- **Test Strategy**: Standard",
+      "## Stage Progress",
+      "### CONSTRUCTION PHASE",
+      ...skipped.map((stage) => `- [S] ${stage} ${DASH} SKIP`),
+      `- [-] ${CG} ${DASH} EXECUTE`,
+      `- [ ] build-and-test ${DASH} EXECUTE`,
+      "## Current Status",
+      "- **Lifecycle Phase**: CONSTRUCTION",
+      `- **Current Stage**: ${CG}`,
+      "- **Status**: Running", "",
+    ].join("\n"));
+    mkdirSync(join(this.dir, "src"), { recursive: true });
+    for (const unit of [UNIT, "beta"]) writeFileSync(join(this.dir, "src", `${unit}.ts`), `export const ${unit} = 1;\n`);
+    appendAuditEntry("WORKFLOW_STARTED", { Scope: "classic", ...sourceBaselineAuditFields(this.dir, CG) }, this.dir);
+    // The command each completed Unit is verified with, as the person approved it.
+    const script = join(seededRecordDir(this.dir), "check.cjs");
+    writeFileSync(script, "process.exit(0);");
+    const command = process.platform === "win32"
+      ? `"${process.execPath}" "${script}"`
+      : `'${process.execPath}' '${script}'`;
+    const identity = ["--stage", CG, "--checkpoint", "verification-command", "--command", command, "--session", "verify-command"];
+    json(this.tool("log", ["decision", ...identity, "--decision", "Use this command to verify each completed Unit?",
+      "--options", "Approve,Request Changes"]), "Ask for the verification command");
+    this.says("Approve", "verify-command");
+    json(this.tool("log", ["answer", ...identity, "--details", "Approve"]), "Record the answer");
+    json(this.tool("state", ["set-construction-verification-command", command]), "Set the verification command");
+  }
+
+  tool(name: string, args: string[], env: NodeJS.ProcessEnv = {}): Run {
+    return this.run([process.execPath, join(this.dir, ".kiro", "tools", `aidlc-${name}.ts`), ...args, "--project-dir", this.dir], undefined, env);
+  }
+
+  // What the person types, through the prompt hook.
+  says(prompt: string, session = SESSION): void {
+    const said = this.run([process.execPath, join(this.dir, ".kiro", "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
+      { hook_event_name: "UserPromptSubmit", session_id: session, prompt });
+    expect(said.code, `${said.stdout}\n${said.stderr}`).toBe(0);
+  }
+
+  build(unit: string): void {
+    const stage = findStageBySlug(CG)!;
+    const output = join(seededRecordDir(this.dir), "construction", unit, CG);
+    mkdirSync(output, { recursive: true });
+    for (const name of stage.produces ?? []) writeFileSync(join(output, artifactFilename(name)), `# ${unit} ${name}\n`);
+    writeFileSync(join(output, "source-manifest.json"), JSON.stringify({ stage: CG, unit, version: 1, writes: [{ path: `src/${unit}.ts` }] }));
+    appendAuditEntry("UNIT_COMPLETED", {
+      Stage: CG, Unit: unit, Mode: "wave",
+      "Run floor": latestMainWorkflowStageRunFloorForProject(this.dir, CG, true, unit),
+      "Artifact Fingerprint": reviewArtifactFingerprint(this.dir, stage, unit, { requireRequiredArtifacts: true })!,
+    }, this.dir);
+  }
+
+  requestReview(unit: string): string {
+    const requested = json(this.log(["review", "--stage", CG, "--unit", unit, "--reviewer", CG_REVIEWER, "--iteration", "1"]),
+      `Request ${unit}'s review`);
+    const copyName = String(requested.dispatchAgent);
+    expect(copyName).toMatch(/^aidlc-scoped-review-[0-9a-f]{12}$/);
+    return copyName;
+  }
+
+  // The person says to approve the Unit as it is, and the Unit is approved
+  // over its review, which never got a verdict.
+  approveOverReview(unit: string, beforeApproval: () => void = () => {}): void {
+    this.says("approve it as it is");
+    const turn = readAuditShardEvents(this.dir).filter((row) => row.event === "HUMAN_TURN" &&
+      auditBlockField(row.block, "Session") === SESSION && auditBlockField(row.block, "Message Id") !== null).at(-1);
+    const verified = json(this.tool("bolt", ["checkpoint", "--unit", unit, "--kind", "unit", "--action", "verify", "--session", SESSION,
+      "--over-unfinished-review", "--message", turn ? auditBlockField(turn.block, "Message Id") ?? "" : ""],
+      { AIDLC_SESSION_OVERRIDE: SESSION }), `Verify ${unit} over its review`);
+    expect(verified.verified).toBe(true);
+    beforeApproval();
+    const approved = json(this.tool("bolt", ["checkpoint", "--unit", unit, "--kind", "unit", "--action", "approve", "--session", SESSION]),
+      `Approve ${unit}`);
+    expect(approved.approved).toBe(true);
+    expect(approved.change_notices).toEqual([`Approved. The Code Generation review for ${unit} did not finish.`]);
+  }
+
+  // A chat starts in Kiro.
+  chatStarts(): void {
+    const started = this.run([process.execPath, join(this.dir, ".kiro", "hooks", "aidlc-kiro-adapter.ts"), "session-start"], {
+      session_id: "sess_t-kiro-review-copy-next-chat", hook_event_name: "SessionStart", cwd: this.dir,
+    });
+    expect(started.code, `${started.stdout}\n${started.stderr}`).toBe(0);
+  }
+
+  hasCopy(copyName: string): boolean {
+    return existsSync(join(this.dir, ".kiro", "agents", `${copyName}.md`));
+  }
+}
+
+describe("a reviewer copy whose review is over without its verdict", () => {
+  test("a Unit approved over its review: the copy leaves when the next chat starts, and the request stays open for a later verdict", () => {
+    const p = new KiroUnitCheckpoint();
+    p.build(UNIT);
+    const copyName = p.requestReview(UNIT);
+    // Another piece of work's copy: a request this record does not name.
+    const otherWork = "aidlc-scoped-review-0123456789ab";
+    cpSync(join(p.dir, ".kiro", "agents", `${copyName}.md`), join(p.dir, ".kiro", "agents", `${otherWork}.md`));
+    p.approveOverReview(UNIT, () => {
+      // Verified is not approved: the review may still finish.
+      p.chatStarts();
+      expect(p.hasCopy(copyName)).toBe(true);
+    });
+    expect(p.hasCopy(copyName)).toBe(true);
+
+    p.chatStarts();
+    expect(p.hasCopy(copyName)).toBe(false);
+    expect(p.hasCopy(otherWork)).toBe(true);
+    const requestId = `review:${copyName.slice("aidlc-scoped-review-".length)}`;
+    expect(openReviewRequests(readAuditShardEvents(p.dir)).map((request) => request.requestId.slice(0, requestId.length)))
+      .toContain(requestId);
+    expect(readAuditShardEvents(p.dir).filter((row) => row.event === "REVIEW_COMPLETED")).toEqual([]);
+    // The reviewer that was running when the person approved still finishes as the reviewer.
+    expect(p.dispatched(copyName, `**Reviewer:** ${CG_REVIEWER}\n\nVerdict: READY`).code).toBe(0);
+    expect(p.completions().map((row) => auditBlockField(row, "Agent Type"))).toEqual([CG_REVIEWER]);
+  });
+
+  test("the stage approved at its gate over a Unit's unfinished review: the copy leaves when the next chat starts", () => {
+    const p = new KiroUnitCheckpoint();
+    p.build(UNIT);
+    const copyName = p.requestReview(UNIT);
+    p.chatStarts();
+    expect(p.hasCopy(copyName)).toBe(true);
+    // The row the stage gate's approval writes (aidlc-state approve), with no Unit.
+    appendAuditEntry("GATE_APPROVED", { Stage: CG, "User Input": "Approve", Review: "not finished" }, p.dir);
+    p.chatStarts();
+    expect(p.hasCopy(copyName)).toBe(false);
+  });
+
+  test("a Unit approved over its review and opened again before the next chat: the copy still leaves", () => {
+    const p = new KiroUnitCheckpoint();
+    p.build(UNIT);
+    const copyName = p.requestReview(UNIT);
+    p.approveOverReview(UNIT);
+    // The Unit's checkpoint opened again (a reopen records the checkpoint's rejection).
+    appendAuditEntry("GATE_REJECTED", {
+      Unit: UNIT, Stage: CG, "Gate Stages": CG, "Gate Scope": "unit-end", Checkpoint: "construction-unit", Reopen: "jump",
+    }, p.dir);
+    p.chatStarts();
+    expect(p.hasCopy(copyName)).toBe(false);
+  });
+
+  test("a reopen in another clone's log at the approval's second leaves their order unknown: the copy stays", () => {
+    const p = new KiroUnitCheckpoint();
+    p.build(UNIT);
+    const copyName = p.requestReview(UNIT);
+    p.approveOverReview(UNIT);
+    const approval = readAuditShardEvents(p.dir).filter((row) => row.event === "GATE_APPROVED").at(-1)!;
+    // Another clone's log (host "0", a token of zeros), named to sort before
+    // this clone's own on an ordinary machine name: a reading that took rows in
+    // file order would see the approval last and remove the copy.
+    writeFileSync(join(seededAuditDir(p.dir), "0-00000000.md"), [
+      "# AI-DLC Audit Log", "", "## GATE_REJECTED", `**Timestamp**: ${approval.timestamp}`, "**Event**: GATE_REJECTED",
+      `**Unit**: ${UNIT}`, `**Stage**: ${CG}`, `**Gate Stages**: ${CG}`, "**Gate Scope**: unit-end",
+      "**Checkpoint**: construction-unit", "", "---", "",
+    ].join("\n"));
+    expect(readAuditShardEvents(p.dir).filter((row) => row.event === "GATE_REJECTED")).toHaveLength(1);
+    p.chatStarts();
+    expect(p.hasCopy(copyName)).toBe(true);
+  });
+
+  test("an isolated run of the stage, or a batch of other Units approved, does not end the Unit's review: its copy stays", () => {
+    const p = new KiroUnitCheckpoint();
+    p.build(UNIT);
+    const copyName = p.requestReview(UNIT);
+    // An isolated run's start and approvals (`--single`) are its own.
+    appendAuditEntry("WORKFLOW_STARTED", { Scope: "classic", Workflow: `single-stage:${CG}` }, p.dir);
+    appendAuditEntry("GATE_APPROVED", { Stage: CG, Workflow: `single-stage:${CG}`, "User Input": "Approve" }, p.dir);
+    appendAuditEntry("GATE_APPROVED", { Stage: CG, Unit: UNIT, Workflow: `single-stage:${CG}`, "User Input": "Approve" }, p.dir);
+    // A batch of Units built side by side is approved as a checkpoint naming its Units.
+    appendAuditEntry("GATE_APPROVED", {
+      Checkpoint: "swarm-batch", Stage: CG, "Gate Stages": CG, "Batch number": "2", Units: "beta", "User Input": "Approve",
+    }, p.dir);
+    p.chatStarts();
+    expect(p.hasCopy(copyName)).toBe(true);
+  });
+
+  test("the next Unit's review request removes the copy of a Unit approved over its review, and writes its own", () => {
+    const p = new KiroUnitCheckpoint();
+    p.build(UNIT);
+    const alphaCopy = p.requestReview(UNIT);
+    p.approveOverReview(UNIT);
+    p.build("beta");
+    const betaCopy = p.requestReview("beta");
+    expect(p.hasCopy(alphaCopy)).toBe(false);
+    expect(p.hasCopy(betaCopy)).toBe(true);
+    // A chat that starts while beta's review waits leaves its copy.
+    p.chatStarts();
+    expect(p.hasCopy(betaCopy)).toBe(true);
   });
 });

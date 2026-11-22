@@ -12,15 +12,18 @@ import {
   enterHookWorkflow,
   type ClaudeCodeHookInput,
   decideFence,
+  delegatedAgentOf,
   ENGINE_OWNED_STATE_TRANSITIONS,
   guardStandAsideSpeaks,
   guardStoodAsideLine,
   isClaudeCodeHookInput,
   parseArgs,
   parseWorkspaceCommand,
+  recordGuardBlockedRow,
   recordGuardStoodAside,
   resolveProjectDirFromHook,
   TESTING_POSTURE_SUBCOMMANDS,
+  validSessionId,
   writeGuardStoodAside,
 } from "../tools/aidlc-lib.ts";
 import { LAUNCHER_GLOBAL_FLAGS } from "../tools/aidlc-command.ts";
@@ -57,8 +60,9 @@ const DELEGATED_JUMP_VERBS = ["execute", "reopen"];
 // gate, and landing. merge-status and status are reads.
 const DELEGATED_UNIT_VERBS = ["adopt", "claim", "release", "participate", "publish", "pin", "gate", "land"];
 // Bolt and swarm lifecycle, the Construction autonomy grant, merge holds, and
-// checkpoint decisions; the referee's prepare and finalize belong to the
-// conductor. Its check records nothing and is admitted (DELEGATE_ADMITTED_VERBS).
+// checkpoint decisions; the referee's prepare and finalize, and the person's
+// request recorded by allow-change, belong to the conductor. Its check records
+// nothing and is admitted (DELEGATE_ADMITTED_VERBS).
 const DELEGATED_BOLT_VERBS = [
   "start",
   "complete",
@@ -71,7 +75,7 @@ const DELEGATED_BOLT_VERBS = [
   "hold-merge",
   "release-merge",
 ];
-const DELEGATED_SWARM_VERBS = ["prepare", "finalize"];
+const DELEGATED_SWARM_VERBS = ["prepare", "finalize", "allow-change"];
 // Question, review and pipeline-link receipts; answers is a read.
 const DELEGATED_LOG_VERBS = ["decision", "answer", "review", "link"];
 const DELEGATED_LEARNINGS_VERBS = ["persist"];
@@ -1172,9 +1176,7 @@ export async function run(input: string): Promise<number> {
       workflow.restore();
     }
   };
-  const agentType = parsed.agent_type?.trim() ||
-    (typeof parsed.tool_input?.subagent_type === "string"
-      ? parsed.tool_input.subagent_type.trim() : "");
+  const agentType = delegatedAgentOf(parsed);
   if (agentType.length === 0) return 0;
   const delegatedCommand = delegatedLifecycleCommand(
     parsed.tool_input?.command ?? "",
@@ -1188,6 +1190,27 @@ export async function run(input: string): Promise<number> {
       "or review verdict to the main session without parking, resuming, reporting, routing, " +
       "or presenting an approval question.\n",
   );
+  try {
+    const workflow = enterHookWorkflow(resolveProjectDirFromHook(import.meta.url), parsed.session_id);
+    try {
+      if (!hookStandsOutside(workflow)) {
+        recordGuardBlockedRow(workflow.projectDir, {
+          eventType: "STATE_TRANSITION_BLOCKED",
+          hook: "state-transition-guard",
+          reason: "delegated-lifecycle",
+          tool: "Bash",
+          target: delegatedCommand,
+          session: validSessionId(typeof parsed.session_id === "string" ? parsed.session_id : undefined),
+          intent: workflow.selection?.intent ?? undefined,
+          space: workflow.selection?.space,
+        });
+      }
+    } finally {
+      workflow.restore();
+    }
+  } catch {
+    return 2;
+  }
   return 2;
 }
 

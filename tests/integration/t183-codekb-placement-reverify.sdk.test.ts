@@ -21,10 +21,12 @@
 // the first post-artifact human boundary: RE
 // steps 3-4 write the 9 artifacts before the learnings ritual and approval gate,
 // so the on-disk surface is complete at that moment (before finally-block
-// cleanup wipes the fixture). The test accepts a structured question stop or an
-// unanswered engine-recorded question after the stage's final pipeline link.
-// Continuing beyond the boundary would advance into downstream stages, which
-// are unrelated to this placement test.
+// cleanup wipes the fixture). That boundary is the learnings question or, when
+// the learnings step asks nothing, the gate itself, so the drive leaves the box
+// open and stops there; the test also accepts a turn that ends on an unanswered
+// engine-recorded question after the stage's final pipeline link
+// (tests/harness/post-artifact-wait.ts). Continuing beyond the boundary would
+// advance into downstream stages, which are unrelated to this placement test.
 //
 // The fixture (mirrors t72): a brownfield React/Vite/TS Todo stub seeded at
 // init-done with reverse-engineering in-flight, single-repo (NO repos row), so
@@ -55,7 +57,8 @@ import {
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
 import { retainFailedFixture } from "../harness/failed-fixture.ts";
-import { type CapturedAskUserQuestion, driveAidlc } from "../harness/sdk-drive.ts";
+import { leavesOpen, postArtifactWaitProblems } from "../harness/post-artifact-wait.ts";
+import { driveAidlc } from "../harness/sdk-drive.ts";
 import { compileFixtureRuntimeGraph } from "../harness/tui-fixtures.ts";
 import {
   activeSpace,
@@ -83,16 +86,6 @@ const RE_STEMS = [
   "code-quality-assessment",
   "reverse-engineering-timestamp",
 ];
-
-/** The resume menu a bare `/aidlc` may show on work in progress (Resume, Redo,
- *  Jump, Start fresh): answered Resume, and never the boundary this test stops
- *  at. */
-function isResumeMenu(menu: CapturedAskUserQuestion): boolean {
-  return menu.questions.some((question) => {
-    const labels = question.options.map((option) => option.label);
-    return labels.some((label) => /^resume\b/i.test(label)) && labels.some((label) => /\bfresh\b/i.test(label));
-  });
-}
 
 /** Every markdown path under <proj>/aidlc, relative to proj (posix slashes),
  *  excluding the copied .claude/ distributable. Used to scan WHERE the RE
@@ -136,7 +129,7 @@ describe("t183 codekb placement re-verify (sdk) — RE artifacts land at the eng
       // Captured at the first post-artifact human boundary. The 9 artifacts are
       // on disk by then, before any advance/cleanup.
       let capturedMarkdown: string[] | null = null;
-      let gateCount = 0;
+      let boxesLeftOpen = 0;
       let passed = false;
       try {
         sedReplaceInFile(
@@ -148,24 +141,23 @@ describe("t183 codekb placement re-verify (sdk) — RE artifacts land at the eng
 
         const r = await driveAidlc("/aidlc", {
           projectDir: proj,
-          // Answer a resume menu with Resume, then the first post-artifact
-          // menu. The 9 artifacts have landed by then.
-          answerScript: {
-            kind: "byHeader",
-            map: {},
-            // Resume on the resume menu; any other menu takes its first choice.
-            fallback: { labelContains: "Resume" },
-          },
+          // Resume on the resume menu; every other box is left open.
+          answerScript: { kind: "byHeader", map: {}, fallback: { labelContains: "Resume" } },
           timeoutMs: remainingOperationTimeoutMs(LIVE_WORK_TIMEOUT_MS, {
             deadlineMs, reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS), phase: "integration SDK drive",
           }),
-          stopAfterAskUserQuestionWhen: (menu) => !isResumeMenu(menu),
+          chatAboutQuestionWhen: (menu) => {
+            if (!leavesOpen(menu)) return false;
+            boxesLeftOpen++;
+            return true;
+          },
+          // Stop at the first box left open, once its unanswered result is back.
+          stopWhen: (results) => {
+            const last = results.at(-1);
+            return boxesLeftOpen > 0 && last?.toolName === "AskUserQuestion" && last.isError;
+          },
           onAskUserQuestion: (menu) => {
-            if (isResumeMenu(menu)) return;
-            gateCount++;
-            if (gateCount >= 1 && capturedMarkdown === null) {
-              capturedMarkdown = allAidlcMarkdown(proj);
-            }
+            if (leavesOpen(menu)) capturedMarkdown ??= allAidlcMarkdown(proj);
           },
         });
 
@@ -174,7 +166,7 @@ describe("t183 codekb placement re-verify (sdk) — RE artifacts land at the eng
         // establish that the native question was delivered.
         console.log(`t183 post-run evidence: ${JSON.stringify({
           timedOut: r.timedOut,
-          stoppedAfterAskUserQuestion: r.stoppedAfterAskUserQuestion,
+          stoppedAtOpenBox: r.stoppedWhen === true,
           stoppedAfterToolResult: r.stoppedAfterToolResult,
           askedQuestions: r.askedQuestions.slice(0, 4),
           result: r.resultEvent && {
@@ -197,30 +189,14 @@ describe("t183 codekb placement re-verify (sdk) — RE artifacts land at the eng
         // completed.
         expect(r.timedOut).toBe(false);
         expect(r.stoppedAfterToolResult).toBe(false);
-        // RE must reach its post-artifact human wait (no vacuous pass). The
-        // engine's record decides that, not how the model rendered the
-        // question: the SDK stopped at the structured question, or the turn
-        // ended on a question the engine logged after the stage's final
-        // pipeline link and nobody answered. Menu rendering is not what this
-        // placement test checks.
-        const events = r.auditEvents ?? [];
-        const lastLink = events.lastIndexOf("PIPELINE_LINK_COMPLETED");
-        const lastDecision = events.lastIndexOf("DECISION_RECORDED");
-        const waitingOnLoggedQuestion = r.resultEvent?.subtype === "success" && lastLink !== -1 &&
-          lastDecision > lastLink && !events.slice(lastDecision).includes("QUESTION_ANSWERED");
-        expect(
-          r.stoppedAfterAskUserQuestion || waitingOnLoggedQuestion,
-          `RE never reached its post-artifact human wait: ${JSON.stringify(events.slice(-12))}`,
-        ).toBe(true);
-        // That wait belongs to RE: nothing was approved and the engine still
-        // holds RE when the drive stops. Under the test profile, a conductor
-        // that reports RE complete without asking gets it approved with nobody
-        // asked, and the next stage's first question would satisfy the check
-        // above.
-        expect(events, `RE was approved with nobody asked: ${JSON.stringify(events.slice(-12))}`)
-          .not.toContain("GATE_APPROVED");
-        expect(r.stateFile ?? "", "the drive left no state file to read")
-          .toContain("- **Current Stage**: reverse-engineering");
+        // RE must reach its post-artifact human wait (no vacuous pass), and the
+        // wait is RE's: nothing approved, the engine still holds RE.
+        expect(postArtifactWaitProblems({
+          events: r.auditEvents ?? [],
+          stoppedAtOpenBox: r.stoppedWhen === true,
+          resultSubtype: r.resultEvent?.subtype,
+          stateFile: r.stateFile,
+        })).toEqual([]);
 
         // Defensive fallback for a missing callback snapshot. The native
         // question assertions still apply independently of this file scan.

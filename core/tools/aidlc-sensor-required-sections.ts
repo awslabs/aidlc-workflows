@@ -1,6 +1,8 @@
 import { existsSync, readFileSync } from "node:fs";
-import { basename, join } from "node:path";
-import { errorMessage, parseBoltDag } from "./aidlc-lib.ts";
+import { basename, join, relative, sep } from "node:path";
+import { artifactFilename, headingKey } from "./aidlc-artifact-vocabulary.ts";
+import { asksForHelp, errorMessage, parseBoltDag, printUsageAndExit, unitsBlockRepair } from "./aidlc-lib.ts";
+import { sensorFireUsage } from "./aidlc-runtime-paths.ts";
 
 interface Result {
 	pass: boolean;
@@ -19,8 +21,7 @@ interface Result {
 	// "ineligible" when a template file resolves but the artifact is NOT in the
 	// dispatcher-threaded eligible set (a questions/timestamp marker), so the
 	// template is ignored and a config warning is emitted instead. Absent when
-	// no template resolves — the output keeps the generic ≥2-H2 floor (a
-	// timestamp marker passes instead).
+	// no template resolves: then no heading is required.
 	template?: "applied" | "ineligible";
 	// The template's expected `##` heading set (only when template === "applied").
 	template_expected?: string[];
@@ -31,6 +32,9 @@ interface Result {
 	// stage does not declare template-eligible (the stem==artifact key is
 	// unsound for questions/timestamp markers). Surfaced, not fatal.
 	config_warning?: string;
+	// Why the output fails, in plain words, for the detail file the agent
+	// corrects from. Only on a failure, so a pass keeps its shape.
+	message?: string;
 }
 
 interface Flags {
@@ -44,17 +48,30 @@ interface Flags {
 	// Absolute path to the FRAMEWORK-DEFAULT templates dir
 	// (<harness>/tools/data/templates/) — the engine-shipped MIDDLE tier,
 	// consulted only when the team dir misses. Threaded by the dispatcher.
-	// Absent or a clean miss → fall through to the generic ≥2-H2 floor (or a
-	// timestamp marker's pass). The
+	// Absent or a clean miss: no template, so no heading is required. The
 	// framework ships zero defaults, so this normally misses.
 	frameworkTemplatesDir?: string;
-	// Comma-joined set of artifact NAMES (output-filename stems) this stage
-	// declares template-eligible — the `produces` entries that are NOT
-	// questions/timestamp markers. Threaded from the dispatcher, which holds the
-	// stageNode (the per-sensor script has no graph access). A resolved template
-	// applies ONLY when basename(outputPath) stem ∈ this set; otherwise it is
-	// ignored + a config warning emitted. Absent/empty → no artifact is eligible.
+	// Comma-joined set of artifact NAMES this stage declares template-eligible:
+	// the `produces` entries that are NOT questions/timestamp markers. Threaded
+	// from the dispatcher, which holds the stageNode (the per-sensor script has
+	// no graph access). A resolved template applies ONLY when the output file is
+	// one of these artifacts' files (artifactFilename: Build and Test's
+	// build-test-results writes test-results.md); otherwise it is ignored and a
+	// config warning emitted. Absent/empty: no artifact is eligible.
 	templateEligible?: string[];
+	// `--paths-stdin json`: the paths to evaluate arrive on stdin (evaluatePathSet).
+	pathsStdin?: boolean;
+}
+
+// One result for a set of paths: the failing files' own results, each naming
+// its file (relative to the project), and the count evaluated.
+interface PathSetResult {
+	pass: boolean;
+	findings_count: number;
+	files_evaluated: number;
+	failed_outputs: string[];
+	files: Array<Result & { file: string }>;
+	message?: string;
 }
 
 function parseFlags(argv: string[]): Flags {
@@ -74,6 +91,8 @@ function parseFlags(argv: string[]): Flags {
 				.split(",")
 				.map((s) => s.trim())
 				.filter((s) => s.length > 0);
+		} else if (arg === "--paths-stdin") {
+			out.pathsStdin = argv[++i] === "json";
 		}
 	}
 	return out;
@@ -98,8 +117,8 @@ function parseH2Headings(body: string): string[] {
 // Resolve the template file for an artifact stem in §10 override-before-default
 // order: team dir first, then the framework-default dir; the FIRST existing
 // `<stem>.md` wins. Returns its absolute path, or null when neither tier has one
-// (→ the generic ≥2-H2 floor). A dir flag that is absent or whose `<stem>.md`
-// is missing is simply skipped — graceful fall-through, no error.
+// (no heading is required). A dir flag that is absent or whose `<stem>.md`
+// is missing is simply skipped: graceful fall-through, no error.
 function resolveTemplatePath(stem: string, flags: Flags): string | null {
 	for (const dir of [flags.templatesDir, flags.frameworkTemplatesDir]) {
 		if (!dir) continue;
@@ -109,42 +128,93 @@ function resolveTemplatePath(stem: string, flags: Flags): string | null {
 	return null;
 }
 
+// What a template asks for that the output lacks, as one sentence in the
+// template's order.
+function templateMissSentence(file: string, missing: string[]): string {
+	const named = missing.map((h) => `\`${h}\``);
+	return missing.length === 1
+		? `${file} is missing the ${named[0]} section its template asks for.`
+		: `${file} is missing ${missing.length} sections its template asks for: ${named.join(", ")}.`;
+}
+
 function fail(msg: string): never {
 	process.stderr.write(`aidlc-sensor-required-sections: ${msg}\n`);
 	process.exit(1);
 }
 
 export function main(argv: string[]): void {
+	if (asksForHelp(argv)) printUsageAndExit(`Usage: ${sensorFireUsage("required-sections")}`);
 	const flags = parseFlags(argv);
+	if (flags.pathsStdin) {
+		evaluatePathSet(flags);
+		process.exit(0);
+	}
 
 	if (!flags.outputPath) {
 		fail("--output-path is required");
 	}
-	if (!existsSync(flags.outputPath)) {
-		fail(`--output-path not found: ${flags.outputPath}`);
+	process.stdout.write(`${JSON.stringify(evaluate(flags.outputPath, flags))}\n`);
+	process.exit(0);
+}
+
+// The gate at a codekb stage hands every repository's files on stdin, a JSON
+// list (PATH_SET_SENSOR_IDS, aidlc-graph.ts): each is evaluated exactly as a
+// file given alone, and one result reports them, with each failing file's own
+// result whole so every finding still names its file.
+function evaluatePathSet(flags: Flags): void {
+	let paths: unknown;
+	try {
+		paths = JSON.parse(readFileSync(0, "utf-8"));
+	} catch (err) {
+		fail(`--paths-stdin expects a JSON list of paths on stdin: ${errorMessage(err)}`);
+	}
+	if (!Array.isArray(paths) || paths.length === 0 || !paths.every((p) => typeof p === "string" && p !== "")) {
+		fail("--paths-stdin expects a non-empty JSON list of paths on stdin");
+	}
+	const failing: Array<Result & { file: string }> = [];
+	let findings = 0;
+	for (const path of paths as string[]) {
+		const file = relative(process.cwd(), path).split(sep).join("/");
+		const one = evaluate(path, flags, file);
+		findings += one.findings_count;
+		if (!one.pass) failing.push({ file, ...one });
+	}
+	const result: PathSetResult = {
+		pass: failing.length === 0,
+		findings_count: findings,
+		files_evaluated: paths.length,
+		failed_outputs: failing.map((f) => f.file),
+		files: failing,
+	};
+	if (failing.length > 0) result.message = failing.map((f) => f.message).filter(Boolean).join(" ");
+	process.stdout.write(`${JSON.stringify(result)}\n`);
+}
+
+// `named` is how a finding names the file: its basename alone, or its path in a set.
+function evaluate(outputPath: string, flags: Flags, named = basename(outputPath)): Result {
+	if (!existsSync(outputPath)) {
+		fail(`--output-path not found: ${outputPath}`);
 	}
 
 	// This sensor validates Markdown document shape. Its broad record-tree
 	// manifest glob also matches structured stage artifacts such as
 	// traceability.json, so non-Markdown outputs quiet-pass before any read,
 	// heading, template, or filename-specific logic.
-	if (!flags.outputPath.toLowerCase().endsWith(".md")) {
-		const result: Result = {
+	if (!outputPath.toLowerCase().endsWith(".md")) {
+		return {
 			pass: true,
 			h2_count: 0,
 			headings: [],
 			findings_count: 0,
 		};
-		process.stdout.write(`${JSON.stringify(result)}\n`);
-		return;
 	}
 
 	let body: string;
 	try {
-		body = readFileSync(flags.outputPath, "utf-8");
+		body = readFileSync(outputPath, "utf-8");
 	} catch (err) {
 		fail(
-			`failed to read --output-path ${flags.outputPath}: ${errorMessage(err)}`,
+			`failed to read --output-path ${outputPath}: ${errorMessage(err)}`,
 		);
 	}
 
@@ -153,62 +223,53 @@ export function main(argv: string[]): void {
 	// (two hashes + space); `### Foo`.startsWith("## ") is false because
 	// char[2] is '#', not ' ', so deeper headings are excluded.
 	const headings = parseH2Headings(body);
+	const file = basename(outputPath);
+	const stem = file.replace(/\.md$/, "");
 
-	// Timestamp markers (`<artifact>-timestamp.md`) are run records, not
-	// documents: practices-discovery specifies a single `Discovered: ...` line,
-	// so the floor would fail every to-spec file. They pass, with their headings
-	// still reported. Questions markers keep the floor: each question is its own
-	// `##` section, so real question files clear it. The `-timestamp` suffix is
-	// the marker convention templateEligibleArtifacts (aidlc-graph.ts) keys on.
-	const stem = basename(flags.outputPath).replace(/\.md$/, "");
-	const timestampMarker = stem.endsWith("-timestamp");
-
-	const h2_count = headings.length;
-	let pass = timestampMarker || h2_count >= 2;
-	// Emitted by the script (not the dispatcher) per the control-
-	// plane / data-plane separation: per-sensor scripts own their own
+	// With no template, no heading is required: the stage's prose shapes the
+	// file (stage-protocol.md, Template overrides), and most stages give their
+	// outputs no `##` headings, so a heading count would fail files written to
+	// spec (#2721). The headings are still reported.
+	// findings_count is emitted by the script (not the dispatcher) per the
+	// control-plane / data-plane separation: per-sensor scripts own their own
 	// findings derivation; the dispatcher reads out.findings_count
 	// generically and is sensor-id-agnostic.
-	let findings_count = timestampMarker ? 0 : Math.max(0, 2 - h2_count);
-	const result: Result = { pass, h2_count, headings, findings_count };
+	let pass = true;
+	let findings_count = 0;
+	const reasons: string[] = [];
+	const result: Result = { pass, h2_count: headings.length, headings, findings_count };
 
-	// Template-override branch (TPL — template-override layer). When a
-	// team/framework template resolves for this output, its `##` heading set
-	// REPLACES the generic ≥2-H2 floor: pass iff every template heading is
-	// present in the output (expected ⊆ output); the missing ones are precise
-	// findings. Whole-doc, no merge. No LLM — byte-reproducible.
+	// Template-override branch (TPL, the template-override layer). When a
+	// team/framework template resolves for this output, its `##` heading set is
+	// required: pass iff every template heading is present in the output; the
+	// missing ones are precise findings. Whole-doc, no merge. No LLM, byte-reproducible.
 	//
 	// Resolution, override-before-default, FIRST hit wins:
 	//   1. team template      <templates-dir>/<stem>.md             (--templates-dir)
 	//   2. framework default   <framework-templates-dir>/<stem>.md  (--framework-templates-dir)
-	//   3. else                the generic ≥2-H2 floor              (no template)
+	//   3. else                no heading required                  (no template)
 	// The template key IS the output filename stem: the artifact name, unless
 	// artifactFilename (aidlc-artifact-vocabulary.ts) gives that name another file.
-	// The framework ships zero defaults, so tier 2 normally misses and everything
-	// hits the floor; the branch exists so a default <stem>.md can be dropped in
-	// without touching resolution. The agent reads the SAME order
-	// (stage-protocol.md) - no drift.
+	// The framework ships zero defaults, so tier 2 normally misses; the branch
+	// exists so a default <stem>.md can be dropped in without touching
+	// resolution. The agent reads the SAME order (stage-protocol.md) - no drift.
 	//
 	// ELIGIBILITY GATE (required, not optional): the stem==artifact key is
 	// unsound for questions/timestamp markers (a `*-questions.md` file's
 	// sections are the questions asked this run, not a fixed shape a template
 	// could describe). The per-sensor script cannot know the stage's
 	// artifact set, so the dispatcher threads --template-eligible. A resolved
-	// template applies ONLY when the stem ∈ that set; otherwise it is ignored
-	// and an advisory config warning is emitted (a questions marker keeps its
-	// floor; a timestamp marker still passes).
+	// template applies ONLY when the output file is one of those artifacts'
+	// files; otherwise it is ignored and an advisory config warning is emitted.
 	const templatePath = resolveTemplatePath(stem, flags);
 	if (templatePath) {
-		const eligible = (flags.templateEligible ?? []).includes(stem);
+		const eligible = (flags.templateEligible ?? []).some((name) => artifactFilename(name) === file);
 		if (!eligible) {
 			result.template = "ineligible";
 			result.config_warning =
 				`template ${stem}.md resolved but artifact "${stem}" is not ` +
-				`template-eligible for stage "${flags.stage ?? "?"}" ` +
-				`(questions/timestamp markers are excluded); template ignored, ` +
-				(timestampMarker
-					? `and timestamp markers are not shape-checked.`
-					: `keeping the generic >=2-H2 floor.`);
+				`template-eligible for stage "${flags.stage ?? "?"}"; template ignored: ` +
+				`questions and timestamp markers are not shape-checked.`;
 		} else {
 			let templateBody: string;
 			try {
@@ -218,14 +279,21 @@ export function main(argv: string[]): void {
 					`failed to read template ${templatePath}: ${errorMessage(err)}`,
 				);
 			}
+			// A leading emoji is decoration, so `## 📌 Overview` is the
+			// template's `## Overview`; a missing one is reported as the
+			// template spells it.
+			const sectionKey = (h: string) => headingKey(h.slice(3));
 			const expected = parseH2Headings(templateBody);
-			const present = new Set(headings);
-			const missing = expected.filter((h) => !present.has(h));
-			pass = missing.length === 0;
+			const present = new Set(headings.map(sectionKey));
+			const missing = expected.filter((h) => !present.has(sectionKey(h)));
 			findings_count = missing.length;
 			result.template = "applied";
 			result.template_expected = expected;
 			result.template_missing = missing;
+			if (missing.length > 0) {
+				pass = false;
+				reasons.push(templateMissSentence(named, missing));
+			}
 		}
 	}
 
@@ -234,22 +302,22 @@ export function main(argv: string[]): void {
 	// A malformed or cyclic block fails loud here, at the gate, rather than the
 	// runtime compiler silently mis-reading or omitting it downstream. Every
 	// other markdown artefact keeps the verdict above untouched. (Orthogonal
-	// to the template branch above — the edge-block check still applies even if a
+	// to the template branch above: the edge-block check still applies even if a
 	// template for unit-of-work-dependency resolves.)
-	if (basename(flags.outputPath) === "unit-of-work-dependency.md") {
+	if (file === "unit-of-work-dependency.md") {
 		const parsed = parseBoltDag(body);
-		const edge_block = parsed.ok ? "ok" : parsed.reason;
-		result.edge_block = edge_block;
-		if (edge_block !== "ok") {
+		result.edge_block = parsed.ok ? "ok" : parsed.reason;
+		if (!parsed.ok) {
 			pass = false;
 			findings_count += 1;
+			reasons.push(unitsBlockRepair(parsed.reason, parsed.detail));
 		}
 	}
 
 	result.pass = pass;
 	result.findings_count = findings_count;
-	process.stdout.write(`${JSON.stringify(result)}\n`);
-	process.exit(0);
+	if (reasons.length > 0) result.message = reasons.join(" ");
+	return result;
 }
 
 if (import.meta.main) main(process.argv.slice(2));

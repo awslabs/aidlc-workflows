@@ -2558,8 +2558,8 @@ function buildTarget(target: TargetConfig): TargetResult {
       "pathless-next-env-scope",
       ["engine", "orchestrate", "next"],
       { AWS_AIDLC_DEFAULT_SCOPE: "feature" },
-      "error",
-      "No workflow state found",
+      "print",
+      "Nothing is in progress here yet",
     ));
     result.gates.push(pathlessOrchestrateGate(
       actual.artifact,

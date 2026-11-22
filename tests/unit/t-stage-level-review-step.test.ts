@@ -15,6 +15,11 @@ import {
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { codeGenerationRecordDir } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 
+// The stage's checks run once before its review or gate, and again at the gate
+// (completionChecksStep, t-checks-before-review); this file's fixture documents
+// are not written for them and its subject is not them, so they stay off here.
+process.env.AIDLC_DISABLE_SENSORS = "1";
+
 setDefaultTimeout(600_000);
 resetAidlcEnv();
 const projects: string[] = [];
@@ -148,12 +153,13 @@ describe("stage-level review step: next names the step the review log accepts", 
   });
 });
 
-// Per Unit, units-generation planned, and no Unit DAG yet: the stage-level route.
+// Per Unit, Units Generation done, and no Unit DAG on disk: the stage-level route.
 function noDagFixture(extra: string): string {
   const p = createOrchestrationTestProject();
   projects.push(p);
   const state = readFileSync(join(FIXTURES_DIR, "state-brownfield-feature.md"), "utf-8")
     .replace(/^- \*\*Current Stage\*\*:.*$/m, "- **Current Stage**: code-generation")
+    .replace("- [ ] units-generation", "- [x] units-generation")
     .replace("- **Change Control**: strict (from scope feature)", `- **Change Control**: strict (from scope feature)\n- **Review Override**: adversarial${extra}`);
   writeFileSync(seededStateFile(p), state, "utf-8");
   const dir = codeGenerationRecordDir(p, null);
@@ -350,7 +356,7 @@ describe("nextReviewStepFor: the table", () => {
     const attempt = { pendingReview: { iteration: 1, retryable: false, verdictRecordable: true, recordVerdict: "VERD" } };
     const on = nextReviewStepFor({ attempt: { ...base, ...attempt }, subject: "S" });
     const off = nextReviewStepFor({ attempt: { ...base, ...attempt }, fallback: false, subject: "S" });
-    expect(on?.text).toContain("NOT-READY without one");
+    expect(on?.text).toContain("still wrote no whole review, record NOT-READY;");
     expect(off?.text).toContain("VERD");
     expect(off?.text).not.toContain("NOT-READY");
     expect(off?.personFirst).toBeUndefined();

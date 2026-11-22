@@ -1,6 +1,6 @@
 // covers: subcommand:aidlc-utility:doctor (Kiro IDE ignore sources)
 //
-// Issue #1146: Kiro IDE evaluates ignore files independently, so a project
+// Issue #1146: Kiro (the IDE and Kiro CLI v3) evaluates ignore files independently, so a project
 // negation cannot rescue framework reads denied by a global ignore rule.
 
 import { describe, expect, test, afterEach } from "bun:test";
@@ -50,8 +50,8 @@ function setupProject(): { home: string; project: string; globalFile: string; en
 // through fs_read (protocols, the files beside a skill, both stages in the
 // compiled graph, and their inline persona and knowledge), plus files the agent
 // does not read that way: tools, sensors, hooks, scopes, steering, and settings,
-// and the files the IDE or the engine loads itself (SKILL.md, the IDE conductor
-// agent, and aidlc-common/conductor.md).
+// and the files Kiro or the engine loads itself (SKILL.md, the conductor agent,
+// and aidlc-common/conductor.md).
 const READS = [
   "agents/aidlc-architect-agent.md",
   "skills/aidlc/question-rendering.md",
@@ -123,7 +123,7 @@ function expectWholeInVsCode(row: { label: string; fix?: string }): void {
   }
 }
 const hides = (at: string, count: string, folder: string): string =>
-  `Kiro IDE ignore sources: ${at} hides ${count} framework files (${folder}) - the IDE's fs_read guard denies those framework reads`;
+  `Kiro ignore sources: ${at} hides ${count} framework files (${folder}) - Kiro's fs_read guard (Kiro IDE and Kiro CLI v3) denies those framework reads`;
 
 // A PATH whose git exits with `code` when invoked with `subcommand` and runs the
 // real git otherwise. POSIX shell only, so its tests skip on Windows.
@@ -150,7 +150,10 @@ describe("t340 Kiro IDE ignore sources doctor", () => {
     const failures = rows.filter((row) => !row.pass);
     expect(failures).toHaveLength(1);
     expect(failures[0].severity).toBeUndefined();
-    expect(failures[0].label).toContain(`${XDG_IGNORE}:1 hides .kiro/`);
+    expect(failures[0].label).toBe(
+      `Kiro ignore sources: ${XDG_IGNORE}:1 hides .kiro/ - Kiro's fs_read guard (Kiro IDE and Kiro CLI v3) denies every stage, agent, and protocol read`,
+    );
+    expect(failures[0].fix).toContain("; Kiro evaluates each ignore file on its own,");
     expect(failures[0].fix).toContain("permissions.yaml");
     expect(failures[0].fix).toContain(".git/info/exclude");
     expect(failures.some((row) => row.label.includes(".gitignore:"))).toBe(false);
@@ -178,7 +181,7 @@ describe("t340 Kiro IDE ignore sources doctor", () => {
     expect(rows[0].label).toMatch(/none hide \.kiro\//);
   });
 
-  test("the doctor row is emitted only for the Kiro IDE conductor surface", () => {
+  test("the doctor row is emitted only for the Markdown conductor surface (Kiro IDE and Kiro CLI v3)", () => {
     const { project, globalFile, env } = setupProject();
     writeFileSync(globalFile, ".kiro/\n");
     mkdirSync(join(project, ".kiro", "agents"), { recursive: true });
@@ -194,14 +197,14 @@ describe("t340 Kiro IDE ignore sources doctor", () => {
 
     const cli = run();
     expect(cli).toContain("ok    agents/aidlc.json or agents/aidlc-aidlc.md present (conductor wiring)");
-    expect(cli).not.toContain("Kiro IDE ignore sources:");
+    expect(cli).not.toContain("Kiro ignore sources:");
 
     writeFileSync(join(project, ".kiro", "agents", "aidlc-aidlc.md"), "# AI-DLC conductor\n");
     const ide = run();
-    expect(ide).toContain(`fail  Kiro IDE ignore sources: ${XDG_IGNORE}:1 hides .kiro/`);
+    expect(ide).toContain(`fail  Kiro ignore sources: ${XDG_IGNORE}:1 hides .kiro/`);
   });
 
-  test("global rules fail while workspace rules warn about the IDE setting", () => {
+  test("global rules fail while a .gitignore rule warns it applies on Kiro IDE only", () => {
     const { project, globalFile, env } = setupProject();
     const workspaceFile = join(project, ".gitignore");
     writeFileSync(globalFile, ".kiro/\n");
@@ -214,7 +217,22 @@ describe("t340 Kiro IDE ignore sources doctor", () => {
     expect(failures[0].label).toContain(`${XDG_IGNORE}:1 hides .kiro/`);
     expect(warnings).toHaveLength(1);
     expect(warnings[0].label).toContain(".gitignore:1 hides .kiro/");
-    expect(warnings[0].label).toContain("kiroAgent.agentIgnoreFiles names .gitignore");
+    expect(warnings[0].label).toBe(
+      "Kiro ignore sources: .gitignore:1 hides .kiro/ (advisory - applies when Kiro IDE's kiroAgent.agentIgnoreFiles names .gitignore, as the default does; Kiro CLI v3 does not apply it)",
+    );
+  });
+
+  test("a .kiroignore rule warns that Kiro CLI v3 applies it with no setting", () => {
+    const { project, env } = setupProject();
+    writeFileSync(join(project, ".kiroignore"), ".kiro/\n");
+
+    const rows = kiroIdeIgnoreSourceChecks(project, ".kiro", env);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].severity).toBe("warn");
+    expect(rows[0].label).toBe(
+      "Kiro ignore sources: .kiroignore:1 hides .kiro/ (advisory - Kiro CLI v3 applies .kiroignore; Kiro IDE applies it when kiroAgent.agentIgnoreFiles names it)",
+    );
+    expectWholeInVsCode(rows[0]);
   });
 
   test("repository pattern text never reaches the label or fix", () => {
@@ -327,8 +345,8 @@ describe("t340 Kiro IDE ignore sources doctor", () => {
     const rows = kiroIdeIgnoreSourceChecks(project, ".kiro", { ...env, PATH: `${bin}${delimiter}${env.PATH ?? ""}` });
     // Every git call fails: config for the global file, init for the rest.
     expect(rows.map((row) => row.label)).toEqual([
-      `Kiro IDE ignore sources: ${GLOBAL_ID} not evaluated - git config exit 3`,
-      "Kiro IDE ignore sources: .gitignore not evaluated - git init exit 3",
+      `Kiro ignore sources: ${GLOBAL_ID} not evaluated - git config exit 3`,
+      "Kiro ignore sources: .gitignore not evaluated - git init exit 3",
     ]);
     expect(rows[0].fix).toContain("run `git status` in the project");
     expect(rows[1].fix).toContain("check that file by hand");
@@ -350,7 +368,7 @@ describe("t340 Kiro IDE ignore sources doctor", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0].pass).toBe(false);
     expect(rows[0].severity).toBe("warn");
-    expect(rows[0].label).toBe(`Kiro IDE ignore sources: ${GLOBAL_ID} not evaluated - git is not available`);
+    expect(rows[0].label).toBe(`Kiro ignore sources: ${GLOBAL_ID} not evaluated - git is not available`);
     expect(rows[0].fix).toContain("put `git` on PATH and run doctor again");
     expectWholeInVsCode(rows[0]);
     // Every scope a normal core.excludesFile lookup reads, named without values.
@@ -381,7 +399,7 @@ describe("t340 Kiro IDE ignore sources doctor", () => {
     const outside = { ...env, GIT_CEILING_DIRECTORIES: tmpdir() };
     for (const runEnv of [outside, { ...outside, PATH: noGit }]) {
       const rows = kiroIdeIgnoreSourceChecks(project, ".kiro", runEnv);
-      expect(rows).toEqual([{ pass: true, label: "Kiro IDE ignore sources: none present" }]);
+      expect(rows).toEqual([{ pass: true, label: "Kiro ignore sources: none present" }]);
     }
   });
 
@@ -394,7 +412,7 @@ describe("t340 Kiro IDE ignore sources doctor", () => {
     writeFileSync(env.GIT_CONFIG_GLOBAL as string, `[init]\n\ttemplateDir = ${template}\n`);
 
     const rows = kiroIdeIgnoreSourceChecks(project, ".kiro", env);
-    expect(rows).toEqual([{ pass: true, label: "Kiro IDE ignore sources: none hide .kiro/ (1 file(s) checked)" }]);
+    expect(rows).toEqual([{ pass: true, label: "Kiro ignore sources: none hide .kiro/ (1 file(s) checked)" }]);
   });
 
   test.skipIf(process.platform === "win32")("a repository git refuses (rev-parse exit 128) warns instead of reading as outside git", () => {
@@ -405,7 +423,7 @@ describe("t340 Kiro IDE ignore sources doctor", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0].pass).toBe(false);
     expect(rows[0].severity).toBe("warn");
-    expect(rows[0].label).toBe(`Kiro IDE ignore sources: ${GLOBAL_ID} not evaluated - git rev-parse exit 128`);
+    expect(rows[0].label).toBe(`Kiro ignore sources: ${GLOBAL_ID} not evaluated - git rev-parse exit 128`);
     // A refusal needs a way past the refusal, not "put git on PATH".
     expect(rows[0].fix).toContain("run `git status` in the project");
     expect(rows[0].fix).toContain("`git config --global --add safe.directory` command git prints");
@@ -433,7 +451,7 @@ describe("t340 Kiro IDE ignore sources doctor", () => {
     });
     expect(rows).toHaveLength(1);
     expect(rows[0].severity).toBe("warn");
-    expect(rows[0].label).toBe(`Kiro IDE ignore sources: ${GLOBAL_ID} not evaluated - git rev-parse exit 128`);
+    expect(rows[0].label).toBe(`Kiro ignore sources: ${GLOBAL_ID} not evaluated - git rev-parse exit 128`);
   });
 
   test("ambient GIT_DIR and GIT_WORK_TREE do not redirect the repository probe", () => {
@@ -460,7 +478,7 @@ describe("t340 Kiro IDE ignore sources doctor", () => {
     expect(rows[0].severity).toBeUndefined();
     // No installed tree here, so one read of each kind stands in.
     expect(rows[0].label).toBe(
-      `Kiro IDE ignore sources: ${XDG_IGNORE}:2,3 hides 2 of 5 framework files (.kiro/agents/, .kiro/skills/) - the IDE's fs_read guard denies those framework reads`,
+      `Kiro ignore sources: ${XDG_IGNORE}:2,3 hides 2 of 5 framework files (.kiro/agents/, .kiro/skills/) - Kiro's fs_read guard (Kiro IDE and Kiro CLI v3) denies those framework reads`,
     );
     expect(rows[0].fix).toContain(`remove or narrow the rules at ${XDG_IGNORE}:2,3;`);
   });
@@ -478,7 +496,7 @@ describe("t340 Kiro IDE ignore sources doctor", () => {
     writeFileSync(join(linked, ".git"), "gitdir: /elsewhere/.git/worktrees/linked\n");
 
     const [row] = kiroIdeIgnoreSourceChecks(linked, ".kiro", plain);
-    expect(row.label).toBe(`Kiro IDE ignore sources: ${GLOBAL_ID} not evaluated - git is not available`);
+    expect(row.label).toBe(`Kiro ignore sources: ${GLOBAL_ID} not evaluated - git is not available`);
     expect(row.fix).toContain("the git directory the project's .git file names on its gitdir: line");
     expect(row.fix).toContain("commondir");
     expect(row.fix).not.toContain("the project's .git/config (and");
@@ -521,14 +539,14 @@ describe("t340 Kiro IDE ignore sources doctor", () => {
     installFramework(project);
     for (const rule of [
       ".kiro/tools/", ".kiro/sensors/", ".kiro/hooks/", ".kiro/scopes/", ".kiro/steering/", ".kiro/settings/",
-      // Loaded by the IDE or baked into directives by the engine.
+      // Loaded by Kiro itself or baked into directives by the engine.
       ".kiro/agents/aidlc-aidlc.md", "SKILL.md", ".kiro/aidlc-common/conductor.md",
       // Contributor documentation the skills never load (#1402 F5).
       ".kiro/aidlc-common/protocols/stage-definition.md",
     ]) {
       writeFileSync(globalFile, `${rule}\n`);
       expect(kiroIdeIgnoreSourceChecks(project, ".kiro", env)).toEqual([
-        { pass: true, label: "Kiro IDE ignore sources: none hide .kiro/ (1 file(s) checked)" },
+        { pass: true, label: "Kiro ignore sources: none hide .kiro/ (1 file(s) checked)" },
       ]);
     }
   });
@@ -546,7 +564,7 @@ describe("t340 Kiro IDE ignore sources doctor", () => {
 
     const rows = kiroIdeIgnoreSourceChecks(project, ".kiro", env);
     expect(rows).toHaveLength(1);
-    // Only the protocol and the stage are fs_read reads; SKILL.md and the IDE
+    // Only the protocol and the stage are fs_read reads; SKILL.md and the
     // conductor agent are not.
     expect(rows[0].label).toContain("hides 2 of 8 framework files (.kiro/aidlc-common/)");
     expect(rows[0].label).not.toContain("hides .kiro/ ");
@@ -609,7 +627,7 @@ describe("t340 Kiro IDE ignore sources doctor", () => {
     ]) {
       writeFileSync(globalFile, `${rule}\n`);
       expect(kiroIdeIgnoreSourceChecks(project, ".kiro", env)).toEqual([
-        { pass: true, label: "Kiro IDE ignore sources: none hide .kiro/ (1 file(s) checked)" },
+        { pass: true, label: "Kiro ignore sources: none hide .kiro/ (1 file(s) checked)" },
       ]);
     }
     writeFileSync(globalFile, ".kiro/knowledge/aidlc-architect-agent/test-pro-extra.md\n");
@@ -660,8 +678,10 @@ describe("t340 Kiro IDE ignore sources doctor", () => {
     expect(existsSync(join(project, ".kiro", "tools", "data", "plugin-compose-test-pro.json"))).toBe(true);
     expect(existsSync(join(project, ".kiro", "tools", "data", "plugin-owned-test-pro.json"))).toBe(true);
 
+    // The lead reads the plugin's persona from its copy without Kiro's
+    // dispatch lines, as it reads the core personas.
     const cases: [rule: string, folder: string][] = [
-      [".kiro/agents/test-pro-*", ".kiro/agents/"],
+      [".kiro/aidlc-common/personas/test-pro-*", ".kiro/aidlc-common/"],
       [".kiro/knowledge/test-pro-metrics-agent/", ".kiro/knowledge/"],
     ];
     for (const [rule, folder] of cases) {
@@ -706,7 +726,7 @@ describe("t340 Kiro IDE ignore sources doctor", () => {
 
     writeFileSync(globalFile, ".kiro/knowledge/aidlc-architect-agent/zz-bulk-159.md\n");
     expect(kiroIdeIgnoreSourceChecks(project, ".kiro", env)).toEqual([
-      { pass: true, label: "Kiro IDE ignore sources: none hide .kiro/ (1 file(s) checked)" },
+      { pass: true, label: "Kiro ignore sources: none hide .kiro/ (1 file(s) checked)" },
     ]);
     writeFileSync(globalFile, ".kiro/knowledge/aidlc-architect-agent/zz-bulk-000.md\n");
     const [row] = kiroIdeIgnoreSourceChecks(project, ".kiro", env);
@@ -779,7 +799,7 @@ describe("t340 Kiro IDE ignore sources doctor", () => {
     created.push(outside);
     symlinkSync(fifo, join(outside, ".git"));
     expect(kiroIdeIgnoreSourceChecks(outside, ".kiro", { ...env, GIT_CEILING_DIRECTORIES: tmpdir() })).toEqual([
-      { pass: true, label: "Kiro IDE ignore sources: none present" },
+      { pass: true, label: "Kiro ignore sources: none present" },
     ]);
   });
 
@@ -791,7 +811,7 @@ describe("t340 Kiro IDE ignore sources doctor", () => {
     writeFileSync(redirected, `[core]\n\texcludesFile = ${custom}\n`);
 
     expect(kiroIdeIgnoreSourceChecks(project, ".kiro", { ...env, GIT_CONFIG: redirected })).toEqual([
-      { pass: true, label: "Kiro IDE ignore sources: none present" },
+      { pass: true, label: "Kiro ignore sources: none present" },
     ]);
   });
 
@@ -860,11 +880,11 @@ describe("t340 Kiro IDE ignore sources doctor", () => {
     const refusing = { ...env, PATH: gitShimPath(env, "rev-parse", 128) };
 
     expect(kiroIdeIgnoreSourceChecks(mounted, ".kiro", refusing, deviceOf)).toEqual([
-      { pass: true, label: "Kiro IDE ignore sources: none present" },
+      { pass: true, label: "Kiro ignore sources: none present" },
     ]);
     const crossing = kiroIdeIgnoreSourceChecks(mounted, ".kiro", { ...refusing, GIT_DISCOVERY_ACROSS_FILESYSTEM: "true" }, deviceOf);
     expect(crossing.map((row) => row.label)).toEqual([
-      `Kiro IDE ignore sources: ${GLOBAL_ID} not evaluated - git rev-parse exit 128`,
+      `Kiro ignore sources: ${GLOBAL_ID} not evaluated - git rev-parse exit 128`,
     ]);
   });
 
@@ -876,6 +896,6 @@ describe("t340 Kiro IDE ignore sources doctor", () => {
     const rows = kiroIdeIgnoreSourceChecks(project, ".kiro", { ...env, HOME: "", USERPROFILE: home });
     const failures = rows.filter((row) => !row.pass && row.severity === undefined);
     expect(failures).toHaveLength(1);
-    expect(failures[0].label).toContain("~/.kiro/settings/kiroignore:1 hides .kiro/");
+    expect(failures[0].label).toContain("~/.kiro/settings/kiroignore:1 hides .kiro/ - Kiro's fs_read guard (Kiro IDE and Kiro CLI v3) denies");
   });
 });

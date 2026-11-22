@@ -52,7 +52,7 @@ import {
   seedStateFile,
 } from "../harness/fixtures.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
-import { classifyTerminalCommand } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { classifyTerminalCommand, MESSAGE_FILL, MESSAGE_SLOT } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -139,6 +139,11 @@ describe("t198 cold-start compose surfaces -> composer dispatch", () => {
     expect(String(d.message)).toContain("pass `--guard-policy <value>` for `strict` or `relaxed`, never for `off`");
     expect(String(d.message)).toContain("flips a matched plan's value below its stock default");
     expect(String(d.message)).toContain("a flip above the default keeps the plan matched");
+    // The stages a custom plan's own skips leave unmade reach the offer in one
+    // line, once; the tables stay on request.
+    expect(String(d.message).split("when the summary carries skipped_inputs").length).toBe(2);
+    expect(String(d.message)).toContain("one plain line saying so, once, for all of them together");
+    expect(String(d.message)).toContain("Apart from the skipped_inputs line, keep the composer's stage-decision table");
   });
 
   test("--report <path> consumes its value (no leak into the intent text)", () => {
@@ -281,7 +286,7 @@ describe("t198 mid-flow compose -> in-flight dispatch, not an advance", () => {
         .replace(" [--skip <changes.skip>]", " --skip team-formation")
         .replace(" [--add <changes.add>]", "")
         // No settings were approved with this stage change.
-        .replace(" [approved setting flags --person-words '<their words>']", "")
+        .replace(` [approved setting flags --message '${MESSAGE_SLOT}']`, "")
         .split(/\s+/);
       expect(argv.shift()).toBe(native ? "aidlc" : "bun");
       const before = readFileSync(seededStateFile(proj), "utf-8");
@@ -314,6 +319,9 @@ describe("t198 mid-flow compose -> in-flight dispatch, not an advance", () => {
       expect(String(d.message)).toContain("go through next --skip or --add only BEFORE calling next compose");
       expect(String(d.message)).toContain("Dispatch the composer subagent with this message as its task");
       expect(String(d.message)).toContain("use its validated proposal at the approval gate");
+      // A recompose validates strictly, so an unmade input is refused, never a line on the offer.
+      expect(String(d.message)).not.toContain("skipped_inputs");
+      expect(String(d.message)).toContain("Keep the composer's stage-decision table");
       // The counterfactual: a guard-less engine routes this to the current
       // run-stage. Pin the absence.
       expect(d.kind).not.toBe("run-stage");
@@ -621,10 +629,8 @@ describe("t198 Branch 8: inference confirm + compose offer", () => {
     const id = /--request ([0-9a-f]{8})/.exec(String(read.message))?.[1];
     expect(id).toBeDefined();
     const ask = directiveOf(runNext(proj, ["--request", id!]).out);
-    const confirm = String(ask.confirm_command);
-    const next = directiveOf(runNext(proj, confirm.slice(confirm.indexOf(" next ") + 6).split(" ")).out);
-    expect(next.kind).toBe("ask");
-    expect(next.ask_type).toBe("new-work-routing");
+    expect(ask.kind).toBe("ask");
+    expect(ask.ask_type).toBe("new-work-routing");
   });
 
   // Settings typed with a new description beside other work go with the work
@@ -664,15 +670,17 @@ describe("t198 Branch 8: inference confirm + compose offer", () => {
     expect(String(created.message)).toContain("to start the new intent");
     const kept = runEmitted(String(ask.continue_command));
     expect(kept.kind).toBe("print");
-    // No line of the person's is on record here, so the step names their words
-    // for the agent to fill with the reply that asked.
+    // No line of the person's is on record here, so the step names the message
+    // slot for the agent to fill with the id of the message that asked.
     expect(String(kept.message)).toContain(
-      "config set depth minimal --learnings off --person-words '<their words>'` to update the configuration",
+      `config set depth minimal --learnings off --message '${MESSAGE_SLOT}'\` to update the configuration${MESSAGE_FILL}`,
     );
     expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before);
     // A setting typed alone is still for the active work.
     const alone = directiveOf(runNext(proj, ["--learnings", "off"]).out);
-    expect(String(alone.message)).toContain("config set learnings off --person-words '<their words>'` to update the configuration");
+    expect(String(alone.message)).toContain(
+      `config set learnings off --message '${MESSAGE_SLOT}'\` to update the configuration${MESSAGE_FILL}`,
+    );
   });
 
   test("the reshape answer applies the typed settings to the active work first, then composes", () => {
@@ -688,9 +696,10 @@ describe("t198 Branch 8: inference confirm + compose offer", () => {
     const first = runEmitted(compose);
     expect(first.kind).toBe("print");
     const message = String(first.message);
-    // No line of the person's is on record here, so the step names their words.
+    // No line of the person's is on record here, so the step names the message slot.
     expect(message).toContain(
-      "config set review none --learnings off --person-words '<their words>'` to apply the settings typed with this request to the work being reshaped",
+      `config set review none --learnings off --message '${MESSAGE_SLOT}'\` to apply the settings typed with this request to the ` +
+        `work being reshaped${MESSAGE_FILL}`,
     );
     const then = /then run `([^`]+)` and follow what it returns/.exec(message)?.[1];
     expect(then, message).toBeDefined();
@@ -733,8 +742,9 @@ describe("t198 Branch 8: inference confirm + compose offer", () => {
     expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before);
   });
 
-  // The person may answer the question by its number in chat; that reply is
-  // the option's own command, settings included.
+  // The person may answer the question by its number in chat; the agent reads
+  // it and runs the option's own command, which keeps the settings typed with
+  // the request.
   test("a reply that only names an option keeps the settings typed with the request", () => {
     proj = createTestProject();
     seedAidlcMemory(proj);
@@ -743,13 +753,16 @@ describe("t198 Branch 8: inference confirm + compose offer", () => {
       "--depth", "minimal", "--guard-policy", "relaxed", "Fix the login crash when the session expires",
     ]).out);
     expect(ask.ask_type).toBe("new-work-routing");
-    const kept = directiveOf(runNext(proj, ["1"]).out);
+    const named = String(directiveOf(runNext(proj, ["1"]).out).message);
+    const command = (label: string): string[] =>
+      (new RegExp(`"${label}": \`[^\`]*? next ([^\`]+)\``).exec(named)?.[1] ?? "").split(" ");
+    const kept = directiveOf(runNext(proj, command("Part of the active work")).out);
+    // Guard Policy relaxed lowers checks, so the step asks the setter for its lines alone.
     expect(String(kept.message)).toContain(
-      "config set depth minimal --guard-policy relaxed --person-words '<their words>'` to update the configuration",
+      `config set depth minimal --guard-policy relaxed --message '${MESSAGE_SLOT}' --verbatim\` to update the configuration${MESSAGE_FILL}`,
     );
-    // The separate-work reply reaches the plan question, then the creation; once
-    // that question is in front of them, a bare number answers it, not this one.
-    const separate = createdThrough(directiveOf(runNext(proj, ["2"]).out));
+    // The separate-work choice reaches the plan question, then the creation.
+    const separate = createdThrough(directiveOf(runNext(proj, command("Separate new piece of work")).out));
     const create = /Run `([^`]+)` to start the new intent/.exec(String(separate.message))?.[1] ?? "";
     expect(create).toContain("intent create --scope bugfix");
     expect(create).toContain("--depth minimal");

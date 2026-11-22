@@ -197,6 +197,28 @@ function presentAndApprove(project: string, session: string): void {
 }
 
 describe("Plan Approval recovery paths: every refusal names a step that works", () => {
+  test("a check that was never reached reads as not evaluated, not as false (#1597)", () => {
+    const session = "unreached-checks";
+    const project = createProject(session);
+    const missing = evaluateCodeGenerationApproval(project, { unit: null });
+    expect(missing.ok).toBe(false);
+    expect(missing.planExists).toBe(false);
+    expect(missing.fingerprintValid).toBeNull();
+    expect(missing.receiptValid).toBeNull();
+
+    const rendered = posture(project, "render");
+    expect(rendered.code, rendered.err).toBe(0);
+    writePlan(project, rendered.out);
+    presentAndApprove(project, session);
+    const planPath = join(codeGenerationRecordDir(project, null), "code-generation-plan.md");
+    writeFileSync(planPath, `${readFileSync(planPath, "utf-8")}\n- [ ] changed after approval\n`);
+    const stale = evaluateCodeGenerationApproval(project, { unit: null });
+    expect(stale.ok).toBe(false);
+    expect(stale.planExists).toBe(true);
+    expect(stale.fingerprintValid).toBe(false);
+    expect(stale.receiptValid).toBeNull();
+  });
+
   test("baseline: the documented sequence records an approval", () => {
     const session = "recovery-baseline";
     const project = createProject(session);
@@ -311,7 +333,8 @@ describe("Plan Approval recovery paths: every refusal names a step that works", 
     const project = presented(session);
     const reply = picker(project, session, approvalPicker("looks good, go ahead"));
     expect(reply.code).toBe(0);
-    expect(noticeOf(reply)).toBe("");
+    // The box answer's only line names the message it was kept as, never its words.
+    expect(noticeOf(reply)).toMatch(/^This message of the person's is on record as ([0-9a-f]+): a decision you record from it can name it with --message \1\.$/);
     expect(readPlanApprovalResponse(project, session)?.words).toBe("looks good, go ahead");
     expect(recordedChoice(project, session)).toBeNull();
     expectRecordsApproval(project, session);
@@ -335,15 +358,18 @@ describe("Plan Approval recovery paths: every refusal names a step that works", 
     expect(evaluateCodeGenerationApproval(project, { unit: null }).ok).toBe(false);
   });
 
-  test("an exact pick is the person's: the conductor cannot record the other choice", () => {
+  // A typed reply is kept as typed, with no choice read into it: the
+  // conductor reads it and records the choice, and no tool holds it to a
+  // reading of the words.
+  test("a typed pick is kept as typed: the conductor's Request Changes is recorded, and no approval stands", () => {
     const session = "recovery-exact-pick";
     const project = presented(session);
     human(project, session, "Request Changes");
-    expect(recordedChoice(project, session)).toBe("Request Changes");
-    markAnswered(project);
-    const refused = answer(project, session, "Approve Plan");
-    expect(refused.code).not.toBe(0);
-    expect(refusal(refused)).toContain('The person picked "Request Changes"');
+    expect(recordedChoice(project, session)).toBeNull();
+    expect(readPlanApprovalResponse(project, session)?.words).toBe("Request Changes");
+    markAnswered(project, "Request Changes");
+    const recorded = answer(project, session, "Request Changes");
+    expect(recorded.code, recorded.err).toBe(0);
     expect(evaluateCodeGenerationApproval(project, { unit: null }).ok).toBe(false);
   });
 
@@ -355,7 +381,7 @@ describe("Plan Approval recovery paths: every refusal names a step that works", 
     expect(refused.code).not.toBe(0);
     expect(refusal(refused)).toContain("has not replied to this question yet");
     human(project, session, "1");
-    expect(recordedChoice(project, session)).toBe("Approve Plan");
+    expect(recordedChoice(project, session)).toBeNull();
     const recorded = answer(project, session);
     expect(recorded.code, recorded.err).toBe(0);
     expectApproved(project);
@@ -397,7 +423,7 @@ describe("Plan Approval recovery paths: every refusal names a step that works", 
     const session = "recovery-crew-envelope";
     const project = presented(session);
     human(project, session, crewEnvelope("Approve Plan"));
-    expect(recordedChoice(project, session)).toBe("Approve Plan");
+    expect(recordedChoice(project, session)).toBeNull();
     expect(readPlanApprovalResponse(project, session)?.words).toBe("Approve Plan");
     expectRecordsApproval(project, session);
   });
@@ -410,7 +436,7 @@ describe("Plan Approval recovery paths: every refusal names a step that works", 
       "[CURRENT USER REQUEST \u2014 respond to this]",
     );
     human(project, session, prompt);
-    expect(recordedChoice(project, session)).toBe("Approve Plan");
+    expect(recordedChoice(project, session)).toBeNull();
     expect(readPlanApprovalResponse(project, session)?.words).toBe("Approve Plan");
   });
 
@@ -426,7 +452,7 @@ describe("Plan Approval recovery paths: every refusal names a step that works", 
     expect(recordedChoice(project, session)).toBeNull();
     expect(readPlanApprovalResponse(project, session)?.words).toBe("what does step 3 do?");
     human(project, session, crewEnvelope("1", history));
-    expect(recordedChoice(project, session)).toBe("Approve Plan");
+    expect(recordedChoice(project, session)).toBeNull();
     expect(readPlanApprovalResponse(project, session)?.words).toBe("what does step 3 do?\n1");
     expectRecordsApproval(project, session);
   });
@@ -443,7 +469,7 @@ describe("Plan Approval recovery paths: every refusal names a step that works", 
     const session = "recovery-latest";
     const project = presented(session);
     human(project, session, "1");
-    expect(recordedChoice(project, session)).toBe("Approve Plan");
+    expect(recordedChoice(project, session)).toBeNull();
     human(project, session, "hmm, let me read it later");
     expect(recordedChoice(project, session)).toBeNull();
     expect(readPlanApprovalResponse(project, session)?.words).toBe("1\nhmm, let me read it later");
@@ -489,7 +515,7 @@ describe("Plan Approval recovery paths: every refusal names a step that works", 
     human(project, session, "Approve Plan");
     const again = decide(project, session);
     expect(again.code, again.err).toBe(0);
-    expect(recordedChoice(project, session)).toBe("Approve Plan");
+    expect(readPlanApprovalResponse(project, session)?.words).toBe("Approve Plan");
     expectRecordsApproval(project, session);
   });
 });
@@ -553,15 +579,12 @@ describe("Plan Approval replies bind to the recorded question", () => {
     expectNothingSpendable(project, session);
   });
 
-  test("an exact Request Changes stays the person's pick across a reworded question", () => {
+  test("a typed 2 is kept as typed across a reworded question, with no choice read into it", () => {
     const session = "bind-reword-flip";
     const project = presented(session);
     human(project, session, "2");
-    expect(readPlanApprovalResponse(project, session)?.choice).toBe("Request Changes");
-    markAnswered(project);
-    const refused = answer(project, session);
-    expect(refused.code).not.toBe(0);
-    expect(refusal(refused)).toContain('The person picked "Request Changes"');
+    expect(readPlanApprovalResponse(project, session)?.choice).toBeUndefined();
+    expect(readPlanApprovalResponse(project, session)?.words).toBe("2");
     expect(evaluateCodeGenerationApproval(project, { unit: null }).ok).toBe(false);
   });
 
@@ -585,16 +608,13 @@ describe("Plan Approval replies bind to the recorded question", () => {
     expect(readAuditShardEvents(project).some((row) => row.event === "DECISION_RECORDED")).toBe(false);
   });
 
-  test("presenting again after Request Changes keeps their pick", () => {
+  test("presenting again after a typed Request Changes keeps their reply", () => {
     const session = "bind-represent-no";
     const project = presented(session);
     human(project, session, "Request Changes");
     expect(decide(project, session).code).toBe(0);
-    expect(readPlanApprovalResponse(project, session)?.choice).toBe("Request Changes");
-    markAnswered(project);
-    const refused = answer(project, session);
-    expect(refused.code).not.toBe(0);
-    expect(refusal(refused)).toContain('The person picked "Request Changes"');
+    expect(readPlanApprovalResponse(project, session)?.words).toBe("Request Changes");
+    expect(readPlanApprovalResponse(project, session)?.choice).toBeUndefined();
   });
 
   test("a plan changed after the human approved says so, not that nothing was recorded", () => {
@@ -627,11 +647,10 @@ describe("Plan Approval recovery paths: a human edit", () => {
     expect(refused.code).not.toBe(0);
     expect(refusal(refused)).toContain("Re-run the fingerprint command");
 
-    // Re-running the fingerprint with the answer still recorded names its own
-    // next step instead of silently regenerating.
+    // No approval is recorded: the answer line in the file decides nothing, so
+    // re-running the fingerprint regenerates it.
     const standing = fingerprint(project);
-    expect(standing.code).not.toBe(0);
-    expect(refusal(standing)).toContain("reset the Plan Approval [Answer]: to blank");
+    expect(standing.code, standing.err).toBe(0);
     // The retired flag names the route that works now instead of withdrawing anything.
     const retired = fingerprint(project, "--reapprove");
     expect(retired.code).not.toBe(0);

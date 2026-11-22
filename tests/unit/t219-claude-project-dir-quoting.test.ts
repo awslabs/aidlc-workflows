@@ -75,7 +75,7 @@ function hasUnfilteredFoldUsageHook(
   expectedCommand: string,
 ): boolean {
   return eventHookGroups(settings, event).some((group) => {
-    if (!isRecord(group) || group.matcher !== "" || !Array.isArray(group.hooks)) {
+    if (!isRecord(group) || group.matcher !== "*" || !Array.isArray(group.hooks)) {
       return false;
     }
     return group.hooks.some(

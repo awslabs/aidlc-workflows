@@ -1568,7 +1568,8 @@ describe("t328 human-only break-glass override", () => {
     const output = JSON.parse(minted.stdout) as { override: boolean; failed_checks: string[]; say?: string };
     expect(output.override).toBe(true);
     expect(output.failed_checks.join("\n")).toContain("workspace source cannot be bound");
-    expect(output.say).toBe("Recorded that you approved building this plan with no check of the project's files.");
+    // The agent says it in its own words; the engine hands it no line.
+    expect(output.say).toBeUndefined();
     expect(evaluateCodeGenerationApproval(project, { unit: null })).toMatchObject({
       ok: true,
       reason: "approved",
@@ -1768,8 +1769,10 @@ describe("t328 the Codex (Recommended) label decorator", () => {
     expect(pairs("Approve Plan (recommended) ")).toBe(true);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test('"Approve Planx" does not pair', () => {
-    expect(pairs("Approve Planx")).toBe(false);
+  // A typed reply is the agent's to read: one that is no label is still the
+  // person's reply to this question, kept with no choice in it.
+  test('"Approve Planx" is kept as their reply, with no choice read into it', () => {
+    expect(pairs("Approve Planx")).toBe(true);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("the decorator is stripped once and only at the end", () => {
@@ -1985,17 +1988,14 @@ describe("t328 plan-approval session resolution", () => {
     expect(refusalMessage(unanswered)).toContain(`"${session}" may not be this conversation's session.`);
     expect(refusalMessage(unanswered)).toContain("start a new chat session and run /aidlc");
 
+    // Their reply is kept with no choice read into it: the agent reads it.
     expect(humanPrompt(project, session, "Request Changes").exitCode).toBe(0);
-    const otherChoice = answer();
-    expect(otherChoice.exitCode).not.toBe(0);
-    expect(refusalMessage(otherChoice)).toContain('The person picked "Request Changes" for this question; record that choice instead');
-    // A recorded answer shows the session is right, so no session recovery.
-    expect(refusalMessage(otherChoice)).not.toContain("start a new chat session");
 
     // A new challenge drops a response to any other challenge under the same
     // lock, so a response naming another challenge is stale runtime state.
     const responsePath = join(sessionsDir(project), "plan-approval", `response-${session}.json`);
-    const response = JSON.parse(readFileSync(responsePath, "utf-8")) as { challengeId: string; choice: string };
+    const response = JSON.parse(readFileSync(responsePath, "utf-8")) as { challengeId: string; choice?: string };
+    expect(response.choice).toBeUndefined();
     writeFileSync(
       responsePath,
       `${JSON.stringify({ ...response, challengeId: `${response.challengeId}-earlier`, choice: "Approve Plan" }, null, 2)}\n`,

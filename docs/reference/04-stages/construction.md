@@ -133,8 +133,8 @@ When the Unit `ask` returns `earlier_reply`, the person already answered in
 this chat while the Unit's review ran: do not show the question, and run
 `approve` or `reject` as their words chose; when their words answer nothing,
 show the question and wait. Otherwise present **Approve** / **Request
-Changes** and wait. The human's exact reply
-to this checkpoint question authorizes the matching action, in that chat or a
+Changes** and wait. The human's reply
+to this checkpoint question authorizes the action the conductor reads from it, in that chat or a
 new one: with no question of its own, a new chat's reply is kept for the
 checkpoint question another chat asked, while it is the newest question asked
 and still open. An unrelated reply, the agent's own words, or a reply to a
@@ -867,6 +867,15 @@ Code is written to the workspace root, never to
   finishes that step
 - Brownfield: modify files in-place. NEVER create duplicates like
   `ClassName_modified.java`
+- Files already in the project that this work did not create (a README,
+  LICENSE, docs, configs) are the person's, on a new project too: leave them
+  as they are and build the code around them; this work's own notes on what it
+  built with and how to run it go in `code-summary.md`, and its test command
+  is already in `unit-test-instructions.md`. Change one of them only when the
+  person asks for it or the work cannot be built without it (on brownfield,
+  the code the work changes): name the change in the plan and say it once at
+  the gate, naming the file and what changed in it, and the way back only when
+  there is one
 - Add `data-testid` attributes to interactive UI elements for test automation
 - Work in this order: plan (Step 2), Step 3 (the person's Plan Approval; with
   plan approval off, only its one-line notice), generation (Step 4), the Step 5
@@ -931,7 +940,8 @@ This stage has a **two-part structure**: planning followed by generation.
      slice, followed by cross-layer implementation, green scenarios, and
      refactoring. It is not converted to layer-local TDD.
    - **ATDD** -- executable acceptance tests before the complete cross-layer
-     feature implementation, followed by acceptance-green and refactoring.
+     feature implementation, run with their failing output recorded,
+     followed by acceptance-green and refactoring.
    - **Custom/mixed** -- the exact affirmed ordering is preserved, including
      combinations such as scenario-first BDD with lower-level unit tests after
      implementation.
@@ -973,7 +983,16 @@ This stage has a **two-part structure**: planning followed by generation.
    mocking/stubbing guidance, and test data management. Every run command MUST
    be scoped to this unit using exact test file paths or an exact unit filter.
    A bare project-wide command such as `npm test` is not acceptable because
-   Build and Test executes every unit's commands.
+   Build and Test executes every unit's commands. A coverage floor set for the
+   whole project is measured by Build and Test on the full suite, not by these
+   commands (on one Unit's tests a runner's threshold can fail on source other
+   Units' tests cover); the file names the floor, and the floor's threshold in
+   the project's coverage configuration is never changed to make a Unit's run
+   pass. A command that the floor's threshold can fail keeps no step after it
+   that the threshold exit would stop, because Build and Test does not exempt
+   a command whose exit stopped a later step. A coverage target set for the
+   Unit or one of its paths gets its own Unit-scoped check.
+
 
    The plan opens with a short `## Summary` (Builds, Touches, Tests lines) that
    the engine shows the person when it asks for approval.
@@ -986,24 +1005,23 @@ This stage has a **two-part structure**: planning followed by generation.
    and **I'll edit the files**. The engine writes `code-generation-questions.md`
    (the question, both tags, and a blank `[Answer]:`) and records the question
    in the protected runtime directory; the conductor shows it and ends the turn.
-   The human-turn hook keeps the person's reply, from any chat on this piece of
-   work, except one typed in a chat where the agent has asked a question of its
-   own since the plan question was last shown in that chat, still open (the
-   verification command, say), which answers that question; the conductor
-   reads it and records their choice with `answer --checkpoint plan-approval`,
+   The human-turn hook keeps every reply of the person's after the question,
+   from any chat on this piece of work, and picks nothing from typed words (a
+   pick in a question box is the host's own structure); the conductor reads
+   which question a reply answers and records their choice with
+   `answer --checkpoint plan-approval`,
    which takes the fingerprint of the files as they
    are then and writes the answer, the receipt, and the `PLAN_APPROVAL_RECORDED`
    row with the person's words. The person may instead write their answer on the
    questions file's own `[Answer]:` line, as that file invites, and say so: the
    engine never overwrites an answer they wrote there while the same question
-   stands, and on an exact "done" it reads that line and records an answer that
-   is one of the choices, the same way it records an exact pick typed in chat,
-   naming the file in one line for the conductor. When the person says it in
-   their own words instead ("I put my answer in the file"), the conductor reads
-   the line and records the choice they made. When the person's message in
+   stands. When they say so, in any words ("done", "I put my answer in the
+   file"), the conductor reads the line and records the choice they made; the
+   line itself approves nothing, the engine's receipt does. When the person's message in
    this chat that the question opened for already asked for a change ("go back
-   to code generation: also accept -S", on finished work too) and no decision
-   has used it, the conductor records it as that question's Request Changes,
+   to code generation: also accept -S", on finished work too, or a redo of one
+   Unit's step that names its change) and no decision but the redo or jump it
+   asked for has used it, the conductor records it as that question's Request Changes,
    with their words (the message record is the proof, as `--message` reads
    it); an approval still needs a reply after the question shows, and the
    revised plan's question needs its own. The
@@ -1030,11 +1048,10 @@ This stage has a **two-part structure**: planning followed by generation.
    checkpoint), while the plan is still the one approved before, `next` first
    returns `revise` with the person's words from that gate, so the question
    that follows shows the revised plan. Reopening the step through
-   `/aidlc --stage code-generation` (`Reopen: jump`) starts a fresh attempt
-   and asks about the plan as it stands, without requiring an arbitrary edit.
-   Redo (`Reopen: redo`) starts the step again, including its plan, before
-   asking for approval. `Reopen: change` and a gate's Request Changes still
-   return `revise` with the person's feedback. Re-running `next`, or a
+   `/aidlc --stage code-generation` (`Reopen: jump`) or Redo (`Reopen: redo`)
+   starts a fresh attempt and asks about the plan as it stands, without
+   requiring an arbitrary edit. `Reopen: change` and a gate's Request Changes
+   still return `revise` with the person's feedback. Re-running `next`, or a
    reissued directive for the same target and attempt, never reopens it, and
    neither does whatever the engine said in between: a chat that compacted, a
    piece of work parked and resumed, or a guard-recovery question. `next` reads
@@ -1273,7 +1290,7 @@ Strictly 2-option: Approve / Request Changes.
 | support_agents    | aidlc-devsecops-agent                                                                                   |
 | mode              | inline                                                                                            |
 | Inputs            | ALL code generation outputs across all units                                                      |
-| Outputs           | `<record>/construction/build-and-test/` -- build-instructions.md, integration-test-instructions.md, performance-test-instructions.md, security-test-instructions.md, build-and-test-summary.md, test-results.md, plus conditional test instruction files |
+| Outputs           | `<record>/construction/build-and-test/` -- build-instructions.md, build-and-test-summary.md, test-results.md; strategy-dependent (declared under `optional_produces`): integration-test-instructions.md (Standard and above), performance-test-instructions.md and security-test-instructions.md (Comprehensive, when that NFR kind exists), plus other conditional test instruction files |
 
 ### Purpose
 
@@ -1339,7 +1356,7 @@ with the aidlc-devsecops-agent providing security testing expertise.
    `<record>/construction/build-and-test/build-and-test-summary.md`:
    - Overall build status and prerequisites
    - Test type inventory (which test types were generated)
-   - Coverage expectations per unit
+   - Coverage expectations for the project and each Unit
    - A Target Verification Matrix with Target ID, Source, Expected, Actual,
      Evidence, Owning Stage, and Verdict
    - Applicable targets begin `Pending`; `N/A` is valid only when the
@@ -1361,6 +1378,26 @@ with the aidlc-devsecops-agent providing security testing expertise.
        commands, and run each distinct command once. Commands should be
        unit-scoped; if a file contains a project-wide command, run it once,
        never once per unit. Report per-unit pass/fail without double counting.
+       When a coverage floor is set for the whole project, the project's
+       full-suite coverage command runs once with its own coverage
+       configuration (in a multi-repo intent, once in each repository the
+       floor applies to, with the repository named in the row's Evidence),
+       and that run is the evidence for a project-wide floor row in the
+       Target Verification Matrix; one repository's run is never the
+       evidence for another repository's floor. A unit-scoped command, from a
+       new or an already-approved file, whose output shows all its selected
+       tests passed and the project-wide floor's threshold (one for all
+       measured source, even when the runner checks it file by file) as the
+       only cause of its non-zero exit counts as passed, with its exit and the
+       reason recorded in test-results.md. That applies only when that exit
+       stopped no later step of the command: when a step after it did not run
+       because of it (one chained, such as `… && <lint>`, one in a script or
+       lifecycle hook the command calls, or a later task or phase of a build
+       tool; tell from the scripts, hooks and task or phase definitions the
+       command runs and from its output), the command is not exempt and its
+       non-zero exit is a failed command. Any other non-zero exit (including a
+       threshold set for one path or Unit) is a failure. A
+       target set for one Unit needs its own Unit-scoped evidence.
     c. **Integration tests** (if applicable): Run integration test commands.
        Capture results.
     d. **Other applicable checks**: Run every applicable command from

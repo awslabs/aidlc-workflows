@@ -27,12 +27,16 @@ import {
   seededStateFile,
 } from "../harness/fixtures.ts";
 
+// The stage's checks run once before its review or gate, and again at the gate
+// (completionChecksStep, t-checks-before-review); this file's fixture documents
+// are not written for them and its subject is not them, so they stay off here.
+process.env.AIDLC_DISABLE_SENSORS = "1";
+
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
-const JUMP = join(AIDLC_SRC, "tools", "aidlc-jump.ts");
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 const REVIEWER = "aidlc-architecture-reviewer-agent";
 const UNITS = ["alpha", "beta"];
@@ -272,23 +276,13 @@ function completeInitialAttempt(): void {
   );
 }
 
+// From Build and Test the loop-back's `next --stage code-generation` makes the
+// backward jump itself and returns Code Generation's step.
 function executeBackwardJump(): void {
-  const jumpPrint = next(["--stage", "code-generation"]);
-  expect(jumpPrint.kind).toBe("print");
-  const match = (jumpPrint.message ?? "").match(
-    /aidlc-jump\.ts execute --target ([a-z][a-z0-9-]*) --direction (forward|backward|redo) --scope ([a-z][a-z0-9-]*)/,
-  );
-  expect(match).not.toBeNull();
-  const jumped = run(JUMP, [
-    "execute",
-    "--target",
-    match?.[1] ?? "",
-    "--direction",
-    match?.[2] ?? "",
-    "--scope",
-    match?.[3] ?? "",
-  ]);
-  expect(jumped.status, jumped.out).toBe(0);
+  const landed = next(["--stage", "code-generation"]);
+  expect(landed.kind, JSON.stringify(landed)).not.toBe("print");
+  expect(landed.stage).toBe("code-generation");
+  expect(readFileSync(seededStateFile(project), "utf-8")).toContain("- **Current Stage**: code-generation");
 }
 
 describe("t307 autonomous unit-major loop-back receipts", () => {

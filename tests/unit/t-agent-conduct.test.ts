@@ -44,6 +44,8 @@ describe("t-agent-conduct", () => {
     // A live Claude Code run: the composer and a reviewer ran AI-DLC commands with the full project
     // path, which the shipped allow list does not match, so each one asked the person to approve it.
     expect(FILE_TOOLS_RULE).toContain("keeping its path as written (never a full path)");
+    expect(FILE_TOOLS_RULE).toContain("Do not stash, reset, check out over, restore or clean the person's working tree");
+    expect(FILE_TOOLS_RULE).toContain("do not install what the plan does not name");
     // A subagent reads its own knowledge files with the file tool too, never
     // through a shell loop.
     expect(FILE_TOOLS_RULE).toContain("Read, list, and search (your own knowledge files included) with your file tools");

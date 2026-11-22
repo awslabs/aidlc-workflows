@@ -36,7 +36,7 @@ This applies to **every** structured-question site, including but not limited to
 - the ladder prompt (autonomy mode after the walking skeleton);
 - halt-and-ask on Bolt failure (Retry / Skip / Abort);
 - consolidated-summary confirmation before artifact generation;
-- the §13 learnings gate (keep / heading / promote-to-team).
+- the section 13 learnings question after a correction (keep for this project, for the team, or not).
 
 (Literal ` ```question ` fences legitimately remain in framework documentation
 like THIS file and the stage-protocol because they are authoring specs, not chat
@@ -124,6 +124,12 @@ Rules:
   gate (`report --result awaiting-approval` or `revised`), which includes any
   plan change made during the stage, else the run-stage directive's. Render
   `Complete workflow` when `next_stage` is null. Never guess the next stage.
+- **Approval gate Accept as-is**: that reply, or the step that shows the gate
+  again, says whether the gate offers a third option. With
+  `accept_as_is: "offered"`, add `Accept as-is` third and
+  name the round from `revision_cycle`; with `"next-revision"`, keep two options
+  and add the note that it comes after one more revision. Never count the
+  rounds yourself.
 - **Bold the header**, then the prompt, then the numbered options in spec
   order. When a question has a recommended option, list it FIRST and append
   "(Recommended)" to its label.
@@ -154,5 +160,4 @@ Rules:
   readable — at most ~4 questions per message, and for 5+ options prefer one
   message per question. The questions FILE remains the authoritative record.
   A message with several questions labels them Q1, Q2, and so on, and ends with: "Reply with each question's number and the number of your choice (for example Q1: 2, Q2: 1), or just tell me." Never give an example answer with letters.
-- **No emergent options**: render exactly the spec's options (+ Other). The
-  NO EMERGENT BEHAVIOR rule applies to the rendering, not just the spec.
+- **No emergent options**: render exactly the spec's options (+ Other).

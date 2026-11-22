@@ -87,9 +87,9 @@ Use this exact format:
 
 | Severity | Location | Finding | Required action |
 |---|---|---|---|
-| Critical | aidlc/spaces/<space>/intents/<intent-record>/inception/requirements-analysis/requirements.md > FR-3 | No acceptance criteria defined | Add a measurable pass/fail criterion to FR-3 |
-| Major | aidlc/spaces/<space>/intents/<intent-record>/inception/user-stories/stories.md > Stories S-4 and S-7 | S-4 and S-7 overlap in scope | Merge the stories or state a non-overlapping boundary for each |
-| Minor | aidlc/spaces/<space>/intents/<intent-record>/inception/requirements-analysis/requirements.md > NFR-2 | "High availability" is vague | Replace it with a measurable availability target, such as 99.9% |
+| Critical | aidlc/spaces/<space>/intents/<intent-record>/inception/requirements-analysis/requirements.md > FR3 | No acceptance criteria defined | Add a measurable pass/fail criterion to FR3 |
+| Major | aidlc/spaces/<space>/intents/<intent-record>/inception/user-stories/stories.md > Stories US1.4 and US1.7 | US1.4 and US1.7 overlap in scope | Merge the stories or state a non-overlapping boundary for each |
+| Minor | aidlc/spaces/<space>/intents/<intent-record>/inception/requirements-analysis/requirements.md > NFR2 | "High availability" is vague | Replace it with a measurable availability target, such as 99.9% |
 
 ### Summary
 

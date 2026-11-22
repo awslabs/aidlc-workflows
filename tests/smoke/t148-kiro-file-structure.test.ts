@@ -22,6 +22,7 @@ import {
 import { delegatedLifecycleCommand } from "../../core/hooks/aidlc-state-transition-guard.ts";
 import { CONFIG_SECTIONS } from "../../core/tools/aidlc-command.ts";
 import { copyChannelDispatcherCommands, ROUTES } from "../../core/tools/aidlc.ts";
+import kiroManifest from "../../harness/kiro/manifest.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const KIRO = join(REPO_ROOT, "dist", "kiro");
@@ -379,6 +380,26 @@ describe("t148 dist/kiro file structure", () => {
       for (const f of readdirSync(tree).filter((n) => n.endsWith(".md"))) {
         expect(fmToolsOf(join(tree, f))).toBeUndefined();
       }
+    }
+  });
+
+  test("a plugin's agent gets the dispatch lines a persona without a role of its own carries, in both channels", () => {
+    // Compose adds tools/data/plugin-agent.md's lines to every agent a plugin
+    // ships (#2892). The quality persona has no role-only verbs, so its lines
+    // (its agent file's frontmatter after the persona copy's) are a plugin
+    // agent's: the same tools, MCP opt-in, allows, asks and deny.
+    for (const { tree } of KIRO_IDE_CHANNELS) {
+      const kiroIde = join(REPO_ROOT, tree, "kiro-ide", ".kiro");
+      const persona = frontmatter(join(kiroIde, "agents", "aidlc-quality-agent.md"));
+      const copy = frontmatter(join(kiroIde, "aidlc-common", "personas", "aidlc-quality-agent.md"));
+      expect(persona.startsWith(`${copy}\n`), tree).toBe(true);
+      const template = readFileSync(join(kiroIde, "tools", "data", "plugin-agent.md"), "utf-8");
+      expect(template, tree).toBe(`---\n${persona.slice(copy.length + 1)}\n---\n`);
+      expect(template, tree).toContain("      effect: deny");
+      const kiro = join(REPO_ROOT, tree, "kiro", ".kiro");
+      expect(readFileSync(join(kiro, "tools", "data", "plugin-agent.md"), "utf-8"), tree).toBe(
+        `---\ntools: ["read", "write", "shell"]\nincludeMcpJson: true\n---\n`,
+      );
     }
   });
 
@@ -982,6 +1003,12 @@ describe("t148 dist/kiro file structure", () => {
       }
     }
     const agents: { path: string; rules: KiroRule[] }[] = [];
+    // The lines compose gives a plugin's agent are a built agent's rules too.
+    for (const path of agentDirs.map((dir) => join(dir, "..", "tools", "data", "plugin-agent.md"))) {
+      if (!existsSync(path)) continue;
+      const rules = (Bun.YAML.parse(frontmatter(path)) as { permissions?: { rules?: unknown } } | null)?.permissions?.rules;
+      if (Array.isArray(rules)) agents.push({ path, rules: rules as KiroRule[] });
+    }
     for (const dir of agentDirs.filter((candidate) => existsSync(candidate))) {
       for (const name of readdirSync(dir)) {
         const path = join(dir, name);
@@ -1213,8 +1240,8 @@ describe("t148 dist/kiro file structure", () => {
       .map((h) => h.command)
       .sort();
     expect(subagentCommands).toEqual([
-      "bun .kiro/tools/aidlc.ts engine adapter kiro deliver-stage-rules",
-      "bun .kiro/tools/aidlc.ts engine adapter kiro plan-approval-guard",
+      `bun .kiro/tools/aidlc.ts engine adapter kiro deliver-stage-rules${kiroManifest.hookCommandSuffix}`,
+      `bun .kiro/tools/aidlc.ts engine adapter kiro plan-approval-guard${kiroManifest.hookCommandSuffix}`,
     ]);
     const matchers = (hooks.postToolUse ?? []).map((h) => h.matcher).sort();
     expect(matchers).toEqual(["execute_bash", "fs_write", "subagent", "todo_list"]);

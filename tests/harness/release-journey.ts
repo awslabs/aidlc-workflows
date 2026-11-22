@@ -9,9 +9,11 @@
 // plan question, "Approve" at Reverse Engineering's approval.
 //
 // Pass/fail reads only what AI-DLC recorded (the person's message records, the
-// plan question's request record, the work record, the audit) and doctor,
-// never the agent's prose. A message record for every line the person typed is
-// the proof that the tool ran AI-DLC's hooks: the human-turn hook writes it.
+// plan question's request record, the work record, the audit), doctor, and the
+// person's files, which stay as they were until their pick of a plan starts the
+// work (the golden journeys' own check), never the agent's prose. A message
+// record for every line the person typed is the proof that the tool ran
+// AI-DLC's hooks: the human-turn hook writes it.
 
 import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
@@ -20,8 +22,12 @@ import { join } from "node:path";
 import { copyChannelOmits, projectionFiles } from "../../core/tools/aidlc-distribution.ts";
 import { auditBlockField, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { REPO_ROOT } from "./fixtures.ts";
+import { auditRows, filesBeforePlanProblems, type GoldenRun, sourceListing } from "./golden-journey.ts";
 import { expectPersonFirst } from "./person-turns.ts";
-import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "./test-budget.ts";
+import {
+  FILE_CLEANUP_ENV, FILE_DEADLINE_ENV, fileCleanupReserveMs, NATIVE_FIXTURE_SETUP_TIMEOUT_MS, remainingOperationTimeoutMs,
+  TestBudgetExhaustedError,
+} from "./test-budget.ts";
 
 export type ReleaseJourneyHarness = "copilot" | "kiro" | "kiro-ide";
 
@@ -48,6 +54,9 @@ export interface ReleaseJourneyProject {
   runtime: string;
   proj: string;
 }
+
+/** The project as the person's first line finds it: their files and the audit's length, as a golden journey keeps them. */
+export type ReleaseJourneyStart = Pick<ReleaseJourneyProject, "proj"> & Pick<GoldenRun, "files" | "start">;
 
 function git(proj: string, args: string[]): void {
   const result = spawnSync("git", ["-c", "user.name=Person", "-c", "user.email=person@example.com", ...args], {
@@ -91,10 +100,12 @@ export function seedGreeter(proj: string): void {
  * The person's project with AI-DLC installed through the copy channel: the
  * runtime is dist/<harness> without the files a copy leaves out, copied over
  * the project, then `config --from` and doctor, as the install guide says.
+ * Its files and audit are read last, as the person's first line finds them.
  */
 export function setupReleaseJourneyProject(
   harness: ReleaseJourneyHarness, env: NodeJS.ProcessEnv = process.env,
-): ReleaseJourneyProject & { setup: string } {
+): ReleaseJourneyProject & ReleaseJourneyStart & { setup: string } {
+  journeyCheckout ??= { commit: checkoutIdentity() };
   const root = realpathSync(mkdtempSync(join(tmpdir(), `release-journey-${harness}-`)));
   const runtime = join(root, "runtime");
   const shipped = join(REPO_ROOT, "dist", harness);
@@ -112,7 +123,7 @@ export function setupReleaseJourneyProject(
   if (doctor.status !== 0) throw new Error(`doctor failed after setup (${doctor.status}):\n${doctor.out.slice(-3000)}`);
   git(proj, ["add", "-A"]);
   git(proj, ["commit", "-qm", "AI-DLC install"]);
-  return { ...project, setup: `${config.out}\n${doctor.out}` };
+  return { ...project, files: sourceListing(proj), start: auditRows(proj).length, setup: `${config.out}\n${doctor.out}` };
 }
 
 interface DoctorCheck { pass: boolean; severity?: string; label: string; fix?: string }
@@ -167,9 +178,9 @@ function ranAhead(proj: string, turn: number): boolean {
 }
 
 /** Check the journey after the person's turn `turn` (1-based), typed `line`, and add what is wrong to the report. */
-export function checkReleaseJourneyTurn(report: ReleaseJourneyReport, proj: string, turn: number, line: string): void {
-  if (ranAhead(proj, turn)) report.ranAhead = true;
-  report.problems.push(...releaseJourneyProblems(proj, turn).map((problem) => `after "${line}": ${problem}`));
+export function checkReleaseJourneyTurn(report: ReleaseJourneyReport, project: ReleaseJourneyStart, turn: number, line: string): void {
+  if (ranAhead(project.proj, turn)) report.ranAhead = true;
+  report.problems.push(...releaseJourneyProblems(project, turn).map((problem) => `after "${line}": ${problem}`));
 }
 
 /** A journey where AI-DLC ran ahead of the person fails as a PersonTurnError, which is never retried. */
@@ -180,14 +191,17 @@ export function expectPersonFirstInJourney(report: ReleaseJourneyReport): void {
 /**
  * What is wrong after the person's turn `turn` (1-based), in plain words; empty
  * when the journey is where it should be. Every turn checks that each line
- * typed so far was recorded as the person's (the hooks ran).
+ * typed so far was recorded as the person's (the hooks ran), and that their
+ * files are as they were until their pick started the work.
  */
-export function releaseJourneyProblems(proj: string, turn: number): string[] {
+export function releaseJourneyProblems(project: ReleaseJourneyStart, turn: number): string[] {
+  const { proj } = project;
   const problems: string[] = [];
   const recorded = recordedPersonLines(proj);
   for (const line of RELEASE_JOURNEY_TURNS.slice(0, turn)) {
     if (!recorded.includes(line)) problems.push(`"${line}" has no message record: the tool did not run AI-DLC's hooks for it`);
   }
+  problems.push(...filesBeforePlanProblems(proj, project));
   if (turn === 1) {
     if (!requestRecords(proj).some((record) => record.text === RELEASE_JOURNEY_REQUEST)) {
       problems.push("AI-DLC has no request for the person's words, so no plan question was asked for them");
@@ -204,20 +218,92 @@ export function releaseJourneyProblems(proj: string, turn: number): string[] {
 
 /** What AI-DLC recorded, kept in a failed run's report: the project goes with its temporary folder. */
 export function releaseJourneyEvidence(proj: string): Record<string, unknown> {
-  let audit: string[] = [];
-  try {
-    audit = readAuditShardEvents(proj).map((row) => `${row.event} ${auditBlockField(row.block, "Stage") ?? ""}`.trim());
-  } catch {
-    // No audit yet.
-  }
-  return { recordedLines: recordedPersonLines(proj), requests: requestRecords(proj), work: workRecords(proj), audit };
+  return {
+    recordedLines: evidenceOf(() => recordedPersonLines(proj)), requests: evidenceOf(() => requestRecords(proj)),
+    work: evidenceOf(() => workRecords(proj)),
+    audit: evidenceOf(() => readAuditShardEvents(proj).map((row) => `${row.event} ${auditBlockField(row.block, "Stage") ?? ""}`.trim())),
+  };
 }
 
-/** Doctor after the journey: it must not report that the hooks never ran. */
+/**
+ * One part of a failed journey's evidence. A part that cannot be read (a
+ * record the tool was still writing, a terminal already gone) is named, and
+ * never drops the other parts.
+ */
+export function evidenceOf<T>(read: () => T): T | { unreadable: string } {
+  try {
+    return read();
+  } catch (error) {
+    return { unreadable: firstLine(error) };
+  }
+}
+
+// Doctor's failing hook-heartbeat rows. Its JSON carries no id for them, so
+// they are read by label; t-release-journey-report runs doctor to keep these
+// in step with its wording.
+const HOOK_HEARTBEAT_FAILURES = [
+  "AIDLC hooks have not run in this project yet",
+  "Hook heartbeat data",
+  "Hooks have never executed although",
+  "Hooks last fired ",
+];
+
+/**
+ * Doctor after the journey: it must not report that the hooks never ran, or
+ * that they stopped beating while the workflow went on. It reads the hooks'
+ * health at the end of the journey only.
+ */
 export function hooksRanProblems(checks: DoctorCheck[]): string[] {
-  return checks.filter((check) => !check.pass &&
-    (check.label.startsWith("AIDLC hooks have not run in this project yet") || check.label.startsWith("Hook heartbeat data")))
+  return checks.filter((check) => !check.pass && HOOK_HEARTBEAT_FAILURES.some((label) => check.label.startsWith(label)))
     .map((check) => `doctor says "${check.label}"`);
+}
+
+/**
+ * A live journey case's two budgets. Its work stops `lastScreenMs` before
+ * the cleanup reserve, on the case deadline and on the runner's file deadline
+ * alike (the runner stops the file at its own reserve), so a journey that
+ * stalls still has that time for the last screen, and `screenMs()` gives the
+ * last screen at most that time. Cleanup keeps the case's
+ * `fileCleanupReserveMs` and the runner's own file reserve; the screen's time
+ * is held back on top of each.
+ */
+export function journeyBudgets(
+  caseDeadlineMs: () => number, totalMs: number, lastScreenMs: number, env: NodeJS.ProcessEnv = process.env,
+): { workMs: () => number; screenMs: () => number } {
+  const reserveMs = fileCleanupReserveMs(totalMs);
+  // The file layer's reserve is the runner's plus the screen's time. A value
+  // the budget reader refuses is passed as it is, so both budgets refuse it.
+  const workEnv = (): NodeJS.ProcessEnv => {
+    const cleanup = env[FILE_CLEANUP_ENV];
+    if (env[FILE_DEADLINE_ENV] === undefined || (cleanup !== undefined && !/^\d+(?:\.\d+)?$/.test(cleanup))) return env;
+    return { ...env, [FILE_CLEANUP_ENV]: String(Number(cleanup ?? 0) + lastScreenMs) };
+  };
+  return {
+    workMs: () => remainingOperationTimeoutMs(totalMs, {
+      deadlineMs: caseDeadlineMs(), reserveMs: reserveMs + lastScreenMs, env: workEnv(), phase: "E2E live work",
+    })!,
+    screenMs: () => remainingOperationTimeoutMs(lastScreenMs, {
+      deadlineMs: caseDeadlineMs(), reserveMs, env, phase: "E2E last screen",
+    })!,
+  };
+}
+
+/**
+ * Wait for one turn to end: `poll` waits up to the milliseconds it is given
+ * and says whether the turn ended. When `waitMs` has no time left, or a test
+ * budget a wait would spend runs out, the turn is left unfinished, so the
+ * journey still reports which line had not ended and what the screen showed,
+ * instead of stopping on the budget.
+ */
+export function waitForTurn(poll: (waitMs: number) => boolean, waitMs: () => number): boolean {
+  try {
+    for (let left = waitMs(); left >= 1; left = waitMs()) {
+      if (poll(left)) return true;
+    }
+  } catch (error) {
+    if (!(error instanceof TestBudgetExhaustedError)) throw error;
+  }
+  return false;
 }
 
 export interface ReleaseJourneyReport {
@@ -237,7 +323,7 @@ export interface ReleaseJourneyReport {
  */
 export function writeReleaseJourneyReport(report: ReleaseJourneyReport): string {
   const minutes = (report.turns.reduce((sum, turn) => sum + turn.seconds, 0) / 60).toFixed(1);
-  const commit = sourceCommit();
+  const commit = journeyCheckout?.commit;
   const tree = report.harness === "copilot" ? "" : ` (${report.harness})`;
   const line = `${TOOL_NAMES[report.harness]} ${report.toolVersion}${tree} release journey${commit ? ` on ${commit}` : ""}: ` +
     `${report.problems.length ? "FAIL" : "PASS"} (${minutes} min of turns${
@@ -251,27 +337,52 @@ export function writeReleaseJourneyReport(report: ReleaseJourneyReport): string 
   return line;
 }
 
+const firstLine = (error: unknown) => (error instanceof Error ? error.message : String(error)).split("\n")[0];
+
 /**
  * Run a journey and write its report, also when a step throws: the step that
  * stopped it becomes a problem first, so the pasted line never says PASS for
- * a journey that ended before its checks ran.
+ * a journey that ended before its checks ran. When the report has a problem,
+ * `evidence` (what AI-DLC recorded, the tool's last output) is kept in it,
+ * whether the journey threw or not; evidence that cannot be read never hides
+ * the error that stopped the journey.
  */
-export function runReleaseJourney(report: ReleaseJourneyReport, journey: () => void): void {
+export function runReleaseJourney(
+  report: ReleaseJourneyReport, journey: () => void, evidence?: () => Record<string, unknown>,
+): void {
   try {
     journey();
   } catch (error) {
-    report.problems.push(`the journey stopped: ${(error instanceof Error ? error.message : String(error)).split("\n")[0]}`);
+    report.problems.push(`the journey stopped: ${firstLine(error)}`);
     throw error;
   } finally {
+    if (report.problems.length && evidence) report.extra.evidence = evidenceOf(evidence);
     writeReleaseJourneyReport(report);
   }
 }
 
-// The commit the journey's AI-DLC tree was built from. A CI live leg runs in a
-// snapshot of the checkout whose HEAD is not the tested commit (the run names
-// that), so the line leaves it out there.
-function sourceCommit(): string | undefined {
+/**
+ * The checkout the journey ran from: its HEAD, and whether it had changes not
+ * in that commit (untracked files included, ignored ones not). The runner
+ * packages dist/ from the checkout as it is, so a line run with uncommitted
+ * changes says so. A CI live leg runs in a snapshot of the checkout whose HEAD
+ * is not the tested commit (the run names that), so the line leaves it out
+ * there.
+ */
+export function checkoutIdentity(root = REPO_ROOT): string | undefined {
   if (process.env.GITHUB_ACTIONS === "true") return undefined;
-  const result = spawnSync("git", ["rev-parse", "--short=12", "HEAD"], { cwd: REPO_ROOT, encoding: "utf8" });
-  return result.status === 0 ? result.stdout.trim() : undefined;
+  const git = (args: string[]) => spawnSync("git", ["--no-optional-locks", ...args], {
+    cwd: root, encoding: "utf8",
+    timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS, { phase: "release journey checkout" }),
+  });
+  const head = git(["rev-parse", "--short=12", "HEAD"]);
+  if (head.status !== 0) return undefined;
+  const status = git(["status", "--porcelain", "--untracked-files=normal"]);
+  if (status.status !== 0) return `${head.stdout.trim()} (git status failed)`;
+  return `${head.stdout.trim()}${status.stdout.trim() ? " plus uncommitted changes" : ""}`;
 }
+
+// Read once, as the first journey project is set up just after the runner
+// packaged dist/ from the checkout, so an edit or a commit during the run does
+// not change the line, and both Kiro trees name the same checkout.
+let journeyCheckout: { commit: string | undefined } | undefined;

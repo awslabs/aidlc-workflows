@@ -3,7 +3,7 @@
 
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   acquireAuditLock,
@@ -139,6 +139,33 @@ describe("log answers", () => {
     };
     expect(answers(pd)).toEqual(expected);
     expect(read(pd, "log", ["answers", "--stage", STAGE], true)).toEqual(expected);
+  });
+
+  test("an audit read leaves the calling chat unbound", () => {
+    const pd = project();
+    shard(pd, "one", question("Authentication?") + answer("A"));
+    const prior = {
+      session: process.env.CLAUDE_CODE_SESSION_ID,
+      pid: process.env.CLAUDE_PID,
+      override: process.env.AIDLC_SESSION_OVERRIDE,
+    };
+    process.env.CLAUDE_CODE_SESSION_ID = "11111111-2222-3333-4444-555555555555";
+    process.env.CLAUDE_PID = String(process.pid);
+    delete process.env.AIDLC_SESSION_OVERRIDE;
+    try {
+      readActiveAuditShardEvents(pd, { includeNotes: true });
+      readActiveAuditShardEvents(pd);
+    } finally {
+      for (const [key, value] of [
+        ["CLAUDE_CODE_SESSION_ID", prior.session],
+        ["CLAUDE_PID", prior.pid],
+        ["AIDLC_SESSION_OVERRIDE", prior.override],
+      ] as const) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+    expect(existsSync(join(pd, "aidlc", ".aidlc-sessions"))).toBe(false);
   });
 
   test("pairs only within the same unit, generation, and single-stage workflow", () => {

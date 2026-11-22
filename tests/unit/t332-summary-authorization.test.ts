@@ -104,14 +104,14 @@ function project(
       // No explicit suffix exercises the scope default; a supplied suffix is
       // the approved plan override, independent of the stock scope mapping.
       state = state.replace(
-        "- [S] units-generation — SKIP (bugfix scope)",
+        "- [ ] units-generation — SKIP (bugfix scope)",
         "- [S] units-generation",
       );
     }
     if (options.unitsGeneration) {
       state = state.replace(
         /^- \[[^\]]+\] units-generation.*$/m,
-        `- [${options.unitsGeneration === "SKIP" ? "S" : " "}] units-generation — ${options.unitsGeneration}`,
+        `- [${options.unitsGeneration === "SKIP" ? "S" : "x"}] units-generation \u2014 ${options.unitsGeneration}`,
       );
     }
     if (options.stage === NFR_STAGE) {
@@ -122,7 +122,7 @@ function project(
         .replace(`- **Current Stage**: ${STAGE}`, `- **Current Stage**: ${NFR_STAGE}`)
         .replace(`- **In Progress**: ${STAGE}`, `- **In Progress**: ${NFR_STAGE}`)
         .replace(`- [-] ${STAGE} — EXECUTE`, `- [x] ${STAGE} — EXECUTE`)
-        .replace(`- [S] ${NFR_STAGE} — SKIP (bugfix scope)`, `- [-] ${NFR_STAGE} — EXECUTE`);
+        .replace(`- [ ] ${NFR_STAGE} — SKIP (bugfix scope)`, `- [-] ${NFR_STAGE} — EXECUTE`);
     }
     writeFileSync(file, state);
   }

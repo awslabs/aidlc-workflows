@@ -17,8 +17,11 @@ collaborators: off
 
 `classic` is the implicit default scope - used when neither the user nor
 `AWS_AIDLC_DEFAULT_SCOPE` names one - and restores v1-style ceremony through
-Inception and Construction, with one human approval per stage. Ideation is
-skipped and Operation remains a placeholder. Stage-declared execution modes
+Inception and Construction: one human approval per Inception stage. In
+Construction, built Unit by Unit, the human approves each Unit's code plan and,
+under "Review each checkpoint", its checkpoint, so a Unit's design stages run
+without a stop of their own; team-owned Units keep their own per-stage or
+end-of-Unit gates. Ideation is skipped and Operation remains a placeholder. Stage-declared execution modes
 are unchanged; collaborators are off, so each stage runs with its lead agent
 only (`/aidlc --collaborators on` brings the support agents in).
 

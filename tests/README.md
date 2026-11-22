@@ -142,7 +142,7 @@ bash tests/run-tests.sh --integration --exclude "^t-tui-"
 # The scope runs, the scope-host runs and the guard matrix (minutes per file) run only when selected
 bash tests/run-tests.sh --integration -P 8 --filter "^t-(scope-run|scope-host|guard-matrix)-"
 
-# Run tests concurrently within a level (larger levels benefit most; smoke/unit stay serial)
+# Run tests concurrently within a level (larger levels benefit most; smoke stays serial, and unit too outside a macOS shard)
 bash tests/run-tests.sh --all --parallel 4
 bash tests/run-tests.sh --integration -P 8
 
@@ -213,11 +213,12 @@ Full Suite full verification runs smoke, sixteen unit shards per OS, integration
 E2E on Linux/macOS/Windows. Integration and E2E have independent jobs per OS
 with fresh Bun runner processes. Each call checks out its supplied commit,
 installs frozen dependencies with Bun 1.4.2, packages the projections, and runs
-the Bash wrapper with `--debug -P 8 --no-llm`. Smoke/unit stay serial inside
-each checkout; the independent unit jobs and eight workers in each integration
-or E2E job provide parallelism. Deterministic jobs, including smoke, plus native
-checks and production guards use two-hour file and four-hour run backstops
-inside a 270-minute step and five-hour job. Live credentialed jobs retain
+the Bash wrapper with `--debug -P 8 --no-llm`. Smoke stays serial inside each
+checkout, and so does unit except a macOS shard, which starts up to the cap in
+`tests/unit-shard-weights.json` at once; the independent unit jobs and eight
+workers in each integration or E2E job provide parallelism. Deterministic jobs,
+including smoke, plus native checks and production guards use two-hour file and
+four-hour run backstops inside a 270-minute step and five-hour job. Live credentialed jobs retain
 their separate lease-bound ceilings. Nested operations share actual remaining
 file time; deliberately short timeout calibrations keep their explicit bounds.
 Sanitized `tests/logs/` and root `tmp/ci-deterministic/` captures
@@ -300,9 +301,10 @@ Windows release-contract job also runs. An unchanged preview skips publication,
 but still requires successful tests before reporting that intentional skip.
 
 Live matrices use bounded, duration-balanced shards on the existing platforms: two
-Claude SDK (five on Linux, which alone runs the golden journeys and the answers
-corpus), three Claude TUI, one Codex (two on Linux and Windows, for the Codex golden
-journey), one Copilot and one opencode shard per OS (**29 live jobs**). Linux allows four
+Claude SDK (five on Linux, for the golden journeys and the answers corpus; three on
+Windows, for the golden journeys), three Claude TUI, one Codex (two on Linux and
+Windows, for the Codex golden journey), one Copilot and one opencode shard per OS
+(**30 live jobs**). Linux allows four
 concurrent live jobs, macOS two and Windows three. Each shard uses up to two
 isolated file workers; Windows Codex files remain serial. A worker starts each
 file/attempt from the original checkout snapshot and fresh home, temporary

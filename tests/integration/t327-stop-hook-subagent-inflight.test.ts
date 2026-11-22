@@ -91,6 +91,7 @@ function runHook(
   hook: string,
   proj: string,
   payload: Record<string, unknown>,
+  extraEnv: Record<string, string> = {},
 ): { rc: number; out: string; err: string } {
   const timeoutMs = remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS, {
     phase: "t327 hook",
@@ -103,6 +104,7 @@ function runHook(
       ...(process.env as Record<string, string>),
       CLAUDE_PROJECT_DIR: proj,
       CLAUDE_CODE_STOP_HOOK_BLOCK_CAP: "100",
+      ...extraEnv,
     },
     timeout: timeoutMs,
   });
@@ -131,10 +133,12 @@ function runStopHook(
   proj: string,
   sessionId?: string,
 ): { rc: number; out: string } {
+  // A run nobody attends: there the block and this carve-out still decide (an
+  // attended, gated run ends its turn whether or not a subagent is in flight).
   const result = runHook(STOP_HOOK, proj, {
     stop_hook_active: false,
     ...(sessionId ? { session_id: sessionId } : {}),
-  });
+  }, { AIDLC_UNATTENDED: "1" });
   return { rc: result.rc, out: result.out };
 }
 

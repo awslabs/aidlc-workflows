@@ -88,7 +88,7 @@ Each one packages `/aidlc --stage <slug> --single`:
 
 - **Apply one piece of methodology without committing to a workflow.** You want a requirements analysis on a problem, but you're not ready to drive a whole lifecycle. Run `/aidlc-requirements-analysis`, get the artifact, stop.
 - **You're the orchestrator.** You're sequencing the work by hand and want the framework to run just the stage in front of you — the human drives, the framework supplies one stage of methodology.
-- **Re-run a stage in isolation** while your main workflow sits parked at a different point — the single-stage run can't disturb it.
+- **Re-run a stage in isolation** while your main workflow sits parked at a different point. The run does not move your workflow; it writes the stage's documents where your work keeps them, after keeping a copy of the files already there.
 
 ### Why it's safe
 
@@ -96,7 +96,10 @@ The `--single` invariant is tool-enforced. `next --single` records the isolated
 start before work begins; `report --single` can only close that same synthetic
 attempt and refuses a direct completion with no start. Neither operation writes
 your main workflow's `Current Stage`. If a runner ever tried to advance the main
-pointer, the engine returns an error instead.
+pointer, the engine returns an error instead. When your work's record already
+holds files for the stage, `next --single` copies them to
+`archive/<time>-<stage>/` in that record before the run starts, and one line
+names the folder.
 
 The three bootstrap **initialization** stages ship no stage-runner - creating half an intent has no standalone meaning. Instead the whole initialization phase is packaged as one command:
 

@@ -100,10 +100,11 @@ describe("t-gate-names-what-it-produced: the gate line names what the stage prod
   });
 
   // A brownfield workspace with two sibling repos: Reverse Engineering writes
-  // every document once per repo, under the space's codekb folder. Each file is
-  // named by its path from the shared folder, so no name repeats and the repo
-  // is said; a single-folder stage keeps reading as before.
-  test("a stage that writes per repo names each file by its repo, not twice by its bare name", () => {
+  // every document once per repo, under the space's codekb folder. The line
+  // names the repos and how many files each holds, in one line whatever their
+  // number (#2874: 190 repos named 1,710 files); a single-folder stage keeps
+  // reading as before.
+  test("a stage that writes per repo names the repos, not every file", () => {
     const proj = createOrchestrationTestProject();
     created.push(proj);
     writeFileSync(seededStateFile(proj), readFileSync(join(FIXTURES_DIR, "state-brownfield-init-done.md"), "utf-8"), "utf-8");
@@ -129,11 +130,10 @@ describe("t-gate-names-what-it-produced: the gate line names what the stage prod
     expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
     const reply = JSON.parse((result.stdout ?? "").trim().split(/\r?\n/).at(-1) ?? "{}") as { narration?: string };
     const line = reply.narration ?? "";
-    expect(line).toStartWith("Reverse Engineering is ready for your review. It produced repo-a/");
-    expect(line).toContain("repo-a/architecture.md");
-    expect(line).toContain("repo-b/architecture.md");
-    expect(line).not.toContain(" architecture.md, architecture.md");
-    expect(produced(line)).toMatch(/, in aidlc\/spaces\/default\/codekb\/\.$/);
+    expect(line).toBe(
+      "Reverse Engineering is ready for your review. It produced the code knowledge base of repo-a and repo-b, " +
+        `${produces.length} files each, in aidlc/spaces/default/codekb/, one folder per repository.`,
+    );
   });
 
   test("a second next at the open gate says the same line, and words at the gate get an answer-first step", () => {

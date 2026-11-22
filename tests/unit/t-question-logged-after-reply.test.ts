@@ -3,17 +3,18 @@
 // From a live Kiro CLI run: the agent put two questions in one questions file,
 // the person answered both in one reply ("done"), and the agent recorded the
 // first answer, then logged the second question, then tried to record its
-// answer. The guard refused (one reply answers only the questions logged before
-// it), and the refusal told the agent to tell the person "Your answer didn't
-// reach AI-DLC", though the reply had arrived and been used. The person had to
-// answer again, told their answer was lost.
+// answer. The guard refused (one reply answered only the questions logged
+// before it), and the refusal told the agent to tell the person "Your answer
+// didn't reach AI-DLC", though the reply had arrived. The person had to answer
+// again, told their answer was lost.
 //
-// The refusal stays: the record cannot tie that reply to a question logged
-// after it. What changes is what it says when the person's message is on
-// record: the agent is pointed at that message, and the steps for a reply the
-// hooks missed (a lost answer when the prompt hook's beat is old, "end your
-// turn" when it is fresh) are said only if no message of theirs answers it, so
-// the person is neither told their answer was lost nor asked again.
+// Which question a reply answers is the agent's reading, and an answer spends
+// no reply, so the second answer records first time: no refusal, nothing said
+// about a lost answer. Its row names no message: the reply is the first
+// answer's, and a question logged after it takes it only when the agent names
+// it (--message), since a live opencode run had a question the agent logged
+// itself recorded on the person's reply to another one. A reply an approval
+// used is spent, and the plain refusal stays.
 import {
   NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
   NATIVE_STARTUP_TIMEOUT_MS,
@@ -34,7 +35,7 @@ import {
   seedStateFile,
 } from "../harness/fixtures.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
-import { readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { auditBlockField, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { saveMessage } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
@@ -42,7 +43,6 @@ setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 const BUN = process.execPath;
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 const KIRO_CLI_LOG = join(REPO_ROOT, "dist", "kiro", ".kiro", "tools", "aidlc-log.ts");
-const NO_MESSAGE_ANSWERS = "If no message of theirs answers it:";
 // What the person must not hear, or be asked again for, after a reply that arrived.
 const LOST = ["didn't reach", "not recorded", "has not answered yet"];
 
@@ -97,13 +97,6 @@ function secondQuestionLoggedAfterTheReply(tool: string, proj: string, words?: s
   return id;
 }
 
-// The part of a refusal said before `marker`: what holds whatever order the agent showed things in.
-function before(out: string, marker: string): string {
-  const at = out.indexOf(marker);
-  expect(at, out).toBeGreaterThan(-1);
-  return out.slice(0, at);
-}
-
 let proj: string;
 
 describe("t-question-logged-after-reply: a question logged after the reply is said so, not called a lost answer", () => {
@@ -115,19 +108,16 @@ describe("t-question-logged-after-reply: a question logged after the reply is sa
   afterEach(() => cleanupTestProject(proj));
 
   for (const label of ["stale", "fresh"] as const) {
-    test(`with the reply on record (Kiro CLI, ${label} heartbeat), the agent is pointed at that message and the missed-reply steps hold only if it does not answer`, () => {
+    test(`with the reply on record (Kiro CLI, ${label} heartbeat), the second answer records on it first time`, () => {
       promptHookBeat(proj, label === "fresh" ? Date.now() : Date.now() - 10 * 60 * 1000);
       const id = secondQuestionLoggedAfterTheReply(KIRO_CLI_LOG, proj, "done")!;
-      const refused = run(KIRO_CLI_LOG, proj, ["answer", "--stage", slugOf(proj), "--details", "Accept failure"]);
-      expect(refused.rc).not.toBe(0);
-      expect(refused.out).toContain("the question was logged after the person's reply");
-      expect(refused.out).toContain(`--message ${id}; do not ask them again.`);
-      const unconditional = before(refused.out, NO_MESSAGE_ANSWERS);
-      for (const words of LOST) expect(unconditional).not.toContain(words);
-      // Named, the reply records the answer: the person is not asked again.
-      const named = run(KIRO_CLI_LOG, proj, ["answer", "--stage", slugOf(proj), "--details", "Accept failure", "--message", id]);
-      expect(named.rc, named.out).toBe(0);
+      const recorded = run(KIRO_CLI_LOG, proj, ["answer", "--stage", slugOf(proj), "--details", "Accept failure"]);
+      expect(recorded.rc, recorded.out).toBe(0);
+      for (const words of LOST) expect(recorded.out).not.toContain(words);
       expect(answers(proj)).toBe(2);
+      const [first, second] = readAuditShardEvents(proj).filter((entry) => entry.event === "QUESTION_ANSWERED");
+      expect(auditBlockField(first.block, "Message Id")).toBe(id);
+      expect(auditBlockField(second.block, "Message Id")).toBeNull();
     });
   }
 

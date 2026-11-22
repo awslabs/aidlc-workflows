@@ -145,12 +145,13 @@ function runtimeFixture(): { project: string; record: string } {
   return { project, record };
 }
 
-function writeManifest(record: string, unit: string, writes: Array<{ path: string; repo?: string }>): void {
+// `bom`: written the way Windows PowerShell 5.1 writes UTF-8, with a byte order mark.
+function writeManifest(record: string, unit: string, writes: Array<{ path: string; repo?: string }>, bom = false): void {
   const dir = join(record, "construction", unit, "code-generation");
   mkdirSync(dir, { recursive: true });
   for (const name of ["code-generation-plan.md", "unit-test-instructions.md", "code-summary.md", "traceability.json"])
     if (!existsSync(join(dir, name))) writeFileSync(join(dir, name), name.endsWith(".json") ? "{}\n" : `# ${name}\n`);
-  writeFileSync(join(dir, "source-manifest.json"), `${JSON.stringify({ stage: "code-generation", unit, version: 1, writes }, null, 2)}\n`);
+  writeFileSync(join(dir, "source-manifest.json"), `${bom ? "﻿" : ""}${JSON.stringify({ stage: "code-generation", unit, version: 1, writes }, null, 2)}\n`);
 }
 
 function cli(tool: string, args: string[], project: string): { rc: number; stdout: string; stderr: string } {
@@ -159,8 +160,8 @@ function cli(tool: string, args: string[], project: string): { rc: number; stdou
   return { rc: r.status ?? -1, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
 }
 
-function review(project: string, record: string, unit: string, writes: Array<{ path: string; repo?: string }>): void {
-  writeManifest(record, unit, writes);
+function review(project: string, record: string, unit: string, writes: Array<{ path: string; repo?: string }>, bom = false): void {
+  writeManifest(record, unit, writes, bom);
   const prior = (readAllAuditShards(project).match(new RegExp(`\\*\\*Event\\*\\*: REVIEW_REQUESTED[\\s\\S]*?\\*\\*Unit\\*\\*: ${unit}`, "g")) ?? []).length;
   const iteration = String(prior + 1);
   // The verdict path validates the reviewer appendix: bytes appended to the
@@ -374,6 +375,20 @@ describe("t312 aidlc-attest resolve/anchor", () => {
     expect(report.warnings.join("\n")).toContain(".gitattributes may convert bytes");
     expect(report.warnings.join("\n")).toContain("can report drifted");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // A manifest the review accepted with a byte order mark is the same manifest
+  // to the commit's attribution (#2452): its claims, not the evidence alone.
+  test("a reviewed manifest written with a byte order mark still attributes the commit", () => {
+    const { project, record } = runtimeFixture();
+    writeFileSync(join(project, "app.ts"), "export const app = 2;\n");
+    review(project, record, "alpha", [{ path: "app.ts" }], true);
+    const commit = commitAll(project, "reviewed change plus its record");
+    const result = attest(["resolve", commit], project);
+    expect(result.rc, result.stderr).toBe(0);
+    const report = JSON.parse(result.stdout);
+    expect(pathStatus(report, "app.ts")).toMatchObject({ status: "verified", unit: "alpha" });
+    expect(report.units[0].claimsSource).toBe("manifest");
+  });
 
   test("resolve is deterministic: the record comes from the queried tree, not the checkout", () => {
     const { project, record } = runtimeFixture();

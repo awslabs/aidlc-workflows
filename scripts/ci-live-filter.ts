@@ -36,11 +36,12 @@ export const LIVE_SHARD_COUNTS: Partial<Record<LiveFamily, number>> = {
 };
 /**
  * More shards where a family's files run on some OSes only: the Claude golden
- * journeys and the answers corpus on Linux, the Codex golden journey on Linux
- * and Windows, each in a shard of its own under the one-hour role session.
+ * journeys on Linux and Windows and the answers corpus on Linux, the Codex
+ * golden journey on Linux and Windows, so each shard stays under the one-hour
+ * role session.
  */
 export const LIVE_PLATFORM_SHARD_COUNTS: Partial<Record<LiveFamily, Partial<Record<NodeJS.Platform, number>>>> = {
-  "claude-sdk": { linux: 5 },
+  "claude-sdk": { linux: 5, win32: 3 },
   codex: { linux: 2, win32: 2 },
 };
 
@@ -105,14 +106,15 @@ export const PLATFORM_ONLY: Record<string, readonly NodeJS.Platform[]> = {
   "tests/e2e/t-acp-kiro-new-work-routing.serial.test.ts": ["win32"],
   "tests/e2e/t-tui-journey-orientation-windows.serial.test.ts": ["win32"],
   "tests/e2e/t-tui-windows-user-settings-isolation.serial.test.ts": ["win32"],
-  // The golden journeys run nightly on Linux; stage logic is the same on every OS.
-  "tests/integration/t-journey-golden-bugfix.sdk.test.ts": ["linux"],
-  "tests/integration/t-journey-golden-poc.sdk.test.ts": ["linux"],
-  // A live file keeps its retry only under 25 minutes (tests/lib/file-retry.ts):
-  // the Codex journey runs about 17 on Windows, Copilot's longer than that.
+  // The golden journeys run nightly on Linux and Windows; macOS shares Linux's
+  // paths. A live file keeps its retry only under 25 minutes (tests/lib/file-retry.ts),
+  // so a journey that runs longer than that on Windows stays on Linux: Copilot's
+  // ran past 40 there.
+  "tests/integration/t-journey-golden-bugfix.sdk.test.ts": ["linux", "win32"],
+  "tests/integration/t-journey-golden-poc.sdk.test.ts": ["linux", "win32"],
   "tests/e2e/t-exec-codex-journey-golden-bugfix.serial.test.ts": ["linux", "win32"],
   "tests/e2e/t-exec-copilot-journey-golden-bugfix.serial.test.ts": ["linux"],
-  "tests/e2e/t-run-opencode-journey-golden-change.serial.test.ts": ["linux"],
+  "tests/e2e/t-run-opencode-journey-golden-change.serial.test.ts": ["linux", "win32"],
   // The answers corpus opens on the family's gate in a live job too: one item
   // per question a night, by a date rotation, on Linux (its own shard).
   "tests/e2e/t-live-aidlc-answers-corpus.serial.test.ts": ["linux"],

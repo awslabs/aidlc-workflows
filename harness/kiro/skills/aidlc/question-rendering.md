@@ -36,7 +36,7 @@ This applies to **every** structured-question site, including but not limited to
 - the ladder prompt (autonomy mode after the walking skeleton);
 - halt-and-ask on Bolt failure (Retry / Skip / Abort);
 - consolidated-summary confirmation before artifact generation;
-- the §13 learnings gate (keep / heading / promote-to-team).
+- the section 13 learnings question after a correction (keep for this project, for the team, or not).
 
 (Literal ` ```question ` fences legitimately remain in framework documentation
 like THIS file and the stage-protocol because they are authoring specs, not chat
@@ -182,6 +182,12 @@ Rules:
   gate (`report --result awaiting-approval` or `revised`), which includes any
   plan change made during the stage, else the run-stage directive's. Render
   `Complete workflow` when `next_stage` is null. Never guess the next stage.
+- **Approval gate Accept as-is**: that reply, or the step that shows the gate
+  again, says whether the gate offers a third option. With
+  `accept_as_is: "offered"`, add `Accept as-is` third and
+  name the round from `revision_cycle`; with `"next-revision"`, keep two options
+  and add the note that it comes after one more revision. Never count the
+  rounds yourself.
 - **Bold the header**, then the prompt, then the numbered options in spec
   order. When a question has a recommended option, list it FIRST and append
   "(Recommended)" to its label.

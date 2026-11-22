@@ -38,6 +38,7 @@ import {
   isRetiredOnlyNextArgv,
   readAuditShardEvents,
   readNextLine,
+  personsWordsText,
   splitKiroCommandArgs,
   validScopes,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -634,8 +635,8 @@ describe("a host's human-turn hook keeps the same reading of the line", () => {
       const expected = parsed.parseError === undefined
         ? (parsed.personWords ?? parsed.intent)?.trim() || null
         : testCase.argv.join(" ");
-      expect(records[0].words, `${note} record=${JSON.stringify(records[0])}`).toBe(expected);
-      expect(records[0].text, note).toBe(prompt);
+      expect(records[0].words && personsWordsText(records[0].words), `${note} record=${JSON.stringify(records[0])}`).toBe(expected);
+      expect(personsWordsText(records[0].text), note).toBe(prompt);
       // The hook applies nothing and says nothing about a setting: no note for
       // the agent, no row, no record kept for the next work, no `applied` field.
       expect(fired.stdout, note).not.toContain("AIDLC Guard Policy");

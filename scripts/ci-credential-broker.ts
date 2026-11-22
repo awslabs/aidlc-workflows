@@ -1,6 +1,8 @@
 import { createHash, createHmac } from "node:crypto";
+import { appendFileSync, mkdirSync } from "node:fs";
 import { request as httpRequest, type IncomingMessage } from "node:http";
 import { request as httpsRequest } from "node:https";
+import { join } from "node:path";
 import { Readable } from "node:stream";
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "../core/tools/aidlc-runtime-budget.ts";
 
@@ -297,10 +299,112 @@ function failure(status: number, source: "broker" | "upstream" = "broker", diagn
   });
 }
 
+interface RequestNote {
+  model: string;
+  dropped: boolean;
+}
+
+// A healthy stream sends data at least every few seconds: the longest wait for
+// a real event measured on 2026-10-21 was 52 s (a hard puzzle at xhigh
+// reasoning effort), and CI's own requests took 1 to 6 s. Mantle sends a
+// ':' keepalive comment every 15 s while a response is open, the reasoning-
+// summary stall included, so a keepalive is not data. Copilot CLI retries a cut
+// stream 5 times, so a stall that repeats ends its turn in about 12 minutes
+// instead of holding the test file for an hour.
+const UPSTREAM_IDLE_TIMEOUT_MS = 120_000;
+
+/** Whether an SSE chunk carries data: anything but ':' comment lines and blank lines. */
+function sseData(chunk: Uint8Array, line: { start: boolean; comment: boolean }): boolean {
+  let data = false;
+  for (const byte of chunk) {
+    if (byte === 10 || byte === 13) {
+      line.start = true;
+      line.comment = false;
+    } else {
+      if (line.start) line.comment = byte === 58;
+      line.start = false;
+      data ||= !line.comment;
+    }
+  }
+  return data;
+}
+
+/**
+ * Ends a started response whose upstream sends no data for the idle time, and
+ * writes one line per request: what was asked and how its answer ended, never
+ * a header or a body.
+ */
+function watched(
+  request: Request, response: Response, started: number, note: RequestNote,
+  idleTimeoutMs: number, log?: (line: string) => void,
+): Response {
+  let path = "-";
+  try {
+    path = new URL(request.url).pathname.slice(0, 200);
+  } catch {}
+  let bytes = 0;
+  let lastByte = Date.now();
+  let written = false;
+  const write = (end: "complete" | "incomplete" | "idle-timeout") => {
+    if (written || !log) return;
+    written = true;
+    try {
+      log(`${new Date(started).toISOString()} ${request.method} ${path} model=${note.model} status=${response.status} ` +
+        `ms=${Date.now() - started} last_byte_ms=${lastByte - started} bytes=${bytes} end=${end}` +
+        (note.dropped ? " dropped=reasoning.summary" : ""));
+    } catch {
+      // A log that cannot be written never fails the request.
+    }
+  };
+  if (!response.body) {
+    write("complete");
+    return response;
+  }
+  const reader = response.body.getReader();
+  const sse = /^text\/event-stream\b/i.test(response.headers.get("content-type") ?? "");
+  const line = { start: true, comment: false };
+  let lastData = Date.now();
+  return new Response(new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const idle = new Promise<"idle">((resolve) => {
+        timer = setTimeout(resolve, lastData + idleTimeoutMs - Date.now(), "idle");
+      });
+      try {
+        const result = await Promise.race([reader.read(), idle]);
+        if (result === "idle") {
+          write("idle-timeout");
+          controller.error(new Error("Upstream sent no data for the idle time"));
+          reader.cancel().catch(() => {});
+          return;
+        }
+        if (result.done) {
+          write("complete");
+          controller.close();
+          return;
+        }
+        bytes += result.value.byteLength;
+        lastByte = Date.now();
+        if (!sse || sseData(result.value, line)) lastData = lastByte;
+        controller.enqueue(result.value);
+      } catch (error) {
+        write("incomplete");
+        controller.error(error);
+      } finally {
+        clearTimeout(timer);
+      }
+    },
+    cancel(reason) {
+      write("incomplete");
+      return reader.cancel(reason);
+    },
+  }), { status: response.status, headers: response.headers });
+}
+
 /** Keeps credentials private; only explicitly permitted inference requests can be signed. */
 export async function startCredentialBroker(
   credentials: { accessKeyId: string; secretAccessKey: string; sessionToken: string; region: string },
-  options: { upstream?: string; stsUpstream?: string; mantleUpstream?: string } = {},
+  options: { upstream?: string; stsUpstream?: string; mantleUpstream?: string; log?: (line: string) => void; idleTimeoutMs?: number } = {},
 ): Promise<{ port: number; account: string; arn: string; stop(): void }> {
   const held = validateCredentials(credentials);
   const upstream = upstreamUrl(options.upstream, "bedrock-runtime", held.region);
@@ -314,6 +418,77 @@ export async function startCredentialBroker(
     throw new Error("Credential identity verification failed");
   }
   const lifetime = new AbortController();
+  async function forward(request: Request, note: RequestNote): Promise<Response> {
+    let destination: URL;
+    let query: string;
+    let isMantle = false;
+    try {
+      const incoming = new URL(request.url);
+      isMantle = incoming.pathname === "/openai/v1/responses";
+      const path = incoming.pathname.replace(/^\/bedrock(?=\/)/, "");
+      if (request.method !== "POST") return failure(403);
+      if (!isMantle) {
+        const route = path.match(/^\/model\/([^/]+)\/(invoke|invoke-with-response-stream|converse|converse-stream)$/);
+        if (!route || !Object.hasOwn(ALLOWED_MODELS, decodeURIComponent(route[1]))) return failure(403);
+        note.model = decodeURIComponent(route[1]);
+      }
+      query = canonicalQuery(incoming.search);
+      destination = new URL(isMantle ? mantle : upstream);
+      destination.pathname = path;
+      destination.search = incoming.search;
+    } catch {
+      return failure(403);
+    }
+    try {
+      let body = Buffer.from(await request.arrayBuffer());
+      if (isMantle) {
+        try {
+          const payload: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(body));
+          if (!jsonRecord(payload) || payload.model !== CI_BEDROCK_MODELS.codex) return failure(403);
+          note.model = CI_BEDROCK_MODELS.codex;
+          // Mantle's openai.gpt-5.5 stalls a response that asks for a reasoning
+          // summary once the model reasons: it opens the reasoning item, then
+          // sends only its 15-second keepalive comments (measured 2026-10-21).
+          // Copilot CLI asks for one on every request and has no setting to stop
+          // it. Every other request is forwarded byte for byte. Remove when
+          // Mantle answers summary requests.
+          if (jsonRecord(payload.reasoning) && Object.hasOwn(payload.reasoning, "summary")) {
+            delete payload.reasoning.summary;
+            body = Buffer.from(JSON.stringify(payload));
+            note.dropped = true;
+          }
+        } catch {
+          return failure(403);
+        }
+      }
+      const headers = forwardHeaders(request.headers);
+      signRequest(destination, query, body, headers, held, isMantle ? "bedrock-mantle" : "bedrock");
+      const response = await sendRequest(destination, body, headers,
+        AbortSignal.any([request.signal, lifetime.signal]));
+      const status = response.statusCode ?? 502;
+      if (status < 200 || status >= 300) {
+        const diagnostic = await upstreamDiagnostic(response);
+        response.destroy();
+        return failure(status >= 400 && status <= 599 ? status : 502, "upstream", diagnostic);
+      }
+      const upstreamHeaders = new Headers();
+      for (let index = 0; index < response.rawHeaders.length; index += 2) {
+        upstreamHeaders.append(response.rawHeaders[index], response.rawHeaders[index + 1]);
+      }
+      const responseHeaders = forwardHeaders(upstreamHeaders);
+      responseHeaders.set("cache-control", "no-store");
+      if (status === 204 || status === 205) {
+        response.destroy();
+        return new Response(null, { status, headers: responseHeaders });
+      }
+      // No text/JSON decoding or buffering: AWS event-stream frames stay byte-identical.
+      return new Response(Readable.toWeb(response) as unknown as ReadableStream<Uint8Array>, {
+        status, headers: responseHeaders,
+      });
+    } catch {
+      return failure(502);
+    }
+  }
   const server = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
@@ -321,65 +496,10 @@ export async function startCredentialBroker(
     idleTimeout: 0,
     error: () => failure(502),
     async fetch(request) {
-      let destination: URL;
-      let query: string;
-      let isMantle = false;
-      try {
-        const incoming = new URL(request.url);
-        isMantle = incoming.pathname === "/openai/v1/responses";
-        const path = incoming.pathname.replace(/^\/bedrock(?=\/)/, "");
-        if (request.method !== "POST") return failure(403);
-        if (!isMantle) {
-          const route = path.match(/^\/model\/([^/]+)\/(invoke|invoke-with-response-stream|converse|converse-stream)$/);
-          if (!route || !Object.hasOwn(ALLOWED_MODELS, decodeURIComponent(route[1]))) return failure(403);
-        }
-        query = canonicalQuery(incoming.search);
-        destination = new URL(isMantle ? mantle : upstream);
-        destination.pathname = path;
-        destination.search = incoming.search;
-      } catch {
-        return failure(403);
-      }
-      try {
-        const body = Buffer.from(await request.arrayBuffer());
-        if (isMantle) {
-          try {
-            const payload: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(body));
-            if (!payload || typeof payload !== "object" || Array.isArray(payload) ||
-                (payload as Record<string, unknown>).model !== CI_BEDROCK_MODELS.codex) {
-              return failure(403);
-            }
-          } catch {
-            return failure(403);
-          }
-        }
-        const headers = forwardHeaders(request.headers);
-        signRequest(destination, query, body, headers, held, isMantle ? "bedrock-mantle" : "bedrock");
-        const response = await sendRequest(destination, body, headers,
-          AbortSignal.any([request.signal, lifetime.signal]));
-        const status = response.statusCode ?? 502;
-        if (status < 200 || status >= 300) {
-          const diagnostic = await upstreamDiagnostic(response);
-          response.destroy();
-          return failure(status >= 400 && status <= 599 ? status : 502, "upstream", diagnostic);
-        }
-        const upstreamHeaders = new Headers();
-        for (let index = 0; index < response.rawHeaders.length; index += 2) {
-          upstreamHeaders.append(response.rawHeaders[index], response.rawHeaders[index + 1]);
-        }
-        const responseHeaders = forwardHeaders(upstreamHeaders);
-        responseHeaders.set("cache-control", "no-store");
-        if (status === 204 || status === 205) {
-          response.destroy();
-          return new Response(null, { status, headers: responseHeaders });
-        }
-        // No text/JSON decoding or buffering: AWS event-stream frames stay byte-identical.
-        return new Response(Readable.toWeb(response) as unknown as ReadableStream<Uint8Array>, {
-          status, headers: responseHeaders,
-        });
-      } catch {
-        return failure(502);
-      }
+      const started = Date.now();
+      const note: RequestNote = { model: "-", dropped: false };
+      return watched(request, await forward(request, note), started, note,
+        options.idleTimeoutMs ?? UPSTREAM_IDLE_TIMEOUT_MS, options.log);
     },
   });
   return {
@@ -396,7 +516,15 @@ if (import.meta.main) {
   try {
     // The CLI has no options: particularly no credential or upstream argv/env inputs.
     if (process.argv.length !== 2) throw new Error("Unexpected arguments");
-    const broker = await startCredentialBroker(JSON.parse(await Bun.stdin.text()));
+    // The start step's output closes when it ends, so the lines go to the
+    // logs folder the job uploads.
+    const logs = join(import.meta.dir, "..", "tests", "logs");
+    const broker = await startCredentialBroker(JSON.parse(await Bun.stdin.text()), {
+      log: (line) => {
+        mkdirSync(logs, { recursive: true });
+        appendFileSync(join(logs, "credential-broker.log"), `${line}\n`);
+      },
+    });
     const stop = () => broker.stop();
     process.once("SIGINT", stop);
     process.once("SIGTERM", stop);

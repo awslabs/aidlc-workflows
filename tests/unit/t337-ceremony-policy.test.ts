@@ -21,6 +21,7 @@ import {
   resolveCeremony,
   resolveCeremonyPolicy,
   scopeCeremonyDefault,
+  summaryConfirmationOwed,
 } from "../../core/tools/aidlc-lib.ts";
 import {
   AIDLC_SRC,
@@ -268,6 +269,19 @@ describe("t337 scope ceremony metadata", () => {
 });
 
 describe("t337 summary confirmation policy", () => {
+  test("disabling the confirmation check preserves the stage's summary question", () => {
+    withEnvAndFreshCaches({ ...POLICY_ENV, AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1" }, () => {
+      const design = loadStageGraph().find((entry) => entry.slug === "functional-design")!;
+      const code = loadStageGraph().find((entry) => entry.slug === "code-generation")!;
+      const options = { scope: "feature", stateContent: "- **Scope**: feature\n" };
+      expect(summaryConfirmationOwed(design, options)).toBe(false);
+      expect(summaryConfirmationOwed(design, { ...options, ignoreGuardSwitch: true })).toBe(true);
+      expect(summaryConfirmationOwed(code, { ...options, ignoreGuardSwitch: true })).toBe(false);
+      process.env.AIDLC_DISABLE_SUMMARY_CONFIRMATION = "1";
+      expect(summaryConfirmationOwed(design, { ...options, ignoreGuardSwitch: true })).toBe(false);
+    });
+  });
+
   test("classic can finish without a summary receipt, but intent on restores the checkpoint", () => {
     const proj = createTestProject();
     tempDirs.push(proj);

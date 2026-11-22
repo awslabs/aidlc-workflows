@@ -28,6 +28,9 @@ const manifest: HarnessManifest = {
   // in-flight ledger until its SubagentStop. Claude Code sets
   // CLAUDE_CODE_SESSION_ID in its agent's shell.
   agentFinishRecorded: { env: ["CLAUDE_CODE_SESSION_ID"] },
+  // AskUserQuestion takes four options besides its own "Type something" row
+  // (question-rendering.md, "Batching limits"), so a question is lettered A-D.
+  questionOptions: 4,
   // A Claude Code session open before setup has no /aidlc and runs none of
   // its hooks until it starts again.
   configNextStep:
@@ -48,6 +51,20 @@ const manifest: HarnessManifest = {
       "while Claude Code was open, exit Claude Code and start it again in this folder, then type " +
       "<entry>.",
     agentStepEdits: ".claude/settings.local.json",
+    // Measured live: Claude Code runs none of the hooks in a settings.json it
+    // cannot parse as strict JSON, and config stops on such a file, so that
+    // case names the file. The restart matches what config itself says.
+    registration: {
+      file: ".claude/settings.json",
+      missing:
+        ".claude/settings.json is missing from this project, so Claude Code runs none of AI-DLC's hooks here. " +
+        "In a terminal in this folder, <repair>, then exit Claude Code and start it again in this folder, " +
+        "and type <entry>.",
+      invalid:
+        "Claude Code cannot read this project's .claude/settings.json because it is not valid JSON, so it runs " +
+        "none of AI-DLC's hooks here. Correct the file, then exit Claude Code and start it again in this folder, " +
+        "and type <entry>.",
+    },
     // The human-turn hook leaves a heartbeat on every message, before the
     // first workflow too.
     notRunYet:
@@ -69,6 +86,12 @@ const manifest: HarnessManifest = {
       "Claude Code was open, exit Claude Code and start it again in this folder, then type <entry>. " +
       "If you started it with a setting that turns hooks off, start it again without that setting; " +
       'otherwise ask your Claude Code administrator to allow project hooks."',
+    // Measured live (2.1.278, 2.1.310): started in a folder inside the
+    // project, Claude Code offers /aidlc there but runs none of the project's
+    // hooks, whatever the settings say.
+    startedInsideProject:
+      "Claude Code runs this project's hooks only when it is started in the project folder. Exit Claude Code, " +
+      "start it again in <folder>, then type <entry>.",
   },
   harnessDir: ".claude",
   orchestratorSkillPath: ".claude/skills/aidlc/SKILL.md",

@@ -42,6 +42,7 @@ const COMPOSER_ONLY = [
 const ANY_CHAT = [
   "**Reshape requests arrive in plain chat too, not just as the literal verb.**",
   "**Named stage changes are done at once.**",
+  "**A named plan is switched at once.**",
   "**New project or existing code, in plain chat.**",
   "**Collaborators in plain chat.**",
   "**Saving a plan for next time.**",

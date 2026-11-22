@@ -203,6 +203,7 @@ describe("a Testing Contract left stale by a setting the person changed", () => 
     const proj = project();
     askFor(proj);
     reply(proj, "3");
+    expect(answer(proj, "I'll edit the files").code).toBe(0);
     expect(next(proj).plan_approval?.status).toBeUndefined();
     writeFileSync(planPath(proj), readFileSync(planPath(proj), "utf-8").replace('"version": 1', '"version": 1,,'), "utf-8");
     reply(proj, "done");
