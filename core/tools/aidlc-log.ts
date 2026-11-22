@@ -34,6 +34,7 @@ import {
   proveMessage,
   readMessage,
   REQUEST_MAX_BYTES,
+  requestMessageStep,
   type StoredMessage,
   SUMMARY_CHANGES_QUESTION,
 } from "./aidlc-message-store.ts";
@@ -184,7 +185,6 @@ import {
   MESSAGE_SPENDING_EVENTS,
   readAuditShardEvents,
   backgroundAgentOutSince,
-  isRequestTurn,
   CONFIG_KEYS,
   latestReplyAfter,
   repliesAfter,
@@ -633,19 +633,6 @@ const ANSWER_OPTIONS: ReadonlySet<string> = new Set([
   ...LOG_INTERACTION_OPTIONS, "--details", "--units", "--reason", "--park", "--on-instruction",
   "--details-file", "--on-instruction-file", "--request-file", "--ends-turn", ...CONFIG_KEYS.map((key) => `--${key}`),
 ]);
-
-// The person has said something in this piece of work: a turn that can carry a
-// request, or the request that started it. Their handing a choice over can
-// come before the question, so the words are what the record keeps.
-function personSpokeInThisWork(pd: string): boolean {
-  try {
-    return readAuditShardEvents(pd).some((row) =>
-      isRequestTurn(row) ||
-      (row.event === "WORKFLOW_STARTED" && (auditBlockField(row.block, "Request") ?? "").trim() !== ""));
-  } catch {
-    return false;
-  }
-}
 
 function verificationCommandFromFlags(pd: string, flags: Record<string, string>) {
   if ((flags.command !== undefined) === (flags["command-file"] !== undefined)) {
@@ -3034,7 +3021,7 @@ function handleAnswer(args: string[]): void {
     // to the presence test below.
     // A choice the person left to the agent names the message that left it the
     // same way, which may also have given an approval ("approve, the rest is up
-    // to you"); with none named, the answer is the agent's own, with no claim.
+    // to you").
     let named: StoredMessage | null = null;
     if (!autonomousDecision) {
       const request = { request: instruction !== undefined };
@@ -3058,44 +3045,53 @@ function handleAnswer(args: string[]): void {
     // another answer already names it: the question's own row says which, the
     // latest on this clone's shard, where the reply turns are read (a
     // teammate's shard can sort after it and hold an older one).
-    const ownQuestion = decisionRowsInScope(ownShardRows(pd).mine, flags.stage, flags.unit).at(-1);
+    const { mine } = ownShardRows(pd);
+    const ownQuestion = decisionRowsInScope(mine, flags.stage, flags.unit).at(-1);
     if (named !== null) {
       fields["Message Id"] = named.id;
       const namedWords = named.words === null ? null : personsWordsText(named.words);
       if (namedWords && !isNonAnswer(namedWords)) fields["Person Reply"] = namedWords;
-    } else if (instruction === undefined && !autonomousDecision) {
+    } else if (!autonomousDecision) {
       const reply = personsGateReply(pd, invokingChat(pd), flags.stage, ownQuestion);
       if (reply.words) fields["Person Reply"] = reply.words;
       if (reply.messageId) fields["Message Id"] = reply.messageId;
       Object.assign(fields, windowMessageIds(reply));
     }
+    // A choice left to the agent stands on the message named, or on a reply of
+    // theirs since its question opened (that question's row, on this clone's
+    // shard): a reply from before it gave the agent no choice to make, unless
+    // the agent names it. Any other answer keeps the floor below, a reply no
+    // decision has used yet, logged before or after its question. The record
+    // says the agent chose, reading a message of theirs, only beside that
+    // message; words the agent passed with the flag are its own and claim
+    // nothing.
+    const sinceItsQuestion = instruction === undefined ||
+      (ownQuestion !== undefined && mine.some((row) => row.pos > ownQuestion.pos && isReplyTurn(row)));
     if (instruction !== undefined) {
-      if (!personSpokeInThisWork(pd)) {
-        error("Nothing the person said in this piece of work is on record, so no choice was left to you. Ask them." +
-          unattendedHumanPresenceHint());
-      }
-      // The record says the agent chose, reading a message of theirs, only
-      // beside that message, whose whole words it keeps; words the agent
-      // passed with the flag are its own and claim nothing.
-      if (named !== null) {
+      if (fields["Message Id"] !== undefined && (named !== null || sinceItsQuestion)) {
         fields["Answer Source"] = ANSWER_SOURCE_ON_INSTRUCTION;
       }
       if (instruction !== "") fields[CONDUCTOR_SUMMARY_FIELD] = instruction;
-    } else if (autonomousDecision) {
+    }
+    if (autonomousDecision) {
       // autonomous Construction: no human presence required
     } else if (humanPresenceGuardDisabled()) {
       // scoped test off-switch
     } else if (named !== null) {
       // The proved message is the person's reply to this question.
-    } else if (!humanActedSinceLastAnswer(pd)) {
+    } else if (!humanActedSinceLastAnswer(pd) || !sinceItsQuestion) {
       // One reply answers every question the agent asked, each as its own
-      // answer: an answer spends no reply.
+      // answer: an answer spends no reply. The command step says the turn since
+      // the last decision was a command, so it is for no reply since then.
+      const tail = (humanActedSinceLastAnswer(pd) ? "" : commandTurnHint(pd)) + unattendedHumanPresenceHint(pd);
       error(
         keptMessageRefusal(pd) ??
-          "Cannot record this answer because no new human reply has arrived for the question. "
-          + "Wait for the human to type an answer, then try again."
-          + commandTurnHint(pd)
-          + unattendedHumanPresenceHint(pd),
+          (instruction === undefined
+            ? "Cannot record this answer because no new human reply has arrived for the question. " +
+              "Wait for the human to type an answer, then try again." + tail
+            : requestMessageStep(pd, "Cannot record this answer as a choice left to you: no reply of the person's " +
+              "is on record since this question was asked. Ask them, end the turn, and record the choice " +
+              "they make." + tail)),
       );
     }
 
