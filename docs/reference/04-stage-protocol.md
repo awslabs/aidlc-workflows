@@ -614,7 +614,11 @@ ask targeted follow-up. Do NOT proceed until resolved.
   after the flag are the agent's own (`Conductor Summary`) and claim nothing;
   no quote is compared. With no message named (by the flag, or by the question
   it answers when that question was logged naming one), the answer is recorded
-  as the agent's own, with no claim that the person left it. The agent then
+  only on a reply of theirs sent after that question was logged (the row names
+  it when it came in this chat), outside autonomous Construction and the human
+  presence off switch; with none, the engine refuses it, names the
+  messages of theirs it could stand on (ids and times), and otherwise says to
+  ask them. The agent then
   says one line: "You left <the question> to me, so I chose <the choice>. Say if you
   want something else."
   (for several questions, "You left <Stage>'s <N> questions to me, so I chose
