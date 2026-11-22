@@ -41,7 +41,8 @@
 // during a revision, named after the gate is shown again; and, under strict, a
 // reply named after a recovery review that is NOT-READY, or READY with a
 // finding of its own, which its note brings to them at the gate (there, their
-// approval meets the revision backstop and one more review first).
+// next reply approves it); and a reply sent before the recovery review was
+// recorded, which did not see what that review found.
 
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -449,7 +450,7 @@ describe("t-gate-reply-before-document: a reply sent before the stage's document
         ["NOT-READY", "| Major | requirements.md | FR-2 has no acceptance rule | Add one |\n"],
         ["READY", "| Minor | requirements.md | FR-2 could say when the ids reset | Say it |\n"],
       ] as const) {
-        test(`strict: after a ${verdict} recovery review with a new finding, their earlier reply named is refused and the gate is shown again`, async () => {
+        test(`strict: after a ${verdict} recovery review with a new finding, their earlier reply named is refused, the gate is shown again and their next reply approves it`, async () => {
           const proj = await at("learnings", policy);
           await writeAndReview(proj);
           expect((await report(proj, ["--result", "awaiting-approval"])).status).toBe(0);
@@ -469,24 +470,42 @@ describe("t-gate-reply-before-document: a reply sent before the stage's document
           const reshown = await report(proj, ["--result", "awaiting-approval"]);
           expect(reshown.status).toBe(0);
           expect(reshown.stdout).toContain("Approve accepts the open review finding R-01");
-          // Their approval then: the revision backstop reads the edit, which a
-          // later turn of theirs followed, as a revision at the open gate, and
-          // the stage takes one more review before their next reply approves.
-          sleep();
-          expect((await say(proj, "approve", "claude")).status).toBe(0);
-          const revision = await report(proj, ["--result", "approved", "--user-input", "Approve"]);
-          expect(rows(proj, "GATE_APPROVED"), revision.stdout).toHaveLength(0);
-          expect(revision.stdout).toContain("REVIEW_EVIDENCE_MISSING");
-          expect(auditBlockField(rows(proj, "GATE_REJECTED").at(-1)?.block ?? "", "Recovered")).toBe("true");
-          expect(await review(proj, 1, "READY")).toContain("ask the approval question in this turn");
-          expect((await report(proj, ["--result", "awaiting-approval"])).status).toBe(0);
+          // Their approval then: the recovery review read the edit and was
+          // recorded before this reply, so it approves, with no Request Changes
+          // they did not give.
           sleep();
           expect((await say(proj, "approve", "claude")).status).toBe(0);
           const approved = await report(proj, ["--result", "approved", "--user-input", "Approve"]);
           expect(rows(proj, "GATE_APPROVED"), approved.stdout).toHaveLength(1);
           expect(auditBlockField(rows(proj, "GATE_APPROVED")[0].block, "Message Id")).toBe(latestMessageId(proj));
+          expect(rows(proj, "GATE_REJECTED")).toHaveLength(0);
+          expect(rows(proj, "STAGE_REVISING")).toHaveLength(0);
         });
       }
+
+      // A change asked for, the edit, the gate shown again with no review, and
+      // their approval; the recovery review is recorded after it and brings a
+      // finding they never saw. Their approval, named, takes nothing: the
+      // stage is reviewed again first.
+      test("strict: a recovery review recorded after their approval, with a new finding, does not take that approval", async () => {
+        const proj = await at("learnings", policy);
+        await writeAndReview(proj);
+        expect((await report(proj, ["--result", "awaiting-approval"])).status).toBe(0);
+        sleep();
+        await replyAtGate(proj, "Rename FR-1 to FR-1a", "claude");
+        sleep();
+        agentEdits(proj, "- FR-1a: a bad duration stops with a clear error.");
+        expect((await report(proj, ["--result", "awaiting-approval"])).status).toBe(0);
+        sleep();
+        expect((await say(proj, "approve", "claude")).status).toBe(0);
+        const approval = latestMessageId(proj);
+        const stale = await report(proj, ["--result", "approved", "--user-input", "Approve", "--message", approval]);
+        expect(stale.stdout).toContain("ARTIFACT_REVIEW_STALE");
+        await recoveryReview(proj, "NOT-READY", "| Major | requirements.md | FR-1a has no acceptance rule | Add one |\n");
+        const named = await report(proj, ["--result", "approved", "--user-input", "Approve", "--message", approval]);
+        expect(rows(proj, "GATE_APPROVED"), named.stdout).toHaveLength(0);
+        expect(named.stdout).toContain("REVIEW_EVIDENCE_MISSING");
+      });
     }
   }
 });
