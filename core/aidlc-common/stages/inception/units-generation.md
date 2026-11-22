@@ -58,7 +58,6 @@ NOTE: **Stage 2.7 produces the dependency DAG (topology). Stage 2.9 Delivery Pla
 - Read the Architecture Decision Records from `<record>/inception/domain-design/decisions.md` (if produced) — the boundary/ownership ADRs constrain how components may be grouped into units (a decision to keep two components separately deployable, for instance, forbids bundling them into one unit)
 - Read `<record>/inception/requirements-analysis/requirements.md`
 - Read `<record>/inception/user-stories/stories.md` (if produced)
-- When this stage runs again after Construction began, run `{{INVOKE}} engine sensor-traceability --stage units-generation --built` and read its list first. Finished Units keep their built work as it is: give a finished Unit no new story or criterion; new work goes to a new Unit or to one that is not finished, unless the person chooses to reopen the finished Unit. Every story it lists as unbuilt needs a Unit in the revised plan. Started Units are someone's work in progress: tell the person which of their rows the revision changes
 
 ### Step 2: Create Decomposition Plan with Questions
 
@@ -90,7 +89,6 @@ Collect answers following stage-protocol.md §3 question flow (collect answers, 
 
 Present the decomposition plan to the user as a structured question:
 - Summarize the approach: unit boundary strategy, estimated unit count, dependency structure, and the proposed kind per unit (service/spec/ui/packaging/library) so the human confirms the design-artifact scope each unit will carry into Construction
-- On a re-run after Construction began, the summary names, for each story the `--built` list gives as unbuilt, the Unit that takes it
 - Options: Approve Plan / Revise Plan
 
 ---
@@ -137,6 +135,7 @@ NOTE: This artifact describes topology only. It does NOT pick a single "recommen
 - Rows that span multiple units (cross-cutting concerns)
 - Implementation order within each unit
 - A story the person decides no Unit builds, because it is handled outside Construction (in Operation, say): write `none` in its Units cell, and give its `traceability.json` row `Deferred` with the reason and where it is handled as the `target`. `N/A` does not settle it
+- A finished Unit keeps its built work as it is: give it no new story or criterion
 - Coverage verification: every enumerated ID assigned, every unit has rows
 
 Create `<record>/inception/units-generation/traceability.json` by running
@@ -182,9 +181,7 @@ For `unit-of-work-dependency.md`, `required-sections` also requires a
 well-formed, cycle-free fenced `yaml` edge block. `traceability` owns
 `traceability.json`, derives the Unit set, and verifies every story, or every
 fallback `FR` when `stories.md` is not produced, maps to its declared target
-Unit. With `stories.md`, when Units are already finished, it also names
-every story whose Units are all finished and did not build all its
-acceptance criteria.
+Unit.
 
 ## Learn
 

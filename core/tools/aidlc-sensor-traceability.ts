@@ -16,7 +16,7 @@ import {
   usesStageLevelPerUnitArtifacts,
 } from "./aidlc-lib.ts";
 import { aidlcDispatcherInvocation, sensorFireUsage } from "./aidlc-runtime-paths.ts";
-import { unitProgressTable, unitRowMerged } from "./aidlc-unit-landing.ts";
+import { completedUnits } from "./aidlc-unit-landing.ts";
 
 const VALID_STATUSES = new Set(["OK", "GAP", "ORPHAN", "Deferred", "N/A"]);
 
@@ -50,7 +50,6 @@ interface Flags {
   outputPath?: string;
   stage?: string;
   writeUpstream?: boolean;
-  built?: boolean;
 }
 
 interface UnitContext {
@@ -73,9 +72,6 @@ interface UpstreamResolution {
   ids: Set<string>;
   reasons: string[];
   extraGaps: string[];
-  // Units Generation: the stories whose Units are all finished and that those
-  // Units did not build, each with what to do.
-  unbuilt: string[];
   unitContext?: UnitContext;
   storyAssignments?: Map<string, Set<string>>;
   recorded: Map<string, RecordedRequirement> | null;
@@ -101,7 +97,6 @@ function parseFlags(argv: string[]): Flags {
     if (arg === "--stage") out.stage = argv[++i];
     else if (arg === "--output-path") out.outputPath = argv[++i];
     else if (arg === "--write-upstream") out.writeUpstream = true;
-    else if (arg === "--built") out.built = true;
   }
   return out;
 }
@@ -439,104 +434,28 @@ function storyAssignments(storyMapPath: string, units: string[], ids: Map<string
     : { assignments };
 }
 
-// The Units the Unit Progress table of aidlc-state.md records as finished, and
-// the ones with work recorded that are not. The table is the engine's own
-// record (`unitRowMerged`, `completedUnits` in aidlc-unit-landing.ts). With a
-// `merged` column, a Unit is finished once its `merged` cell is `[x]`: that is
-// the landing the claim overview does not offer again, and the engine writes a
-// stage the Unit skips as `[x]`, so no stage cell is read. Without the column
-// (nothing has landed yet), the engine reads a Unit as complete when every
-// stage cell and the gate cell are `[x]`; a hand-written `[S]` stage cell counts
-// as done here too. Anything else with a stage cell `[x]` or an owner is started.
-interface UnitWork {
-  finished: string[];
-  started: string[];
-}
-
-function unitWork(projectDir: string): UnitWork {
-  const work: UnitWork = { finished: [], started: [] };
+// With stories, a story whose row names only finished Units (the engine's own
+// reading of the Unit Progress table, `completedUnits`) is not worked on again,
+// so each of its criteria must already be built or settled as Build and Test's
+// coverage reads it (`finalCoverage`): a criterion nobody built and nobody
+// settled would never be built. A story with a Unit that is not finished on its
+// row is asked of that Unit. `finalCoverage` calls `resolveUpstream` itself, so
+// this runs from `verifyTargets` only.
+function unbuiltStories(projectDir: string, docsDir: string, assignments: Map<string, Set<string>>): string[] {
   const state = readPlanState(projectDir);
-  const table = state === null ? null : unitProgressTable(state);
-  if (state === null || table === null) return work;
-  const column = (name: string) => table.header.findIndex((cell) => cell.toLowerCase() === name);
-  const mergedIndex = column("merged");
-  const gateIndex = column("gate");
-  const stageEnd = gateIndex >= 0 ? gateIndex : mergedIndex >= 0 ? mergedIndex : table.header.length;
-  for (const cells of table.rows) {
-    const unit = cells[0];
-    const stages = cells.slice(2, stageEnd);
-    const finished = mergedIndex >= 0
-      ? unitRowMerged(state, unit)
-      : gateIndex >= 0 && cells[gateIndex] === "[x]" && stages.every((cell) => cell === "[x]" || cell === "[S]");
-    if (finished) work.finished.push(unit);
-    else if (stages.includes("[x]") || (cells[1] !== "" && cells[1] !== "-")) work.started.push(unit);
-  }
-  work.finished.sort();
-  work.started.sort();
-  return work;
-}
-
-// The acceptance criteria a Unit's Code Generation table builds: an `OK` row
-// whose target is an existing workspace file.
-function builtCriteria(projectDir: string, docsDir: string, unit: string): Set<string> {
-  const built = new Set<string>();
-  const table = readTable(join(docsDir, "construction", unit, "code-generation", "traceability.json"), unit);
-  for (const entry of table.data?.coverage ?? []) {
-    if (entry.status === "OK" && codeTargetProblem(resolve(projectDir), entry.target) === null) built.add(entry.id);
-  }
-  return built;
-}
-
-interface UnbuiltStory {
-  story: string;
-  units: string[];
-  criteria: string[];
-}
-
-interface BuiltWork extends UnitWork {
-  unbuilt: UnbuiltStory[];
-}
-
-function unbuiltFinding({ story, units, criteria }: UnbuiltStory): string {
-  return `${story}: every Unit on its row is finished (${units.join(", ")}), and none of them built ${criteria.join(", ")}; ` +
-    "add a Unit that is not finished to the row, or reopen one of them";
-}
-
-// With stories, a story whose row names only finished Units is built only if
-// those Units built every one of its criteria: a finished Unit is not worked
-// again, so a criterion it did not build (it marked it `N/A`, the criterion came
-// later, or the story reached its row only now) would never be built. A story
-// with one Unit that is not finished on its row is fine: that Unit is asked for
-// every criterion. `assignments` is the story map's, or read from the plan when
-// not given.
-function builtWork(projectDir: string, assignments?: Map<string, Set<string>>): BuiltWork {
-  const work = unitWork(projectDir);
-  const result: BuiltWork = { ...work, unbuilt: [] };
-  const docsDir = recordDir(projectDir);
-  if (!docsDir || work.finished.length === 0) return result;
-  const storiesRead = readText(join(docsDir, "inception", "user-stories", "stories.md"));
-  if (storiesRead.content === null) return result;
-  let rows = assignments;
-  if (!rows) {
-    const dag = resolveBoltDag(projectDir);
-    if (dag.state !== "ok") return result;
-    const unitIds = unitIdMap(join(docsDir, "inception", "units-generation", "unit-of-work.md"), dag.units);
-    rows = storyAssignments(join(docsDir, "inception", "units-generation", "unit-of-work-story-map.md"), dag.units, unitIds, [ID_PATTERNS.US]).assignments;
-  }
-  const finished = new Set(work.finished);
-  const built = new Map<string, Set<string>>();
-  for (const [story, units] of [...rows].sort(([a], [b]) => a.localeCompare(b, "en", { numeric: true }))) {
-    if (units.size === 0 || ![...units].every((unit) => finished.has(unit))) continue;
-    const criteria = [...criteriaOfStories(storiesRead.content, new Set([story]))].sort((a, b) => a.localeCompare(b, "en", { numeric: true }));
-    const unbuilt = criteria.filter((criterion) =>
-      ![...units].some((unit) => {
-        if (!built.has(unit)) built.set(unit, builtCriteria(projectDir, docsDir, unit));
-        return built.get(unit)!.has(criterion);
-      })
-    );
-    if (unbuilt.length > 0) result.unbuilt.push({ story, units: [...units].sort(), criteria: unbuilt });
-  }
-  return result;
+  const finished = state === null ? new Set<string>() : completedUnits(state);
+  const rows = [...assignments].filter(([, units]) => units.size > 0 && [...units].every((unit) => finished.has(unit)));
+  const stories = rows.length === 0 ? null : readText(join(docsDir, "inception", "user-stories", "stories.md")).content;
+  if (stories === null) return [];
+  const settled = new Set(finalCoverage(projectDir).coverage.filter((row) => row.covered).map((row) => row.id));
+  const byId = (a: string, b: string) => a.localeCompare(b, "en", { numeric: true });
+  return rows.flatMap(([story, units]) => {
+    const unbuilt = [...criteriaOfStories(stories, new Set([story]))].filter((id) => !settled.has(id)).sort(byId);
+    return unbuilt.length === 0 ? [] : [
+      `${story}: every Unit on its row is finished (${[...units].sort().join(", ")}), and none of them built ${unbuilt.join(", ")}; ` +
+      "add a Unit that is not finished to the row",
+    ];
+  });
 }
 
 // The Units of the plan, with what the story map says of each item: a row of it
@@ -683,7 +602,7 @@ function resolveNfrUpstream(
 // `declared` is the table's own upstream_ids: with requirements.md's own, the
 // requirements it traces when Requirements Analysis recorded none.
 function resolveUpstream(stage: string, projectDir: string, outputPath: string, declared: readonly string[]): UpstreamResolution {
-  const result: UpstreamResolution = { ids: new Set(), reasons: [], extraGaps: [], unbuilt: [], recorded: null, unrecorded: [], requirementsFile: "" };
+  const result: UpstreamResolution = { ids: new Set(), reasons: [], extraGaps: [], recorded: null, unrecorded: [], requirementsFile: "" };
   const docsDir = recordDir(projectDir);
   if (!docsDir) {
     result.reasons.push("cannot resolve the active intent record directory");
@@ -736,7 +655,6 @@ function resolveUpstream(stage: string, projectDir: string, outputPath: string, 
         if (!mapped.assignments.has(id)) result.extraGaps.push(id);
       }
     }
-    if (hasStories) result.unbuilt = builtWork(projectDir, mapped.assignments).unbuilt.map(unbuiltFinding);
     return result;
   }
 
@@ -874,6 +792,7 @@ function verifyTargets(
         invalidTargets.push(`${entry.id}: target "${rawTarget}" is not mapped in unit-of-work-story-map.md`);
       }
     }
+    if (docsDir) invalidTargets.push(...unbuiltStories(projectDir, docsDir, upstream.storyAssignments));
   }
 
   if (stage === "functional-design" && docsDir) {
@@ -1330,8 +1249,7 @@ export function main(argv: string[]): void {
   if (asksForHelp(argv)) {
     printUsageAndExit(
       `Usage: ${sensorFireUsage("traceability")}\n` +
-        `       ${aidlcDispatcherInvocation("sensor-traceability --stage build-and-test")}\n` +
-        `       ${aidlcDispatcherInvocation("sensor-traceability --stage units-generation --built")}`,
+        `       ${aidlcDispatcherInvocation("sensor-traceability --stage build-and-test")}`,
     );
   }
   const flags = parseFlags(argv);
@@ -1339,11 +1257,6 @@ export function main(argv: string[]): void {
     if (!flags.stage) fail("--stage is required with --write-upstream");
     if (!flags.outputPath) fail("--output-path is required");
     writeUpstream(flags.stage, flags.outputPath);
-    return;
-  }
-  if (flags.stage === "units-generation" && flags.built && !flags.outputPath) {
-    const { finished, started, unbuilt } = builtWork(resolveProjectDir());
-    process.stdout.write(`${JSON.stringify({ finished_units: finished, started_units: started, unbuilt })}\n`);
     return;
   }
   if (flags.stage === "build-and-test" && !flags.outputPath) {
@@ -1429,7 +1342,7 @@ export function main(argv: string[]): void {
     missing_from_table: uniqueSorted(missingFromTable),
     missing_from_upstream_ids: uniqueSorted(missingFromUpstreamIds),
     invalid_entries: uniqueSorted(invalidEntries),
-    invalid_targets: uniqueSorted([...targetChecks.invalidTargets, ...upstream.unbuilt]),
+    invalid_targets: uniqueSorted(targetChecks.invalidTargets),
     findings_count: 0,
   };
   result.findings_count =

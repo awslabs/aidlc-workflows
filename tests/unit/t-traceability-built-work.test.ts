@@ -7,8 +7,9 @@
 // after they finished, or the story reached their row only now). A finished Unit
 // is not worked again, so nobody would build it. With stories.md and at least
 // one finished Unit, a story whose row names only finished Units must have every
-// criterion built (an `OK` row with an existing file) in one of them. The same
-// list is printed by `--stage units-generation --built`.
+// criterion built or settled, read as Build and Test's coverage reads it: an
+// `OK` row with an existing file, or an `N/A` with its reason that hands the
+// criterion to no other Unit.
 
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
@@ -31,12 +32,6 @@ interface SensorResult {
   invalid_targets: string[];
   findings_count: number;
   reason?: string;
-}
-
-interface BuiltList {
-  finished_units: string[];
-  started_units: string[];
-  unbuilt: Array<{ story: string; units: string[]; criteria: string[] }>;
 }
 
 interface Row {
@@ -176,10 +171,6 @@ function run(proj: string, file: string): SensorResult {
   return JSON.parse(sensor(proj, ["--output-path", file])) as SensorResult;
 }
 
-function built(proj: string): BuiltList {
-  return JSON.parse(sensor(proj, ["--built"])) as BuiltList;
-}
-
 const PLAIN_MAP = [
   "| Story | Unit ID | Directory |",
   "|---|---|---|",
@@ -215,12 +206,14 @@ function landed(extra: Partial<Plan> = {}): Plan {
   };
 }
 
-describe("Units Generation: a story whose Units are all finished must be built there", () => {
-  test("first run: no Unit Progress table says nothing, and --built prints three empty arrays", () => {
+// The findings of this rule, apart from the others the check may raise.
+const finishedFindings = (result: SensorResult) => result.invalid_targets.filter((text) => text.includes("is finished"));
+
+describe("Units Generation: a story whose Units are all finished must be built or settled", () => {
+  test("first run: no Unit Progress table says nothing", () => {
     const { proj, file } = project({ map: PLAIN_MAP });
     const result = run(proj, file);
     expect(result.pass, JSON.stringify(result)).toBe(true);
-    expect(built(proj)).toEqual({ finished_units: [], started_units: [], unbuilt: [] });
   });
 
   test("a table with no finished Unit says nothing", () => {
@@ -229,21 +222,19 @@ describe("Units Generation: a story whose Units are all finished must be built t
       map: PLAIN_MAP,
     });
     expect(run(proj, file).pass).toBe(true);
-    expect(built(proj)).toEqual({ finished_units: [], started_units: [], unbuilt: [] });
   });
 
   test("every criterion OK with an existing file in the finished Units passes", () => {
     const { proj, file } = project(landed());
     const result = run(proj, file);
     expect(result.pass, JSON.stringify(result)).toBe(true);
-    expect(built(proj)).toEqual({ finished_units: ["u1-ledger", "u2-profile"], started_units: [], unbuilt: [] });
   });
 
-  test("a criterion the finished Unit marked N/A is named with the story, the Unit and the criterion", () => {
+  test("a criterion the finished Unit deferred is named with the story, the Unit and the criterion", () => {
     const { proj, file } = project(landed({
       tables: {
         "u1-ledger": LEDGER_DONE,
-        "u2-profile": [PROFILE_DONE[0], { id: "AC1.2.2", status: "N/A", target: "not needed" }],
+        "u2-profile": [PROFILE_DONE[0], { id: "AC1.2.2", status: "Deferred", target: "later" }],
       },
     }));
     const result = run(proj, file);
@@ -255,7 +246,7 @@ describe("Units Generation: a story whose Units are all finished must be built t
     expect(finding).toContain("AC1.2.2");
     expect(finding).not.toContain("AC1.2.1");
     expect(finding).toContain("finished");
-    expect(finding).toContain("add a Unit that is not finished to the row, or reopen one of them");
+    expect(finding).toMatch(/; add a Unit that is not finished to the row$/);
   });
 
   test("a criterion in stories.md that the finished Unit's table does not list is named", () => {
@@ -286,7 +277,7 @@ describe("Units Generation: a story whose Units are all finished must be built t
     const plan = landed({
       tables: {
         "u1-ledger": LEDGER_DONE,
-        "u2-profile": [PROFILE_DONE[0], { id: "AC1.2.2", status: "N/A", target: "not needed" }],
+        "u2-profile": [PROFILE_DONE[0], { id: "AC1.2.2", status: "Deferred", target: "later" }],
       },
       map: [
         "| Story | Unit ID | Directory |",
@@ -298,7 +289,6 @@ describe("Units Generation: a story whose Units are all finished must be built t
     const { proj, file } = project(plan);
     const result = run(proj, file);
     expect(result.pass, JSON.stringify(result)).toBe(true);
-    expect(built(proj).unbuilt).toEqual([]);
   });
 
   test("a criterion built by another finished Unit on the row counts", () => {
@@ -326,22 +316,7 @@ describe("Units Generation: a story whose Units are all finished must be built t
     expect(result.invalid_targets[0]).toMatch(/^US1\.2: .*AC1\.2\.1, AC1\.2\.2/);
   });
 
-  test("a landed Unit with skipped design stages counts as finished", () => {
-    const skipped = ["[S]", "[S]", "[S]", "[S]", "[x]", "[x]"];
-    const { proj, file } = project(landed({
-      progress: { ...LANDED, "u1-ledger": { cells: skipped, merged: "[x]" }, "u2-profile": { cells: skipped, merged: "[x]" } },
-    }));
-    expect(built(proj).finished_units).toEqual(["u1-ledger", "u2-profile"]);
-    expect(run(proj, file).pass).toBe(true);
-
-    const unbuilt = project(landed({
-      progress: { ...LANDED, "u2-profile": { cells: skipped, merged: "[x]" } },
-      tables: { "u1-ledger": LEDGER_DONE },
-    }));
-    expect(run(unbuilt.proj, unbuilt.file).invalid_targets).toHaveLength(1);
-  });
-
-  test("a started but unfinished Unit is listed as started, and its stories raise nothing", () => {
+  test("a started but unfinished Unit's stories raise nothing", () => {
     const { proj, file } = project(landed({
       progress: {
         "u1-ledger": { cells: DONE, merged: "[x]" },
@@ -352,17 +327,9 @@ describe("Units Generation: a story whose Units are all finished must be built t
     }));
     const result = run(proj, file);
     expect(result.pass, JSON.stringify(result)).toBe(true);
-    expect(built(proj)).toEqual({ finished_units: ["u1-ledger"], started_units: ["u2-profile"], unbuilt: [] });
   });
 
-  test("a Unit with an owner and no stage done is started", () => {
-    const { proj } = project(landed({
-      progress: { ...LANDED, "u3-reports": { owner: "reports-team", cells: FRESH, merged: "[ ]" } },
-    }));
-    expect(built(proj).started_units).toEqual(["u3-reports"]);
-  });
-
-  test("--built prints the same stories and criteria as the findings", () => {
+  test("a story on two finished Units names both, and only what neither built", () => {
     const { proj, file } = project(landed({
       map: [
         "| Story | Unit ID | Directory |",
@@ -375,19 +342,16 @@ describe("Units Generation: a story whose Units are all finished must be built t
         "u2-profile": [{ id: "AC1.2.1", status: "OK", target: "src/profile.ts" }],
       },
     }));
-    const list = built(proj);
-    expect(list.finished_units).toEqual(["u1-ledger", "u2-profile"]);
-    expect(list.unbuilt).toEqual([
-      { story: "US1.1", units: ["u1-ledger"], criteria: ["AC1.1.2"] },
-      { story: "US1.2", units: ["u1-ledger", "u2-profile"], criteria: ["AC1.2.2"] },
-    ]);
     const findings = run(proj, file).invalid_targets;
     expect(findings).toHaveLength(2);
-    for (const entry of list.unbuilt) {
+    for (const entry of [
+      { story: "US1.1", units: ["u1-ledger"], criteria: ["AC1.1.2"] },
+      { story: "US1.2", units: ["u1-ledger", "u2-profile"], criteria: ["AC1.2.2"] },
+    ]) {
       const finding = findings.find((text) => text.startsWith(`${entry.story}: `));
       expect(finding, JSON.stringify(findings)).toBeTruthy();
       for (const unit of entry.units) expect(finding).toContain(unit);
-      expect(finding).toContain(entry.criteria.join(", "));
+      expect(finding).toContain(`built ${entry.criteria.join(", ")};`);
     }
   });
 
@@ -395,35 +359,55 @@ describe("Units Generation: a story whose Units are all finished must be built t
     const { proj, file } = project({
       progress: {
         "u1-ledger": { cells: DONE },
-        "u2-profile": { cells: ["[x]", "[S]", "[S]", "[S]", "[x]", "[x]"] },
+        "u2-profile": { cells: DONE },
         "u3-reports": { cells: ["[x]", "[x]", "[ ]", "[ ]", "[ ]", "[ ]"] },
       },
       map: PLAIN_MAP,
       tables: { "u1-ledger": LEDGER_DONE, "u2-profile": [PROFILE_DONE[0]] },
       files: FILES,
     });
-    expect(built(proj)).toMatchObject({
-      finished_units: ["u1-ledger", "u2-profile"],
-      started_units: ["u3-reports"],
-      unbuilt: [{ story: "US1.2", units: ["u2-profile"], criteria: ["AC1.2.2"] }],
-    });
-    expect(run(proj, file).invalid_targets).toHaveLength(1);
+    const findings = run(proj, file).invalid_targets;
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toMatch(/^US1\.2: .*\(u2-profile\).*AC1\.2\.2;/);
   });
 
   test("a table without a merged column and with the gate still open finishes nothing", () => {
-    const { proj } = project({
+    const { proj, file } = project({
       progress: { "u1-ledger": { cells: ["[x]", "[x]", "[x]", "[x]", "[x]", "[ ]"] } },
       map: PLAIN_MAP,
     });
-    expect(built(proj)).toEqual({ finished_units: [], started_units: ["u1-ledger"], unbuilt: [] });
+    expect(finishedFindings(run(proj, file))).toEqual([]);
   });
 
   test("without stories.md the rule says nothing (rows are requirements)", () => {
-    const { proj, file } = project(landed({ tables: {} }));
+    const { proj, file } = project(landed({
+      tables: {},
+      map: ["| Requirement | Unit ID | Directory |", "|---|---|---|", "| FR1 | U1 | u1-ledger |", "| FR2 | U2 | u2-profile |"],
+    }));
     // The FR-keyed case is not checked against built work.
     rmSync(join(seededRecordDir(proj), "inception", "user-stories", "stories.md"));
     const result = run(proj, file);
-    expect(result.invalid_targets.filter((text) => text.includes("is finished"))).toEqual([]);
-    expect(built(proj).unbuilt).toEqual([]);
+    expect(result.reason ?? "", JSON.stringify(result)).not.toContain("failed safely");
+    expect(finishedFindings(result)).toEqual([]);
+  });
+
+  test("a criterion a finished Unit marked N/A with its reason is settled, as Build and Test reads it; one handed to another Unit that built nothing is named", () => {
+    const { proj, file } = project(landed({
+      tables: {
+        "u1-ledger": [LEDGER_DONE[0], { id: "AC1.1.2", status: "N/A", target: "u3-reports" }],
+        "u2-profile": [PROFILE_DONE[0], { id: "AC1.2.2", status: "N/A", target: "not offered in this release" }],
+      },
+    }));
+    const findings = finishedFindings(run(proj, file));
+    expect(findings, JSON.stringify(findings)).toHaveLength(1);
+    expect(findings[0]).toMatch(/^US1\.1: .*\(u1-ledger\).*AC1\.1\.2;/);
+  });
+
+  test("a merged Unit with a stage cell not done is not finished, as the engine reads a complete Unit", () => {
+    const { proj, file } = project(landed({
+      progress: { ...LANDED, "u2-profile": { cells: ["[x]", "[x]", "[x]", "[x]", "[-]", "[x]"], merged: "[x]" } },
+      tables: { "u1-ledger": LEDGER_DONE, "u2-profile": [PROFILE_DONE[0]] },
+    }));
+    expect(finishedFindings(run(proj, file))).toEqual([]);
   });
 });

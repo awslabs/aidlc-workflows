@@ -1100,12 +1100,10 @@ names) / **Request Changes**.
 - The story map provides traceability: every user story (or every functional
   requirement, when no stories are produced) must be assigned to at least one
   Unit, and every Unit must have at least one row.
-- When the stage runs again after Construction began, a story whose row names
-  only finished Units must have every acceptance criterion built in one of
-  them (an `OK` row with an existing file in that Unit's Code Generation
-  table), or the traceability check names it. `aidlc engine sensor-traceability
-  --stage units-generation --built` prints the finished and started Units and
-  those stories, and the stage reads it first.
+- When the stage runs again after Construction began, in team-owned
+  Construction, a story whose row names only finished Units must have every
+  acceptance criterion built or settled, as Build and Test's coverage reads it,
+  or the traceability check names it.
 - The aidlc-delivery-agent provides feasibility validation and prioritization input,
   ensuring the decomposition is practical from a delivery perspective.
 

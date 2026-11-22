@@ -58,14 +58,13 @@ opens, on the tables as they are then:
    whose kind writes no `rules.md` (a `ui` Unit) names one of its design files
    (`functional-spec.md`, `frontend-components.md`) on each row instead of a
    business rule. At Units Generation, with stories, once a Unit is finished
-   (its `merged` cell in the Unit Progress table of `aidlc-state.md` is `[x]`;
-   without that column, every stage cell and the gate cell are done), a story
-   whose row names only finished Units must have every acceptance criterion
-   built in one of them: an `OK` row, whose target is an existing file, in that
-   Unit's Code Generation table. A finished Unit is not worked again, so a
-   criterion it marked `N/A`, never listed, or got after it finished would
-   never be built; each such story is reported as an invalid target. A story
-   with a Unit that is not finished on its row is not.
+   (its row in the Unit Progress table of `aidlc-state.md` has every stage cell
+   and the gate cell `[x]`, and its `merged` cell too where the table has one),
+   a story whose row names only finished Units must have every acceptance
+   criterion built or settled, as Build and Test's coverage below reads it. A
+   finished Unit is not worked again, so a criterion nobody built or settled
+   would never be built; each such story is reported as an invalid target. A
+   story with a Unit that is not finished on its row is not.
 6. Derives functional-design orphans from `rules.md` rather than
    trusting only the self-reported `reverse` array.
 
@@ -88,12 +87,6 @@ settles its criteria the same way (a requirement, in work without stories),
 unless a later stage's table lists them. A Code Generation `N/A` that hands the
 ID to another Unit settles nothing: if no Unit built it, it is uncovered and its
 row lists the hand-offs as `handed_off` (`<Unit>/code-generation: <target>`).
-
-`--stage units-generation --built`, with no output path, prints the same list
-before the plan is edited, as one JSON line: `finished_units`, `started_units`
-(Units with some work recorded that are not finished; information only) and
-`unbuilt` (each `{ "story", "units", "criteria" }` the rule above reports). With
-no Unit Progress table or no finished Unit, all three are empty.
 
 ## Expected JSON schema
 
