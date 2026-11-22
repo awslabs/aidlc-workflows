@@ -614,7 +614,11 @@ ask targeted follow-up. Do NOT proceed until resolved.
   after the flag are the agent's own (`Conductor Summary`) and claim nothing;
   no quote is compared. With no message named (by the flag, or by the question
   it answers when that question was logged naming one), the answer is recorded
-  as the agent's own, with no claim that the person left it. The agent then
+  only on a reply of theirs sent after that question was logged (the row names
+  it when it came in this chat), outside autonomous Construction and the human
+  presence off switch; with none, the engine refuses it, names the
+  messages of theirs it could stand on (ids and times), and otherwise says to
+  ask them. The agent then
   says one line: "You left <the question> to me, so I chose <the choice>. Say if you
   want something else."
   (for several questions, "You left <Stage>'s <N> questions to me, so I chose
@@ -1273,9 +1277,13 @@ change. See
    as a refused completion. It returns `reviewed_at` too, the UTC time this
    review is dated: the dispatch brief carries it as `Date for this review:`
    and the reviewer writes its `**Date:**` line from the brief, so no reviewer
-   runs a command of its own for the time. On a stage that builds in the
+   runs a command of its own for the time. Its `agent_note` gives first the
+   line the brief carries word for word that names the review file and says
+   its folder already exists (`Your review file is <reviewFile> (its folder
+   already exists).`): the request made that folder, so the review is one
+   plain file write. On a stage that builds in the
    workspace, when another open piece of work in this checkout claims files in
-   its Units' source manifests, its `agent_note` gives the line the brief
+   its Units' source manifests, its `agent_note` gives one more line the brief
    carries word for word: those files are that work's, not this work's to
    review (the same set `other_work_note` names to the build). On Code
    Generation, when the plan the person approved changed after that approval

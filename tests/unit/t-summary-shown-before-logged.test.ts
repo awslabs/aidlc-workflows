@@ -212,10 +212,10 @@ describe("t-summary-shown-before-logged: a summary answered before its question 
       says(proj, "yes, looks correct");
       const recorded = answerSummary(proj, questions, "Looks correct");
       expect(recorded.status, recorded.out).toBe(0);
-      // Every reply of theirs in this chat that no decision has used yet: the
-      // answers' replies spend none (the audit escapes the line break).
+      // The reply the stage's answers stood on is on their rows already, so
+      // the receipt keeps only the reply since.
       expect(auditBlockField(events(proj, "SUMMARY_CONFIRMATION_RECORDED")[0].block, "Person Reply"))
-        .toBe("go with the recommended\\nyes, looks correct");
+        .toBe("yes, looks correct");
       expect(said(recorded.out)).toBeUndefined();
     });
 
