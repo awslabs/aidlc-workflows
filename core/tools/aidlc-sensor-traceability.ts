@@ -410,16 +410,43 @@ function tokenPresent(cell: string, token: string): boolean {
   return new RegExp(`(?:^|[\\s,;/])${escaped}(?:$|[\\s,;/])`, "i").test(cell);
 }
 
+interface StoryMapLine {
+  line: string;
+  cells: string[];
+  // The text read for story and requirement IDs: the whole line, so a row
+  // with no closing `|` still gives its IDs, or the row's other cells when its
+  // table has a `Reached through` column.
+  idText: string;
+  reach?: string;
+}
+
+// The story map line by line, for both of its readers. A row with a cell
+// reading `Reached through` names that column for the rows below it, until a
+// line that does not start with `|`. A row's cell in that column is split off
+// as `reach`, a story's answer, so its words are never read for a story or a
+// Unit name.
+function storyMapLines(content: string): StoryMapLine[] {
+  let column = -1;
+  return content.split(/\r?\n/).map((line) => {
+    const all = markdownCells(line);
+    if (!line.trimStart().startsWith("|")) column = -1;
+    const heading = all.findIndex((cell) => cell.replace(/[*_]/g, "").replace(/\s*:$/, "").toLowerCase() === "reached through");
+    if (heading >= 0) column = heading;
+    if (column < 0) return { line, cells: all, idText: line };
+    const cells = all.filter((_, index) => index !== column);
+    return { line, cells, idText: cells.join(" | "), reach: all[column] };
+  });
+}
+
 // `idPatterns` follow the stage's source fallback: US rows when stories.md
 // exists; otherwise FR rows plus any NFR rows the map also carries.
 function storyAssignments(storyMapPath: string, units: string[], ids: Map<string, string>, idPatterns: RegExp[]): { assignments: Map<string, Set<string>>; reason?: string } {
   const read = readText(storyMapPath);
   if (read.content === null) return { assignments: new Map(), reason: read.reason };
   const assignments = new Map<string, Set<string>>();
-  for (const line of read.content.split(/\r?\n/)) {
-    const cells = markdownCells(line);
+  for (const { cells, idText } of storyMapLines(read.content)) {
     if (cells.length === 0) continue;
-    const stories = extractIds(line, idPatterns);
+    const stories = extractIds(idText, idPatterns);
     if (stories.size === 0) continue;
     for (const unit of units) {
       const aliases = [unit, ids.get(unit)].filter((value): value is string => value !== undefined);
@@ -443,8 +470,8 @@ function storyAssignments(storyMapPath: string, units: string[], ids: Map<string
 const KINDS_WITHOUT_SURFACE = new Set(["library", "spec", "packaging"]);
 
 interface StoryReach {
-  // A story's own answer, from its row: `interface`, `existing: <where>`, or a
-  // bare `existing` (no place, refused).
+  // A story's own answer, from its row's cell in the `Reached through` column:
+  // `interface`, `existing: <where>`, or a bare `existing` (no place, refused).
   rows: Map<string, string>;
   // One answer for every story that has none of its own.
   everyStory?: string;
@@ -454,29 +481,29 @@ function reachAnswer(text: string): string | undefined {
   const value = text.trim();
   if (/^interface$/i.test(value)) return "interface";
   // `existing` alone or `existing: <where>`; a cell that only starts with the
-  // word (a story's title) is not an answer.
+  // word is not an answer.
   const existing = /^existing(?:\s*:\s*(.*))?$/i.exec(value);
   return existing ? `existing: ${(existing[1] ?? "").trim()}`.trim() : undefined;
 }
 
 // How the story map says a story is reached when no Unit on its row exposes
-// it: a cell of the story's row, or a `Reached through: <answer>` line outside
-// the tables that answers for every story.
+// it: its row's cell in the `Reached through` column, or a
+// `Reached through: <answer>` line outside the tables that answers for every
+// story.
 function storyReach(storyMapPath: string): StoryReach {
   const reach: StoryReach = { rows: new Map() };
   const read = readText(storyMapPath);
   if (read.content === null) return reach;
-  for (const line of read.content.split(/\r?\n/)) {
-    const cells = markdownCells(line);
+  for (const { line, cells, idText, reach: cell } of storyMapLines(read.content)) {
     if (cells.length === 0) {
       const everyStory = /^\s*(?:[-*]\s+)?\*{0,2}Reached through\*{0,2}\s*:\s*\*{0,2}\s*(.+?)\s*$/i.exec(line.replaceAll("`", ""));
       const answer = everyStory ? reachAnswer(everyStory[1]) : undefined;
       if (answer !== undefined) reach.everyStory = answer;
       continue;
     }
-    const answer = cells.map(reachAnswer).find((value) => value !== undefined);
+    const answer = cell === undefined ? undefined : reachAnswer(cell);
     if (answer === undefined) continue;
-    for (const story of extractIds(line, [ID_PATTERNS.US])) reach.rows.set(story, answer);
+    for (const story of extractIds(idText, [ID_PATTERNS.US])) reach.rows.set(story, answer);
   }
   return reach;
 }
@@ -496,7 +523,7 @@ function unreachedStories(assignments: Map<string, Set<string>>, unitKinds: Map<
     const owners = kinds.map(({ unit, kind }) => `${unit} (${kind})`).join(", ");
     findings.push(
       answer === undefined
-        ? `${story}: no Unit on its row exposes it: ${owners}. Add the ui or service Unit that does, or write how it is reached on its row: "existing: <where>" when the product already has the place, "interface" when its caller is a developer or another system`
+        ? `${story}: no Unit on its row exposes it: ${owners}. Add the ui or service Unit that does, or write how it is reached on its row, in a column headed Reached through: "existing: <where>" when the product already has the place, "interface" when its caller is a developer or another system`
         : `${story}: "existing" needs the place the product already has, as "existing: <where>"`,
     );
   }

@@ -185,7 +185,7 @@ describe("Units Generation: a story says how it is reached", () => {
   test("a cell that only starts with the word is not an answer", () => {
     const { proj, file } = project({
       map: [
-        "| Story | Unit ID | Directory | Title |",
+        "| Story | Unit ID | Directory | Reached through |",
         "|---|---|---|---|",
         "| US1.1 | U1 | u1-ledger | Post an entry |",
         "| US1.2 | U2 | u2-profile | Existing members edit a profile |",
@@ -262,5 +262,75 @@ describe("Units Generation: a story says how it is reached", () => {
       ],
     });
     expect(run(proj, file).pass).toBe(true);
+  });
+
+  test("the answer is read from the column headed Reached through, never from a team's own column", () => {
+    for (const [heading, cell] of [["Type", "Interface"], ["Status", "Existing"]]) {
+      const { proj, file } = project({
+        map: [
+          `| Story | Unit ID | Directory | ${heading} |`,
+          "|---|---|---|---|",
+          "| US1.1 | U1 | u1-ledger | |",
+          `| US1.2 | U2 | u2-profile | ${cell} |`,
+        ],
+      });
+      const result = run(proj, file);
+      expect(result.pass).toBe(false);
+      expect(result.invalid_targets).toHaveLength(1);
+      expect(result.invalid_targets[0].startsWith("US1.2: no Unit on its row exposes it")).toBe(true);
+      expect(result.invalid_targets[0]).toContain("Reached through");
+    }
+    const bold = project({
+      map: [
+        "| Story | Unit ID | Directory | **Reached through** |",
+        "|---|---|---|---|",
+        "| US1.1 | U1 | u1-ledger | |",
+        "| US1.2 | U2 | u2-profile | interface |",
+      ],
+    });
+    expect(run(bold.proj, bold.file).pass).toBe(true);
+    // The column ends with its table: a table below it is read whole.
+    const twoTables = project({
+      profile: "service",
+      map: [
+        "| Story | Unit ID | Directory | Reached through |",
+        "|---|---|---|---|",
+        "| US1.1 | U1 | u1-ledger | |",
+        "",
+        "| Unit ID | Directory | Order | Stories |",
+        "|---|---|---|---|",
+        "| U2 | u2-profile | 2 | US1.2 |",
+      ],
+    });
+    expect(run(twoTables.proj, twoTables.file).pass).toBe(true);
+  });
+
+  test("the answer is read for no story or Unit name", () => {
+    const { proj, file } = project({
+      ledger: "library",
+      map: [
+        "| Story | Unit ID | Directory | Reached through |",
+        "|---|---|---|---|",
+        "| US1.1 | U1 | u1-ledger | |",
+        "| US1.2 | U2 | u2-profile | existing: the US1.1 entries page of u1-ledger |",
+      ],
+    });
+    // Targets that only the answer's words would put on the rows.
+    write(proj, "inception/units-generation/traceability.json", `${JSON.stringify({
+      stage: "units-generation",
+      upstream_ids: ["US1.1", "US1.2"],
+      coverage: [
+        { id: "US1.1", status: "OK", target: "U2" },
+        { id: "US1.2", status: "OK", target: "U1" },
+      ],
+    }, null, 2)}\n`);
+    const result = run(proj, file);
+    expect(result.pass).toBe(false);
+    expect(result.invalid_targets).toHaveLength(3);
+    expect(result.invalid_targets[0].startsWith("US1.1: no Unit on its row exposes it: u1-ledger (library)")).toBe(true);
+    expect(result.invalid_targets.slice(1)).toEqual([
+      'US1.1: target "U2" is not mapped in unit-of-work-story-map.md',
+      'US1.2: target "U1" is not mapped in unit-of-work-story-map.md',
+    ]);
   });
 });
