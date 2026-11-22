@@ -38649,14 +38649,15 @@ const APPROVED_TOGETHER_ENDS = new Set([
 // A later listed stage's approval stands on the person's one reply while the
 // approval that listed it still covers it: no question, rejection or decision
 // since, no gate for a stage outside the list, and the latest review of this stage
-// since, if any, brings no finding the reply never saw (`reviewBringsFinding`, the
-// test the caller applies to a named reply's gate; this file must not import its
-// owner, which imports this one). Ledger order only. The row is that approval's
-// own, so what it recorded travels with it.
+// since, if any, brings no finding the reply never saw (`reviewBringsFinding`, given
+// the review and the row that opened the gate the reply came at; the caller owns
+// the test, and this file must not import its owner, which imports this one).
+// Ledger order only. The row is that approval's own, so what it recorded travels
+// with it.
 export function approvedTogetherCover(
   projectDir: string,
   slug: string,
-  reviewBringsFinding: (review: AuditShardEvent) => boolean,
+  reviewBringsFinding: (review: AuditShardEvent, opened: AuditShardEvent) => boolean,
 ): { first: string; row: AuditShardEvent } | null {
   let rows: AuditShardEvent[];
   try {
@@ -38672,7 +38673,12 @@ export function approvedTogetherCover(
     if (!first || first === slug || !listed.includes(slug)) continue;
     const since = rows.slice(i + 1);
     const review = since.findLast((later) => later.event === "REVIEW_COMPLETED" && auditBlockField(later.block, "Stage") === slug);
-    if (review !== undefined && reviewBringsFinding(review)) return null;
+    if (review !== undefined) {
+      const opened = rows.slice(0, i).findLast((earlier) =>
+        earlier.event === "STAGE_AWAITING_APPROVAL" && auditBlockField(earlier.block, "Stage") === first
+      ) ?? row;
+      if (reviewBringsFinding(review, opened)) return null;
+    }
     for (const later of since) {
       if (APPROVED_TOGETHER_ENDS.has(later.event)) return null;
       if (later.event !== "GATE_APPROVED" && later.event !== "STAGE_AWAITING_APPROVAL") continue;
