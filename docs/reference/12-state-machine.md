@@ -715,9 +715,12 @@ must repeat the same switch.
 gate without first reporting rejection, the `approved` report reconciles the
 missing `GATE_REJECTED` + `STAGE_REVISING` pair before completion when audit
 evidence proves an artifact write after a post-gate human turn and before the
-person's later, approving turn. The backfilled rows carry `Recovered: true`;
-reviewer writes before the human turn do not count, and a write after the
-approving turn carries out the approval, so it is not a revision. Reviewer-bearing stages persist `[R]` after that recovered
+person's later, approving turn, with no review of the stage recorded between
+that write and that turn. The backfilled rows carry `Recovered: true`;
+reviewer writes before the human turn do not count, a write after the
+approving turn carries out the approval, so it is not a revision, and a write
+a stage review read before the person answered is the one their approval
+stands on (a per-Unit review clears no write). Reviewer-bearing stages persist `[R]` after that recovered
 rejection and require a fresh review plus the normal `revised` report before
 the gate can reopen. Bypass with `AIDLC_SKIP_REVISION_BACKSTOP=1`.
 

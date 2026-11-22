@@ -25,9 +25,10 @@ import {
   REQUEST_TEXT_DIRS,
 } from "./aidlc-lib.ts";
 import { projectInRepo } from "./aidlc-git.ts";
-import { committedRecordIgnoreConflicts } from "./aidlc-gitignore.ts";
+import type { ProjectionDescriptor } from "./aidlc-distribution.ts";
+import { committedRecordIgnoreConflicts, untrackedSetupLine } from "./aidlc-gitignore.ts";
 import { onlyOwnLookRows } from "./aidlc-record-core.ts";
-import { workspaceSyncInvocation } from "./aidlc-runtime-paths.ts";
+import { discoverProjectHarnesses, workspaceSyncInvocation } from "./aidlc-runtime-paths.ts";
 import {
   parseWorkspaceManifest,
   readWorkspaceRepos,
@@ -57,11 +58,11 @@ const FORWARDING_LATCH = "aidlc/.aidlc-forwarding-latch";
 /**
  * Workspace-manifest health rows for `/aidlc --doctor` (all advisory).
  *
- * W1, the request folder and forwarding latch (W1c) and record visibility run
- * in any git workspace; W2/W3 run only when a repos.json manifest is present at
- * the workspace root (the declared multi-repo signal). A single-repo
- * install or a bare test fixture has no repos.json, so W2/W3 skip silently and
- * no manifest-specific rows are added.
+ * W1, the setup git does not track (W1s), the request folder and forwarding
+ * latch (W1c) and record visibility run in any git workspace; W2/W3 run only
+ * when a repos.json manifest is present at the workspace root (the declared
+ * multi-repo signal). A single-repo install or a bare test fixture has no
+ * repos.json, so W2/W3 skip silently and no manifest-specific rows are added.
  */
 export function workspaceManifestChecks(projectDir: string): DoctorCheck[] {
   const results: DoctorCheck[] = [];
@@ -186,6 +187,29 @@ export function workspaceManifestChecks(projectDir: string): DoctorCheck[] {
     ...(latch.blocksCommit ? ["forwarding latch"] : []),
   ].join(" and ");
 
+  // W1s - The note config says once, on the run that first writes a harness's
+  // setup into a git clone, stands here for as long as it holds: the helper's
+  // own line, read from each installed harness's description of its folders.
+  // None while a held-words row blocks a commit: the line can name aidlc/
+  // whole, which would take those words in.
+  const setupLines: string[] = [];
+  try {
+    for (const harness of blockers === "" ? discoverProjectHarnesses(projectDir) : []) {
+      try {
+        const descriptor = JSON.parse(
+          readFileSync(join(harness.root, "tools", "data", "aidlc-projection.json"), "utf-8"),
+        ) as ProjectionDescriptor | null;
+        if (descriptor?.harnessDir !== harness.harnessDir || typeof descriptor.productName !== "string") continue;
+        const line = untrackedSetupLine(projectDir, descriptor);
+        if (line) setupLines.push(line);
+      } catch {
+        // An unreadable description names nothing for that harness.
+      }
+    }
+  } catch {
+    // A project folder that cannot be listed gets no setup row.
+  }
+
   // W1 - Uncommitted records. Any git workspace: surface uncommitted changes
   // under aidlc/ so the shared records get committed and pushed to teammates.
   // Reports a passing row outside a git repo (smoke / fresh fixtures).
@@ -246,6 +270,9 @@ export function workspaceManifestChecks(projectDir: string): DoctorCheck[] {
             `Workspace records: ${dirty.length} uncommitted change(s) under aidlc/ (advisory - the shared records travel by git; ` +
             (blockers !== ""
               ? `commit & push them so teammates get them once the ${blockers} steps below are done)`
+              // `git add aidlc/` alone would leave out the setup a W1s row names.
+              : setupLines.length > 0
+              ? "commit & push so teammates get them)"
               : "commit & push so teammates get them: `git add aidlc/`, `git commit`, `git push`)"),
           ...(blockers !== "" ? { fix: `do the ${blockers} steps below first; then this row names the commit` } : {}),
         });
@@ -254,6 +281,7 @@ export function workspaceManifestChecks(projectDir: string): DoctorCheck[] {
   } catch (e) {
     results.push({ pass: true, label: `Workspace records: check skipped (advisory) - ${errorMessage(e)}` });
   }
+  for (const label of setupLines) results.push({ pass: false, severity: "warn", label });
   for (const row of [request.row, latch.row]) if (row) results.push(row);
 
   // W1b - A later user ignore rule can hide records even after config succeeded.

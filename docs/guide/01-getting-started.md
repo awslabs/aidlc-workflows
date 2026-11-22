@@ -391,21 +391,23 @@ Machine
 Project (.claude, Claude Code)
   warn  AIDLC hooks have not run in this project yet
         fix: This is expected before your first Claude Code chat in this folder. ...
-  warn  Workspace records: 8 uncommitted change(s) under aidlc/ (advisory - the shared records travel by git; commit & push so teammates get them: `git add aidlc/`, `git commit`, `git push`)
+  warn  Workspace records: 8 uncommitted change(s) under aidlc/ (advisory - the shared records travel by git; commit & push so teammates get them)
+        fix: add --verbose to see the details, correct the named condition, then run doctor again
+  warn  git does not track AI-DLC's setup for Claude Code in this project yet: .claude/, aidlc/, .gitattributes, .gitignore, .mcp.json and aidlc.settings.json. Commit them so teammates who use Claude Code get the same setup.
         fix: add --verbose to see the details, correct the named condition, then run doctor again
   ok    49 checks passed
 
 Framework integrity
   ok    all 12 checks passed
 
-0 problems, 3 warnings.
+0 problems, 4 warnings.
 Warnings are advisory - if everything works, ignore them.
 Add --verbose to see every check.
 ```
 
-On a new project these three warnings are expected: the first matters only if
+On a new project these four warnings are expected: the first matters only if
 you start Claude Code from a desktop icon, the second clears after your first
-chat, and the third after you commit. A `fail` row is a real problem and comes
+chat, and the third and fourth after you commit. A `fail` row is a real problem and comes
 with its fix. Inside Claude Code, `/aidlc --doctor` runs the same check.
 
 ## 5. Your first run in Claude Code
