@@ -184,6 +184,7 @@ import {
   PLAN_APPROVAL_ASKED_BY_ENGINE,
   planApprovalAskIsOpen,
   TESTING_POSTURE_SUBCOMMANDS,
+  hooksNeverRanHere,
   readWorkspaceSourceSnapshot,
   recordedSourceListingUnderCurrentBoundary,
 } from "./aidlc-lib.ts";
@@ -2035,8 +2036,14 @@ export function briefHandedAtStart(projectDir: string): boolean {
   }
 }
 
-/** Whether a tool hands this install's developer its brief, by the start context or by the input rewrite. */
+/**
+ * Whether a tool hands this install's developer its brief, by the start
+ * context or by the input rewrite. Not where the work's hooks never ran (a
+ * host that runs none, with the presence check switched off): no tool runs to
+ * hand it over, so the conductor passes it.
+ */
 export function briefHandedByTool(projectDir: string): boolean {
+  if (hooksNeverRanHere(projectDir)) return false;
   return briefHandedAtStart(projectDir) || BRIEF_REWRITE_HARNESSES.has(runtimeHarnessName(projectDir));
 }
 

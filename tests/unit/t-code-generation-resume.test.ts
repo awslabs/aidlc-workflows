@@ -78,6 +78,7 @@ import {
 import { publishPlanApprovalAsk, routeCodeGenerationPlanApproval } from "../../dist/claude/.claude/tools/aidlc-plan-approval-ask.ts";
 import {
   auditBlockField,
+  hooksHealthReadDir,
   readAuditShardEvents,
   stateDigest,
   workspaceSourceListing,
@@ -1382,6 +1383,30 @@ describe("the developer is handed its plan as it starts", () => {
     expect(handed.plan_note).toContain("The developer gets the plan and its test instructions from AI-DLC as it starts: " +
       "leave them out of its message and do not retell them.");
     expect(handed.plan_note).not.toContain("Start the developer's message");
+  });
+
+  test("where the work's hooks never ran, the note names the brief command; with them running, it is as above", () => {
+    for (const harness of ["claude", "copilot"]) {
+      for (const hooksRan of [false, true]) {
+        const proj = project();
+        registerStartDelivery(proj);
+        // The stage is under way on record, as in any run that reaches its build.
+        appendAuditEntry("STAGE_STARTED", { Stage: "code-generation" }, proj);
+        writePlan(proj);
+        expect(next(proj).ask_type).toBe("plan-approval");
+        approve(proj);
+        // A host that runs no hooks, with the presence check switched off: the
+        // work has stage events and no hook heartbeat at all.
+        if (!hooksRan) rmSync(hooksHealthReadDir(proj), { recursive: true, force: true });
+        const run = runOrchestrateNext(ORCHESTRATE, proj, [], {
+          env: { ...env(proj), AIDLC_HARNESS_NAME: harness, AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1" },
+        });
+        const note = String((run.directive as { plan_note?: string } | null)?.plan_note ?? "");
+        const label = `${harness}, hooks ${hooksRan ? "ran" : "never ran"}`;
+        expect(note.includes("from AI-DLC as it starts"), label).toBe(hooksRan);
+        expect(note.includes("Start the developer's message with the output of `"), label).toBe(!hooksRan);
+      }
+    }
   });
 });
 
