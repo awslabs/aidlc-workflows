@@ -10,6 +10,9 @@
 // as current, so nobody approves anything again. A Unit already done hears it
 // with an offer of follow-up work and is never reopened; the lead hears it is
 // not rebuilt, and says whether it goes back to its builder or is built here.
+// Where a Unit's branch starts is never its build's change: an early start's
+// pushed head, and the next Unit's main as the clone fetched it once the
+// checkout holds it, after the Unit before merged with a review commit.
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
@@ -52,7 +55,7 @@ import {
   finishInception,
   planRefOf,
 } from "../harness/team-build.ts";
-import { driveCodeGeneration, type EarlyStart, outsideTheUnits, teammateTakes } from "../harness/early-start.ts";
+import { driveCodeGeneration, type EarlyStart, nextUnitAfterReviewedSquash, outsideTheUnits, teammateTakes } from "../harness/early-start.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 afterEach(cleanupTeamBuild);
@@ -380,6 +383,104 @@ describe("an early start's Code Generation gate, its dependency built to its end
     const build = teammateTakes({ early: true, repos: true, rhythm: "unit-end" });
     const ran = driveCodeGeneration(build, notes(build));
     expect(outsideTheUnits(ran)).toBe("These files changed outside any unit's work in Code Generation: billing/NOTES.md. Kept them.");
+  });
+});
+
+// The next Unit in a clone whose last Unit merged with a review commit the
+// builder never pulled: once the checkout is on main as this clone fetched it
+// (their agent's work branch, or their own pull), main's version of that file
+// is where the Unit's branch starts, never a change of theirs.
+describe("the next Unit's Code Generation after the one before merged with a review commit", () => {
+  const ontoMain = (build: EarlyStart): void => {
+    git(build.code, ["fetch", "-q", "origin"]);
+    git(build.code, ["switch", "-q", "-c", "work", "origin/main"]);
+  };
+  const said = (ran: ReturnType<typeof driveCodeGeneration>) => ({
+    plan: ran.plans.flat().filter((line) => line.startsWith("Already changed before you approved")),
+    gate: outsideTheUnits(ran),
+  });
+
+  const notes = (build: EarlyStart): void => writeFileSync(join(build.code, "NOTES.md"), "mine\n");
+  const outside = (files: string): string => `These files changed outside any unit's work in Code Generation: ${files}. Kept them.`;
+
+  test("after the move onto main, neither the code plan nor the gate names the reviewer's change", () => {
+    const build = nextUnitAfterReviewedSquash();
+    ontoMain(build);
+    const ran = driveCodeGeneration(build);
+    expect(ran.refusal).toBeNull();
+    expect(said(ran)).toEqual({ plan: [], gate: null });
+  });
+
+  test("a file of theirs after the move, and the build's own change to the reviewer's file, are still said", () => {
+    const build = nextUnitAfterReviewedSquash();
+    ontoMain(build);
+    notes(build);
+    const ran = driveCodeGeneration(build, () => writeFileSync(join(build.code, "src", "refunds.ts"), "export const refunds = (): number => 44;\n"));
+    expect(said(ran)).toEqual({ plan: ["Already changed before you approved: NOTES.md."], gate: outside("NOTES.md, src/refunds.ts") });
+  });
+
+  test("their own uncommitted change the take recorded, put back by the build to main's version, is still said", () => {
+    const build = nextUnitAfterReviewedSquash({ beforeTake: (code) => writeFileSync(join(code, "README.md"), "# checkout\n\nmine.\n") });
+    ontoMain(build);
+    const ran = driveCodeGeneration(build, () => git(build.code, ["checkout", "--", "README.md"]));
+    expect(said(ran)).toEqual({ plan: [], gate: outside("README.md") });
+  });
+
+  test("a commit of theirs on main, put back by the build to main's version, is still said", () => {
+    const build = nextUnitAfterReviewedSquash({
+      beforeTake: (code) => {
+        git(code, ["fetch", "-q", "origin"]);
+        git(code, ["switch", "-q", "-c", "mine", "origin/main"]);
+        writeFileSync(join(code, "README.md"), "# checkout\n\nmine.\n");
+        git(code, ["commit", "-q", "-am", "mine"]);
+      },
+    });
+    const ran = driveCodeGeneration(build, () => git(build.code, ["checkout", "origin/main", "--", "README.md"]));
+    expect(said(ran)).toEqual({ plan: [], gate: outside("README.md") });
+  });
+
+  test("under strict, the moved file lets the gate through, and a file of theirs still stops it", () => {
+    const build = nextUnitAfterReviewedSquash({ policy: "strict" });
+    ontoMain(build);
+    const ran = driveCodeGeneration(build);
+    expect(ran.refusal).toBeNull();
+    expect(ran.end?.ask_type).toBe("unit-push");
+    const stray = nextUnitAfterReviewedSquash({ policy: "strict" });
+    ontoMain(stray);
+    const stopped = driveCodeGeneration(stray, () => notes(stray));
+    expect(stopped.refusal).toContain("no Unit's review covers (NOTES.md)");
+  });
+
+  test("with main's fetched copy gone after the move, the reviewer's change is said as before", () => {
+    const build = nextUnitAfterReviewedSquash();
+    ontoMain(build);
+    git(build.code, ["update-ref", "-d", "refs/remotes/origin/main"]);
+    const ran = driveCodeGeneration(build);
+    expect(said(ran)).toEqual({ plan: ["Already changed before you approved: src/refunds.ts."], gate: outside("src/refunds.ts") });
+  });
+
+  test("in a code repository of its own, the reviewer's change is not named either", () => {
+    const build = nextUnitAfterReviewedSquash({ repos: true });
+    ontoMain(build);
+    const ran = driveCodeGeneration(build);
+    expect(ran.refusal).toBeNull();
+    expect(said(ran)).toEqual({ plan: [], gate: null });
+  });
+
+  // A known limit, pinned so a change that closes it turns this case: Units
+  // that start at Functional Design record Code Generation's start after the
+  // take, so a tracked file of theirs edited by hand after the take and before
+  // Code Generation, which the build puts back to main's version, reads as
+  // main's and is not named.
+  test("a hand edit made after the take and before Code Generation, put back by the build to main's version, is not named", () => {
+    const build = nextUnitAfterReviewedSquash({ functionalDesignFirst: true });
+    ontoMain(build);
+    writeFileSync(join(build.code, "README.md"), "# checkout\n\nmine, after the take.\n");
+    const ran = driveCodeGeneration(build, () => {
+      notes(build);
+      git(build.code, ["checkout", "--", "README.md"]);
+    });
+    expect(outsideTheUnits(ran)).toBe(outside("NOTES.md"));
   });
 });
 

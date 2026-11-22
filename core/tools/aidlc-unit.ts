@@ -9197,10 +9197,12 @@ interface HomeWork {
 // of solo work is recorded. With no copy of the plan here, the plan is looked
 // for at the work's Home Location before a record is written there; work not
 // shared yet keeps its records there. A look of all the work's records reads
-// the places this workspace knows of (recordPlacesOfWork).
-function recordPlaceOf(projectDir: string, home: HomeWork, unit: string): RecordPlace {
-  if (home.solo) return { repo: workspaceRepoEntry(projectDir).name, address: home.location };
-  const plan = home.plan ?? planOfWork(projectDir, home.id8, home.location) ?? planLookedFor(projectDir, home.location, home.id8);
+// the places this workspace knows of (recordPlacesOfWork). `look` false asks
+// no remote anything: the copies here only, and the repository named by its
+// address (workspaceRepoEntry can ask the remote for its main).
+function recordPlaceOf(projectDir: string, home: HomeWork, unit: string, look = true): RecordPlace {
+  if (home.solo) return { repo: look ? workspaceRepoEntry(projectDir).name : repoNameOf(home.location), address: home.location };
+  const plan = home.plan ?? planOfWork(projectDir, home.id8, home.location) ?? (look ? planLookedFor(projectDir, home.location, home.id8) : null);
   return plan === null ? { repo: repoNameOf(home.location), address: home.location } : recordPlaceIn(plan, unit, home.location);
 }
 
@@ -14414,6 +14416,26 @@ function onlyOnLastPush(dir: string, lease: string, tip: string, into: string, o
     git(dir, ["diff-tree", "--cc", "--no-commit-id", "-r", tip]).stdout.trim() === "";
 }
 
+// Where a Unit's branch in `repo` (at `dir`) starts and what it merges into,
+// as the push cuts it (pushUnit's integrationOf) but read as this clone holds
+// it, never fetched: in the workspace's own repository the branch its take
+// read the plan from, else the one the plan names (null when neither does: the
+// branch then starts where they are); in a code repository its remote's main,
+// by the remote a push of `branch` goes to (`remote`, else read here; null
+// when that is not one remote). `look` false asks no remote (recordPlaceOf).
+export function unitBranchStartHere(pd: string, unit: string, branch: string, repo: string, dir: string,
+  remote?: ReturnType<typeof pushRemoteOf>, look = true): string | null {
+  if (repo !== ".") {
+    const to = remote === undefined ? pushRemoteOf(dir, branch) : remote;
+    return typeof to === "string" ? unitBranchInto(dir, to) : null;
+  }
+  const build = unitBuildOf(readStateFile(pd));
+  if (build === null) return null;
+  const home = buildsHome(pd, build);
+  return takeIntegrationRef(pd, recordCopied(pd, recordPlaceOf(pd, home, unit, look), recordWork(home), unit), false) ??
+    planBranchStart(pd, build, false);
+}
+
 // The code repositories of that push whose head kept mainMovedMark, with the
 // branch each merges into and its remote, read here with no fetch, and the
 // Unit's own files there that it changed and the pushed branch lacks (none
@@ -14423,13 +14445,6 @@ export function mainMovedRepos(pd: string, unit: string, branch: string, marked 
   Array<{ repo: string; name: string; dir: string; remote: string; into: string; head: string; paths: string[]; files: string[]; hostAhead?: true }> {
   const manifest = readUnitSourceManifest(pd, "code-generation", unit);
   const targets = manifest.ok ? unitWriteTargets(pd, manifest.manifest.writes) : new Map<string, { dir: string; paths: string[] }>();
-  // The workspace's own repository starts from the branch its take or its plan names, read as the push read it, unfetched.
-  const ownInto = (): string | null => {
-    const build = unitBuildOf(readStateFile(pd));
-    if (build === null) return null;
-    const home = buildsHome(pd, build);
-    return takeIntegrationRef(pd, recordCopied(pd, recordPlaceOf(pd, home, unit), recordWork(home), unit), false) ?? planBranchStart(pd, build, false);
-  };
   return [...lastPushedHeads(pd, unit, branch)].flatMap(([repo, head]) => {
     const dir = targets.get(repo)?.dir ?? (repo === "." ? pd : repoDir(pd, repo));
     if (!isGitRepoDir(dir)) return [];
@@ -14440,9 +14455,9 @@ export function mainMovedRepos(pd: string, unit: string, branch: string, marked 
     const host = engineAskMark(pd, hostAheadMark(unit, head)) === null ? []
       : [{ repo, name, dir, remote, into: `${remote}/${branch}`, head, paths, files: [] as string[], hostAhead: true as const }];
     if (marked && engineAskMark(pd, mainMovedMark(unit, head)) === null) return host;
-    const own = repo === "." ? ownInto() : null;
-    if (repo === "." && own === null) return host;
-    const into = own === null ? unitBranchInto(dir, remote) : own.replace(/^refs\/(?:remotes|heads)\//, "");
+    const start = unitBranchStartHere(pd, unit, branch, repo, dir, remote);
+    if (start === null) return host;
+    const into = start.replace(/^refs\/(?:remotes|heads)\//, "");
     const pushedTip = git(dir, ["rev-parse", "--verify", "--quiet", `refs/remotes/${remote}/${branch}^{commit}`]).stdout.trim() || head;
     return [...host, { repo, name, dir, remote, into, head, paths, files: mainChangedUnder(dir, pushedTip, into, paths) }];
   });

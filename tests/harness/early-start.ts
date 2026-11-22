@@ -15,6 +15,7 @@ import {
   cloneCode,
   cloneOf,
   codeHost,
+  commitOnHost,
   git,
   GIT_ENV,
   homeState,
@@ -22,6 +23,7 @@ import {
   makePlanHomeWithRemote,
   planFrom,
   run,
+  squashOnHost,
   STATE,
   takeIn,
   UNIT,
@@ -55,6 +57,8 @@ export interface EarlyStart {
   unit: string;
   record: string;
   home: { dir: string; remote: string };
+  /** The take's --plan and --from. */
+  from: string[];
 }
 
 /**
@@ -73,6 +77,8 @@ export function teammateTakes(options: {
   policy?: "off" | "relaxed" | "strict";
   /** The lead's Units start at Functional Design (the default) instead of Code Generation. */
   functionalDesignFirst?: boolean;
+  /** The plan's Units, refunds and reporting (on refunds) by default. */
+  dependencies?: string;
 }): EarlyStart {
   const rhythm = options.rhythm ?? "per-stage";
   let home: { dir: string; remote: string };
@@ -80,11 +86,11 @@ export function teammateTakes(options: {
   let from: string[];
   if (options.repos) {
     hosts = { "checkout-api": codeHost("checkout-api"), billing: codeHost("billing") };
-    const planHome = makePlanHomeWithRemote({ repos: hosts, state: codeGenerationFirst(rhythm === "unit-end" ? ["- **Unit Gate Rhythm**: unit-end"] : []) });
+    const planHome = makePlanHomeWithRemote({ repos: hosts, dependencies: options.dependencies, state: codeGenerationFirst(rhythm === "unit-end" ? ["- **Unit Gate Rhythm**: unit-end"] : []) });
     home = planHome;
     from = planFrom(planHome);
   } else {
-    home = makeHome({ repos: {}, dependencies: BOTH_UNITS, state: options.functionalDesignFirst ? homeState() : codeGenerationFirst() });
+    home = makeHome({ repos: {}, dependencies: options.dependencies ?? BOTH_UNITS, state: options.functionalDesignFirst ? homeState() : codeGenerationFirst() });
     expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
     if (rhythm === "unit-end") expect(run(STATE, ["set-unit-gate-rhythm", "unit-end"], home.dir).status).toBe(0);
     const path = seededStateFile(home.dir);
@@ -154,7 +160,47 @@ export function teammateTakes(options: {
     const set = run(join(dana, ".claude", "tools", "aidlc.ts"), ["config", "set", "guard-policy", options.policy], dana);
     expect(set.status, set.out).toBe(0);
   }
-  return { dana, code, unit, record: recordOf(dana, "data", unit), home };
+  return { dana, code, unit, record: recordOf(dana, "data", unit), home, from };
+}
+
+const twoUnits = (repos: string): string => "# Unit dependencies\n\n```yaml\nunits:\n" +
+  `  - name: refunds\n    kind: service\n${repos}    depends_on: []\n  - name: checkout-ui\n    kind: ui\n${repos}    depends_on: []\n` + "```\n";
+
+/**
+ * dana builds refunds and pushes it; a reviewer commits a change to its
+ * src/refunds.ts on the host and squashes it into main, so main holds a
+ * version of that file her clone never had. In the same clone, still on
+ * refunds' branch as its push left her, she takes checkout-ui, whose Code
+ * Generation starts there (at Functional Design with `functionalDesignFirst`).
+ * `repos` builds both in a billing repository of their own; `beforeTake` runs
+ * in the code's checkout just before the second take.
+ */
+export function nextUnitAfterReviewedSquash(options: {
+  policy?: "strict";
+  repos?: boolean;
+  functionalDesignFirst?: boolean;
+  beforeTake?: (code: string) => void;
+} = {}): EarlyStart {
+  const first = teammateTakes({
+    early: false, repos: options.repos, functionalDesignFirst: options.functionalDesignFirst,
+    dependencies: twoUnits(options.repos ? "    repos: [billing]\n" : ""),
+  });
+  const built = driveCodeGeneration(first);
+  expect(built.end?.ask_type, built.refusal ?? "").toBe("unit-push");
+  const pushed = run(UNIT, ["push"], first.dana);
+  expect(pushed.status, pushed.out).toBe(0);
+  const host = git(first.code, ["remote", "get-url", "origin"]);
+  commitOnHost(host, "refunds", { "src/refunds.ts": "export const refunds = (): number => 43;\n" }, "review: refunds");
+  squashOnHost(host, "refunds", "refunds (#1)");
+  options.beforeTake?.(first.code);
+  const took = takeIn("data", ["checkout-ui", ...first.from], first.dana);
+  expect(took.status, took.out).toBe(0);
+  // The Guard Policy is the work's own (resolveGuardPolicy reads its state): set on checkout-ui's.
+  if (options.policy !== undefined) {
+    const set = run(join(first.dana, ".claude", "tools", "aidlc.ts"), ["config", "set", "guard-policy", options.policy], first.dana);
+    expect(set.status, set.out).toBe(0);
+  }
+  return { ...first, unit: "checkout-ui", record: recordOf(first.dana, "data", "checkout-ui") };
 }
 
 export interface CodeGenerationRun {

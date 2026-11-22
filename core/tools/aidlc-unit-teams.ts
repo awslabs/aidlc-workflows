@@ -2020,19 +2020,27 @@ export function buildEarlyOn(projectDir: string, build: UnitBuild, record?: Unit
   return earlyOnFrom(field) ?? record?.payload.early_on ?? [];
 }
 
-// Of `keys` (changed source paths, `<repo>\0<path>`), the ones an early
-// start's branch brought: in a repo this build started early on a Unit's
+// Of `keys` (changed source paths, `<repo>\0<path>`), the ones that are where
+// this Unit's branch starts, as one of two commits holds them by git's own
+// compare. An early start's: in a repo this build started early on a Unit's
 // pushed head, while the checkout is on this Unit's branch or holds that head
-// (switched at the take, by the person later, or moved onto what merged
-// since), a path that is as that head holds it by git's own compare (tracked
-// with the same content, or absent from both). They are where the Unit's
-// branch started, so no change of this build's or the person's, whenever the
-// switch came after the stage's start record. The person's own uncommitted
-// work the take recorded (readTakeTree) is never the branch's: a switch carries
-// it unchanged. A file changed after the switch differs from the head and
-// stays a change. Empty when this is no early start or git cannot tell. The
-// outside-the-Units check, the code plan question and the brought-files line
-// all leave these out.
+// (switched at the take, by the person later, or moved onto what merged since),
+// a path tracked with the same content, or absent from both. The branch the
+// Unit merges into, as this clone last fetched it (unitBranchStartHere, a
+// remote's branch only): in each repo the take walked, while the checkout holds
+// that commit (their agent's branch from it, or main pulled, after an earlier
+// Unit merged with a change they never had), a path tracked with the same
+// content there, on disk and in the commit the checkout stands on, so no commit
+// of theirs since is taken for it. Either is no change of this build's or the
+// person's, whenever the move came after the stage's start record, save a file
+// of theirs made or edited after the take and before the reader's own start
+// (its stage's start, or the last code plan approval) that the build puts back
+// as that commit holds it: that reads as the branch's too. The person's own
+// uncommitted work the take recorded (readTakeTree) is never the branch's: a
+// switch carries it unchanged. A file changed after the move differs and stays
+// a change. Empty when this is no taken Unit's build or git cannot tell; read
+// from the clone as it is, never fetched. The outside-the-Units check, the code
+// plan question and the brought-files line all leave these out.
 export function earlyStartBrought(projectDir: string, keys: Iterable<string>): Set<string> {
   const found = new Set<string>();
   try {
@@ -2044,40 +2052,64 @@ export function earlyStartBrought(projectDir: string, keys: Iterable<string>): S
     const record = recordDir(projectDir);
     const theirs = record === null ? {} : readTakeTree(record);
     const branch = unitBranchOf(state, build.unit);
+    // `repo`'s changed paths as `head` holds them: an early start's head, or (`early` false) the merge-into branch.
+    const asAt = (repo: string, head: string, early: boolean): void => {
+      const prefix = repo === "." ? "" : repo;
+      const own = theirs[repo] ?? {};
+      const paths = all.filter((key) => key.startsWith(`${prefix}\0`)).map((key) => key.slice(prefix.length + 1))
+        .filter((path) => !Object.hasOwn(own, path));
+      if (paths.length === 0) return;
+      const dir = repo === "." ? projectDir : repoDir(projectDir, repo);
+      if (!isGitRepoDir(dir)) return;
+      const git = (args: string[]) => {
+        const ran = spawnSync("git", ["-C", dir, ...args], { encoding: "utf-8", maxBuffer: 512 * 1024 * 1024, env: { ...process.env, GIT_NO_LAZY_FETCH: "1" } });
+        return { ok: ran.status === 0 && !ran.error, stdout: ran.stdout ?? "" };
+      };
+      const onBranch = early && git(["branch", "--show-current"]).stdout.trim() === branch;
+      if (!onBranch && !git(["merge-base", "--is-ancestor", head, "HEAD"]).ok) return;
+      // Whole listings, no pathspec: a long list of paths never meets a command-line limit.
+      const listed = (args: string[]): Set<string> | null => {
+        const ran = git(args);
+        return ran.ok ? new Set(ran.stdout.split("\0").filter(Boolean)) : null;
+      };
+      const atHead = listed(["ls-tree", "-r", "-z", "--name-only", head]);
+      const tracked = listed(["ls-files", "-z"]);
+      const differs = listed(["diff", "--name-only", "--no-renames", "-z", head]);
+      // The merge-into branch's: the commit the checkout stands on holds the path as it does, so a commit of theirs since stays theirs.
+      const committed = early ? new Set<string>() : listed(["diff", "--name-only", "--no-renames", "-z", head, "HEAD"]);
+      if (atHead === null || tracked === null || differs === null || committed === null) return;
+      for (const path of paths) {
+        let here = true;
+        try {
+          lstatSync(join(dir, ...path.split("/")));
+        } catch {
+          here = false;
+        }
+        // Absent from both is an early start's only: a recorded checkout's, a link target's, an ignored or a nested
+        // checkout's path is in no tree, so for the merge-into branch it would read as the branch's.
+        if (atHead.has(path) ? here && tracked.has(path) && !differs.has(path) && !committed.has(path) : early && !here) found.add(`${prefix}\0${path}`);
+      }
+    };
     for (const dep of buildEarlyOn(projectDir, build)) {
       for (const { repo, head } of dep.repos) {
-        if (head === "") continue;
-        const prefix = repo === "." ? "" : repo;
-        const own = theirs[repo] ?? {};
-        const paths = all.filter((key) => key.startsWith(`${prefix}\0`)).map((key) => key.slice(prefix.length + 1))
-          .filter((path) => !Object.hasOwn(own, path));
-        if (paths.length === 0) continue;
+        if (head !== "") asAt(repo, head, true);
+      }
+    }
+    // Loaded only here: aidlc-unit.ts imports this file, and the hooks' own tool set leaves it out.
+    const { unitBranchStartHere } = require("./aidlc-unit.ts") as typeof import("./aidlc-unit.ts");
+    // The repos the take walked for its take tree (recordTakeTree), so the person's own work stays theirs in each.
+    const walked = intentRepos(projectDir);
+    const named = new Set(all.map((key) => key.slice(0, key.indexOf("\0")) || "."));
+    for (const repo of (walked.length > 0 ? walked : ["."]).filter((name) => named.has(name))) {
+      try {
         const dir = repo === "." ? projectDir : repoDir(projectDir, repo);
         if (!isGitRepoDir(dir)) continue;
-        const git = (args: string[]) => {
-          const ran = spawnSync("git", ["-C", dir, ...args], { encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 });
-          return { ok: ran.status === 0 && !ran.error, stdout: ran.stdout ?? "" };
-        };
-        const onBranch = git(["branch", "--show-current"]).stdout.trim() === branch;
-        if (!onBranch && !git(["merge-base", "--is-ancestor", head, "HEAD"]).ok) continue;
-        // Whole listings, no pathspec: a long list of paths never meets a command-line limit.
-        const listed = (args: string[]): Set<string> | null => {
-          const ran = git(args);
-          return ran.ok ? new Set(ran.stdout.split("\0").filter(Boolean)) : null;
-        };
-        const atHead = listed(["ls-tree", "-r", "-z", "--name-only", head]);
-        const tracked = listed(["ls-files", "-z"]);
-        const differs = listed(["diff", "--name-only", "--no-renames", "-z", head]);
-        if (atHead === null || tracked === null || differs === null) continue;
-        for (const path of paths) {
-          let here = true;
-          try {
-            lstatSync(join(dir, ...path.split("/")));
-          } catch {
-            here = false;
-          }
-          if (atHead.has(path) ? here && tracked.has(path) && !differs.has(path) : !here) found.add(`${prefix}\0${path}`);
-        }
+        const start = unitBranchStartHere(projectDir, build.unit, branch, repo, dir, undefined, false);
+        // A code repository's is `<remote>/<branch>`; a branch of this clone's own was never fetched.
+        const fetched = start === null ? null : start.startsWith("refs/") ? start : `refs/remotes/${start}`;
+        if (fetched?.startsWith("refs/remotes/")) asAt(repo, fetched, false);
+      } catch {
+        // This repo's branch not read: its changes are said as before.
       }
     }
   } catch {
