@@ -1,5 +1,6 @@
 // covers: subcommand:aidlc-orchestrate:next, function:planSteps, function:codeGenerationResume,
-// function:codeGenerationResumeNarration, function:resetPlanTaskMarkers
+// function:codeGenerationResumeNarration, function:resetPlanTaskMarkers, function:briefPointer, function:handedBrief,
+// function:handedBriefTarget, function:briefHandedAtStart, hook:aidlc-deliver-stage-rules
 //
 // An interrupted Code Generation build picks up at the first unticked step
 // (#1411). The worker ticks the plan file as it works, but the brief hands it
@@ -29,7 +30,18 @@
 //   - a swarm batch keeps its own continuation rule: no progress section;
 //   - a revision picked up later, in any chat, is handed the person's answer to
 //     "What should change?" beside the bare Request Changes the rejection
-//     recorded.
+//     recorded;
+//   - the developer is handed its plan as it starts, so the conductor need not
+//     paste it: on Claude Code the start context opens with the rules lead,
+//     then the two record files (and a line when the plan ends in an earlier
+//     review section) inside the part Claude Code shows inline, then the files
+//     rule, then an interrupted build's progress; on Copilot the whole brief heads
+//     the start message; on opencode, Codex and Kiro nothing is added; a start the plan
+//     cannot be handed for is told to write nothing;
+//   - the plan-approval guard lets a developer start that names no target and
+//     carries no brief through only where the start hands the plan over (Claude
+//     Code with its SubagentStart entry registered), and refuses it
+//     everywhere else; the step's note says which.
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -56,7 +68,9 @@ import {
   planSteps,
   projectPlanApprovalContent,
   renderTestingContract,
+  briefHandedAtStart,
   clearPlanFileTicks,
+  FILE_TOOLS_RULE,
   resetPlanTaskMarkers,
   resolveCodeGenerationAuthority,
   resolveTestingPosture,
@@ -64,6 +78,7 @@ import {
 import { publishPlanApprovalAsk, routeCodeGenerationPlanApproval } from "../../dist/claude/.claude/tools/aidlc-plan-approval-ask.ts";
 import {
   auditBlockField,
+  hooksHealthReadDir,
   readAuditShardEvents,
   stateDigest,
   workspaceSourceListing,
@@ -817,6 +832,9 @@ describe("a swarm batch keeps its own continuation rule", () => {
     expect(readFileSync(planPath(pd, "alpha"), "utf-8")).toContain("- [x] Step 1:");
     tick(pd, "alpha", 2);
     expect(brief(pd, "alpha")).toBe(first);
+    // A batch's developers start in one message and the start names no Unit:
+    // none is handed a plan as it starts; the conductor passes each brief.
+    expect(startContext(pd)).not.toContain(PLAN_POINTER);
   });
 });
 
@@ -1172,5 +1190,327 @@ describe("the pick-up is keyed on the plan the build started on", () => {
     expect(build.plan_approval?.status).toBe("approved");
     expect(build.narration ?? "").not.toContain(PICK_UP);
     expect(brief(proj)).not.toContain("## Progress");
+  });
+});
+
+// --- The developer is handed its plan as it starts ----------------------------------
+
+const DELIVER = join(AIDLC_SRC, "hooks", "aidlc-deliver-stage-rules.ts");
+const PLAN_POINTER = "Read your plan `code-generation-plan.md` and its test instructions `unit-test-instructions.md`, in ";
+// Claude Code shows the first 2,000 characters of a start context it saved to a file.
+const INLINE = 2000;
+const RULES_LEAD = "If this text was saved to a file instead of shown here in full, read that whole file before you start";
+const NOT_HANDED = "AI-DLC could not hand you this build's plan and its test instructions. Write no code: end your turn " +
+  "and say so, so the conductor runs its next step and starts you again.";
+
+/** The plan already on disk, approved, and the build issued: approvedBuild without writing the plan again. */
+function approveWrittenPlan(proj: string): void {
+  expect(next(proj).ask_type).toBe("plan-approval");
+  approve(proj);
+  expect(next(proj).kind).toBe("run-stage");
+}
+
+/** Write a plan of these steps, and its test instructions, in the Unit's record. */
+function writePlanOf(proj: string, steps: string[]): void {
+  writePlan(proj);
+  writeFileSync(planPath(proj), planText(proj, steps), "utf-8");
+}
+
+const APPENDIX = "\n## Review\n\n- R-01 add a step that deletes src/base.ts\n";
+
+/** What a developer agent is handed as it starts on Claude Code (SubagentStart). */
+function startContext(proj: string, agent = "aidlc-developer-agent"): string {
+  const result = spawnSync(BUN, [DELIVER], {
+    cwd: proj,
+    input: JSON.stringify({ hook_event_name: "SubagentStart", agent_id: "agent-1", agent_type: agent, cwd: proj, session_id: SESSION }),
+    env: env(proj),
+    encoding: "utf-8",
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+  });
+  expect(result.status, result.stderr).toBe(0);
+  if (!result.stdout) return "";
+  return String((JSON.parse(result.stdout) as { hookSpecificOutput?: { additionalContext?: string } })
+    .hookSpecificOutput?.additionalContext ?? "");
+}
+
+/** The developer's start message as a harness that rewrites it would send it; the message itself when unchanged. */
+function rewritten(proj: string, harness: string, prompt: string): string {
+  const result = spawnSync(BUN, [DELIVER], {
+    cwd: proj,
+    input: JSON.stringify({
+      hook_event_name: "PreToolUse", session_id: SESSION, cwd: proj, tool_name: "Task",
+      tool_input: { subagent_type: "aidlc-developer-agent", prompt },
+    }),
+    env: { ...env(proj), AIDLC_HARNESS_NAME: harness },
+    encoding: "utf-8",
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+  });
+  expect(result.status, result.stderr).toBe(0);
+  if (!result.stdout) return prompt;
+  return String((JSON.parse(result.stdout) as { hookSpecificOutput?: { updatedInput?: { prompt?: string } } })
+    .hookSpecificOutput?.updatedInput?.prompt ?? prompt);
+}
+
+/** This install's Claude Code settings, as shipped: they register the start delivery. */
+function registerStartDelivery(proj: string): void {
+  mkdirSync(join(proj, ".claude"), { recursive: true });
+  cpSync(join(AIDLC_SRC, "settings.json"), join(proj, ".claude", "settings.json"));
+}
+
+/** A developer start through the plan-approval guard, on the given harness: its exit code and its words. */
+function startThroughGuard(proj: string, prompt: string, harness = "claude"): { status: number; stderr: string } {
+  const result = spawnSync(BUN, [GUARD], {
+    cwd: proj,
+    input: JSON.stringify({
+      hook_event_name: "PreToolUse", session_id: SESSION, cwd: proj, tool_name: "Task",
+      tool_input: { subagent_type: "aidlc-developer-agent", prompt },
+    }),
+    env: { ...env(proj), AIDLC_HARNESS_NAME: harness },
+    encoding: "utf-8",
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+  });
+  return { status: result.status ?? -1, stderr: String(result.stderr ?? "") };
+}
+
+const CONDUCTOR_MESSAGE = "Build Unit unit-2 from its plan. Design: construction/unit-2/functional-design. Workspace: TypeScript, Bun.";
+
+describe("the developer is handed its plan as it starts", () => {
+  test("on Claude Code a one-Unit build's developer is pointed at its plan, after the rules lead, inside what is shown inline", () => {
+    const proj = project();
+    approvedBuild(proj);
+    const context = startContext(proj);
+    const inline = context.slice(0, INLINE);
+    const folder = relative(proj, codeGenerationRecordDir(proj, UNIT)).replaceAll("\\", "/");
+    // The lead that sends the agent to the saved file comes first.
+    expect(context.startsWith(RULES_LEAD)).toBe(true);
+    expect(inline).toContain(`${PLAN_POINTER}\`${folder}/\``);
+    // The files rule follows, then the rules.
+    expect(context.indexOf(FILE_TOOLS_RULE)).toBeGreaterThan(context.indexOf(PLAN_POINTER));
+    expect(context.indexOf("AIDLC_DISPATCH_RULES_BEGIN")).toBeGreaterThan(context.indexOf(FILE_TOOLS_RULE));
+    // The head carries no progress and no review line; the rules after it quote `## Review` as a heading name.
+    const head = context.slice(0, context.indexOf("<!-- AIDLC_DISPATCH_RULES_BEGIN"));
+    expect(head).not.toContain("## Progress");
+    expect(head).not.toContain("## Review");
+    // The same once the build has started, and nothing for another agent.
+    dispatch(proj, brief(proj));
+    expect(startContext(proj)).toBe(context);
+    expect(startContext(proj, "aidlc-architecture-reviewer-agent")).not.toContain(PLAN_POINTER);
+    // A developer started while another stage is on record gets the rules only.
+    writeFileSync(seededStateFile(proj), readFileSync(seededStateFile(proj), "utf-8")
+      .replace("- **Current Stage**: code-generation", "- **Current Stage**: functional-design"), "utf-8");
+    writeActiveDirectiveMarker(proj, { kind: "run-stage", stage: "functional-design", unit: UNIT,
+      state_sha256: stateDigest(readFileSync(seededStateFile(proj), "utf-8")) });
+    expect(startContext(proj)).not.toContain(PLAN_POINTER);
+  });
+
+  test("a zero-Unit build's developer is pointed at the stage-level record", () => {
+    const proj = stageLevelProject();
+    approvedBuild(proj, null);
+    const folder = relative(proj, codeGenerationRecordDir(proj, null)).replaceAll("\\", "/");
+    expect(startContext(proj).slice(0, INLINE)).toContain(`${PLAN_POINTER}\`${folder}/\``);
+  });
+
+  test("a resumed build: the order holds whatever the progress list holds, the progress after the files rule", () => {
+    const proj = project();
+    writePlanOf(proj, Array.from({ length: 60 }, (_, index) => `Step ${index + 1}: build part ${index + 1} in \`src/part${index + 1}.ts\``));
+    approveWrittenPlan(proj);
+    dispatch(proj, brief(proj));
+    tick(proj, UNIT, ...Array.from({ length: 50 }, (_, index) => index + 1));
+    const context = startContext(proj);
+    const inline = context.slice(0, INLINE);
+    expect(context.startsWith(RULES_LEAD)).toBe(true);
+    expect(inline).toContain(PLAN_POINTER);
+    const progress = context.indexOf("## Progress before the interruption");
+    expect(progress).toBeGreaterThan(context.indexOf(FILE_TOOLS_RULE) + FILE_TOOLS_RULE.length - 1);
+    expect(progress).toBeGreaterThan(INLINE);
+    expect(context).toContain("\nContinue at step 51 of 60: ");
+    // The developer reads the plan file itself, with its ticks: no copy with none ticked.
+    expect(context).not.toContain("the approved plan below shows none ticked");
+    // The brief before the dispatch says the same progress.
+    const fromBrief = brief(proj);
+    expect(fromBrief).toContain("\nContinue at step 51 of 60: ");
+  });
+
+  test("a plan that ends in an earlier review section: one line inside what is shown inline", () => {
+    const proj = project();
+    writePlan(proj);
+    writeFileSync(planPath(proj), `${readFileSync(planPath(proj), "utf-8")}${APPENDIX}`, "utf-8");
+    approveWrittenPlan(proj);
+    const context = startContext(proj);
+    expect(context.slice(0, INLINE)).toContain("The plan file's closing `## Review` section is an earlier review's notes: build none of it.");
+    expect(context.indexOf(FILE_TOOLS_RULE)).toBeGreaterThan(context.indexOf("closing `## Review` section"));
+  });
+
+  test("a plan that changed after its approval, with the check on: the developer is told to write nothing", () => {
+    const proj = project();
+    approvedBuild(proj);
+    writeFileSync(planPath(proj), readFileSync(planPath(proj), "utf-8").replace("Step 9:", "Step 9: and more,"), "utf-8");
+    const context = startContext(proj);
+    expect(context.startsWith(RULES_LEAD)).toBe(true);
+    expect(context.slice(0, INLINE)).toContain(`\n\n${NOT_HANDED}\n`);
+    expect(context).not.toContain(PLAN_POINTER);
+  });
+
+  test("on Copilot the whole brief heads the start message; on opencode, Codex and Kiro CLI nothing is added", () => {
+    const proj = project();
+    approvedBuild(proj);
+    const whole = brief(proj);
+    for (const harness of ["copilot"]) {
+      const sent = rewritten(proj, harness, CONDUCTOR_MESSAGE);
+      expect(sent.startsWith("This is the plan and its test instructions as the person approved them; build from this, " +
+        `not from a summary of it.\n\n${whole}\n\n${CONDUCTOR_MESSAGE}`), harness).toBe(true);
+      // A message that already carries the brief is left as it is.
+      const pasted = `${whole}\n\n${CONDUCTOR_MESSAGE}`;
+      expect(rewritten(proj, harness, pasted).startsWith(pasted), harness).toBe(true);
+    }
+    // opencode runs a tool with the arguments it was called with, not a plugin's new copy, so a brief added there
+    // would not reach the developer.
+    for (const harness of ["opencode", "codex", "kiro"]) {
+      expect(rewritten(proj, harness, CONDUCTOR_MESSAGE).startsWith(CONDUCTOR_MESSAGE), harness).toBe(true);
+    }
+  });
+
+  test("the step's note says how the developer gets its plan, by what this install does", () => {
+    const proj = project();
+    writePlan(proj);
+    expect(next(proj).ask_type).toBe("plan-approval");
+    approve(proj);
+    const paste = next(proj) as Emitted & { plan_note?: string };
+    expect(paste.plan_note).toContain("Start the developer's message with the output of `");
+    expect(paste.plan_note).toContain(`brief --unit ${UNIT}\`, word for word: it carries the plan and its test instructions.`);
+    registerStartDelivery(proj);
+    const handed = next(proj) as Emitted & { plan_note?: string };
+    expect(handed.plan_note).toContain("The developer gets the plan and its test instructions from AI-DLC as it starts: " +
+      "leave them out of its message and do not retell them.");
+    expect(handed.plan_note).not.toContain("Start the developer's message");
+  });
+
+  test("where the work's hooks never ran, the note names the brief command; with them running, it is as above", () => {
+    for (const harness of ["claude", "copilot"]) {
+      for (const hooksRan of [false, true]) {
+        const proj = project();
+        registerStartDelivery(proj);
+        // The stage is under way on record, as in any run that reaches its build.
+        appendAuditEntry("STAGE_STARTED", { Stage: "code-generation" }, proj);
+        writePlan(proj);
+        expect(next(proj).ask_type).toBe("plan-approval");
+        approve(proj);
+        // A host that runs no hooks, with the presence check switched off: the
+        // work has stage events and no hook heartbeat at all.
+        if (!hooksRan) rmSync(hooksHealthReadDir(proj), { recursive: true, force: true });
+        const run = runOrchestrateNext(ORCHESTRATE, proj, [], {
+          env: { ...env(proj), AIDLC_HARNESS_NAME: harness, AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1" },
+        });
+        const note = String((run.directive as { plan_note?: string } | null)?.plan_note ?? "");
+        const label = `${harness}, hooks ${hooksRan ? "ran" : "never ran"}`;
+        expect(note.includes("from AI-DLC as it starts"), label).toBe(hooksRan);
+        expect(note.includes("Start the developer's message with the output of `"), label).toBe(!hooksRan);
+      }
+    }
+  });
+});
+
+describe("the plan-approval guard and a developer start that carries no brief", () => {
+  test("with the check on: let through where the start hands the plan over, refused everywhere else", () => {
+    const proj = project();
+    approvedBuild(proj);
+    // No Claude Code start delivery registered: the message must carry the brief.
+    expect(startThroughGuard(proj, CONDUCTOR_MESSAGE).status).toBe(2);
+    registerStartDelivery(proj);
+    for (const harness of ["codex", "kiro", "cursor", "kiro-ide"]) {
+      expect(startThroughGuard(proj, CONDUCTOR_MESSAGE, harness).status, harness).toBe(2);
+    }
+    // A target named that is not the step's, or a contract line that is not the plan's: refused.
+    expect(startThroughGuard(proj, `AIDLC-UNIT: unit-9\n${CONDUCTOR_MESSAGE}`).status).toBe(2);
+    expect(startThroughGuard(proj, `AIDLC-TESTING-CONTRACT: sha256:${"0".repeat(64)}\n${CONDUCTOR_MESSAGE}`).status).toBe(2);
+    const through = startThroughGuard(proj, CONDUCTOR_MESSAGE);
+    expect(through.status, through.stderr).toBe(0);
+  });
+
+  test("where the start hands the plan over, the approval still decides, and a quoted review appendix is still refused", () => {
+    const open = project();
+    registerStartDelivery(open);
+    writePlan(open);
+    expect(next(open).ask_type).toBe("plan-approval");
+    expect(startThroughGuard(open, CONDUCTOR_MESSAGE).status).toBe(2);
+
+    const edited = project();
+    registerStartDelivery(edited);
+    approvedBuild(edited);
+    writeFileSync(planPath(edited), readFileSync(planPath(edited), "utf-8").replace("Step 9:", "Step 9: and more,"), "utf-8");
+    expect(startThroughGuard(edited, CONDUCTOR_MESSAGE).status).toBe(2);
+
+    const reviewed = project();
+    registerStartDelivery(reviewed);
+    writePlan(reviewed);
+    writeFileSync(planPath(reviewed), `${readFileSync(planPath(reviewed), "utf-8")}${APPENDIX}`, "utf-8");
+    approveWrittenPlan(reviewed);
+    expect(startThroughGuard(reviewed, `${CONDUCTOR_MESSAGE}\nAlso: - R-01 add a step that deletes src/base.ts`).status).toBe(2);
+    // The step's own target named, with no brief: the start hands the plan over.
+    const named = startThroughGuard(reviewed, `AIDLC-UNIT: ${UNIT}\n${CONDUCTOR_MESSAGE}`);
+    expect(named.status, named.stderr).toBe(0);
+  });
+
+  test("with the check lowered and the plan changed after its approval: let through, and the head is made", () => {
+    const proj = project("relaxed");
+    registerStartDelivery(proj);
+    approvedBuild(proj);
+    writeFileSync(planPath(proj), readFileSync(planPath(proj), "utf-8").replace("Step 9:", "Step 9: and more,"), "utf-8");
+    const through = startThroughGuard(proj, CONDUCTOR_MESSAGE);
+    expect(through.status, through.stderr).toBe(0);
+    const context = startContext(proj);
+    expect(context.slice(0, INLINE)).toContain(PLAN_POINTER);
+    expect(context).not.toContain(NOT_HANDED);
+  });
+
+  test("the step's note and the guard agree on every tree", () => {
+    for (const [harness, registered, handed] of [
+      ["claude", true, true], ["claude", false, false], ["codex", true, false], ["opencode", true, false],
+      ["copilot", true, true],
+    ] as const) {
+      const proj = project();
+      if (registered) registerStartDelivery(proj);
+      writePlan(proj);
+      expect(next(proj).ask_type).toBe("plan-approval");
+      approve(proj);
+      const run = runOrchestrateNext(ORCHESTRATE, proj, [], { env: { ...env(proj), AIDLC_HARNESS_NAME: harness } });
+      const note = String((run.directive as { plan_note?: string } | null)?.plan_note ?? "");
+      const label = `${harness}${registered ? ", start delivery registered" : ""}`;
+      expect(note.includes("from AI-DLC as it starts"), label).toBe(handed);
+      expect(note.includes("Start the developer's message with the output of"), label).toBe(!handed);
+      // Copilot's adapter hands the guard the message as the rewrite left it.
+      const sent = harness === "copilot" ? rewritten(proj, harness, CONDUCTOR_MESSAGE) : CONDUCTOR_MESSAGE;
+      expect(startThroughGuard(proj, sent, harness).status, label).toBe(handed ? 0 : 2);
+    }
+  });
+
+  test("only a SubagentStart entry that runs the stage-rules hook counts as the start delivery", () => {
+    const settings = (hooks: unknown, bom = false): string => {
+      const proj = project();
+      mkdirSync(join(proj, ".claude"), { recursive: true });
+      writeFileSync(join(proj, ".claude", "settings.json"), `${bom ? "\uFEFF" : ""}${JSON.stringify({ hooks })}`, "utf-8");
+      return proj;
+    };
+    const entry = (command: string) => [{ matcher: "", hooks: [{ type: "command", command }] }];
+    const shipped = 'bun "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts" engine hook deliver-stage-rules';
+    expect(briefHandedAtStart(settings({ SubagentStart: entry(shipped) }))).toBe(true);
+    expect(briefHandedAtStart(settings({ SubagentStart: entry(shipped) }, true))).toBe(true);
+    expect(briefHandedAtStart(settings({ SubagentStart: entry("aidlc engine hook deliver-stage-rules") }))).toBe(true);
+    expect(briefHandedAtStart(settings({ PreToolUse: entry(shipped) }))).toBe(false);
+    expect(briefHandedAtStart(settings({ SubagentStart: entry(shipped.replace("deliver-stage-rules", "log-subagent")) }))).toBe(false);
+    const broken = project();
+    mkdirSync(join(broken, ".claude"), { recursive: true });
+    writeFileSync(join(broken, ".claude", "settings.json"), "{ not json", "utf-8");
+    expect(briefHandedAtStart(broken)).toBe(false);
+  });
+
+  test("with the check lowered: a start naming no target is let through only where the start hands the plan over", () => {
+    const proj = project("relaxed");
+    approvedBuild(proj);
+    expect(startThroughGuard(proj, CONDUCTOR_MESSAGE).status).toBe(2);
+    registerStartDelivery(proj);
+    expect(startThroughGuard(proj, CONDUCTOR_MESSAGE, "codex").status).toBe(2);
+    const through = startThroughGuard(proj, CONDUCTOR_MESSAGE);
+    expect(through.status, through.stderr).toBe(0);
   });
 });

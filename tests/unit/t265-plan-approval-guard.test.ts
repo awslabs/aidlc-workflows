@@ -5343,7 +5343,7 @@ describe("t265c registrations", () => {
     expect(emission).toBeGreaterThan(validation);
   });
 
-  test("code-generation stage requires the explicit dispatch unit marker", () => {
+  test("code-generation stage leaves the developer's brief to the step's plan note", () => {
     const stage = readFileSync(
       join(
         REPO_ROOT,
@@ -5357,8 +5357,13 @@ describe("t265c registrations", () => {
       ),
       "utf-8",
     );
-    expect(stage).toContain("AIDLC-UNIT: <directive.unit>");
-    expect(stage).toContain("AIDLC-TESTING-CONTRACT: <contract_sha256>");
+    // The note names the exact brief command where the conductor passes it,
+    // and says the developer is handed its plan where a tool does that.
+    expect(stage).toContain("the step's plan note says how the developer gets the\nplan and its test instructions");
+    // A step that carries no plan note (a legacy Kiro IDE window's) still names the brief command.
+    expect(stage).toContain("for a step with no plan note, start the message with the\n" +
+      "output of `bun .claude/tools/aidlc-testing-posture.ts brief --unit <directive.unit>`");
+    expect(stage).not.toContain("verbatim and unedited");
   });
 
   test("all native projections emit the Plan Approval prerequisite commands", () => {
