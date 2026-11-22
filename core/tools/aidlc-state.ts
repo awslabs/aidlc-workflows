@@ -673,13 +673,13 @@ function auditTailHasFields(
 // rather than silently under-record the revision (leaving Revision Count 0 and
 // no audit pair for a revision the user actually saw happen).
 //
-// Chronological interleave of six event types across every shard (Timestamp,
+// Chronological interleave of seven event types across every shard (Timestamp,
 // then buffer position as the tiebreak): the SAME sort idiom humanActedSinceGate
 // uses (aidlc-lib.ts). readAllAuditShards concatenates per-clone shards in
 // FILENAME order, which is NOT time order, so a raw-position scan could misrank
 // an older event living in a lexically-later shard. findAllEvents is NOT usable
 // here: it filters ONE event type per call, and this predicate needs one
-// interleaved ordering across all six to reason about "after the gate opened".
+// interleaved ordering across all seven to reason about "after the gate opened".
 //
 // The four conjuncts, all required:
 //   1. an anchor exists: the LAST ORGANIC (non-Recovered) STAGE_AWAITING_APPROVAL
@@ -694,7 +694,18 @@ function auditTailHasFields(
 //   3. at least one HUMAN_TURN after the anchor (the human responded at the
 //      gate), AND
 //   4. at least one ARTIFACT_CREATED/ARTIFACT_UPDATED to a declared produces file
-//      AFTER the FIRST post-anchor HUMAN_TURN and BEFORE the LAST one.
+//      AFTER the FIRST post-anchor HUMAN_TURN and BEFORE the LAST one, with no
+//      stage-level REVIEW_COMPLETED for this slug between that write and the
+//      LAST turn.
+//
+// A review recorded after the write and before the person's last turn read the
+// changed document before they answered: that edit is the one their approval
+// stands on, not a revision nobody recorded. A review recorded only after their
+// last turn covers nothing here, so an approval given before a finding it
+// raises still meets this backstop. A per-Unit review row clears no write: it
+// covers one Unit's document, and the write may be another's. Whether the
+// review still covers the current bytes is the approval's own reviewer check
+// (freshReviewReceipts), which runs next.
 //
 // A declared produces file here is never one of the stage's own questions files
 // (summaryOwnedReviewInput): a write there notes the person's answers, so a
@@ -757,6 +768,7 @@ function unrecordedRevisionSinceGateOpen(
     "HUMAN_TURN",
     "ARTIFACT_CREATED",
     "ARTIFACT_UPDATED",
+    "REVIEW_COMPLETED",
   ]);
   const blocks = audit.replace(/\r\n/g, "\n").split(/\n---\n/);
   const events: {
@@ -765,6 +777,7 @@ function unrecordedRevisionSinceGateOpen(
     event: string;
     stage: string | null;
     file: string | null;
+    unit: string | null;
     recovered: boolean;
   }[] = [];
   const withdrawn = withdrawnTurnPositions(blocks);
@@ -778,6 +791,7 @@ function unrecordedRevisionSinceGateOpen(
       event: ev,
       stage: auditField(blocks[i], "Stage"),
       file: auditField(blocks[i], "File"),
+      unit: auditField(blocks[i], "Unit"),
       recovered: auditField(blocks[i], "Recovered") === "true",
     });
   }
@@ -835,18 +849,22 @@ function unrecordedRevisionSinceGateOpen(
   if (firstHuman === -1) return false;
   if (!anchorIsGateOpen && !wroteBeforeHuman) return false;
   // 4. A produces-file artifact write after the first post-anchor human turn
-  // and before the last one (the approving turn; see the function comment).
+  // and before the last one (the approving turn), that no stage-level review of
+  // this stage recorded before that turn read (see the function comment).
+  let unreviewedWrite = false;
   for (let i = firstHuman + 1; i < lastHuman; i++) {
     const e = events[i];
-    if (
+    if (e.event === "REVIEW_COMPLETED" && e.stage === stage.slug && !e.unit) {
+      unreviewedWrite = false;
+    } else if (
       (e.event === "ARTIFACT_CREATED" || e.event === "ARTIFACT_UPDATED") &&
       e.file !== null &&
       producesArtifactFile(shown, e.file, recordedRepos)
     ) {
-      return true;
+      unreviewedWrite = true;
     }
   }
-  return false;
+  return unreviewedWrite;
 }
 
 // --- Slug + small helpers (used by fork/merge handlers below; declared
