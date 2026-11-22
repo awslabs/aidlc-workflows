@@ -194,7 +194,9 @@ Together`, each later one `Approved Together With: <first stage>` plus the same
 summary, reviewer and sensor checks; the first stage that refuses stops the run
 there, with the stages before it approved. That stage's later approval needs no
 new person turn while no reply, rejection or answer has been recorded since the
-approval that listed it. A rejection approves nothing. A change the person asks
+approval that listed it, and the latest review of that stage since, if any, is
+READY and leaves no finding of the stage New or Unresolved; after any other review
+its own gate is shown, as the one question for it and the stages after it. A rejection approves nothing. A change the person asks
 for at that question for one listed stage is `next --stage <stage> --unit
 <unit> --change` (or `--every-unit`): the print names `aidlc-jump.ts reopen ...
 --via change`, whose Unit-scoped `GATE_REJECTED` carries `Reopen: change`,
