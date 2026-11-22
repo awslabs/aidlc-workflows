@@ -139,6 +139,7 @@ NOTE: This artifact describes topology only. It does NOT pick a single "recommen
 - One row per upstream item, keyed the way the traceability enumeration below is keyed. When `stories.md` is produced, key every row by `USx.y`; only `USx.y` rows are read. Otherwise key rows by `FR`, and optionally add an `NFR` row for any NFR this scope also traces; a requirement with sub-requirements is traced through its `FR{n}.{m}` IDs, so key its rows by those. Each row names the implementing Unit `U{n}` ID and directory name, for example `| US1.1 | U1 | u1-ledger |`; separate several Units in one cell with `;`. Every Unit a row names traces all of that row's acceptance criteria in its Functional Design, so name a Unit on a row only when it implements part of that item
 - Rows that span multiple units (cross-cutting concerns)
 - When mockups were produced, every screen, control and command they show belongs to a Unit whose responsibilities in `unit-of-work.md` say it builds it. A screen no Unit's responsibilities name is a gap in the plan, not a detail for Functional Design to find
+- With `stories.md`, a story whose row names only `library`, `spec` or `packaging` Units also names the Unit that builds its screen, command or endpoint, or says how it is reached in a column headed `Reached through`: `existing: <where>` when the product already has the place, `interface` when its caller is a developer or another system. When one answer holds for every story, write it once below the table as `Reached through: <answer>`
 - Implementation order within each unit
 - A story the person decides no Unit builds, because it is handled outside Construction (in Operation, say): write `none` in its Units cell, and give its `traceability.json` row `Deferred` with the reason and where it is handled as the `target`. `N/A` does not settle it
 - Coverage verification: every enumerated ID assigned, every unit has rows
@@ -186,7 +187,8 @@ For `unit-of-work-dependency.md`, `required-sections` also requires a
 well-formed, cycle-free fenced `yaml` edge block. `traceability` owns
 `traceability.json`, derives the Unit set, and verifies every story, or every
 fallback `FR` when `stories.md` is not produced, maps to its declared target
-Unit.
+Unit. With `stories.md` it also names every story whose row holds only
+`library`, `spec` or `packaging` Units and no `Reached through` answer.
 
 ## Learn
 
