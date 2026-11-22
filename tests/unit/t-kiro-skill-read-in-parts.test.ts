@@ -122,11 +122,12 @@ describe("t-kiro-skill-read-in-parts: the conductor carries the skill as its own
 
 // The Kiro CLI (V2) row's SKILL.md is still one file past Kiro's 50,000-character
 // cut, so an instruction its conductor must follow sits ahead of the cut: a
-// teammate who gives the lead's address is otherwise asked for it again.
+// teammate who asks to take a Unit, with the plan's address or without one, is
+// otherwise asked for the address.
 const PER_FILE_CUT = 50_000;
 describe("t-kiro-skill-read-in-parts: the Kiro CLI (V2) row's routing instructions sit before the cut", () => {
   for (const [tool, root] of TREES.filter(([, , harness]) => harness === "kiro")) {
-    test(`${tool}: the lead's-address instruction ends within the first ${PER_FILE_CUT} characters`, () => {
+    test(`${tool}: the plan-address and no-address Unit instructions end within the first ${PER_FILE_CUT} characters`, () => {
       const text = readFileSync(join(REPO, root, ".kiro", "skills", "aidlc", "SKILL.md"), "utf-8");
       const start = text.indexOf("**The plan by its address.**");
       expect(start).toBeGreaterThan(-1);
