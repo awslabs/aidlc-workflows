@@ -17,6 +17,7 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
+import { SHIPPED_FORMAT_DOCS } from "../../core/tools/aidlc-inline-context.ts";
 import { CONDUCTOR_SKILL_FILES, conductorSkillText } from "../harness/conductor-skill.ts";
 
 const REPO = join(import.meta.dir, "..", "..");
@@ -275,10 +276,11 @@ describe("t-kiro-skill-read-in-parts: the generated preflight tells a Kiro helpe
   }
 });
 
-// Kiro's caps on an agent's `file://` resources (see the header): a helper that
-// declares none of its own gets the conductor's, so checking every agent that
-// declares some covers them all. Lengths count UTF-16 code units, never fewer
-// than Kiro's characters, and the whole file, front matter included.
+// Kiro's caps on an agent's `file://` resources (see the header). A helper that
+// declares no `file://` of its own gets the conductor's, even with
+// `resources: []`, so every Kiro-row helper and the plugin-agent lines declare
+// the shared files (the last block). Lengths count UTF-16 code units, never
+// fewer than Kiro's characters, and the whole file, front matter included.
 const RESOURCE_MAX_FILES = 32;
 const RESOURCE_MAX_FILE_CHARS = 50_000;
 const RESOURCE_MAX_TOTAL_CHARS = 100_000;
@@ -335,6 +337,33 @@ describe("t-kiro-skill-read-in-parts: every Kiro-row agent's resources fit Kiro'
       expect(problems).toEqual([]);
       expect(resourceBudget(root, join(agents, "aidlc-aidlc.md")).files).toBe(RESOURCE_FILES["kiro-ide"].length);
       expect(conductorResources(root)).toEqual(RESOURCE_FILES["kiro-ide"].map((file) => `file://.kiro/skills/aidlc/${file}`));
+    });
+  }
+});
+
+function fileResources(agentFile: string): string[] {
+  const fm = Bun.YAML.parse(frontmatter(readFileSync(agentFile, "utf-8"))) as { resources?: unknown } | null;
+  const resources = Array.isArray(fm?.resources) ? (fm.resources as unknown[]) : [];
+  return resources.filter((entry): entry is string => typeof entry === "string" && entry.startsWith("file://"));
+}
+
+describe("t-kiro-skill-read-in-parts: a Kiro-row helper carries the shared files, not the conductor's", () => {
+  for (const [tool, root] of TREES.filter(([, , harness]) => harness === "kiro-ide")) {
+    test(`${tool}: every helper and the plugin-agent lines declare the shared knowledge files as file:// resources`, () => {
+      const shared = readdirSync(join(REPO, root, ".kiro", "knowledge", "aidlc-shared"))
+        .filter((name) => name.endsWith(".md") && !SHIPPED_FORMAT_DOCS.has(name))
+        .sort()
+        .map((name) => `file://.kiro/knowledge/aidlc-shared/${name}`);
+      expect(shared.length).toBeGreaterThan(0);
+      const agents = join(REPO, root, ".kiro", "agents");
+      const helpers = readdirSync(agents).filter((name) => name.endsWith(".md") && name !== "aidlc-aidlc.md");
+      expect(helpers).toContain("aidlc-developer-agent.md");
+      const wrong: Record<string, string[]> = {};
+      for (const file of [...helpers.map((name) => join(agents, name)), join(REPO, root, ".kiro", "tools", "data", "plugin-agent.md")]) {
+        const resources = fileResources(file);
+        if (JSON.stringify(resources) !== JSON.stringify(shared)) wrong[relative(REPO, file)] = resources;
+      }
+      expect(wrong).toEqual({});
     });
   }
 });

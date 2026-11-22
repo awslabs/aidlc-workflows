@@ -19,6 +19,8 @@
 //     session start. IDE 0.x .kiro.hook files are not shipped: IDE 1.x never
 //     executes them.
 
+import { join } from "node:path";
+import { sharedKnowledgeResources } from "../../scripts/agent-knowledge.ts";
 import type { HarnessManifest } from "../../scripts/manifest-types.ts";
 import {
   copyChannelDelegateShellDeny,
@@ -101,6 +103,11 @@ function personaFrontmatter(agent: string): string[] {
   return [
     `tools: ["read", "write", "shell"]`,
     "includeMcpJson: true",
+    // A sub-agent with no `file://` of its own loads the conductor's whole
+    // skill (Kiro's agent configuration reference, "resources" field), so each
+    // helper declares the shared files its knowledge preflight names.
+    "resources:",
+    ...sharedKnowledgeResources(join(import.meta.dir, "..", "..", "core"), ".kiro").map((uri) => `  - "${uri}"`),
     "permissions:",
     "  rules:",
     "    - capability: shell",

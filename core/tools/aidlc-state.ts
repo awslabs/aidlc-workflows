@@ -8238,10 +8238,12 @@ function verifyApprovalDecision(
   // it: "Approve", "Accept as-is", "Add User Stories" alike. The engine reads
   // nothing into it.
   const approvalInput = userInput?.trim();
-  // A later stage the person's one approval listed stands on that reply.
+  // A later stage the person's one approval listed stands on that reply, until its
+  // latest review since raises what a named reply's gate would bring to them.
   const together = autonomousDecision || forceHuman || humanPresenceGuardDisabled()
     ? null
-    : approvedTogetherCover(pd, stage.slug);
+    : approvedTogetherCover(pd, stage.slug, (review) =>
+      auditBlockField(review.block, "Verdict") !== "READY" || reviewHasUnseenFinding(pd, stage.slug));
   if (!autonomousDecision && !humanPresenceGuardDisabled() && approvalInput && isNonAnswer(approvalInput)) {
     refuseForAgent(
       `Cannot approve "${stage.slug}" because the reply ${formatReceivedReply(approvalInput)} is ` +

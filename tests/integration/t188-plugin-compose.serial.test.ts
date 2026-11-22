@@ -4802,11 +4802,17 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       else expect(fm, variant.label).not.toContain("      effect: deny");
     }
 
-    // An agent that declares all three keys gets nothing added, and a later
+    // An agent that declares all four keys gets nothing added, and a later
     // compose leaves its copy as it is.
     const plugin = "syn-keys-all";
     const agent = `${plugin}-agent`;
-    const own = ['tools: ["read"]', "includeMcpJson: false", ...cases[1].own];
+    const own = [
+      'tools: ["read"]',
+      "includeMcpJson: false",
+      "resources:",
+      '  - "file://.kiro/knowledge/aidlc-shared/rules-reading.md"',
+      ...cases[1].own,
+    ];
     const { proj } = composeSynthetic(plugin, { [`agents/${agent}.md`]: pluginAgent(plugin, agent, own) }, "kiro-ide");
     const installed = join(proj, ".kiro", "agents", `${agent}.md`);
     expect(kiroFrontmatter(readFileSync(installed, "utf-8"))).toBe(
