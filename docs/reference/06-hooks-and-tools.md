@@ -1945,7 +1945,8 @@ a read subcommand of git handed a program through `-c` or `--config-env` (an
 external diff or diff driver, a file-system monitor, a hook, a content filter,
 a signature program, or another config file; any other setting, such as `-c
 core.quotePath=false`, is a read), in any shortened spelling the command
-accepts. A variable set
+accepts; a word that is another option's value is not an option (`rg --regexp
+--pre` searches for the text `--pre`). A variable set
 on the command line counts the same way: `RIPGREP_CONFIG_PATH` before ripgrep
 (a config file's lines are options), `GIT_EXTERNAL_DIFF` or `GIT_CONFIG_COUNT`,
 `GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM` or `GIT_CONFIG_PARAMETERS` before a

@@ -3506,6 +3506,9 @@ describe("t265b hook lifecycle", () => {
         "sort -uo src/sorted.txt input.txt",
         "file -C -m magic",
         "file --compile -m magic",
+        // After an option's own value the next word is an option again.
+        "rg --regexp TODO --pre ./tool src",
+        "rg --regexp=TODO --pre ./tool src",
         // However the command is reached.
         "env rg --pre ./tool TODO src",
         "/usr/bin/sort --compress-program=./tool input.txt",
@@ -3524,6 +3527,9 @@ describe("t265b hook lifecycle", () => {
         "rg -tzsh TODO src",
         "rg -ez src",
         "rg -e --pre src",
+        "rg --regexp --pre src",
+        "rg --regexp -z src",
+        "rg --glob --pre-glob TODO src",
         "rg -- --pre src",
         "rg --pretty TODO src",
         "rg TODO src | sort",

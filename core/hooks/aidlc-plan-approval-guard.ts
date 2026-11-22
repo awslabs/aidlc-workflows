@@ -194,7 +194,7 @@ import {
   stepNextCommand,
   WORKER_BRIEF_SECTIONS,
 } from "../tools/aidlc-testing-posture.ts";
-import { codexPatchMode, shellPatchPaths } from "./review-freeze-command.ts";
+import { codexPatchMode, RG_SHORT_VALUE_OPTIONS, RG_VALUE_OPTIONS, shellPatchPaths } from "./review-freeze-command.ts";
 import { refuseRuntimeIntegrityViolation } from "./runtime-integrity.ts";
 import { unaskedSystemInstall } from "./system-install.ts";
 
@@ -1557,9 +1557,16 @@ function installedEngine(path: string): "launcher" | "executable" | null {
 // One command's options of a kind. `long` pairs each option with the shortest
 // spelling that selects it: sort, file and git grep take a long option cut to
 // any prefix that names only it; ripgrep and git's own `--output` take the
-// whole name. `short` are its letters, and `values` are the command's other
-// short options that take a value, so a value is never read as an option.
-interface OptionSpec { long: [option: string, shortest: string][]; short: string; values: string }
+// whole name. `short` are its letters. `values` and `longValues` are the
+// command's other options that take a value, by short letter and by long
+// name, so a value is never read as an option (`rg --regexp --pre` searches
+// for the text `--pre`).
+interface OptionSpec {
+  long: [option: string, shortest: string][];
+  short: string;
+  values: string;
+  longValues: ReadonlySet<string>;
+}
 
 function optionGiven(options: OptionSpec, args: readonly string[]): boolean {
   for (let i = 0; i < args.length && args[i] !== "--"; i++) {
@@ -1567,6 +1574,8 @@ function optionGiven(options: OptionSpec, args: readonly string[]): boolean {
     if (arg.startsWith("--")) {
       const spelled = arg.split("=", 1)[0];
       if (options.long.some(([option, shortest]) => option.startsWith(spelled) && spelled.startsWith(shortest))) return true;
+      // Written apart from its value, the option takes the next word.
+      if (spelled === arg && options.longValues.has(arg)) i++;
       continue;
     }
     if (!arg.startsWith("-")) continue;
@@ -1584,10 +1593,17 @@ function optionGiven(options: OptionSpec, args: readonly string[]): boolean {
 
 // The options through which a read command writes a file: sort's and git's
 // output file, and the compiled magic file `file -C` leaves beside its source.
+const SORT_VALUE_OPTIONS: ReadonlySet<string> = new Set([
+  "--batch-size", "--buffer-size", "--field-separator", "--files0-from", "--key",
+  "--parallel", "--random-source", "--sort", "--temporary-directory",
+]);
+const FILE_VALUE_OPTIONS: ReadonlySet<string> = new Set([
+  "--exclude", "--exclude-quiet", "--files-from", "--magic-file", "--parameter", "--separator",
+]);
 const WRITING_OPTIONS = new Map<string, OptionSpec>([
-  ["sort", { long: [["--output", "--o"]], short: "o", values: "kSTt" }],
-  ["file", { long: [["--compile", "--co"]], short: "C", values: "eFfmP" }],
-  ["git", { long: [["--output", "--output"]], short: "", values: "" }],
+  ["sort", { long: [["--output", "--o"]], short: "o", values: "kSTt", longValues: SORT_VALUE_OPTIONS }],
+  ["file", { long: [["--compile", "--co"]], short: "C", values: "eFfmP", longValues: FILE_VALUE_OPTIONS }],
+  ["git", { long: [["--output", "--output"]], short: "", values: "", longValues: new Set() }],
 ]);
 
 // A file a command writes through an option or a second operand, which the
@@ -1606,13 +1622,24 @@ const PROGRAM_STARTING_OPTIONS = new Map<string, OptionSpec>([
   ["rg", {
     long: [["--pre", "--pre"], ["--pre-glob", "--pre-glob"], ["--hostname-bin", "--hostname-bin"], ["--search-zip", "--search-zip"]],
     short: "z",
-    values: "ABCdEefgjMmrTt",
+    values: RG_SHORT_VALUE_OPTIONS,
+    longValues: RG_VALUE_OPTIONS,
   }],
-  ["sort", { long: [["--compress-program", "--co"]], short: "", values: "kSTto" }],
-  ["file", { long: [["--uncompress-noreport", "--uncompress"]], short: "zZ", values: "eFfmP" }],
+  ["sort", { long: [["--compress-program", "--co"]], short: "", values: "kSTto", longValues: SORT_VALUE_OPTIONS }],
+  ["file", {
+    long: [["--uncompress-noreport", "--uncompress"]],
+    short: "zZ",
+    values: "eFfmP",
+    longValues: FILE_VALUE_OPTIONS,
+  }],
 ]);
 // git grep opens the files it finds in the program this option names.
-const GIT_GREP_PAGER: OptionSpec = { long: [["--open-files-in-pager", "--op"]], short: "O", values: "efABCm" };
+const GIT_GREP_PAGER: OptionSpec = {
+  long: [["--open-files-in-pager", "--op"]],
+  short: "O",
+  values: "efABCm",
+  longValues: new Set(["--after-context", "--before-context", "--context", "--max-count", "--max-depth", "--threads"]),
+};
 
 // The variables that hand a read command a program on its own command line:
 // ripgrep's config file (its lines are options, the preprocessor among them),

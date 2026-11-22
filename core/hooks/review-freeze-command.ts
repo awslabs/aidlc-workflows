@@ -155,6 +155,19 @@ interface ShellInvocationParseState {
   variables?: string[];
 }
 
+// ripgrep's options that take a value, by long name and by short letter. A
+// word written apart after one of them is its value, never another option.
+export const RG_VALUE_OPTIONS: ReadonlySet<string> = new Set([
+  "--after-context", "--before-context", "--color", "--colors", "--context",
+  "--context-separator", "--dfa-size-limit", "--encoding", "--engine",
+  "--field-context-separator", "--field-match-separator", "--file", "--generate",
+  "--glob", "--hostname-bin", "--hyperlink-format", "--iglob", "--ignore-file",
+  "--max-columns", "--max-count", "--max-depth", "--max-filesize", "--path-separator",
+  "--pre", "--pre-glob", "--regex-size-limit", "--regexp", "--replace", "--sort",
+  "--sortr", "--threads", "--type", "--type-add", "--type-clear", "--type-not",
+]);
+export const RG_SHORT_VALUE_OPTIONS = "ABCEMdefgjmrtT";
+
 function changesExecutableResolution(name: string): boolean {
   return /^(?:PATH|PATHEXT)$/i.test(name);
 }
