@@ -1108,6 +1108,10 @@ names) / **Request Changes**.
   has the place, `interface` when its caller is a developer or another system,
   in the `Reached through` column of its row or once as a `Reached through:`
   line. Otherwise the traceability check names it.
+- When the stage runs again after Construction began, in team-owned
+  Construction, a story whose row names only finished Units must have every
+  acceptance criterion built or settled, as Build and Test's coverage reads it,
+  or the traceability check names it.
 - The aidlc-delivery-agent provides feasibility validation and prioritization input,
   ensuring the decomposition is practical from a delivery perspective.
 

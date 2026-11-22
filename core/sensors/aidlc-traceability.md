@@ -60,7 +60,14 @@ opens, on the tables as they are then:
    Functional Design Unit
    whose kind writes no `rules.md` (a `ui` Unit) names one of its design files
    (`functional-spec.md`, `frontend-components.md`) on each row instead of a
-   business rule.
+   business rule. At Units Generation, with stories, once a Unit is finished
+   (its row in the Unit Progress table of `aidlc-state.md` has every stage cell
+   and the gate cell `[x]`, and its `merged` cell too where the table has one),
+   a story whose row names only finished Units must have every acceptance
+   criterion built or settled, as Build and Test's coverage below reads it. A
+   finished Unit is not worked again, so a criterion nobody built or settled
+   would never be built; each such story is reported as an invalid target. A
+   story with a Unit that is not finished on its row is not.
 6. Derives functional-design orphans from `rules.md` rather than
    trusting only the self-reported `reverse` array.
 

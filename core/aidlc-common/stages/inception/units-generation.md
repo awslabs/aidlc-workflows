@@ -142,6 +142,7 @@ NOTE: This artifact describes topology only. It does NOT pick a single "recommen
 - With `stories.md`, a story whose row names only `library`, `spec` or `packaging` Units also names the Unit that builds its screen, command or endpoint, or says how it is reached in a column headed `Reached through`: `existing: <where>` when the product already has the place, `interface` when its caller is a developer or another system. When one answer holds for every story, write it once below the table as `Reached through: <answer>`
 - Implementation order within each unit
 - A story the person decides no Unit builds, because it is handled outside Construction (in Operation, say): write `none` in its Units cell, and give its `traceability.json` row `Deferred` with the reason and where it is handled as the `target`. `N/A` does not settle it
+- A finished Unit keeps its built work as it is: give it no new story or criterion
 - Coverage verification: every enumerated ID assigned, every unit has rows
 
 Create `<record>/inception/units-generation/traceability.json` by running

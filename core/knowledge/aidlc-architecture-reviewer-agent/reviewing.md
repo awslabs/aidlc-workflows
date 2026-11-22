@@ -47,6 +47,7 @@ When invoked as a reviewer, your role changes. You are NOT designing — you are
 - For each story whose Units cell is not `none`: which Unit builds the logic, which Unit builds the screen, command or endpoint it is reached through, and which Unit connects the two? Name every story where one of the three has no owner.
 - When `mockups.md` or `interaction-spec.md` is passed: does every screen, control and command they show have a Unit whose responsibilities say it builds it?
 - A story no Unit exposes and no `Reached through` answer covers, or a mockup screen no Unit builds, is Major: one finding per story or screen, naming the acceptance criteria it leaves uncovered.
+- On a re-run with finished Units: does every story whose Units are all finished have its criteria built or settled (`N/A` with its reason), and does new work go only to Units that are not finished?
 - Each unit independently deployable?
 
 ### Validation Tools

@@ -16,6 +16,7 @@ import {
   usesStageLevelPerUnitArtifacts,
 } from "./aidlc-lib.ts";
 import { aidlcDispatcherInvocation, sensorFireUsage } from "./aidlc-runtime-paths.ts";
+import { completedUnits } from "./aidlc-unit-landing.ts";
 
 const VALID_STATUSES = new Set(["OK", "GAP", "ORPHAN", "Deferred", "N/A"]);
 
@@ -530,6 +531,30 @@ function unreachedStories(assignments: Map<string, Set<string>>, unitKinds: Map<
   return findings;
 }
 
+// With stories, a story whose row names only finished Units (the engine's own
+// reading of the Unit Progress table, `completedUnits`) is not worked on again,
+// so each of its criteria must already be built or settled as Build and Test's
+// coverage reads it (`finalCoverage`): a criterion nobody built and nobody
+// settled would never be built. A story with a Unit that is not finished on its
+// row is asked of that Unit. `finalCoverage` calls `resolveUpstream` itself, so
+// this runs from `verifyTargets` only.
+function unbuiltStories(projectDir: string, docsDir: string, assignments: Map<string, Set<string>>): string[] {
+  const state = readPlanState(projectDir);
+  const finished = state === null ? new Set<string>() : completedUnits(state);
+  const rows = [...assignments].filter(([, units]) => units.size > 0 && [...units].every((unit) => finished.has(unit)));
+  const stories = rows.length === 0 ? null : readText(join(docsDir, "inception", "user-stories", "stories.md")).content;
+  if (stories === null) return [];
+  const settled = new Set(finalCoverage(projectDir).coverage.filter((row) => row.covered).map((row) => row.id));
+  const byId = (a: string, b: string) => a.localeCompare(b, "en", { numeric: true });
+  return rows.flatMap(([story, units]) => {
+    const unbuilt = [...criteriaOfStories(stories, new Set([story]))].filter((id) => !settled.has(id)).sort(byId);
+    return unbuilt.length === 0 ? [] : [
+      `${story}: every Unit on its row is finished (${[...units].sort().join(", ")}), and none of them built ${unbuilt.join(", ")}; ` +
+      "add a Unit that is not finished to the row",
+    ];
+  });
+}
+
 // The Units of the plan, with what the story map says of each item: a row of it
 // per story (`USg.s`), or per requirement when there are no stories.
 interface HandoffPlan {
@@ -865,6 +890,7 @@ function verifyTargets(
         invalidTargets.push(`${entry.id}: target "${rawTarget}" is not mapped in unit-of-work-story-map.md`);
       }
     }
+    if (docsDir) invalidTargets.push(...unbuiltStories(projectDir, docsDir, upstream.storyAssignments));
   }
 
   if (stage === "functional-design" && docsDir) {
