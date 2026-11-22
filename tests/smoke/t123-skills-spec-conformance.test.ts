@@ -77,6 +77,7 @@ const STAGE_GRAPH = join(AIDLC_SRC, "tools", "data", "stage-graph.json");
 // runner, so each is named here rather than derived.
 const BASE_SKILLS = [
   "aidlc",
+  "aidlc-humanizer",
   "aidlc-knowledge",
   "aidlc-outcomes-pack",
   "aidlc-replay",
