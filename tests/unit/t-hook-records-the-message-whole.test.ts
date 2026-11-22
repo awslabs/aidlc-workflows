@@ -451,7 +451,7 @@ describe("the chain the agent follows ends, within three steps, and applies a se
     const refused: string[] = [];
     for (let call = 0; call < max; call += 1) {
       // The first call is the agent's own: bare (Copilot CLI), or with the
-      // person's line as its arguments (`next $ARGUMENTS`, Claude Code).
+      // person's line as its arguments (`next $ARGUMENTS`, as Cursor's and opencode's skills run it).
       const step = next(proj, call === 0 ? first : []);
       const kind = step.directive?.kind ?? "none";
       if (kind !== "print") return { prints, ran, refused, ended: kind };

@@ -481,6 +481,7 @@ import {
   reviewArtifactEntries,
   settleConflictedState,
   isReadOnlyNextArgv,
+  classifyTerminalCommand,
   withoutEntryWord,
   sortAttemptEvents,
   stageJumpReaches,
@@ -537,6 +538,7 @@ import {
   shellArg,
   scopeArg,
   splitKiroCommandArgs,
+  selectedRecordIsFinished,
   isScopeName,
   authoritativeProjectDescription,
   harnessDir,
@@ -1455,6 +1457,8 @@ function projectStageValidityAdvisory(
 }
 
 let engineSessionId: string | undefined;
+// This run is AI-DLC's first command (`next --entry`, their line read from the record).
+let entryCommand = false;
 const engineSelections = new Map<string, WorkflowSelection>();
 
 function engineSelection(projectDir: string): WorkflowSelection {
@@ -2200,7 +2204,7 @@ function prepareEmission(directive: Directive): PreparedEmission {
   // ask whose ways on are the conductor's own work (agent_work) is no question
   // for the person: the turn goes on, and the conductor carries them out.
   const endsTurn = (directive.kind === "ask" && (directive as { agent_work?: unknown }).agent_work !== true) ||
-    turnEndingPrints.has(directive) || (directive.kind === "print" && directive.ends_turn === true) ||
+    terminalNextArgs || turnEndingPrints.has(directive) || (directive.kind === "print" && directive.ends_turn === true) ||
     showsGateAgain(directive as unknown as Record<string, unknown>);
   if (
     directive.kind === "run-stage" && directive.construction_policy &&
@@ -11651,6 +11655,14 @@ const runStageRoutes = new WeakMap<RunStageDirective, RunStageRoute>();
 const runStageQuestionsFiles = new WeakMap<RunStageDirective, string>();
 // Prints the agent stops after (turnEndingPrint).
 const turnEndingPrints = new WeakSet<Directive>();
+// The one rule for the turn end of AI-DLC's own commands: a `next` whose final
+// arguments the Stop hook's terminal classifier (isReadOnlyNextArgv) calls
+// terminal ends the turn, its line read from the record or passed alike, as
+// the hook ends `next <them>` by its text. A switch that is handed out keeps
+// its own stop rule (a turn that only selects ends at the switch, while stage
+// work after it, or a switch away and back, does not), so the workspace branch
+// clears the flag where it hands one out.
+let terminalNextArgs = false;
 // The in-flight compose step: the agent asks the question from the composer's
 // proposal, and the step is published as that open question (prepareEmission).
 const composeQuestions = new WeakSet<Directive>();
@@ -13923,10 +13935,14 @@ function takePersonsOwnLine(flags: ParsedFlags, pd: string): string[] | null {
   if (message === null || message.source !== "prompt") return null;
   const stateContent = loadStateFileIfPresent(pd);
   if (message.words !== null) {
-    // Their words name work; with work selected, only while their turn is
-    // still the latest row: after that the agent's bare `next` is the work in
-    // hand.
-    if (stateContent !== null && !turnIsLatestRow(pd, message.id)) return null;
+    // Their words name work; with work selected, only while nothing has run
+    // since they spoke: after that the agent's bare `next` is the work in hand.
+    // A line cut with no whole copy is cutLineGoesOn's to take once, from the
+    // first command on: its own step writes the mark, which over finished work
+    // is no sign anything ran.
+    const cutUncopied = message.cut === true && wholeMessageText(pd, message) === null && finishedWorkSelected(pd) &&
+      (entryCommand || lineHandedOut(pd, engineSessionId, message.id));
+    if (stateContent !== null && !cutUncopied && !nothingRanSinceTheySpoke(pd, engineSessionId, message.id)) return null;
   } else {
     // The entry word alone over work in hand picks it back up, as `--resume`
     // does, whichever the agent sent first: the line decides, not the agent.
@@ -13975,6 +13991,9 @@ function takePersonsOwnLine(flags: ParsedFlags, pd: string): string[] | null {
   }
   for (const key of Object.keys(flags)) delete (flags as unknown as Record<string, unknown>)[key];
   Object.assign(flags, own);
+  // Over finished work no row follows what the first command takes, so the
+  // mark keeps a later one from taking their words again.
+  if (entryCommand && message.words !== null && finishedWorkSelected(pd)) markLineHandedOut(pd, engineSessionId, message.id);
   return argv;
 }
 
@@ -14112,6 +14131,88 @@ function cutMessageStep(shape: ParsedFlags, message: StoredMessage, reply: boole
   );
 }
 
+// AI-DLC's first command (`next --entry`, the Claude Code skill's step 1)
+// carries none of the person's words: the bare `next` reads the words of their
+// typed line from the record (takePersonsOwnLine), and a line of tokens alone
+// runs as the command before this is asked (entryTokens). With no `/aidlc` line of
+// this chat's to read (the hooks off, which stop before the record is read; a
+// run nobody attends, whose prompts are not kept; a latest message that is no
+// `/aidlc` line; no chat), the agent hands their words over in the request
+// file, never on a command line (noTypedLineStep), which cannot know what they
+// typed, so it always says where their flags go; what the agent put after
+// `--entry` is the command there instead (`main`). One plain message on record
+// goes on itself: a reply while a plan or routing question waits, or while work
+// here is in progress and none is selected, which routeNext reads only as
+// words with no `--` mark, and a request file always adds one. It goes on as
+// the one argument the agent would have passed, and only whole, so a message
+// the record cut keeps the step. Returns the step, the bare `next`, or the
+// arguments the reply runs as.
+function entryLine(pd: string, selection: WorkflowSelection, unjoined: boolean): "bare" | "step" | string[] {
+  if (!humanTurnMintAllowed() || !selection.sessionId) return "step";
+  if (!unjoined && hooksOffStop(pd, selection, []) !== null) return "step";
+  const message = chatLatestMessage(pd, selection.sessionId);
+  if (message === null || message.source !== "prompt") return "step";
+  if (aidlcEntryWords(personsWordsText(message.text)) !== null) return "bare";
+  const reply = message.words === null || message.cut === true ? null : personsWordsText(message.words);
+  if (reply === null) return "step";
+  // Presence alone: reading the record would bring an older one up to date.
+  const unselected = !existsSync(engineStateFilePath(pd)) ? unselectedRecords(pd) : null;
+  const waits = openRoutingQuestion(pd) !== null || openFrontQuestion(pd) !== null || (unselected?.selectable.length ?? 0) > 0;
+  return waits ? [reply] : "step";
+}
+// Their `/aidlc` line of tokens alone (a flag, a verb, a plan's name, a
+// setting, a jump: the record keeps no words for it) runs as the first command,
+// as the skill once ran `next $ARGUMENTS`, by the engine's own split of what
+// they typed; `main` reads it before anything reads the command, so every
+// reader meets it as that command. A line classifyTerminalCommand takes (a
+// read-only flag such as the status, help, a space or intent command other than
+// starting work, a knowledge or plugin command) moves no stage and may be read
+// again; any other is taken once, on takePersonsOwnLine's bounds (not handed
+// out yet; with work selected, nothing run since they spoke), and marked, so a later
+// first command before their next message goes on from where the work now
+// stands. Null leaves the first command to entryLine.
+function entryTokens(pd: string): string[] | null {
+  if (!humanTurnMintAllowed()) return null;
+  let selection: WorkflowSelection;
+  try {
+    selection = engineWorkflowSelection(pd);
+  } catch {
+    return null;
+  }
+  const session = selection.sessionId;
+  if (!session) return null;
+  const message = chatLatestMessage(pd, session);
+  if (message === null || message.source !== "prompt" || message.cut === true || message.words !== null) return null;
+  const typed = aidlcEntryWords(personsWordsText(message.text));
+  if (!typed) return null;
+  const tokens = splitKiroCommandArgs(typed);
+  if (classifyTerminalCommand(tokens, pd, session) !== null) return tokens;
+  if (lineHandedOut(pd, session, message.id)) return null;
+  if (selection.intent !== null && !nothingRanSinceTheySpoke(pd, session, message.id)) return null;
+  if (!isReadOnlyEngineProbe()) markLineHandedOut(pd, session, message.id);
+  return tokens;
+}
+// The chat has not joined the selected work (SessionStart bound it to no
+// record, or nothing local says it chose this one).
+function chatOutsideWork(pd: string, selection: WorkflowSelection): boolean {
+  if (selection.intent === null) return selection.binding?.source === "unjoined";
+  return workflowParticipation(pd, selection) !== "participant";
+}
+// What such a chat's `next` sees: a workspace with no work selected.
+function outsideSelection(selection: WorkflowSelection): WorkflowSelection {
+  return { ...selection, intent: null, binding: null };
+}
+function noTypedLineStep(): PrintDirective {
+  const next = `${aidlcToolInvocation("orchestrate")} next`;
+  return printDirective(
+    "AI-DLC has no copy of what the person typed in this chat. Write the words of their request, exactly as they " +
+      `typed them, with your file tool to \`${CUT_MESSAGE_FILE}\`, then run \`${next} --request-file ` +
+      `${CUT_MESSAGE_FILE}\` and follow what it returns. Only their words go in the file: the plan, command word and ` +
+      "flags they typed stay on the command, before `--request-file`. When they typed nothing after the entry word, " +
+      `run \`${next}\` with nothing after it and follow what it returns.`,
+  );
+}
+
 // The request as the person's line typed it. The split reads quote marks and
 // escapes as syntax, so the parse's words had lost them (`slugit "" prints`
 // came back as `slugit  prints`, the bug itself gone). `said` is the parse's
@@ -14219,6 +14320,21 @@ function readingMessage(pd: string): ReturnType<typeof latestMessage> {
 }
 
 
+// Nothing has run since the person spoke. Over finished work the human-turn
+// hook writes no turn row in the record (hookStandsOutside), so for the first
+// command there it is their line not handed out yet; everywhere else, their
+// turn the latest row, which a later `next` over finished work never meets.
+function nothingRanSinceTheySpoke(pd: string, session: string, messageId: string): boolean {
+  return entryCommand && finishedWorkSelected(pd) ? !lineHandedOut(pd, session, messageId) : turnIsLatestRow(pd, messageId);
+}
+function finishedWorkSelected(pd: string): boolean {
+  try {
+    return selectedRecordIsFinished(pd, engineWorkflowSelection(pd));
+  } catch {
+    return false;
+  }
+}
+
 // The person's turn that carries this message is the latest row: nothing has
 // run since they spoke.
 function turnIsLatestRow(pd: string, messageId: string): boolean {
@@ -14273,6 +14389,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   }
   const withoutResume = resumeWithWords(flags, taken);
   const args = withoutResume ?? taken;
+  terminalNextArgs = isReadOnlyNextArgv(args);
   // Only the park branches still see a resume that carried words.
   const resuming = flags.resume === true || withoutResume !== null;
   handOutSettingsLine(flags, resolveProjectDir(projectDir));
@@ -14921,6 +15038,8 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       emit(errorDirective("Invalid workspace command."));
       return;
     }
+    // Each print below that hands out a switch leaves it to its own stop rule.
+    if (command.kind === "switch") terminalNextArgs = false;
     const [verb, ...tail] = argv;
     // Quoted for the shell the agent runs it in: a repo's name can hold an
     // apostrophe, which PowerShell quotes its own way.
@@ -14971,9 +15090,8 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     const terminalBoundary = command.kind === "create-intent"
       ? ""
       : " Do not call `next` or `report`, run a stage, or offer to resume a workflow after this command, even if the selected space or intent has unfinished work.";
-    // A switch keeps its own stop rule: a turn that only selects ends at the
-    // switch, while stage work after it, or a switch straight back to the
-    // intent in hand, does not. So it marks no turn end here.
+    // The turn end is the one rule for AI-DLC's own commands (terminalNextArgs),
+    // which leaves a switch to its own stop rule.
     emit(printDirective(
       `Run \`${aidlcDispatcherInvocation(route)}${suffix}\`, print its output verbatim, then stop.${terminalBoundary}`,
     ));
@@ -27673,6 +27791,14 @@ export function main(argv: string[]): void {
 
   const subcommand = filteredArgs[0];
   let subArgs = filteredArgs.slice(1);
+  // The skill's first command is `next --entry`; it comes off before anything
+  // reads the command, and their typed line is read from the record (see
+  // entryLine). What an agent puts after it is the command only where no line
+  // of theirs is on record.
+  const entry = subcommand === "next" && subArgs[0] === "--entry";
+  const entryTail = entry ? subArgs.slice(1) : [];
+  if (entry) subArgs = [];
+  entryCommand = entry;
   if (engineInvocation !== null) throw new Error("Nested aidlc-orchestrate dispatch is not supported");
   const resolvedProjectDir = resolveProjectDir(projectDir);
   const commandKind = (["next", "continue", "report", "park"] as const).find((kind) => kind === subcommand);
@@ -27691,6 +27817,21 @@ export function main(argv: string[]): void {
         "and follow what it returns.",
     ));
     return;
+  }
+  // A line of theirs that is tokens alone is the command, before anything reads it (entryTokens).
+  const typedAlone = entry ? entryTokens(resolvedProjectDir) : null;
+  const selected = engineWorkflowSelection(resolvedProjectDir);
+  if (typedAlone !== null) {
+    subArgs = typedAlone;
+  } else if (entryTail.length > 0) {
+    // Whether a line of theirs is on record is settled here, read as `next`
+    // reads it below, so where none is the tail is the command from the start.
+    const outside = chatOutsideWork(resolvedProjectDir, selected);
+    engineSelections.set(resolvedProjectDir, outside ? outsideSelection(selected) : selected);
+    if (entryLine(resolvedProjectDir, selected, outside) === "step") {
+      subArgs = entryTail;
+      entryCommand = false;
+    }
   }
   let spendRequestFile = (): void => {};
   let restoreRequestFile = (): void => {};
@@ -27716,7 +27857,6 @@ export function main(argv: string[]): void {
   // The chat's own step on the work it followed the cursor to puts it in that
   // work's fences from now on (chatTookStep); a read-only `next` or a hook's
   // own probe is no step.
-  const selected = engineWorkflowSelection(resolvedProjectDir);
   const resolvedSelection = commandKind !== undefined && !isReadOnlyEngineProbe() &&
       !(commandKind === "next" && isReadOnlyNextArgv(subArgs))
     ? chatTookStep(resolvedProjectDir, selected)
@@ -27731,10 +27871,7 @@ export function main(argv: string[]): void {
   // stage refuse instead of advancing someone else's workflow.
   // SessionStart binds such a conversation to no record and says why in the
   // binding's source, so the same holds on its later engine calls.
-  const boundOutside = resolvedSelection.intent === null &&
-    resolvedSelection.binding?.source === "unjoined";
-  const unjoined = commandKind !== undefined && (boundOutside || (resolvedSelection.intent !== null &&
-    workflowParticipation(resolvedProjectDir, resolvedSelection) !== "participant"));
+  const unjoined = commandKind !== undefined && chatOutsideWork(resolvedProjectDir, resolvedSelection);
   engineUnjoined = unjoined;
   if (unjoined) {
     if (commandKind !== "next") {
@@ -27752,7 +27889,7 @@ export function main(argv: string[]): void {
       ));
       return;
     }
-    engineSelections.set(resolvedProjectDir, { ...resolvedSelection, intent: null, binding: null });
+    engineSelections.set(resolvedProjectDir, outsideSelection(resolvedSelection));
   }
   // Git left its conflict in the record (a pull, a rebase, a stash pop): the
   // command carries on from the person's own side. A read-only next (status,
@@ -27768,6 +27905,14 @@ export function main(argv: string[]): void {
   let restart: RestartRequest | null = null;
   // The command as it was run, which the host claimed: a kept stop's id, not its arguments.
   const ranArgs = subArgs;
+  const line = entryCommand && typedAlone === null ? entryLine(resolvedProjectDir, resolvedSelection, unjoined) : "bare";
+  if (line === "step") {
+    // The command this step names carries the hook notice where one applies.
+    activeHookHealthNotice = null;
+    emit(noTypedLineStep());
+    return;
+  }
+  if (line !== "bare") subArgs = line;
   // The AI-DLC update question's answer comes off before the kept request it names runs.
   if (subcommand === "next") {
     const taken = takeUpdateAnswer(subArgs);

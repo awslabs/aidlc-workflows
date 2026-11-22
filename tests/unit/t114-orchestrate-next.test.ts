@@ -889,7 +889,7 @@ describe("t114 gate axis != execution axis", () => {
 // ===========================================================================
 describe("t114 cutover: no --args swallow", () => {
   test("14a: SKILL.md forwarding loop has no 'next --args' wrapper", () => {
-    // SKILL.md invokes the engine as `next $ARGUMENTS` (argv word-split into the
+    // SKILL.md invokes the engine as `next`, with a flag typed alone (argv word-split into the
     // parser). A `next --args "$ARGUMENTS"` wrapper would silently drop every
     // flag-bearing invocation. Pin half (a): the shipped prose must NOT document
     // a `--args` wrapper.
