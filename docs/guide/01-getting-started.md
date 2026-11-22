@@ -178,8 +178,8 @@ Then it asks one more question, about Claude Code's status line:
   Writing project files ... done  (.claude/ and aidlc/, 316 files)
   Recording model preset ... done  (aidlc.settings.json in this project)
   Note: git does not track AI-DLC's setup for Claude Code in this project yet: .claude/, aidlc/,
-        .gitignore, .mcp.json and aidlc.settings.json. Commit them so teammates who use Claude Code
-        get the same setup.
+        .gitattributes, .gitignore, .mcp.json and aidlc.settings.json. Commit them so teammates who
+        use Claude Code get the same setup.
 
   Setup complete. Start your first workflow:
 
@@ -290,7 +290,7 @@ servers on (add `--mcp defaults` for that):
 
 ```text
 $ aidlc config --harness claude --mcp defaults --yes
-  Note: git does not track AI-DLC's setup for Claude Code in this project yet: .claude/, aidlc/, .gitignore and .mcp.json. Commit them so teammates who use Claude Code get the same setup.
+  Note: git does not track AI-DLC's setup for Claude Code in this project yet: .claude/, aidlc/, .gitattributes, .gitignore and .mcp.json. Commit them so teammates who use Claude Code get the same setup.
 configured /home/you/ci-demo for Claude Code X.Y.Z; next: open Claude Code in this project (if it is already open in this folder, exit it and start it again) and run `/aidlc --doctor`
 ```
 
