@@ -1189,8 +1189,8 @@ branch:
 ```
 
 It commits what git shows changed here (files git does not track included,
-ignored files and AI-DLC's own part of `.gitignore`, `AGENTS.md` and
-`opencode.json` left out), then pushes the integration branch to the remote
+ignored files and AI-DLC's own part of `.gitignore`, `.gitattributes`, `AGENTS.md`
+and `opencode.json` left out), then pushes the integration branch to the remote
 with a plain push, never forced, so Units can be taken from the plan, and a
 Unit that landed is seen. Once it has pushed, it names what it committed: how
 many files and, by name as changed, new or deleted, up to ten outside
@@ -1339,8 +1339,8 @@ after a publish to publish again with them:
 
 The command requires a clean tracked worktree and CAS-updates the live claim ref
 to a candidate commit that preserves both claim and implementation history.
-AI-DLC's own part of `.gitignore`, `AGENTS.md` and `opencode.json` (written when a
-session starts in a fresh clone) does not count, here or at landing; it stays
+AI-DLC's own part of `.gitignore`, `.gitattributes`, `AGENTS.md` and `opencode.json`
+(written when a session starts in a fresh clone) does not count, here or at landing; it stays
 uncommitted, and any other change still stops both.
 A change to a record outside the Unit's `construction/<unit>/` folder (an Inception
 artifact such as `contract-summary.md`, say) is still published, but pin will refuse

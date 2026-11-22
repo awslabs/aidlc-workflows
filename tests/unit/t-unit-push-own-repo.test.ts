@@ -2255,6 +2255,92 @@ describe("a Unit on the workspace's own repository", () => {
     expect(blob("refunds:.gitignore").equals(Buffer.concat([blob("main:.gitignore"), Buffer.from(IGNORES)]))).toBe(true);
   });
 
+  // AI-DLC's .gitattributes part, which config puts FIRST in the file (a line of the team's below it wins), as each
+  // teammate's config leaves it: uncommitted. Kiro ships none; Codex does.
+  const OWN_ATTRIBUTES = "# BEGIN AI-DLC:gitattributes";
+  const ATTRIBUTES = "*.pdf binary\n";
+  function leadsAttributes(home: ReturnType<typeof makeHome>, text: string): void {
+    writeFileSync(join(home.dir, ".gitattributes"), text);
+    git(home.dir, ["add", "--", ".gitattributes"]);
+    git(home.dir, ["commit", "-q", "-m", "lead: .gitattributes"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+  }
+  const blob = (host: string, ref: string): Buffer => spawnSync("git", ["cat-file", "blob", ref], { cwd: host }).stdout as Buffer;
+
+  for (const made of [true, false]) {
+    test(`${made ? "a .gitattributes config writes new" : "the repository's .gitattributes with AI-DLC's part put first"}, uncommitted: the take leaves it to the Unit, the build's line goes with it, the part stays`, () => {
+      const home = oneRepoTeams();
+      if (!made) leadsAttributes(home, "*.png binary\n");
+      const alice = cloneOf(home.remote, "alice");
+      configured(alice, "codex");
+      expect(readFileSync(join(alice, ".gitattributes"), "utf-8")).toStartWith(OWN_ATTRIBUTES);
+      const record = builtWithRootFiles(alice, "refunds", "refunds.ts", { ".gitattributes": appended(ATTRIBUTES) });
+      const here = readFileSync(join(alice, ".gitattributes"), "utf-8");
+      const pushed = run(UNIT, ["push"], alice);
+      expect(pushed.status, pushed.out).toBe(0);
+      expect(String(pushed.json?.notice)).not.toContain("is not in the commit");
+      expect(blob(home.remote, "refunds:.gitattributes").toString("utf-8")).toBe(`${made ? "" : "*.png binary\n"}${ATTRIBUTES}`);
+      expect(prFiles(home.remote, "main", "refunds")).toContain(".gitattributes");
+      expect(readFileSync(join(alice, ".gitattributes"), "utf-8")).toBe(here);
+      expect(takeTreeKeys(record)).not.toContain(".gitattributes");
+      expect(workToCommit(alice).paths).not.toContain(".gitattributes");
+    });
+  }
+
+  test("a .gitattributes saved with a byte order mark, AI-DLC's part after it: the Unit's line goes and the mark stays, the part does not go", () => {
+    const home = oneRepoTeams();
+    leadsAttributes(home, "\uFEFF*.png binary\n");
+    const alice = cloneOf(home.remote, "alice");
+    configured(alice, "codex");
+    expect(readFileSync(join(alice, ".gitattributes"), "utf-8")).toStartWith(`\uFEFF${OWN_ATTRIBUTES}`);
+    builtWithRootFiles(alice, "refunds", "refunds.ts", { ".gitattributes": appended(ATTRIBUTES) });
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    expect(blob(home.remote, "refunds:.gitattributes").equals(Buffer.concat([blob(home.remote, "main:.gitattributes"), Buffer.from(ATTRIBUTES)]))).toBe(true);
+  });
+
+  test("bringing main in where main's .gitattributes moved: the part is set aside for the merge and back after it, first in the file, never in the Unit's commit", () => {
+    const home = oneRepoTeams();
+    leadsAttributes(home, "*.png binary\n");
+    const alice = cloneOf(home.remote, "alice");
+    configured(alice, "codex");
+    builtWithRootFiles(alice, "refunds", "refunds.ts", { ".gitattributes": appended(ATTRIBUTES) });
+    leadsAttributes(home, "*.svg text\n*.png binary\n");
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(next(alice).ask_type).toBe("unit-main-moved");
+    const merged = run(UNIT, ["push", "--merge-main"], alice);
+    expect(merged.status, merged.out).toBe(0);
+    expect(String(merged.json?.notice)).toContain("Merged origin/main into refunds in the repo and pushed refunds.");
+    expect(blob(home.remote, "refunds:.gitattributes").toString("utf-8")).toBe(`*.svg text\n*.png binary\n${ATTRIBUTES}`);
+    const now = readFileSync(join(alice, ".gitattributes"), "utf-8");
+    expect(now).toStartWith(OWN_ATTRIBUTES);
+    expect(now).toEndWith(`\n\n*.svg text\n*.png binary\n${ATTRIBUTES}`);
+    expect(workToCommit(alice).paths).not.toContain(".gitattributes");
+  });
+
+  test("with the part on main, every path of the work's record in the Unit's request reads as generated, the rules and the code do not", () => {
+    const home = oneRepoTeams();
+    configured(home.dir, "codex");
+    git(home.dir, ["add", "--", ".gitattributes"]);
+    git(home.dir, ["commit", "-q", "-m", "AI-DLC's .gitattributes"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const alice = cloneOf(home.remote, "alice");
+    builtHere(alice, "refunds", "refunds.ts");
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    const changed = git(home.remote, ["diff", "--name-only", "main...refunds"]).split("\n").filter(Boolean);
+    const checked = spawnSync("git", ["check-attr", "--source", "refunds", "--stdin", "linguist-generated", "gitlab-generated"], {
+      cwd: home.remote, encoding: "utf-8", input: `${changed.join("\n")}\n`,
+    }).stdout.split("\n").filter(Boolean);
+    const work = changed.filter((path) => /^aidlc\/spaces\/[^/]+\/intents\//.test(path));
+    expect(work.length).toBeGreaterThan(0);
+    for (const path of changed) {
+      const value = work.includes(path) ? "set" : "unspecified";
+      expect(checked).toContain(`${path}: linguist-generated: ${value}`);
+      expect(checked).toContain(`${path}: gitlab-generated: ${value}`);
+    }
+    expect(changed).toContain("src/refunds.ts");
+  });
+
   for (const [harness, kept] of [["kiro", false], ["codex", true]] as const) {
     test(`${harness}, ${kept ? "the team's AGENTS.md" : "an AGENTS.md config writes new"}: the build's section goes with the Unit, AI-DLC's part stays uncommitted`, () => {
       const home = oneRepoTeams();

@@ -622,6 +622,108 @@ describe("unit commit-record --update", () => {
   });
 });
 
+// A release that adds a root file config writes new, AI-DLC's .gitattributes part: git shows it as an untracked file
+// at the root, which the update's own commit takes for every caller while it holds AI-DLC's part alone.
+describe("a release that adds AI-DLC's .gitattributes part", () => {
+  // This release's tree stamped as the one before, from before the part: none at the root, in root-blocks or declared.
+  function earlierWithoutPart(harness: Harness): string {
+    const tree = earlierTree(harness);
+    unlinkSync(join(tree, ".gitattributes"));
+    unlinkSync(join(tree, DIRS[harness], "tools", "data", "root-blocks", "gitattributes"));
+    const path = join(tree, DIRS[harness], "tools", "data", "aidlc-projection.json");
+    const descriptor = JSON.parse(readFileSync(path, "utf-8")) as { rootIntegrations: Array<{ path: string }> };
+    descriptor.rootIntegrations = descriptor.rootIntegrations.filter((integration) => integration.path !== ".gitattributes");
+    writeFileSync(path, `${JSON.stringify(descriptor, null, 2)}\n`);
+    return tree;
+  }
+  function behind(before?: (dir: string) => void): string {
+    const dir = tempDir("update-attributes");
+    git(dir, ["init", "-q", "-b", "main"]);
+    repo(dir);
+    config(dir, "claude", earlierWithoutPart("claude"));
+    before?.(dir);
+    git(dir, ["add", "-A"]);
+    git(dir, ["commit", "-q", "-m", "setup"]);
+    expect(existsSync(join(dir, ".gitattributes"))).toBe(false);
+    return dir;
+  }
+  const committed = (dir: string): string[] => git(dir, ["show", "--name-only", "--format=", "HEAD"]).split("\n");
+
+  test("the update's own commit takes the new file for every caller, and the line names AI-DLC's part of it", () => {
+    const dir = behind();
+    const changedBefore = refresh(dir, "claude");
+    expect(readFileSync(join(dir, ".gitattributes"), "utf-8")).toStartWith("# BEGIN AI-DLC:gitattributes\n");
+    for (const asked of [changedBefore, null, () => true, () => false]) {
+      const { commit, left } = ownFilesToCommit(dir, asked);
+      expect(commit).toContain(".gitattributes");
+      expect(left).not.toContain(".gitattributes");
+    }
+    expect(catchUpChangedLine(AIDLC_VERSION, [".claude/a.md", ".claude/b.md", ".gitattributes"], false, false, { branch: "main", left: [] })).toBe(
+      `AI-DLC updated its own files in this project to ${AIDLC_VERSION}: 2 files under .claude and its part of .gitattributes changed. ` +
+        "Want me to commit them on main, as one commit of their own? Nothing is pushed.",
+    );
+    const yes = run(UNIT, ["commit-record", "--update"], dir);
+    expect(yes.status, yes.out).toBe(0);
+    expect(committed(dir)).toContain(".gitattributes");
+  });
+
+  test("a .gitattributes of the person's own, not committed, stays theirs: never taken", () => {
+    const dir = behind();
+    writeFileSync(join(dir, ".gitattributes"), "*.png binary\n");
+    const { commit } = ownFilesToCommit(dir, refresh(dir, "claude"));
+    expect(readFileSync(join(dir, ".gitattributes"), "utf-8")).toEndWith("\n\n*.png binary\n");
+    expect(commit).not.toContain(".gitattributes");
+  });
+
+  test("a .gitattributes the person ignores is never taken, and the yes still commits the rest", () => {
+    const dir = behind();
+    writeFileSync(join(dir, ".git", "info", "exclude"), ".gitattributes\n");
+    const changedBefore = refresh(dir, "claude");
+    expect(existsSync(join(dir, ".gitattributes"))).toBe(true);
+    expect(ownFilesToCommit(dir, changedBefore).commit).not.toContain(".gitattributes");
+    const yes = run(UNIT, ["commit-record", "--update"], dir);
+    expect(yes.status, yes.out).toBe(0);
+    expect(committed(dir)).not.toContain(".gitattributes");
+  });
+
+  test("a .gitignore of AI-DLC's alone that git never held is left as it was; only the file the release added goes", () => {
+    const dir = behind();
+    git(dir, ["rm", "-q", "--cached", ".gitignore"]);
+    git(dir, ["commit", "-q", "-m", "keep .gitignore out of git"]);
+    const { commit } = ownFilesToCommit(dir, refresh(dir, "claude"));
+    expect(commit).toContain(".gitattributes");
+    expect(commit).not.toContain(".gitignore");
+  });
+
+  test("beside an install nobody committed, the update's commit takes no root file of AI-DLC's", () => {
+    const dir = tempDir("update-uncommitted");
+    git(dir, ["init", "-q", "-b", "main"]);
+    repo(dir);
+    writeFileSync(join(dir, "README.md"), "Ours.\n");
+    git(dir, ["add", "README.md"]);
+    git(dir, ["commit", "-q", "-m", "ours"]);
+    config(dir, "claude", earlierWithoutPart("claude"));
+    const { commit } = ownFilesToCommit(dir, refresh(dir, "claude"));
+    for (const path of [".gitattributes", ".gitignore"]) expect(commit).not.toContain(path);
+  });
+
+  test("on opencode the engine's step names AI-DLC's part of .gitattributes, and its yes commits the new file", () => {
+    const draft = `aidlc/.aidlc-engine/request-text/unit-record-message-update-${AIDLC_VERSION}.txt`;
+    const dir = behind((d) => {
+      seedWorkspaceShell(d);
+      writeFileSync(seededStateFile(d), readFileSync(join(FIXTURES_DIR, "state-construction.md"), "utf-8"));
+    });
+    refresh(dir, "claude");
+    mkdirSync(join(dir, "aidlc", ".aidlc-engine", "request-text"), { recursive: true });
+    writeFileSync(join(dir, ...draft.split("/")), `Update AI-DLC to ${AIDLC_VERSION}\n`);
+    const step = run(ORCH, ["next"], dir, { ...ENV, AIDLC_HARNESS_NAME: "opencode" });
+    expect(String(step.json?.message), step.out).toContain(" and its part of .gitattributes changed. Want me to commit them on main, as one commit of their own?");
+    const yes = run(UNIT, ["commit-record", "--update", "--commit-message-file", draft], dir);
+    expect(yes.status, yes.out).toBe(0);
+    expect(committed(dir)).toContain(".gitattributes");
+  });
+});
+
 // opencode carries no session-start context, so the engine's next step puts the same question, with the agent's
 // draft before it and the same yes, once; the other harnesses keep the session start's own.
 describe("on opencode, the engine's next step puts the update's question", () => {

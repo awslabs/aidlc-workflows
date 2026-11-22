@@ -781,11 +781,20 @@ function linesAboveOwnSection(text: string, nextBody: string, newline: string): 
   return above && !nextBody.includes(above) ? above : "";
 }
 
+// AI-DLC's part of .gitattributes only marks its record for the hosts' request
+// diffs, so a file config cannot merge it into (not a regular file, not UTF-8,
+// broken markers, a part the person edited) is left as it is and never stops
+// config; planRootIntegrations reads this beside mergeBlock's placement of the
+// same file.
+export function leftAsIsWhenUnmergeable(path: string): boolean {
+  return path === ".gitattributes";
+}
+
 // The one rule for AI-DLC's part of a team file: replace the text between its
 // markers, adopt an unmarked file that is exactly a release's, and otherwise
-// add the marked part after the team's content (a missing file gets only that
-// part). Used by config and by the engine for a copy that was never
-// configured.
+// add the marked part after the team's content, or before it in .gitattributes
+// (a missing file gets only that part). Used by config and by the engine for a
+// copy that was never configured; withoutBlock is its inverse.
 export function mergeBlock(
   path: string,
   current: string,
@@ -860,12 +869,32 @@ export function mergeBlock(
     };
   }
   // Any other unmarked text is the team's, whatever it says about AI-DLC: it
-  // stays as it is, and the marked part goes after it.
+  // stays as it is, and the marked part goes after it. In .gitattributes git
+  // takes the last line that matches a path, so there the part goes first,
+  // after a byte order mark, and a line of the team's for the same paths wins.
+  if (path === ".gitattributes") {
+    const bom = current.startsWith(BOM) ? BOM : "";
+    const team = current.slice(bom.length);
+    return { value: `${bom}${block}${newline}${team ? `${newline}${team}` : ""}`, nextHash: blockHash };
+  }
   const prefix = current.length === 0 || current.endsWith(newline) ? current : `${current}${newline}`;
   return {
     value: `${prefix}${prefix ? newline : ""}${block}${newline}`,
     nextHash: blockHash,
   };
+}
+
+// The file with AI-DLC's part taken out, for a release that no longer ships it:
+// mergeBlock's placement undone. A part that stands first in .gitattributes
+// goes with its line end and the blank line mergeBlock put after it; elsewhere
+// in that file, with its line end alone. Every other byte stays. Other files
+// keep the trim they have always had.
+export function withoutBlock(path: string, text: string, beginAt: number, blockEnd: number): string {
+  const before = text.slice(0, beginAt);
+  const after = text.slice(blockEnd);
+  if (path !== ".gitattributes") return `${before}${after}`.replace(/^\r?\n/, "").replace(/\r?\n\r?\n$/, "\n");
+  const ownLine = after.replace(/^\r?\n/, "");
+  return `${before}${before === "" || before === BOM ? ownLine.replace(/^\r?\n/, "") : ownLine}`;
 }
 
 // The onboarding's title line: this release's, then the one earlier releases

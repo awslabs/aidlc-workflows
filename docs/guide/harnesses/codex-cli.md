@@ -177,7 +177,8 @@ then set `RUNTIME_ROOT` to the extracted `runtime/` directory.
    ```
 
    It adds AI-DLC's lines to your `AGENTS.md` and `.gitignore`, after
-   everything already there (or creates them), before your first workflow:
+   everything already there, and to the top of your `.gitattributes` (or
+   creates them), before your first workflow:
    the per-clone audit shards under each intent's `audit/` are committed
    deliberately (each clone writes its own `<host>-<clone>.md`, so concurrent
    appends never git-conflict), while per-user cursors and machine-local

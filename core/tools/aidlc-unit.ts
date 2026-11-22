@@ -11802,6 +11802,8 @@ function withHeadsPart(
   const after = text.slice(at + disk.block.length).replace(/^(?:[ \t]*\r?\n)+/, "");
   const next = head.block !== null
     ? `${text.slice(0, at)}${head.block.replace(/\r?\n/g, nl)}${text.slice(at + disk.block.length)}`
+    // A byte order mark before a part that stands first (.gitattributes) stays the file's first bytes, joined to nothing.
+    : /^(?:\uFEFF|\u00EF\u00BB\u00BF)$/.test(before) ? `${before}${after}`
     : [before, after].filter(Boolean).join(nl) + (after === "" && before !== "" ? nl : "");
   if (!inHead && next === "") return null;
   writeFileSync(join(scratch, "root-part"), next, encoding);

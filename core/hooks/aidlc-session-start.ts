@@ -110,7 +110,7 @@ import {
 } from "../tools/aidlc-runtime-paths.ts";
 import { compareVersions } from "../tools/aidlc-channel.ts";
 import { recordCommitBlock } from "../tools/aidlc-git.ts";
-import { ownFilesToCommit } from "../tools/aidlc-brought-files.ts";
+import { ownFilesToCommit, ownNewRootFiles } from "../tools/aidlc-brought-files.ts";
 import {
   catchUpAsk,
   unitBuildOf,
@@ -239,7 +239,8 @@ function catchUpProjectFiles(
   // The list's move, still to make: the update's own commit makes it on the yes its question names it in.
   const moving = trackedList && reposMoveToCommit(projectDir).length > 0;
   const after = before === null ? null : projectChanges(projectDir);
-  const changed = after === null ? [] : refreshChanged(projectDir, before ?? new Map(), after);
+  const newRoot = new Set(after === null ? [] : ownNewRootFiles(projectDir));
+  const changed = after === null ? [] : refreshChanged(projectDir, before ?? new Map(), after, newRoot);
   const told = catchUpChangedLine(AIDLC_VERSION, changed, false);
   if (told === null && !moving) return null;
   if (process.env.AIDLC_UNATTENDED === "1") {
@@ -261,7 +262,9 @@ function catchUpProjectFiles(
     const left = (drafted ? own : ownFilesToCommit(projectDir, null)).left.filter((path) => changed.includes(path));
     const branch = projectGit(projectDir, ["symbolic-ref", "--quiet", "--short", "HEAD"]).stdout.trim();
     const named = moving && drafted;
-    const asked = catchUpChangedLine(AIDLC_VERSION, changed, named, drafted, { branch, left });
+    // AI-DLC's own new root file the yes commits is named with the rest, also one an earlier config left.
+    const offered = [...changed, ...own.commit.filter((path) => newRoot.has(path) && !changed.includes(path))];
+    const asked = catchUpChangedLine(AIDLC_VERSION, offered, named, drafted, { branch, left });
     if (asked !== null) {
       return { told: told ?? asked, asked, messageFile: drafted ? file : null, update: updateCommitAbout(files, named), leave: own.held, later: null };
     }
@@ -333,8 +336,9 @@ function projectChanges(projectDir: string): Map<string, string> | null {
 }
 
 // The paths the refresh changed: new in git's view or with new content, a file
-// git does not track counted only in a folder git already tracks.
-function refreshChanged(projectDir: string, before: Map<string, string>, after: Map<string, string>): string[] {
+// git does not track counted only in a folder git already tracks, or at the
+// root as AI-DLC's own new file (`newRoot`, ownNewRootFiles).
+function refreshChanged(projectDir: string, before: Map<string, string>, after: Map<string, string>, newRoot: ReadonlySet<string>): string[] {
   const tracked = new Map<string, boolean>();
   const folderTracked = (folder: string): boolean => {
     if (!tracked.has(folder)) tracked.set(folder, projectGit(projectDir, ["ls-files", "--", folder]).stdout.trim() !== "");
@@ -344,7 +348,7 @@ function refreshChanged(projectDir: string, before: Map<string, string>, after: 
     if (before.get(path) === now) return false;
     if (!now.startsWith("??")) return true;
     const slash = path.indexOf("/");
-    return slash > 0 && folderTracked(path.slice(0, slash));
+    return (slash > 0 && folderTracked(path.slice(0, slash))) || newRoot.has(path);
   }).map(([path]) => path);
 }
 

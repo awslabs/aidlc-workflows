@@ -79,7 +79,7 @@ For an air-gapped package, use
 `Set-ExecutionPolicy` line.
 
 `aidlc config` projects `.aidlc/`, `.opencode/`, the workspace shell,
-`AGENTS.md`, the managed `.gitignore` block, and AI-DLC's entries in
+`AGENTS.md`, the managed `.gitignore` and `.gitattributes` blocks, and AI-DLC's entries in
 `opencode.json`. Those entries discover the skill and method files, let
 AI-DLC's own direct `aidlc engine *` commands run without a prompt, and ask
 once before `rm -r...` and `git push`; every other shell command follows your
@@ -131,8 +131,9 @@ then set `RUNTIME_ROOT` to the extracted `runtime/` directory.
    ```
 
    It adds AI-DLC's lines to your `AGENTS.md` and `.gitignore`, after
-   everything already there, and AI-DLC's entries to your `opencode.json`
-   (or creates them), before your first workflow
+   everything already there, to the top of your `.gitattributes`, and
+   AI-DLC's entries to your `opencode.json` (or creates them), before your
+   first workflow
    (per-clone audit shards are committed deliberately; cursors and
    machine-local runtime stay ignored).
 

@@ -120,8 +120,8 @@ before each Unit this session would build:
   shows changed here (the question names how many files and, by name as
   changed, new or deleted, up to ten outside `aidlc/`, past ten those nearest
   the project's top, with how many more; `git status` shows the rest before you
-  share; ignored files and AI-DLC's own part of `.gitignore`, `AGENTS.md` and
-  `opencode.json` stay out)
+  share; ignored files and AI-DLC's own part of `.gitignore`, `.gitattributes`,
+  `AGENTS.md` and `opencode.json` stay out)
   and pushes the integration branch with a plain push, never forced. This
   checkout then shows the board instead of building Units. A push the remote
   refuses because it has commits this clone lacks keeps the commit, says why,
@@ -352,8 +352,8 @@ or an unignored `node_modules`, stay on disk uncommitted, and the publish says
 once how many it left out; say which you want in and it publishes again with
 them (`--include <path>`). **Not now** leaves it, and the step then says it is
 not published yet, so asking for it later publishes it. Publication requires a clean tracked checkout;
-AI-DLC's own part of `.gitignore`, `AGENTS.md` and `opencode.json`, which it
-writes when a session starts in a fresh clone, does not count. By hand:
+AI-DLC's own part of `.gitignore`, `.gitattributes`, `AGENTS.md` and
+`opencode.json`, which it writes when a session starts in a fresh clone, does not count. By hand:
 
 ```bash
 git add -A
@@ -892,6 +892,10 @@ request; a later push of the Unit (a redo) carries it as it is then. When your
 hook or your host refuses the record, the code stays pushed, the branch stays
 where the code's push left it, the line says so once in their words, and the
 record is yours to check in. The lead's merge check reads only the Unit's code.
+Pull and merge requests from branches made after AI-DLC's `.gitattributes` is
+on your default branch show that record folded and the code open (on GitHub,
+and on GitLab 16.11 or newer); a line of yours below AI-DLC's part in that file
+wins.
 
 Get it merged in each repo your usual way (a pull request, where your host has
 them): a merge commit, a squash or a rebase. The push also sends the result

@@ -62,6 +62,7 @@ import {
   kiroUpgradedAgentFile,
   kiroUpgradeIntact,
   legacyAidlcHookTarget,
+  leftAsIsWhenUnmergeable,
   mergeBlock,
   mergeJsonEntries,
   newlineOf,
@@ -86,6 +87,7 @@ import {
   validateProjectionDescriptor,
   walkFiles,
   withOwnTitleLine,
+  withoutBlock,
   withoutBom,
   withSpace,
 } from "./aidlc-distribution.ts";
@@ -10710,12 +10712,16 @@ function planRootIntegrations(
     const targetPath = join(projectDir, targetRel);
     const targetExists = pathPresent(targetPath);
     const targetRegular = targetExists && lstatSync(targetPath).isFile();
+    // A file config leaves as it is (leftAsIsWhenUnmergeable) is never a stop:
+    // one config cannot merge AI-DLC's part into stays as it is, as session
+    // start leaves it (addRootBlocks), and config records nothing new for it.
+    const conflict = (path: string, detail: string): void => {
+      actions.push(leftAsIsWhenUnmergeable(integration.path)
+        ? { path, action: "preserve", detail: `left as it is: ${detail}` }
+        : { path, action: "conflict", detail });
+    };
     if (targetExists && !targetRegular && !force) {
-      actions.push({
-        path: targetRel,
-        action: "conflict",
-        detail: "root integration is not a regular file",
-      });
+      conflict(targetRel, "root integration is not a regular file");
       continue;
     }
     const currentBytes = targetRegular ? readFileSync(targetPath) : Buffer.alloc(0);
@@ -10724,13 +10730,7 @@ function planRootIntegrations(
     // replaced, so config writes none (session start leaves it alone too,
     // aidlc-includes.ts). One config would leave as it is stays as it is.
     const lossless = Buffer.from(current, "utf-8").equals(currentBytes);
-    const notUtf8 = (): void => {
-      actions.push({
-        path: targetRel,
-        action: "conflict",
-        detail: `${targetRel} is not valid UTF-8; convert its encoding before config`,
-      });
-    };
+    const notUtf8 = (): void => conflict(targetRel, `${targetRel} is not valid UTF-8; convert its encoding before config`);
     const priorContribution = prior?.rootContributions[integration.path];
     if (integration.policy === "managed-block") {
       const marker = integration.marker || basename(integration.path);
@@ -10780,15 +10780,14 @@ function planRootIntegrations(
           .map((contribution) => contribution?.policy === "managed-block" ? contribution.hash : undefined),
       );
       if (merged.error) {
-        actions.push({ path: integration.path, action: "conflict", detail: merged.error });
+        conflict(integration.path, merged.error);
         continue;
       }
       if (missingCopy && !force && merged.value !== current) {
-        actions.push({
-          path: integration.path,
-          action: "conflict",
-          detail: `${typedHarnessName(missingCopy.distribution)} is missing its shipped block copy (${missingCopy.harnessDir}/tools/data/root-blocks/${marker}); run ${configCommand(`--harness ${typedHarnessName(missingCopy.distribution)}`)} first`,
-        });
+        conflict(
+          integration.path,
+          `${typedHarnessName(missingCopy.distribution)} is missing its shipped block copy (${missingCopy.harnessDir}/tools/data/root-blocks/${marker}); run ${configCommand(`--harness ${typedHarnessName(missingCopy.distribution)}`)} first`,
+        );
         continue;
       }
       let value = merged.value as string;
@@ -10856,13 +10855,13 @@ function planRootIntegrations(
         } else if (priorHash || !merged.currentBlockShipped) {
           // A part that is exactly what a release shipped (one a copy added
           // before config ran) is AI-DLC's own even without a record.
-          actions.push({
-            path: integration.path,
-            action: "conflict",
-            detail: priorHash ? "managed block was locally modified" : "managed block has no ownership baseline",
-          });
+          conflict(integration.path, priorHash ? "managed block was locally modified" : "managed block has no ownership baseline");
           continue;
         }
+      }
+      if (!lossless && value !== current) {
+        notUtf8();
+        continue;
       }
       contributions[integration.path] = {
         policy: "managed-block",
@@ -10871,8 +10870,6 @@ function planRootIntegrations(
       };
       if (value === current) {
         actions.push({ path: integration.path, action: "preserve", detail: keptTitle ? KEPT_TITLE_LINE_DETAIL : undefined });
-      } else if (!lossless) {
-        notUtf8();
       } else {
         operations.push(writeOperation(integration.path, value, expected(targetPath)));
         actions.push({
@@ -11257,8 +11254,7 @@ function planRemovedRootIntegrations(
         actions.push({ path, action: "conflict", detail: "retired managed block was locally modified" });
         continue;
       }
-      let value = `${text.slice(0, beginAt)}${text.slice(blockEnd)}`;
-      value = value.replace(/^\r?\n/, "").replace(/\r?\n\r?\n$/, "\n");
+      const value = withoutBlock(path, text, beginAt, blockEnd);
       if (!value) {
         operations.push({ kind: "remove", path: targetRel, expected: expected(targetPath) });
         actions.push({ path, action: "remove", detail: NO_LONGER_SHIPPED });

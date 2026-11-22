@@ -1574,6 +1574,35 @@ describe("a Unit someone holds is not taken again", () => {
     expect(readFileSync(join(bea, ".gitignore"), "utf-8")).toContain("# BEGIN AI-DLC:gitignore");
   });
 
+  // AI-DLC's .gitattributes part goes first in the file, and a new file config wrote holds nothing else.
+  test("back on main with config's .gitattributes uncommitted and their build on a branch that adds .gitattributes: the take switches there, and the part is first in the file again", () => {
+    const home = makeHome();
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    asLeadsOwnCheckout(home.dir);
+    commitAll(home.dir, "teams");
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    planShared(home);
+    const bea = cloneOf(home.remote, "bea");
+    configured(bea, "codex");
+    const withPart = readFileSync(join(bea, ".gitattributes"), "utf-8");
+    expect(withPart).toStartWith("# BEGIN AI-DLC:gitattributes\n");
+    expect(take(bea, "refunds").status).toBe(0);
+    finishBuild(buildDir(bea, "default", "refunds"));
+    git(bea, ["switch", "-q", "-c", "records/refunds"]);
+    // The branch holds an attribute line of the build's own, and none of AI-DLC's part.
+    writeFileSync(join(bea, ".gitattributes"), "*.pdf binary\n");
+    git(bea, ["add", ".gitattributes", "aidlc"]);
+    git(bea, ["commit", "-q", "-m", "refunds record"]);
+    git(bea, ["push", "-q", "-u", "origin", "records/refunds"]);
+    git(bea, ["switch", "-q", "main"]);
+    writeFileSync(join(bea, ".gitattributes"), withPart);
+    const again = take(bea, "refunds");
+    expect(again.status, again.out).toBe(0);
+    expect(again.json?.notice, again.out).toBe("You're on records/refunds now, where your build of refunds is. Carrying on refunds, your build here.");
+    expect(git(bea, ["branch", "--show-current"])).toBe("records/refunds");
+    expect(readFileSync(join(bea, ".gitattributes"), "utf-8")).toBe(`${withPart}\n*.pdf binary\n`);
+  });
+
   test("back on main with their build checked in on a branch of its own: the take question offers to carry it on there, never as taken, and the take switches to it", () => {
     const home = makeHome();
     expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);

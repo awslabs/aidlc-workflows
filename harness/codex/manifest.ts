@@ -64,6 +64,14 @@ const manifest: HarnessManifest = {
   orchestratorSkillPath: ".agents/skills/aidlc/SKILL.md",
   tierFlavor: "codex",
   rootIntegrations: [
+    // AI-DLC's record of each piece of work marked as generated for GitHub's and
+    // GitLab's request diffs; the one source is core/templates/dot-gitattributes.
+    {
+      path: ".gitattributes",
+      policy: "managed-block",
+      marker: "gitattributes",
+      shared: "union",
+    },
     {
       path: ".gitignore",
       policy: "managed-block",

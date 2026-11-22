@@ -458,8 +458,8 @@ function readSafe(path: string): string | null {
 // A copy runtime leaves the team's .gitignore and AGENTS.md out (a copy would
 // replace them) and ships AI-DLC's part of each in root-blocks. Where config
 // never ran (no harness in the project has its install record), this adds that
-// part with config's own rule, at the same two moments as the includes: after
-// the team's content, or as the whole file when there is none. A part that is
+// part with config's own rule, at the same two moments as the includes: where
+// mergeBlock puts it, or as the whole file when there is none. A part that is
 // exactly what a release shipped is brought up to date; a part the team
 // changed, and every file config or the Cursor installer manages, is left as
 // it is. Best-effort: a file that cannot be read or merged is skipped, never

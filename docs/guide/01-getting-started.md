@@ -96,8 +96,8 @@ executable? The manual-copy path is the one place Bun is needed: install
 [release](https://github.com/awslabs/aidlc-workflows/releases/latest), copy
 the complete `runtime/<harness>/` directory into the project, and run its own
 setup once, as [Copy Channel](18-install-and-lifecycle.md#copy-channel) shows.
-A copy never replaces your `.gitignore` or `AGENTS.md`; AI-DLC adds its own
-lines to them. The manual-copy path does not require the native `aidlc`
+A copy never replaces your `.gitignore`, `.gitattributes` or `AGENTS.md`;
+AI-DLC adds its own lines to them. The manual-copy path does not require the native `aidlc`
 command.
 
 ## 2. Set up your project
@@ -351,6 +351,7 @@ The rest is the same, with `Claude Code selected` in place of `detected`.
 ```text
 $ git status --short
 ?? .claude/
+?? .gitattributes
 ?? .gitignore
 ?? .mcp.json
 ?? aidlc.settings.json
@@ -362,13 +363,14 @@ $ git status --short
 | `.claude/` | Claude Code's AI-DLC files: the `/aidlc` skill, agents, stages, hooks, tools, and `settings.json` (hooks, permissions, the welcome message) | Yes |
 | `aidlc/` | AI-DLC's records: `aidlc/spaces/default/memory/` holds the rules (the framework's defaults, and your team's and project's own), and each piece of work gets its record here | Yes |
 | `.gitignore` | AI-DLC's own marked block, added to yours if you had one | Yes |
+| `.gitattributes` | AI-DLC's own marked block, added at the top of yours if you had one: it marks each piece of work's record under `aidlc/spaces/*/intents/` as generated, so pull and merge requests show it folded and the code open; a line of yours below it wins | Yes |
 | `.mcp.json` | The MCP servers, when you chose them | Yes |
 | `aidlc.settings.json` | The model preset | Yes |
 | `aidlc.settings.local.json`, `.claude/settings.local.json` | Your own choices (here, the status line) | No, git-ignored |
 
-Commit the first five so your team gets the same setup (in a git repository, the
+Commit the first six so your team gets the same setup (in a git repository, the
 first `aidlc config` for a harness names them in a `Note:` line):
-`git add .claude aidlc .gitignore .mcp.json aidlc.settings.json && git commit -m "Set up AI-DLC"`.
+`git add .claude aidlc .gitattributes .gitignore .mcp.json aidlc.settings.json && git commit -m "Set up AI-DLC"`.
 Run `aidlc config` again at any time to refresh the files from your installed
 release; it keeps what you edited
 ([Configure or Refresh a Project](18-install-and-lifecycle.md#configure-or-refresh-a-project)).

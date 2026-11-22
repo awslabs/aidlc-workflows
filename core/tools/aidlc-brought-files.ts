@@ -628,6 +628,46 @@ function holdsInstallWrite(record: InstallRecord, path: string, bytes: Buffer, b
   return false;
 }
 
+// AI-DLC's own new files at the project root: a shared root file a release
+// added since the install git holds (the install record has a marked part for
+// it and the record at HEAD names none), untracked there and not ignored,
+// holding that part and nothing of the person's. Git lists a new file at the
+// root on its own, never inside a folder it tracks, so the update's offer
+// names these (the session start) and its commit takes them
+// (ownFilesToCommit) by this one test.
+export function ownNewRootFiles(projectDir: string): string[] {
+  return newRootFilesOf(projectDir, installRecord(projectDir));
+}
+
+function newRootFilesOf(projectDir: string, record: InstallRecord): string[] {
+  // The root files the install git holds already knew: in one nobody committed there is no record at HEAD, and
+  // every file of it is new, so none is offered.
+  const atHead = record.harnessDirs.map((dir) => {
+    try {
+      const head = git(projectDir, ["cat-file", "blob", `HEAD:./${dir}/tools/data/aidlc-manifest.json`]);
+      const parts = head === null ? null : (JSON.parse(head.toString("utf-8")) as { rootContributions?: unknown }).rootContributions;
+      return head === null ? null : Object.keys(typeof parts === "object" && parts !== null ? parts : {});
+    } catch {
+      return null;
+    }
+  });
+  if (atHead.every((known) => known === null)) return [];
+  const known = new Set(atHead.flatMap((paths) => paths ?? []));
+  const found: string[] = [];
+  for (const path of record.parts.keys()) {
+    // Untracked and not ignored: git lists it among the others.
+    if (path.includes("/") || known.has(path) || !git(projectDir, ["ls-files", "--others", "--exclude-standard", "--", path])?.length) continue;
+    try {
+      if (!lstatSync(join(projectDir, path)).isFile()) continue;
+    } catch {
+      continue;
+    }
+    const bytes = bytesNow(projectDir, path);
+    if (bytes !== null && holdsInstallWrite(record, path, bytes, () => "")) found.push(path);
+  }
+  return found.sort();
+}
+
 // The top-level keys whose values differ between two JSON (or JSONC) texts;
 // null when either is not an object.
 function changedTopKeys(text: string, before: string): string[] | null {
@@ -643,8 +683,9 @@ function changedTopKeys(text: string, before: string): string[] | null {
 /**
  * What a yes to the offer after an update commits: AI-DLC's own files that git
  * shows changed here (outside aidlc/, a new one only in a folder git already
- * tracks), each still holding exactly what AI-DLC wrote with nothing of the
- * person's changed since HEAD, and the repo list's move with them.
+ * tracks or at the root as ownNewRootFiles finds it), each still holding
+ * exactly what AI-DLC wrote with nothing of the person's changed since HEAD,
+ * and the repo list's move with them.
  * `left` is the rest of AI-DLC's changed files, for the person to commit. Worked
  * out from the install records and git each time, so nothing is kept and the
  * person's work since the refresh counts.
@@ -678,6 +719,7 @@ export function ownFilesToCommit(
     const slash = path.indexOf("/");
     if (slash > 0 && folderTracked(path.slice(0, slash))) status.set(path, "?");
   }
+  for (const path of newRootFilesOf(projectDir, record)) status.set(path, "?");
   const atHead = (path: string): string | null => git(projectDir, ["cat-file", "blob", `HEAD:./${path}`])?.toString("utf-8") ?? null;
   const headRecords = new Map(record.harnessDirs.map((dir) => {
     try {

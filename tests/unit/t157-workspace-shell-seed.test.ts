@@ -356,22 +356,20 @@ describe("t157 seeded workspace shell + re-rooted .gitignore (SEED)", () => {
       );
       expect(ignoresWholeAudit, `${h}: no single-audit-file ignore`).toBe(false);
     }
-    // The RESOLVED decision forbids a .gitattributes merge=union driver anywhere
-    // in the shipped trees (it corrupts the multi-line audit blocks; per-clone
-    // shards make a merge driver unnecessary).
-    for (const h of HARNESSES) {
+    // The RESOLVED decision forbids a .gitattributes merge driver anywhere in
+    // what ships (merge=union corrupts the multi-line audit blocks; per-clone
+    // shards make a merge driver unnecessary): AI-DLC's .gitattributes part, at
+    // a tree's root and in its root-blocks copy, sets none.
+    const shippedAttributes = HARNESSES.flatMap((h) => {
       const distRoot = join(REPO_ROOT, "dist", h);
-      const ga = join(distRoot, ".gitattributes");
-      if (existsSync(ga)) {
-        expect(readFileSync(ga, "utf-8")).not.toContain("merge=union");
-      }
-    }
-    // And no .gitattributes was authored alongside any gitignore in harness/.
-    for (const h of HARNESSES) {
-      expect(
-        existsSync(join(REPO_ROOT, "harness", h, "dot-gitattributes")),
-        `${h}: no authored .gitattributes`,
-      ).toBe(false);
+      return (readdirSync(distRoot, { recursive: true }) as string[])
+        .map((rel) => rel.replaceAll("\\", "/"))
+        .filter((rel) => rel === ".gitattributes" || rel.endsWith("/tools/data/root-blocks/gitattributes"))
+        .map((rel) => join(distRoot, rel));
+    });
+    expect(shippedAttributes.length, "AI-DLC's .gitattributes part ships somewhere").toBeGreaterThan(0);
+    for (const file of shippedAttributes) {
+      expect(readFileSync(file, "utf-8"), file).not.toMatch(/\bmerge(=|\s|$)/m);
     }
   });
 

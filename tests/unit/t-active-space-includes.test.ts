@@ -448,9 +448,10 @@ describe("t-active-space-includes: Kiro IDE steering carries the active space's 
   });
 });
 
-// A copy runtime leaves the team's .gitignore and AGENTS.md out and ships
-// AI-DLC's part of each in the harness folder (root-blocks). Where config never
-// ran, the engine adds that part after the team's content, once.
+// A copy runtime leaves the team's .gitignore, .gitattributes and AGENTS.md out
+// and ships AI-DLC's part of each in the harness folder (root-blocks). Where
+// config never ran, the engine adds that part once, where config's own rule
+// puts it: after the team's content, and first in .gitattributes.
 describe("t-active-space-includes: AI-DLC's part of the team's root files", () => {
   const blocks = join(distSurface("copilot", ".aidlc"), "tools", "data", "root-blocks");
   const gitignorePart = (): string =>
@@ -467,11 +468,22 @@ describe("t-active-space-includes: AI-DLC's part of the team's root files", () =
     const root = copiedProject();
     writeFileSync(join(root, ".gitignore"), "node_modules\n.env.local\n");
     writeFileSync(join(root, "AGENTS.md"), "# Shop\n\nOur own notes for agents.\n");
-    expect(addRootBlocks(root).sort()).toEqual([".gitignore", "AGENTS.md"]);
+    expect(addRootBlocks(root).sort()).toEqual([".gitattributes", ".gitignore", "AGENTS.md"]);
     expect(readFileSync(join(root, ".gitignore"), "utf-8")).toBe(`node_modules\n.env.local\n\n${gitignorePart()}`);
     expect(readFileSync(join(root, "AGENTS.md"), "utf-8")).toBe(`# Shop\n\nOur own notes for agents.\n\n${agentsPart()}`);
     expect(addRootBlocks(root)).toEqual([]);
     expect(readFileSync(join(root, ".gitignore"), "utf-8")).toBe(`node_modules\n.env.local\n\n${gitignorePart()}`);
+  });
+
+  // In .gitattributes git takes the last line that matches a path, so AI-DLC's part goes first and the team's lines,
+  // byte for byte, after it; a byte order mark stays the file's first bytes.
+  test("puts AI-DLC's .gitattributes part first in the team's file, after its byte order mark, and adds it once", () => {
+    const root = copiedProject();
+    const attributesPart = `# BEGIN AI-DLC:gitattributes\n${readFileSync(join(blocks, "gitattributes"), "utf-8").trim()}\n# END AI-DLC:gitattributes\n`;
+    writeFileSync(join(root, ".gitattributes"), "\uFEFF*.png binary\n");
+    expect(addRootBlocks(root)).toContain(".gitattributes");
+    expect(readFileSync(join(root, ".gitattributes"), "utf-8")).toBe(`\uFEFF${attributesPart}\n*.png binary\n`);
+    expect(addRootBlocks(root)).toEqual([]);
   });
 
   test("a project without the files gets only AI-DLC's part", () => {
@@ -539,7 +551,7 @@ describe("t-active-space-includes: AI-DLC's part of the team's root files", () =
     const edited = gitignorePart().replace("# END AI-DLC:gitignore", "our-own-line\n# END AI-DLC:gitignore");
     writeFileSync(join(changed, ".gitignore"), edited);
     writeFileSync(join(changed, "AGENTS.md"), "# Shop\n");
-    expect(addRootBlocks(changed)).toEqual(["AGENTS.md"]);
+    expect(addRootBlocks(changed).sort()).toEqual([".gitattributes", "AGENTS.md"]);
     expect(readFileSync(join(changed, ".gitignore"), "utf-8")).toBe(edited);
 
     const configured = copiedProject();
@@ -555,7 +567,8 @@ describe("t-active-space-includes: AI-DLC's part of the team's root files", () =
     const installed = "node_modules\n\n# BEGIN AIDLC CURSOR\naidlc/active-space\n# END AIDLC CURSOR\n";
     writeFileSync(join(root, ".gitignore"), installed);
     writeFileSync(join(root, "AGENTS.md"), "<!-- BEGIN AIDLC CURSOR -->\n# AI-DLC\n<!-- END AIDLC CURSOR -->\n");
-    expect(addRootBlocks(root)).toEqual([]);
+    // The installer writes no .gitattributes, so AI-DLC's part goes there.
+    expect(addRootBlocks(root)).toEqual([".gitattributes"]);
     expect(readFileSync(join(root, ".gitignore"), "utf-8")).toBe(installed);
   });
 
@@ -577,7 +590,7 @@ describe("t-active-space-includes: AI-DLC's part of the team's root files", () =
     symlinkSync(outside, join(root, "linked"), "dir");
     writeFileSync(join(outside, "AGENTS.md"), "# elsewhere\n");
     symlinkSync(join(outside, "AGENTS.md"), join(root, "AGENTS.md"));
-    expect(addRootBlocks(root)).toEqual([".gitignore"]);
+    expect(addRootBlocks(root).sort()).toEqual([".gitattributes", ".gitignore"]);
     expect(existsSync(join(outside, "escaped"))).toBe(false);
     expect(readdirSync(outside).sort()).toEqual(["AGENTS.md"]);
     expect(readFileSync(join(outside, "AGENTS.md"), "utf-8")).toBe("# elsewhere\n");

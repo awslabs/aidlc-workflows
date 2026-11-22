@@ -1310,6 +1310,7 @@ the entries AI-DLC wrote.
 | Surface | Harnesses | Policy |
 |---------|-----------|--------|
 | `.gitignore` | All | Own one marked AI-DLC block containing the union of installed harnesses' shipped entries; preserve every byte outside it |
+| `.gitattributes` | Claude, Codex, Cursor, OpenCode, Copilot | One marked block that marks `aidlc/spaces/*/intents/` as generated for GitHub and GitLab request diffs, shared (`shared: "union"`); placed first in a file the project already has, so the team's own lines after it win, and every byte outside it preserved; a file config cannot merge into (not a regular file, not UTF-8, broken markers, an edited block) is left as it is without stopping config, and `--force` does what it does for any other file |
 | `.mcp.json` / `mcpServers` | Claude | Add or remove only consented, baseline-owned entries; preserve user keys and overrides |
 | `.kiro/settings/mcp.json` / `mcpServers` | Kiro CLI | Per server, as `.mcp.json`: follow the release only for AI-DLC's servers you have not changed; keep the servers you add and a shipped server you turn on; a file the project already had at setup is merged, not refused |
 | `AGENTS.md` | Kiro CLI, Kiro IDE, Codex, Cursor, OpenCode, Copilot | One marked block; harness-neutral and shared (`shared: "identical"`) except Copilot, whose block carries its `@`-imports; preserve project instructions |
@@ -1433,10 +1434,12 @@ is exactly what a release shipped as its own. opencode's entries in
 Known unmarked files and JSON entries from historical shipped projections are
 adopted only when their exact recorded SHA-256 signature matches. Any other
 unmarked content is the team's, whatever it says about AI-DLC: config preserves
-it as a prefix and appends a fresh managed block; no rename or deletion is
+it as a prefix and appends a fresh managed block (in `.gitattributes`, the block
+goes first and the team's content follows it); no rename or deletion is
 needed. A root file that is not valid UTF-8 (`.gitignore`, `AGENTS.md` or any other
 AI-DLC merges into) remains untouched and requires an encoding conversion before
-config can merge it safely.
+config can merge it safely; a `.gitattributes` that is not is left as it is and
+config goes on.
 
 Inside a Git repository, config also checks whether a user-owned rule hides
 committed workflow records, including during `--dry-run`. A rule such as
@@ -2073,7 +2076,7 @@ cd your-project && bun .claude/tools/aidlc.ts config --from "$RUNTIME_ROOT" --ha
 ```
 
 The last line is the copy's own setup, run once from the extracted runtime: it
-adds AI-DLC's lines to your `.gitignore` and `AGENTS.md` before the first chat
+adds AI-DLC's lines to your `.gitignore`, `.gitattributes` and `AGENTS.md` before the first chat
 and checks the rest of the setup. Without it, AI-DLC adds them when the first
 chat starts, or at the latest when you start work.
 
@@ -2254,6 +2257,7 @@ still holds what AI-DLC wrote; a value your team changed is yours, so keep it:
 |------|--------|
 | `.gitignore` | The lines from `# BEGIN AI-DLC:gitignore` to `# END AI-DLC:gitignore`, and the blank line above them. Several harnesses share this one block. |
 | `AGENTS.md` | The lines from `<!-- BEGIN AI-DLC:agents -->` to `<!-- END AI-DLC:agents -->`, and the blank line above them. |
+| `.gitattributes` | The lines from `# BEGIN AI-DLC:gitattributes` to `# END AI-DLC:gitattributes`, and the blank line below them. Several harnesses share this one block. |
 | `.claude/settings.json` | `companyAnnouncements`, unless your team set its own. `statusLine` when its command runs `aidlc`. Every hook group whose command runs `aidlc` (`aidlc engine hook ...`, or `bun "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts" engine hook ...` in a copied project). The `permissions.allow` entries that name `aidlc`, and `Edit(/**)`, `Task` and `WebSearch` unless you added them. `env` keys that start with `AIDLC_` or `AWS_AIDLC_`, and any provider keys you chose in `aidlc config providers`. |
 | `.claude/settings.local.json` | A `statusLine` whose command runs `aidlc`; AI-DLC's status line lands here when it is turned on. Step 1's `--statusline off` takes it out. |
 | `.mcp.json` (Claude Code), `.kiro/settings/mcp.json` (Kiro CLI) | The MCP servers AI-DLC ships (`context7`, `aws-mcp`, `aws-pricing`, `aws-iac`, `aws-serverless`), unless you set one up yourself. Kiro CLI gets them by default, turned off; Claude Code gets them when you turned them on, by answering yes when `aidlc config` asked at a terminal or with `config project --mcp defaults`. |
@@ -2274,11 +2278,11 @@ held before. Searching each shared file from step 3 for `AI-DLC` and `aidlc`
 should find nothing of AI-DLC's left:
 
 ```bash
-grep -n "AI-DLC\|aidlc" .gitignore AGENTS.md
+grep -n "AI-DLC\|aidlc" .gitignore .gitattributes AGENTS.md
 ```
 
 ```powershell
-Select-String -Path .gitignore, AGENTS.md -Pattern 'AI-DLC|aidlc'
+Select-String -Path .gitignore, .gitattributes, AGENTS.md -Pattern 'AI-DLC|aidlc'
 ```
 
 A project copied from `aidlc-copy-runtime-X.Y.Z.tar.gz` gets the manifest when

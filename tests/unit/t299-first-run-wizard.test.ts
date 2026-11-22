@@ -779,7 +779,7 @@ describe("t299 first-run setup wizard", () => {
 
   test("recommended defaults in a git repository say once what git does not track of the setup, before setup is complete", () => {
     const said = "Note: git does not track AI-DLC's setup for Claude Code in this project yet: .claude/, aidlc/, " +
-      ".gitignore, .mcp.json and aidlc.settings.json. Commit them so teammates who use Claude Code get the same setup.";
+      ".gitattributes, .gitignore, .mcp.json and aidlc.settings.json. Commit them so teammates who use Claude Code get the same setup.";
     const result = runWizard("\n", {
       gitOnPath: true,
       prepare: (project) => {

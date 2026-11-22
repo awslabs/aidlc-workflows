@@ -303,6 +303,19 @@ describe("#2057 line endings Git rewrites are not the person's change", () => {
     expect(files.pass, files.label).toBe(true);
   });
 
+  test("claude: AI-DLC's .gitattributes part in a CRLF checkout is not rewritten and keeps its record", () => {
+    const { clone } = configuredClone("claude");
+    const before = readFileSync(join(clone, ".gitattributes"));
+    expect(before.toString("utf-8")).toStartWith("# BEGIN AI-DLC:gitattributes\r\n");
+    const manifestPath = join(clone, ".claude", "tools", "data", "aidlc-manifest.json");
+    const recorded = (JSON.parse(readFileSync(manifestPath, "utf-8")) as Manifest).rootContributions[".gitattributes"].hash;
+    const applied = config(clone, "claude", ["--yes"]);
+    expect(applied.status, applied.stdout + applied.stderr).toBe(0);
+    expect(readFileSync(join(clone, ".gitattributes")).equals(before)).toBe(true);
+    expect(porcelain(clone).filter((line) => line.endsWith(".gitattributes"))).toEqual([]);
+    expect((JSON.parse(readFileSync(manifestPath, "utf-8")) as Manifest).rootContributions[".gitattributes"].hash).toBe(recorded);
+  });
+
   test("claude: a real edit in a CRLF clone is still refused, and doctor names exactly what config refuses", () => {
     const { clone } = configuredClone("claude");
     const shipped = readFileSync(join(clone, AGENT), "utf-8");

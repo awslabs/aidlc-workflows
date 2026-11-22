@@ -106,7 +106,7 @@ export function releaseBeforeLayout(release: string): boolean {
 }
 
 // A file AI-DLC shares with the person, where it writes only its own marked part.
-const SHARED_ROOT_FILES = new Set(["AGENTS.md", ".gitignore"]);
+const SHARED_ROOT_FILES = new Set(["AGENTS.md", ".gitignore", ".gitattributes"]);
 
 function joinWithAnd(parts: readonly string[]): string {
   return parts.length <= 1 ? (parts[0] ?? "") : `${parts.slice(0, -1).join(", ")} and ${parts.at(-1)}`;

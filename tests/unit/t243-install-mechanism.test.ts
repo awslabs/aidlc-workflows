@@ -95,7 +95,7 @@ import {
   writeOperation,
 } from "../../core/tools/aidlc-transaction.ts";
 import { AIDLC_VERSION } from "../../core/tools/aidlc-version.ts";
-import { writeSessionPidEntry } from "../../core/tools/aidlc-lib.ts";
+import { aidlcOwnedSourceKey, mainCheckoutChangeRefusal, sourcePathKey, writeSessionPidEntry } from "../../core/tools/aidlc-lib.ts";
 import { copyChannelDispatcherCommands } from "../../core/tools/aidlc.ts";
 import { doctorCommandLines, vscodeVisibleOutput } from "../harness/vscode-output-trim.ts";
 import {
@@ -4829,7 +4829,7 @@ describe("t243 project initialization", () => {
     test("a new project: the first config names the setup once, before its last line, and the next config says nothing", () => {
       const project = repository("aidlc-t243-setup-new-");
       const first = configure(project, CLAUDE_RELEASE, "claude");
-      expect(first).toContain(line("Claude Code", ".claude/, aidlc/ and .gitignore"));
+      expect(first).toContain(line("Claude Code", ".claude/, aidlc/, .gitattributes and .gitignore"));
       expect(times(first), first).toBe(1);
       expect(first.indexOf(SAID)).toBeLessThan(first.indexOf("configured "));
       // A refresh of a setup that is already here, tracked or not, says nothing.
@@ -4841,7 +4841,7 @@ describe("t243 project initialization", () => {
       const project = repository("aidlc-t243-setup-own-files-", { ".gitignore": "node_modules/\n" });
       writeFileSync(join(project, ".mcp.json"), `${JSON.stringify({ mcpServers: { mine: { command: "mine" } } })}\n`);
       const out = configure(project, CLAUDE_RELEASE, "claude");
-      expect(out).toContain(line("Claude Code", ".claude/, aidlc/ and .gitignore"));
+      expect(out).toContain(line("Claude Code", ".claude/, aidlc/, .gitattributes and .gitignore"));
       expect(out).not.toContain(".mcp.json");
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -4859,13 +4859,13 @@ describe("t243 project initialization", () => {
       const project = repository("aidlc-t243-setup-jsonc-", { "opencode.jsonc": "{\n  // the team's own\n}\n" });
       const out = configure(project, OPENCODE_RELEASE, "opencode");
       expect(git(project, "status", "--porcelain")).toContain(" M opencode.jsonc");
-      expect(out).toContain(line("opencode", ".aidlc/, .opencode/, aidlc/, .gitignore, AGENTS.md and opencode.jsonc"));
+      expect(out).toContain(line("opencode", ".aidlc/, .opencode/, aidlc/, .gitattributes, .gitignore, AGENTS.md and opencode.jsonc"));
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
     test("a project in a folder of a bigger repository: the paths named are the project's own", () => {
       const repo = repository("aidlc-t243-setup-monorepo-", { "apps/shop/README.md": "# Shop\n" });
       const out = configure(join(repo, "apps", "shop"), CLAUDE_RELEASE, "claude");
-      expect(out).toContain(line("Claude Code", ".claude/, aidlc/ and .gitignore"));
+      expect(out).toContain(line("Claude Code", ".claude/, aidlc/, .gitattributes and .gitignore"));
       expect(out).not.toContain("apps/shop/.claude");
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -10062,5 +10062,189 @@ describe("t243 a pinned release is checked once per session", () => {
         return (text.match(/hashes: false/g) ?? []).map(() => name);
       });
     expect(sites).toEqual(["aidlc-lifecycle.ts"]);
+  });
+});
+
+// AI-DLC's .gitattributes part marks its record of each piece of work as
+// generated for GitHub's and GitLab's request diffs. It goes first in the
+// person's own file, so a line of theirs below it wins, and every byte of
+// theirs stays as it was; a file config cannot merge into is left as it is
+// without stopping config. Like .gitignore and AGENTS.md it is one of AI-DLC's
+// own files where AI-DLC counts the project's source. Kiro ships no part.
+describe("t243 AI-DLC's .gitattributes part", () => {
+  const PART = [
+    "# BEGIN AI-DLC:gitattributes",
+    "# AI-DLC: marks its record of each piece of work as generated, which GitHub and GitLab fold in request diffs; a line of yours below this part wins",
+    "aidlc/spaces/*/intents/** linguist-generated gitlab-generated",
+    "# END AI-DLC:gitattributes",
+  ];
+  const part = (nl = "\n"): string => `${PART.join(nl)}${nl}`;
+  const BOM = "\uFEFF";
+  function git(cwd: string, args: string[]): void {
+    const result = spawnSync("git", args, { cwd, encoding: "utf-8" });
+    expect(result.status, `git ${args.join(" ")}: ${result.stderr}`).toBe(0);
+  }
+  const RECORD = "aidlc/spaces/default/intents/260101-work/audit/a.md";
+  const RULES = "aidlc/spaces/default/memory/team.md";
+  const KIRO_RELEASE = join(REPO_ROOT, "dist-release", "kiro");
+  function gitProject(prefix: string): string {
+    const project = temp(prefix);
+    expect(spawnSync("git", ["init", "-q", "-b", "main", project]).status).toBe(0);
+    return project;
+  }
+  function configure(project: string, release = CLAUDE_RELEASE, harness = "claude", ...extra: string[]): void {
+    const configured = run(INIT, [
+      "config", "--project-dir", project, "--from", release, "--harness", harness, "--yes", "--mcp", "none", ...extra,
+    ], project);
+    expect(configured.status, configured.stdout + configured.stderr).toBe(0);
+  }
+  const attributes = (project: string): string => readFileSync(join(project, ".gitattributes"), "utf-8");
+  const attr = (cwd: string, path: string, ...source: string[]): string =>
+    spawnSync("git", ["check-attr", ...source, "linguist-generated", "gitlab-generated", "--", path], { cwd, encoding: "utf-8" }).stdout;
+  const both = (path: string, value: string): string =>
+    `${path}: linguist-generated: ${value}\n${path}: gitlab-generated: ${value}\n`;
+  // The release before this part: none at the root, none in root-blocks, none declared.
+  function releaseWithoutPart(release: string, harnessDir: string): string {
+    const earlier = join(temp("aidlc-t243-ga-release-"), "release");
+    cpSync(release, earlier, { recursive: true });
+    rmSync(join(earlier, ".gitattributes"));
+    rmSync(join(earlier, harnessDir, "tools", "data", "root-blocks", "gitattributes"));
+    const descriptorPath = join(earlier, harnessDir, "tools", "data", "aidlc-projection.json");
+    const descriptor = JSON.parse(readFileSync(descriptorPath, "utf-8")) as { rootIntegrations: Array<{ path: string }> };
+    descriptor.rootIntegrations = descriptor.rootIntegrations.filter((integration) => integration.path !== ".gitattributes");
+    writeFileSync(descriptorPath, `${JSON.stringify(descriptor, null, 2)}\n`);
+    return earlier;
+  }
+
+  test("a project without one gets the four lines: the record reads as generated, the rules and the code do not", () => {
+    const project = gitProject("aidlc-t243-ga-new-");
+    configure(project);
+    expect(attributes(project)).toBe(part());
+    expect(attr(project, RECORD)).toBe(both(RECORD, "set"));
+    expect(attr(project, RULES)).toBe(both(RULES, "unspecified"));
+    expect(attr(project, "src/app.ts")).toBe(both("src/app.ts", "unspecified"));
+    const again = run(INIT, ["config", "--project-dir", project, "--from", CLAUDE_RELEASE, "--harness", "claude", "--mcp", "none", "--dry-run", "--json"], project);
+    const actions = (JSON.parse(again.stdout.trim().split("\n").at(-1) ?? "{}") as { data: { actions: Array<{ path: string; action: string }> } }).data.actions;
+    expect(actions).toContainEqual({ path: ".gitattributes", action: "preserve" });
+  });
+
+  test("the person's own file: AI-DLC's part comes first, every byte of theirs after it, and their own line below it wins", () => {
+    for (const [name, theirs, expected] of [
+      ["CRLF, no last newline", "* text=auto\r\naidlc/** -linguist-generated -gitlab-generated", `${part("\r\n")}\r\n* text=auto\r\naidlc/** -linguist-generated -gitlab-generated`],
+      ["a byte order mark", `${BOM}# ours\naidlc/** -linguist-generated -gitlab-generated\n`, `${BOM}${part()}\n# ours\naidlc/** -linguist-generated -gitlab-generated\n`],
+    ] as const) {
+      const project = gitProject("aidlc-t243-ga-theirs-");
+      writeFileSync(join(project, ".gitattributes"), theirs);
+      configure(project);
+      expect(attributes(project), name).toBe(expected);
+      expect(attr(project, RECORD), name).toBe(both(RECORD, "unset"));
+      configure(project);
+      expect(attributes(project), name).toBe(expected);
+    }
+  });
+
+  test("a .gitattributes config cannot merge into is left as it is and config goes on; --force rewrites an edited part", () => {
+    const edited = part().replace("aidlc/spaces/*/intents/**", "aidlc/spaces/*/intents/*/audit/**");
+    const cases: Array<[string, (project: string) => void]> = [
+      ["not UTF-8", (project) => writeFileSync(join(project, ".gitattributes"), Buffer.from([0x2a, 0x20, 0xff, 0xfe, 0x0a]))],
+      ["broken markers", (project) => writeFileSync(join(project, ".gitattributes"), "# BEGIN AI-DLC:gitattributes\n*.png binary\n")],
+      ["an edited part", (project) => {
+        configure(project);
+        writeFileSync(join(project, ".gitattributes"), edited);
+      }],
+    ];
+    if (process.platform !== "win32") {
+      cases.push(["a symlink", (project) => {
+        writeFileSync(join(project, "attributes.txt"), "*.png binary\n");
+        symlinkSync("attributes.txt", join(project, ".gitattributes"));
+      }]);
+    }
+    for (const [name, arrange] of cases) {
+      const project = gitProject("aidlc-t243-ga-odd-");
+      arrange(project);
+      const before = readFileSync(join(project, ".gitattributes"));
+      const link = lstatSync(join(project, ".gitattributes")).isSymbolicLink();
+      const configured = run(INIT, ["config", "--project-dir", project, "--from", CLAUDE_RELEASE, "--harness", "claude", "--yes", "--mcp", "none"], project);
+      expect(configured.status, `${name}: ${configured.stdout}${configured.stderr}`).toBe(0);
+      expect(configured.stdout, name).not.toContain(".gitattributes");
+      expect(readFileSync(join(project, ".gitattributes")).equals(before), name).toBe(true);
+      expect(lstatSync(join(project, ".gitattributes")).isSymbolicLink(), name).toBe(link);
+      if (name === "an edited part") {
+        configure(project, CLAUDE_RELEASE, "claude", "--force");
+        expect(attributes(project)).toBe(part());
+      }
+    }
+  });
+
+  test("two of ours in one project give one part; Kiro alone writes none, and beside one of ours there is one part", () => {
+    const pair = gitProject("aidlc-t243-ga-pair-");
+    configure(pair);
+    configure(pair, CODEX_RELEASE, "codex");
+    expect(attributes(pair)).toBe(part());
+    const kiro = gitProject("aidlc-t243-ga-kiro-");
+    configure(kiro, KIRO_RELEASE, typedHarnessName("kiro"));
+    expect(existsSync(join(kiro, ".gitattributes"))).toBe(false);
+    configure(kiro, KIRO_RELEASE, typedHarnessName("kiro"));
+    expect(existsSync(join(kiro, ".gitattributes"))).toBe(false);
+    configure(kiro);
+    expect(attributes(kiro)).toBe(part());
+    configure(kiro, KIRO_RELEASE, typedHarnessName("kiro"));
+    expect(attributes(kiro)).toBe(part());
+  });
+
+  test("the file is one of AI-DLC's own where AI-DLC counts source, as .gitignore is, written or committed", () => {
+    const project = gitProject("aidlc-t243-ga-owned-");
+    configure(project);
+    expect(attributes(project)).toBe(part());
+    const owned = (path: string): boolean => aidlcOwnedSourceKey(project)(sourcePathKey("", path));
+    expect(owned(".gitattributes")).toBe(true);
+    git(project, ["config", "user.name", "lead"]);
+    git(project, ["config", "user.email", "lead@example.test"]);
+    git(project, ["add", ".gitattributes"]);
+    git(project, ["commit", "-q", "-m", "AI-DLC's .gitattributes"]);
+    expect(owned(".gitattributes")).toBe(true);
+    expect(owned(".gitignore")).toBe(true);
+    expect(mainCheckoutChangeRefusal(project, [".gitattributes"], [], () => null)).toBe(
+      ".gitattributes is one of AI-DLC's own files, which change only through AI-DLC's own steps.",
+    );
+  });
+
+  test("the getting-started commit and push give the host a record that reads as generated in its own copy", () => {
+    const project = gitProject("aidlc-t243-ga-host-");
+    configure(project);
+    mkdirSync(join(project, dirname(RECORD)), { recursive: true });
+    writeFileSync(join(project, RECORD), "# Audit\n");
+    git(project, ["config", "user.name", "lead"]);
+    git(project, ["config", "user.email", "lead@example.test"]);
+    const listed = [".claude", "aidlc", ".gitattributes", ".gitignore", ".mcp.json", "aidlc.settings.json"]
+      .filter((path) => existsSync(join(project, path)));
+    expect(listed).toContain(".gitattributes");
+    git(project, ["add", ...listed]);
+    git(project, ["commit", "-q", "-m", "Set up AI-DLC"]);
+    const host = temp("aidlc-t243-ga-bare-");
+    git(host, ["init", "-q", "--bare", "-b", "main"]);
+    git(project, ["push", "-q", host, "main"]);
+    expect(attr(host, RECORD, "--source", "main")).toBe(both(RECORD, "set"));
+    expect(attr(host, RULES, "--source", "main")).toBe(both(RULES, "unspecified"));
+  });
+
+  test("a release that stops shipping it takes AI-DLC's part out, and the person's file is byte for byte theirs", () => {
+    const later = releaseWithoutPart(CLAUDE_RELEASE, ".claude");
+    for (const [name, theirs, arrange] of [
+      ["none of theirs", null, null],
+      ["CRLF, no last newline", "* text=auto\r\n*.png binary", null],
+      ["a byte order mark", `${BOM}*.png binary\n`, null],
+      ["a blank last line", "*.png binary\n\n", null],
+      ["a file that starts with a blank line", "\n*.png binary\n", null],
+      ["a part they moved below their own line", "*.png binary\n", () => `*.png binary\n${part()}`],
+    ] as const) {
+      const project = gitProject("aidlc-t243-ga-retired-");
+      if (theirs !== null) writeFileSync(join(project, ".gitattributes"), theirs);
+      configure(project);
+      if (arrange !== null) writeFileSync(join(project, ".gitattributes"), arrange());
+      configure(project, later);
+      if (theirs === null) expect(existsSync(join(project, ".gitattributes")), name).toBe(false);
+      else expect(attributes(project), name).toBe(theirs);
+    }
   });
 });

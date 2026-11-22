@@ -89,7 +89,7 @@ The installer preflights the full copy, refuses project-owned collisions,
 preserves `.cursor/.gitignore` and existing method memory, structurally
 merges `.cursor/hooks.json` and `.cursor/cli.json`, and adds marked AI-DLC
 sections to existing `AGENTS.md` and `.gitignore` files instead of replacing
-them. It records framework ownership in `.cursor/aidlc-install.json`;
+them; AI-DLC's `.gitattributes` part is added when the first session starts. It records framework ownership in `.cursor/aidlc-install.json`;
 re-running it upgrades managed files while preserving `aidlc/active-space`
 and explicit plugin selection/composed state, and reapplying that space to
 all mutable rule and persona pointers, including files restored after deletion.

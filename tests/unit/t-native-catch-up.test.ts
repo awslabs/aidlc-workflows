@@ -309,6 +309,33 @@ describe.skipIf(SKIP_REASON !== null)("each project catches up the next time it 
     expect(first.stdout).toContain(catchUpAsked(dir, false));
   });
 
+  // A release that adds a root file config writes new (AI-DLC's .gitattributes part): git shows it as an untracked
+  // file at the root, which the offer names as AI-DLC's part and its yes commits with the rest.
+  test("a release that adds AI-DLC's .gitattributes part: the first start names its part, and the yes commits the new file", () => {
+    const tree = stampedTree(shifted(AIDLC_VERSION, -1));
+    rmSync(join(tree, ".gitattributes"));
+    rmSync(join(tree, ".claude", "tools", "data", "root-blocks", "gitattributes"));
+    const descriptorPath = join(tree, ".claude", "tools", "data", "aidlc-projection.json");
+    const descriptor = JSON.parse(readFileSync(descriptorPath, "utf-8")) as { rootIntegrations: Array<{ path: string }> };
+    descriptor.rootIntegrations = descriptor.rootIntegrations.filter((integration) => integration.path !== ".gitattributes");
+    writeFileSync(descriptorPath, `${JSON.stringify(descriptor, null, 2)}\n`);
+    const dir = project(tree, { tracked: false });
+    expect(existsSync(join(dir, ".gitattributes"))).toBe(false);
+    const first = sessionStart(dir, "catch-up, a new root file");
+    expect(first.status, first.stdout + first.stderr).toBe(0);
+    expect(readFileSync(join(dir, ".gitattributes"), "utf-8")).toStartWith("# BEGIN AI-DLC:gitattributes\n");
+    const n = git(dir, ["status", "--porcelain", "-uall", "--", ".claude"]).split("\n").filter(Boolean).length;
+    expect(first.stdout).toContain(
+      `AI-DLC updated its own files in this project to ${AIDLC_VERSION}: ${n} files under .claude and its part of .gitattributes changed. ` +
+        "Want me to commit them on main, as one commit of their own? Nothing is pushed. I'd use this commit message:",
+    );
+    const file = `aidlc/.aidlc-engine/request-text/unit-record-message-update-${AIDLC_VERSION}.txt`;
+    const yes = sh(dir, `aidlc unit commit-record --update --commit-message-file ${file}`);
+    expect(yes.status, yes.stdout + yes.stderr).toBe(0);
+    expect(git(dir, ["show", "--name-only", "--format=", "HEAD"]).split("\n")).toContain(".gitattributes");
+    expect(git(dir, ["status", "--porcelain", "--", ".gitattributes"])).toBe("");
+  });
+
   test("unattended or on no branch, today's line and no offer; a settings file that held their words is left and named", () => {
     const unattended = project(earlierTree);
     const saved = env;
