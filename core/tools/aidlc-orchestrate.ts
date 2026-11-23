@@ -12340,9 +12340,14 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   if (openFront !== null) {
     const tool = `${aidlcToolInvocation("orchestrate")} next`;
     const open = openFront.question;
-    // The commands named here carry the stage changes typed with the request,
-    // as the question's own do, from the request's stored copy.
+    // The commands named here carry the settings and the stage changes typed
+    // with the request, as the question's own do, from the request's stored copy.
+    // Under a team's locked strict (teamKeepsTyped), a lowered Guard Policy or
+    // plan approval off would be refused at creation and the question would
+    // wait for the same answer again, and a check typed off is kept on: then
+    // the commands carry none of the typed settings.
     const kept = openQuestionSettings(questionDir, open);
+    const settings = kept && teamKeepsTyped(kept, questionDir) === null ? carriedCreationFlags(kept) : "";
     const stages = typedStageAnswers(open.proposedScope, kept?.planChanges, kept?.planName);
     const answer = !openFront.sole
       // More than one plan question is open on this work, so which one they are
@@ -12351,9 +12356,9 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       ? "the command that question gave for their choice, as that question still stands in your own chat, " +
         "with the `--request` id it came with"
       : open.proposedScope.length > 0
-        ? `\`${tool} --scope ${scopeArg(open.proposedScope)} --request ${open.id}${stages.plan}\`, ` +
-          `or \`${tool} compose --request ${open.id}${stages.tailored}\` for a plan tailored to it`
-        : `\`${tool} compose --request ${open.id}${stages.tailored}\`, or one of the plan commands that question listed, ` +
+        ? `\`${tool} --scope ${scopeArg(open.proposedScope)} --request ${open.id}${settings}${stages.plan}\`, ` +
+          `or \`${tool} compose --request ${open.id}${settings}${stages.tailored}\` for a plan tailored to it`
+        : `\`${tool} compose --request ${open.id}${settings}${stages.tailored}\`, or one of the plan commands that question listed, ` +
           `each with \`--request ${open.id}\``;
     // The request it was asked about: a chat that never saw the question cannot
     // tell an answer from the same work asked again without it (#3609).

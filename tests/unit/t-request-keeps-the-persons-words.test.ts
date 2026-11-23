@@ -703,11 +703,13 @@ describe("AI-DLC's first command carries none of the person's words", () => {
     return { ...own, message: String(own.message).replace(" Replace `--label`", `${starts} Replace \`--label\``) };
   }
   // The plan question for their request asked as separate new work beside the work in hand (the routing question's
-  // separate-work answer, then the plan proposed), in a later second than anything before it.
-  function newWorkPlanQuestion(): PlanQuestion {
-    typed(`/aidlc ${REQUEST}`);
-    const kept = String(run([]).message).match(/next --request ([0-9a-f]{8})/)?.[1];
-    const routing = run(["--request", kept as string]) as { choices?: Array<{ label: string; command?: string }> };
+  // separate-work answer, then the plan proposed), in a later second than anything before it, with `settings` typed
+  // before the request. With a setting typed, the first `next` asks the routing question at once.
+  function newWorkPlanQuestion(settings = ""): PlanQuestion {
+    typed(`/aidlc ${settings}${REQUEST}`);
+    const first = run([]) as { message?: string; choices?: Array<{ label: string; command?: string }> };
+    const kept = String(first.message).match(/next --request ([0-9a-f]{8})/)?.[1];
+    const routing = (kept === undefined ? first : run(["--request", kept])) as { choices?: Array<{ label: string; command?: string }> };
     const separate = routing.choices?.find((choice) => choice.label === "Separate new piece of work")?.command;
     expect(separate, JSON.stringify(routing)).toBeDefined();
     laterSecond();
@@ -761,6 +763,66 @@ describe("AI-DLC's first command carries none of the person's words", () => {
     holdsNoneOfTheirWords(step);
     for (const command of commands(step)) expect(command).not.toContain("Go ahead");
   });
+
+  // The commands that step names are the question's own, the settings typed with the request on each, so the work
+  // started from a reply in plain words has them.
+  const TYPED_SETTINGS = "--depth comprehensive --guard-policy strict";
+  const recordField = (field: string): string => {
+    const intents = join(proj, "aidlc", "spaces", "default", "intents");
+    const dir = readFileSync(join(intents, "active-intent"), "utf-8").trim();
+    return getField(readFileSync(join(intents, dir, "aidlc-state.md"), "utf-8"), field) ?? "";
+  };
+  for (const [where, ask] of [
+    ["with no work in hand", () => planQuestionOpen(`${TYPED_SETTINGS} `)],
+    ["beside work in hand", () => { openWork(); return newWorkPlanQuestion(`${TYPED_SETTINGS} `); }],
+  ] as const) {
+    test(`a plain reply while the plan question waits, ${where}: its go-ahead command keeps the settings typed with the request`, () => {
+      const asked = ask() as PlanQuestion & { confirm_command?: string };
+      typed("Go ahead");
+      const step = run(["--entry"]);
+      const command = String(asked.confirm_command);
+      expect(command).toContain(TYPED_SETTINGS);
+      expect(step.message).toContain(`\`${command}\``);
+      create(proj, run(command.replace(`${RUN} `, "").split(" ")));
+      expect(recordField("Guard Policy")).toBe("strict (set by you)");
+      expect(recordField("Depth")).toBe("Comprehensive");
+    });
+
+    test(`a plain reply while the plan question waits, ${where}: its tailored-plan command keeps the settings typed with the request`, () => {
+      const asked = ask() as PlanQuestion & { compose_command?: string };
+      typed("Go ahead");
+      const step = run(["--entry"]);
+      const command = String(asked.compose_command);
+      expect(command).toContain(TYPED_SETTINGS);
+      expect(step.message).toContain(`\`${command}\``);
+      const dispatch = run(command.replace(`${RUN} `, "").split(" "));
+      expect(dispatch.message).toContain(`This request carries ${TYPED_SETTINGS}: add exactly that to the approval's`);
+      const approval = String(dispatch.message).match(/On approval, run `next (--scope <scopeName> --request [0-9a-f]{8})`/)?.[1];
+      expect(approval, String(dispatch.message)).toBeDefined();
+      create(proj, run([...(approval as string).replace("<scopeName>", "bugfix").split(" "), ...TYPED_SETTINGS.split(" ")]));
+      expect(recordField("Guard Policy")).toBe("strict (set by you)");
+      expect(recordField("Depth")).toBe("Comprehensive");
+    });
+  }
+
+  // A setting the team's locked strict keeps would be refused at creation on every answer, and the plan question would
+  // wait for the same answer again: the step's commands then carry none of the settings typed with the request, and
+  // the work starts at the team's strict.
+  for (const lowering of ["--guard-policy relaxed", "--plan-approval off"]) {
+    test(`a plain reply while the plan question waits, the team's strict locked, ${lowering} typed: the work starts at the team's strict`, () => {
+      const team = join(proj, "aidlc", "spaces", "default", "memory", "team.md");
+      writeFileSync(team, readFileSync(team, "utf-8").replace("## Guard Policy\n", "## Guard Policy\n\nMode: strict\n"), "utf-8");
+      planQuestionOpen(`--depth comprehensive ${lowering} `);
+      typed("Go ahead");
+      const step = run(["--entry"]);
+      const command = String(step.message).match(/run the command it gave for their choice: `[^`]*? next (--scope [^`]+)`/)?.[1];
+      expect(command, String(step.message)).toBeDefined();
+      expect(command).not.toContain(lowering);
+      create(proj, run((command as string).split(" ")));
+      expect(recordField("Guard Policy")).toBe("strict (from team.md)");
+      expect(recordField("Plan Approval")).toStartWith("on ");
+    });
+  }
 
   test("a plain reply while the routing question waits goes to that question, with its own commands", () => {
     routingQuestionOpen();
