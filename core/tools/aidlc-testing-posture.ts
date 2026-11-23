@@ -2006,16 +2006,14 @@ export function workerBrief(
 //     context inline only up to about 10,000 characters and saves a longer one
 //     to a file it shows the first 2,000 of; a Sonnet developer did not read
 //     that file in a measure, and read the two record files it was pointed at.
-//   - Copilot (the input rewrite): the whole brief.
-// Codex, opencode, Kiro CLI, Kiro IDE and Cursor stay with the conductor's
+//   - Copilot and opencode (the input rewrite): the whole brief.
+// Codex, Kiro CLI, Kiro IDE and Cursor stay with the conductor's
 // paste: on Codex the plan-approval guard runs beside the rewrite, never after
-// it, so it could not tell the brief was handed; opencode runs a tool with the
-// arguments it was called with, not the adapter's rewritten copy, so a brief
-// added there never reaches the developer. A parallel batch stays with the paste on
+// it, so it could not tell the brief was handed. A parallel batch stays with the paste on
 // every tool: a starting developer cannot be paired with its Unit on Claude
 // Code. The step note, the guard and the delivery hook all read these.
 
-export const BRIEF_REWRITE_HARNESSES: ReadonlySet<string> = new Set(["copilot"]);
+export const BRIEF_REWRITE_HARNESSES: ReadonlySet<string> = new Set(["copilot", "opencode"]);
 
 /**
  * Whether the developer's start hands it the brief on this install by the
