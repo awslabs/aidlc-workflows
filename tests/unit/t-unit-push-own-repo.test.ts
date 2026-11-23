@@ -180,6 +180,16 @@ describe("a Unit on the workspace's own repository", () => {
     expect(step.ask_type, JSON.stringify(step).slice(0, 1500)).toBe("unit-take");
   });
 
+  test("a Unit's result on the workspace's own repository carries no address: the plan names that repository itself", () => {
+    const home = oneRepoTeams();
+    const alice = cloneOf(home.remote, "alice");
+    builtHere(alice, "refunds", "refunds.ts");
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    const claim = claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds") as { result: { repos: Array<{ repo: string; address?: string }> } };
+    expect(claim.result.repos.map((repo) => [repo.repo, repo.address ?? null])).toEqual([[".", null]]);
+  });
+
   test("its branch starts from the lead's main as fetched, never from the clone's own main left behind", () => {
     const home = oneRepoTeams();
     const alice = cloneOf(home.remote, "alice");

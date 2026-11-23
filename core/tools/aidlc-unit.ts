@@ -14083,6 +14083,8 @@ function pushUnit(args: string[], projectDir?: string,
         `was not replaced, and nothing was pushed. ${newBranchWay(`${branch}-2`, true)}${whereNow()}`);
     }
   }
+  // The repos the plan this build was taken from lists, as this clone's copy holds it; null with no such plan.
+  const planListed = takenFromPlan(pd, build) ? planRepoNames(pd, build) : null;
   for (const { repo, dir, name, remote, paths } of planned) {
     // The branch's copy on its remote as last fetched: a commit there that
     // AI-DLC did not push and this build is on top of stays among its heads.
@@ -14206,8 +14208,11 @@ function pushUnit(args: string[], projectDir?: string,
         const id = patchIdOf(dir, base, head, changed);
         return id ? { patch_id: id } : {};
       })(),
-      // A repository the plan does not list: the lead reaches it by this address, with no sign-in in it.
-      ...(addedRepos.includes(repo) ? { address: recordedAddress(dir, git(dir, ["remote", "get-url", remote]).stdout.trim()) } : {}),
+      // A repository the plan does not list, whether this push or Code Generation added it: the lead reaches it by
+      // this address, with no sign-in in it. Never the workspace's own repository, which the plan lists by name.
+      ...(repo !== "." && (addedRepos.includes(repo) || (planListed !== null && !planListed.has(repo)))
+        ? { address: recordedAddress(dir, git(dir, ["remote", "get-url", remote]).stdout.trim()) }
+        : {}),
     };
     results.push(entry);
     hostSaid.push({ name, words: hostLinkWords(pushed.stderr, branch) });
@@ -14553,9 +14558,21 @@ export function forkPlaceOf(pd: string, build: UnitBuild, named?: string):
 // the build's plan has it; undefined where the build is not from a plan or the
 // copy names no such repository.
 function planEntryOf(pd: string, build: UnitBuild, repo: string): PlanJson["repos"][number] | undefined {
+  return buildsPlanCopy(pd, build)?.repos.find((entry) => entry.name === repo);
+}
+
+// The plan a build was taken from, as this clone's copy holds it; null when
+// there is no copy to read.
+function buildsPlanCopy(pd: string, build: UnitBuild): PlanJson | null {
   const copy = isGitAddress(build.homeLocation) ? copyOf(build.homeLocation, planRecordRef(idSuffix(build.homeWork))) : null;
   const kept = copy === null ? null : planAtCopy(pd, copy, { commit: planCommitOf(pd, copy) });
-  return kept?.kind === "read" ? kept.plan.repos.find((entry) => entry.name === repo) : undefined;
+  return kept?.kind === "read" ? kept.plan : null;
+}
+
+// Every repository that plan lists, its own included; null when there is no copy to read.
+function planRepoNames(pd: string, build: UnitBuild): Set<string> | null {
+  const plan = buildsPlanCopy(pd, build);
+  return plan === null ? null : new Set([plan.plan_repo.name, ...plan.repos.map((entry) => entry.name)]);
 }
 
 // What the fork offer says, read with no fetch: that place, the plan's main by

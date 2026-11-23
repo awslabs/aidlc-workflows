@@ -19,6 +19,7 @@ import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync
 import { basename, join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { recordedAddress } from "../../dist/claude/.claude/tools/aidlc-unit.ts";
 import { fixtureIntentId8 } from "../harness/fixtures.ts";
 import {
   cleanupTeamBuild,
@@ -809,6 +810,28 @@ describe("the push", () => {
     // Added by hand at review time, it is the same one line.
     const again = run(UTILITY, ["intent", "add-repo", "ledger"], alice);
     expect(again.out).toContain("ledger is already one of this piece of work's repos");
+  });
+
+  test("a repo the lead's plan did not list, added during Code Generation, goes home with its address in the result", () => {
+    const { home, alice, record } = refundsTakenInClone();
+    codeGenerated(alice, record);
+    const ledger = codeHost("ledger");
+    cloneCode(ledger, alice, "ledger", "alice");
+    // Code Generation's own check has the agent add it before the push.
+    const added = run(UTILITY, ["intent", "add-repo", "ledger"], alice);
+    expect(added.out).toContain("Added ledger to refunds's repos: the lead's plan did not list it, so refunds's record carries its address when you push.");
+    writeFileSync(join(alice, "ledger", "entries.ts"), "export const entry = 1;\n");
+    const manifest = join(record, "construction", "refunds", "code-generation", "source-manifest.json");
+    const written = JSON.parse(readFileSync(manifest, "utf-8")) as { writes: Array<{ repo: string; path: string }> };
+    written.writes.push({ repo: "ledger", path: "entries.ts" });
+    writeFileSync(manifest, `${JSON.stringify(written, null, 2)}\n`);
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    const claim = recordAt(home, "refunds")?.json as { result: { repos: Array<{ repo: string; address?: string }> } };
+    const byRepo = new Map(claim.result.repos.map((repo) => [repo.repo, repo.address]));
+    expect(byRepo.get("ledger"), JSON.stringify(claim.result.repos)).toBe(recordedAddress(join(alice, "ledger"), git(join(alice, "ledger"), ["remote", "get-url", "origin"])));
+    // The plan's own repos carry none: the lead has their addresses on the plan.
+    expect([...byRepo].filter(([repo, address]) => repo !== "ledger" && address !== undefined)).toEqual([]);
   });
 
   test("a push a repo's host refuses is said once, in its words, and nothing is retried", () => {
