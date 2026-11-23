@@ -1,4 +1,4 @@
-// covers: function:takePersonsOwnLine, function:planNamedReply, function:planQuestionChoice,
+// covers: function:takePersonsOwnLine, function:planNamedReply, function:planQuestionChoice, function:shortcutEntryWords,
 // function:planSentBesideWaitingRequest, function:planOrWaitingRequestStep
 //
 // The request a piece of work is recorded with is the person's own words. Live
@@ -29,11 +29,12 @@ import {
 import {
   auditBlockField,
   getField,
+  pendingPersonLines,
   readAuditShardEvents,
   splitKiroCommandArgs,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
-import { parseNextFlags, requestAsTyped } from "../../dist/claude/.claude/tools/aidlc-orchestrate.ts";
+import { CUT_MESSAGE_PERSON_LINE, parseNextFlags, requestAsTyped } from "../../dist/claude/.claude/tools/aidlc-orchestrate.ts";
 
 setDefaultTimeout(120_000);
 
@@ -1459,6 +1460,91 @@ describe("AI-DLC's first command carries none of the person's words", () => {
     expect(readAuditShardEvents(proj).filter((row) => row.event === "STAGE_JUMPED")).toHaveLength(1);
   });
 
+  // A shortcut's line of tokens alone (`/aidlc-express`, `/aidlc-bugfix --status`, `/aidlc-feature --depth minimal`):
+  // the shortcut's first command runs it as the shortcut's own command runs it, each time it is run and with no mark,
+  // and no bare `next` reads it again. So beside a waiting plan question the plan's name is weighed as that command's
+  // is, and a setting is named once.
+  test("a shortcut alone while the plan question for new work waits: its first command gets the step that reads which, and the work keeps its plan", () => {
+    openWork();
+    const ask = newWorkPlanQuestion();
+    typed("/aidlc-express", SECOND, proj, OTHER_CHAT);
+    expect(run(["--entry", "--scope", "express"], SECOND)).toEqual(readsWhich(ask));
+    expect(scopeNow()).toBe("feature");
+    expect(run(["--scope", "express"], SECOND).message).toStartWith(SWITCH);
+  });
+
+  for (const way of ["its first command", "the command a shortcut runs on the other tools"] as const) {
+    test(`a shortcut's setting over work in hand, ${way}: the setter once, then a bare next is the work's own step`, () => {
+      const passed = createOrchestrationTestProject();
+      try {
+        for (const at of [proj, passed]) {
+          seedStateFile(at, join(FIXTURES_DIR, "state-mid-ideation.md"));
+          typed("/aidlc-feature --depth minimal", {}, at);
+        }
+        const setter = run(["--scope", "feature", "--depth", "minimal"], {}, passed);
+        const first = way === "its first command" ? ["--entry", "--scope", "feature"] : ["--scope", "feature", "--depth", "minimal"];
+        expect(shape(run(first))).toBe(shape(setter));
+        const after = run([]);
+        expect(shape(after)).not.toBe(shape(setter));
+        expect((after as { stage?: string }).stage).toBe("feasibility");
+        expect(shape(after)).toBe(shape(run([], {}, passed)));
+      } finally {
+        cleanupTestProject(passed);
+      }
+    });
+  }
+
+  test("a shortcut's setting with a row recorded since their line: its first command still names the setter", () => {
+    const passed = createOrchestrationTestProject();
+    try {
+      for (const at of [proj, passed]) {
+        seedStateFile(at, join(FIXTURES_DIR, "state-mid-ideation.md"));
+        typed("/aidlc-feature --depth minimal", {}, at);
+        appendAuditEntry("ERROR_LOGGED", { Details: "a row since their line" }, at);
+      }
+      expect(shape(run(["--entry", "--scope", "feature"]))).toBe(shape(run(["--scope", "feature", "--depth", "minimal"], {}, passed)));
+    } finally {
+      cleanupTestProject(passed);
+    }
+  });
+
+  test("a shortcut's status over a conflicted record of work in hand: the status, the record untouched, and a later bare next is no status", () => {
+    seedStateFile(proj, join(FIXTURES_DIR, "state-mid-inception.md"));
+    const path = seededStateFile(proj);
+    const conflicted = readFileSync(path, "utf-8").replace(
+      /^(- \*\*Current Stage\*\*: .*)$/m, "<<<<<<< ours\n$1\n=======\n$1\n>>>>>>> theirs",
+    );
+    writeFileSync(path, conflicted, "utf-8");
+    typed("/aidlc-bugfix --status");
+    expect(run(["--entry", "--scope", "bugfix"]).message).toStartWith("Run `bun .claude/tools/aidlc.ts engine status`");
+    expect(readFileSync(path, "utf-8")).toBe(conflicted);
+    expect(run([]).message).not.toStartWith("Run `bun .claude/tools/aidlc.ts engine status`");
+  });
+
+  // Holds the plan step to one.
+  test("a shortcut alone, fresh: the plan step, then a later bare next does not pick the plan again", () => {
+    const passed = createOrchestrationTestProject();
+    try {
+      typed("/aidlc-bugfix");
+      typed("/aidlc-bugfix", {}, passed);
+      const first = run(["--entry", "--scope", "bugfix"]);
+      expect(shape(first)).toBe(shape(run(["--scope", "bugfix"], {}, passed)));
+      const later = run([]);
+      expect(shape(later)).not.toBe(shape(first));
+      expect(later.message).toStartWith("No workflow state found (no active intent).");
+    } finally {
+      cleanupTestProject(passed);
+    }
+  });
+
+  test("a shortcut's jump on the work's own plan: the jump, then a bare next is the work where it stands", () => {
+    seedStateFile(proj, join(FIXTURES_DIR, "state-mid-inception.md"));
+    typed("/aidlc-bugfix --stage reverse-engineering");
+    expect((run(["--entry", "--scope", "bugfix"]) as { stage?: string }).stage).toBe("reverse-engineering");
+    expect((run([]) as { stage?: string }).stage).toBe("reverse-engineering");
+    expect(readAuditShardEvents(proj).filter((row) => row.event === "STAGE_JUMPED")).toHaveLength(1);
+  });
+
   test("a later bare next in the loop is as it was: with no typed line, it names the ways to start", () => {
     typed(REQUEST);
     expect(run([]).message).toStartWith("No workflow state found (no active intent).");
@@ -1581,5 +1667,348 @@ describe("On Codex, AI-DLC's first command reads the person's line from its own 
       writeFileSync(join(entered, ...FILE.split("/")), REQUEST, "utf-8");
       expect(same(next(entered, ["--request-file", FILE]))).toBe(same(next(onTheCommand, REQUEST.split(" "))));
     }
+  });
+});
+
+// A Claude Code shortcut's first command carries none of the person's words either: `/aidlc-bugfix <request>` runs
+// `next --entry --scope bugfix`, the shortcut's own arguments after `--entry`, and the engine reads the shortcut's typed
+// line from its own record as the `/aidlc` line it stands for. Each case sets up two projects alike: that first command
+// in one, the shortcut's command with the same words after it (what the other tools' shortcut files run) in the other,
+// and the two steps are the same. Where no line of theirs is on record, the request-file step keeps the shortcut's own arguments on its
+// command.
+describe("A Claude Code shortcut's first command carries none of the person's words", () => {
+  // Two ordinary requests.
+  const REQUESTS = ["fix the greeter so it doesn't greet nobody by name", "fix the greeter (it says hello instead of greeting the person by name)"];
+  const [REQUEST, OTHER] = REQUESTS;
+  const OTHER_CHAT = "01995000-7a11-7000-8000-0000000000d2";
+  const FILE = "aidlc/.aidlc-request-text/request.txt";
+  const RUN = "bun .claude/tools/aidlc-orchestrate.ts next";
+  const SHORTCUTS: Array<[string, string[]]> = [
+    ["/aidlc-bugfix", ["--scope", "bugfix"]],
+    ["/aidlc-express", ["--scope", "express"]],
+    ["/aidlc-compose", ["compose"]],
+    ["/aidlc-init", ["--new-intent"]],
+  ];
+  // Work in hand on another plan than the bugfix shortcut's, and on the same one.
+  const WORK: Array<[string, string]> = [["feature", "state-mid-ideation.md"], ["bugfix", "state-mid-inception.md"]];
+  const UNATTENDED = { AIDLC_UNATTENDED: "1" };
+  const created: string[] = [];
+  beforeEach(() => resetAidlcEnv());
+  afterEach(() => {
+    while (created.length > 0) cleanupTestProject(created.pop());
+  });
+  function project(): string {
+    const proj = createOrchestrationTestProject();
+    created.push(proj);
+    return proj;
+  }
+  function envWith(extra: Record<string, string | undefined>): Record<string, string | undefined> {
+    const e = { ...env(), ...extra };
+    for (const [key, value] of Object.entries(extra)) if (value === undefined) delete e[key];
+    return e;
+  }
+  function hook(proj: string, payload: Record<string, unknown>, extra: Record<string, string | undefined> = {}): void {
+    const r = spawnSync(BUN, [DISPATCHER, "engine", "hook", "record-human-turn"], {
+      cwd: proj,
+      input: JSON.stringify(payload),
+      env: { ...envWith(extra), CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj },
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(r.status, r.stderr).toBe(0);
+  }
+  function typed(proj: string, prompt: string, chat = SESSION, extra: Record<string, string | undefined> = {}): void {
+    hook(proj, { hook_event_name: "UserPromptSubmit", session_id: chat, prompt }, { AIDLC_SESSION_OVERRIDE: chat, ...extra });
+  }
+  // The person picks "No" in the agent's own question (the shortcut's new-work offer), in a later second than their
+  // line, as a person does: the picker answer is the chat's latest message, not a typed line.
+  function picked(proj: string): void {
+    const second = Math.floor(Date.now() / 1000);
+    while (Math.floor(Date.now() / 1000) === second) Bun.sleepSync(25);
+    const asked = [{
+      question: "Start a second piece of work?", header: "New work", multiSelect: false,
+      options: [{ label: "Yes, start a second intent", description: "" }, { label: "No", description: "" }],
+    }];
+    hook(proj, {
+      hook_event_name: "PostToolUse", session_id: SESSION, tool_name: "AskUserQuestion", tool_input: { questions: asked },
+      tool_response: { questions: asked, answers: { [asked[0].question]: "No" } },
+    });
+  }
+  function next(proj: string, args: string[], extra: Record<string, string | undefined> = {}, chat = SESSION): string {
+    const r = runOrchestrateNext(ORCHESTRATE, proj, args, { cwd: proj, env: envWith({ AIDLC_SESSION_OVERRIDE: chat, ...extra }) });
+    expect(r.directive, r.out).not.toBeNull();
+    return JSON.stringify(r.directive).split(proj).join("<proj>");
+  }
+  const message = (step: string): string => String(JSON.parse(step).message ?? "");
+  // What the person meets from a step: its kind, stage, lines and question, the request's id and receipts set aside.
+  const shape = (step: string): string => {
+    const s = JSON.parse(step) as Record<string, unknown>;
+    return JSON.stringify({ kind: s.kind, stage: s.stage, narration: s.narration, message: s.message, question: s.question })
+      .replace(/--request [0-9a-f]{8}/g, "--request <id>").replace(/continue [A-Za-z0-9_-]{8}\b/g, "continue <r>");
+  };
+  // Every command the step names for the agent: each span in backticks of every string it carries that runs AI-DLC's
+  // own tool.
+  const named = (step: string): string[] => {
+    const strings: string[] = [];
+    const walk = (value: unknown): void => {
+      if (typeof value === "string") strings.push(value);
+      else if (Array.isArray(value)) value.forEach(walk);
+      else if (value !== null && typeof value === "object") Object.values(value).forEach(walk);
+    };
+    walk(JSON.parse(step));
+    return strings.flatMap((text) => [...text.matchAll(/`([^`]+)`/g)].map((match) => match[1])).filter((span) => /^bun /.test(span));
+  };
+  const holdsNoneOfTheirWords = (step: string): void => {
+    expect(named(step).length, step).toBeGreaterThan(0);
+    for (const command of named(step)) for (const word of ["greeter", "nobody", "hello"]) expect(command, step).not.toContain(word);
+  };
+  // The step for a tail when no line of theirs is on record.
+  const noLineStep = (tail: string[]): string => "AI-DLC has no copy of what the person typed in this chat. Write the " +
+    `words of their request, exactly as they typed them, with your file tool to \`${FILE}\`, then run \`${RUN} ` +
+    `${tail.join(" ")} --request-file ${FILE}\` and follow what it returns. Only their words go in the file: the flags ` +
+    "they typed stay on the command, before `--request-file`. When they typed nothing after the command, run " +
+    `\`${RUN} ${tail.join(" ")}\` with nothing after it and follow what it returns.`;
+  // The same line typed in two projects set up alike: the shortcut's first command in one, its command with `words`
+  // after it in the other.
+  function enteredAndPassed(line: string, tail: string[], words: string[], setUp: (proj: string) => void = () => {}): [string, string] {
+    const [entered, onTheCommand] = [project(), project()];
+    for (const proj of [entered, onTheCommand]) {
+      setUp(proj);
+      typed(proj, line);
+    }
+    return [next(entered, ["--entry", ...tail]), next(onTheCommand, [...tail, ...words])];
+  }
+  const askedAbout = (proj: string, step: string): string => {
+    const id = /--request ([0-9a-f]{8})/.exec(step)?.[1];
+    expect(id, step).toBeDefined();
+    return (JSON.parse(readFileSync(join(proj, "aidlc", ".aidlc-sessions", "questions", `${id}.json`), "utf-8")) as { text: string }).text;
+  };
+  const inHand = (fixture: string) => (proj: string): void => seedStateFile(proj, join(FIXTURES_DIR, fixture));
+
+  test("a request: the shortcut's first command is the step its command with the same words gives, and no command it names holds a word of theirs", () => {
+    for (const [shortcut, tail] of SHORTCUTS) {
+      for (const request of REQUESTS) {
+        const [entered, passed] = enteredAndPassed(`${shortcut} ${request}`, tail, [request]);
+        expect(shape(entered), `${shortcut} ${request}`).toBe(shape(passed));
+        holdsNoneOfTheirWords(entered);
+      }
+    }
+  });
+
+  test("with their line on record, what follows --entry is not read", () => {
+    const [express] = enteredAndPassed(`/aidlc-express ${REQUEST}`, ["--scope", "bugfix"], []);
+    const [, expressPassed] = enteredAndPassed(`/aidlc-express ${REQUEST}`, ["--scope", "express"], [REQUEST]);
+    expect(shape(express)).toBe(shape(expressPassed));
+    const copied = project();
+    typed(copied, `/aidlc-bugfix ${REQUEST}`);
+    const [entered] = enteredAndPassed(`/aidlc-bugfix ${REQUEST}`, ["--scope", "bugfix"], []);
+    expect(shape(next(copied, ["--entry", "--scope", "bugfix", ...REQUEST.split(" ")]))).toBe(shape(entered));
+  });
+
+  // Over work on another plan this is a differing plan with words.
+  for (const [plan, fixture] of WORK) {
+    test(`a request over ${plan} work in hand: the shortcut's first command is the step its command with the same words gives`, () => {
+      for (const [shortcut, tail] of SHORTCUTS) {
+        const [entered, passed] = enteredAndPassed(`${shortcut} ${REQUEST}`, tail, [REQUEST], inHand(fixture));
+        expect(shape(entered), shortcut).toBe(shape(passed));
+        holdsNoneOfTheirWords(entered);
+      }
+    });
+  }
+
+  // The shortcut alone runs as its command runs: fresh, over work on another plan, and over work on its own (a
+  // resume).
+  test("the shortcut alone, fresh and over work in hand: its first command is the step its command gives", () => {
+    for (const [shortcut, tail] of SHORTCUTS) {
+      for (const setUp of [() => {}, ...WORK.map(([, fixture]) => inHand(fixture))]) {
+        const [entered, passed] = enteredAndPassed(shortcut, tail, [], setUp);
+        expect(shape(entered), shortcut).toBe(shape(passed));
+      }
+    }
+  });
+
+  test("a plan typed with /aidlc-init alone, and a report typed with /aidlc-compose alone: the step their command gives", () => {
+    const [init, initPassed] = enteredAndPassed("/aidlc-init --scope bugfix", ["--new-intent"], ["--scope", "bugfix"]);
+    expect(shape(init)).toBe(shape(initPassed));
+    const [compose, composePassed] = enteredAndPassed("/aidlc-compose --report docs/review.md", ["compose"], ["--report", "docs/review.md"]);
+    expect(shape(compose)).toBe(shape(composePassed));
+  });
+
+  // Over finished work their words are taken once, as an `/aidlc` line's are: a first command sent again before their
+  // next message answers that the work is done.
+  test("a request over finished work: the step its command gives, taken once", () => {
+    const [entered, passed] = enteredAndPassed(`/aidlc-bugfix ${REQUEST}`, ["--scope", "bugfix"], [REQUEST], inHand("state-completed.md"));
+    expect(JSON.parse(entered).kind).not.toBe("done");
+    expect(shape(entered)).toBe(shape(passed));
+    const proj = project();
+    seedStateFile(proj, join(FIXTURES_DIR, "state-completed.md"));
+    typed(proj, `/aidlc-bugfix ${REQUEST}`);
+    expect(JSON.parse(next(proj, ["--entry", "--scope", "bugfix"])).kind).not.toBe("done");
+    expect(JSON.parse(next(proj, ["--entry", "--scope", "bugfix"])).kind).toBe("done");
+  });
+
+  test("each chat's first command reads its own shortcut line, not the other chat's", () => {
+    const proj = project();
+    typed(proj, `/aidlc-bugfix ${REQUEST}`);
+    typed(proj, `/aidlc-express ${OTHER}`, OTHER_CHAT);
+    expect(askedAbout(proj, next(proj, ["--entry", "--scope", "express"], {}, OTHER_CHAT))).toBe(OTHER);
+    expect(askedAbout(proj, next(proj, ["--entry", "--scope", "bugfix"]))).toBe(REQUEST);
+  });
+
+  test("the request is kept and recorded in their words, with nothing of the shortcut's name", () => {
+    const proj = project();
+    typed(proj, `/aidlc-bugfix ${REQUEST}`);
+    const step = next(proj, ["--entry", "--scope", "bugfix"]);
+    expect(askedAbout(proj, step)).toBe(REQUEST);
+    create(proj, JSON.parse(step) as { message?: string });
+    const record = recorded(proj);
+    expect(record.project).toBe(REQUEST);
+    expect(record.requests.length).toBeGreaterThan(0);
+    for (const request of record.requests) expect(request).toBe(`/aidlc ${REQUEST}`);
+  });
+
+  // Past what the record keeps of a line, with its whole copy beside it, the line is read whole. Past what the copy
+  // holds too, the step for a cut line names the shortcut's arguments on its request-file command, and the bare `next`
+  // it also names goes ahead on the shortcut's plan from the part kept, with the line that tells the person.
+  test("a long request: with its whole copy, the step its command gives; cut with none, the cut-line step on the shortcut's plan", () => {
+    const whole = "keep the greeting as it is and ".repeat(300).trim();
+    const [entered, passed] = enteredAndPassed(`/aidlc-bugfix ${whole}`, ["--scope", "bugfix"], [whole]);
+    expect(shape(entered)).toBe(shape(passed));
+    const read = project();
+    typed(read, `/aidlc-bugfix ${whole}`);
+    expect(askedAbout(read, next(read, ["--entry", "--scope", "bugfix"]))).toBe(whole);
+    const proj = project();
+    typed(proj, `/aidlc-bugfix ${"keep the receipt layout as it is and ".repeat(4000).trim()}`);
+    const cut = message(next(proj, ["--entry", "--scope", "bugfix"]));
+    expect(cut).toContain(`\`${RUN} --scope bugfix --request-file ${FILE}\``);
+    expect(cut).toContain("the work goes ahead from the part AI-DLC kept");
+    expect(next(proj, [])).toContain("intent create --scope bugfix");
+    expect(pendingPersonLines(proj, SESSION).lines).toContain(CUT_MESSAGE_PERSON_LINE);
+  });
+
+  // With no line of theirs as the chat's latest message, the request-file step keeps the shortcut's own arguments on
+  // its command, and followed (their words in the file, its command run) it gives what the shortcut's command with
+  // their words gives.
+  const NO_LINE: Array<[string, (proj: string, line: string) => void, Record<string, string | undefined>]> = [
+    ["in a run nobody attends", (proj, line) => typed(proj, line, SESSION, UNATTENDED), UNATTENDED],
+    ["with the hooks off", () => {}, {}],
+    ["with the person's pick in the agent's question the latest message", (proj, line) => {
+      typed(proj, line);
+      picked(proj);
+    }, {}],
+    ["with no chat to read", (proj, line) => typed(proj, line), { AIDLC_SESSION_OVERRIDE: undefined }],
+  ];
+  for (const [state, before, extra] of NO_LINE) {
+    test(`${state}: the request-file step keeps the shortcut's own arguments, and followed gives what its command gives`, () => {
+      for (const [shortcut, tail] of SHORTCUTS) {
+        const [entered, onTheCommand] = [project(), project()];
+        for (const proj of [entered, onTheCommand]) before(proj, `${shortcut} ${REQUEST}`);
+        expect(message(next(entered, ["--entry", ...tail], extra)), shortcut).toBe(noLineStep(tail));
+        mkdirSync(join(entered, "aidlc", ".aidlc-request-text"), { recursive: true });
+        writeFileSync(join(entered, ...FILE.split("/")), REQUEST, "utf-8");
+        expect(shape(next(entered, [...tail, "--request-file", FILE], extra)), shortcut).toBe(shape(next(onTheCommand, [...tail, REQUEST], extra)));
+      }
+    });
+  }
+
+  // A tail that is not a shortcut's own runs as the command where no line is on record.
+  test("in a run nobody attends, a tail that is not a shortcut's own runs as that command does", () => {
+    const [entered, onTheCommand] = [project(), project()];
+    for (const proj of [entered, onTheCommand]) {
+      seedStateFile(proj, join(FIXTURES_DIR, "state-mid-inception.md"));
+      typed(proj, "/aidlc-bugfix", SESSION, UNATTENDED);
+    }
+    expect(shape(next(entered, ["--entry", "--resume"], UNATTENDED))).toBe(shape(next(onTheCommand, ["--resume"], UNATTENDED)));
+  });
+
+  // The reader's mapping of a shortcut's line is what that shortcut's file forwards on a tree that still forwards the
+  // words, and what follows `--entry` in Claude Code's file; the generator owns both.
+  test("the reader maps each shortcut's line to the arguments its generated files carry", async () => {
+    const { shortcutEntryWords } = await import(join(AIDLC_SRC, "tools", "aidlc-reply-reader.ts"));
+    const { validScopes } = await import(join(AIDLC_SRC, "tools", "aidlc-lib.ts"));
+    expect(typeof shortcutEntryWords).toBe("function");
+    const isPlan = (plan: string): boolean => validScopes().has(plan);
+    const carried = (tree: string, pattern: RegExp): Array<[string, string]> => {
+      const skills = join(REPO_ROOT, "dist", tree);
+      return readdirSync(skills).flatMap((name) => {
+        const file = join(skills, name, "SKILL.md");
+        const body = existsSync(file) ? readFileSync(file, "utf-8") : "";
+        const args = body.includes("generated-by: aidlc-runner-gen") ? pattern.exec(body)?.[1] : undefined;
+        return args === undefined ? [] : [[name, args.trim()] as [string, string]];
+      });
+    };
+    const SEVEN = ["aidlc-bugfix", "aidlc-compose", "aidlc-express", "aidlc-feature", "aidlc-init", "aidlc-mvp", "aidlc-security-patch"];
+    const forwarding = carried(join("codex", ".agents", "skills"), /aidlc-orchestrate\.ts next ([^`\n]*?) ?\$ARGUMENTS/);
+    expect(forwarding.map(([name]) => name).sort()).toEqual(SEVEN);
+    for (const [name, args] of forwarding) expect(shortcutEntryWords(`/${name} ${REQUEST}`, isPlan), name).toBe(`${args} ${REQUEST}`);
+    const entered = carried(join("claude", ".claude", "skills"), /aidlc-orchestrate\.ts next --entry ([^`\n]+)/);
+    expect(entered.map(([name]) => name).sort()).toEqual(SEVEN);
+    for (const [name, tail] of entered) {
+      expect(shortcutEntryWords(`/${name}`, isPlan), name).toBe(tail);
+      expect(message(next(project(), ["--entry", ...tail.split(" ")], UNATTENDED)), name).toBe(noLineStep(tail.split(" ")));
+    }
+    for (const line of [`/aidlc ${REQUEST}`, `$aidlc-bugfix ${REQUEST}`, `/aidlc-code-generation ${REQUEST}`, `/aidlc-Bugfix ${REQUEST}`]) {
+      expect(shortcutEntryWords(line, isPlan), line).toBeNull();
+    }
+  });
+});
+
+// On a tool whose shortcuts still forward the words (Cursor here), a later `next` with nothing after it reads a
+// shortcut's line as the `/aidlc` line it stands for, and a shortcut's line of tokens alone is not read again.
+describe("A shortcut's line on a tool whose shortcuts forward the words", () => {
+  const REQUEST = "fix the greeter so it doesn't greet nobody by name";
+  const created: string[] = [];
+  beforeEach(() => resetAidlcEnv());
+  afterEach(() => {
+    while (created.length > 0) cleanupTestProject(created.pop());
+  });
+  function cursorProject(fixture?: string): string {
+    const proj = createOrchestrationTestProject();
+    created.push(proj);
+    cpSync(join(REPO_ROOT, "dist", "cursor", ".cursor"), join(proj, ".cursor"), { recursive: true });
+    if (fixture !== undefined) seedStateFile(proj, join(FIXTURES_DIR, fixture));
+    return proj;
+  }
+  // A command in a Cursor chat: no other tool's variables.
+  function cursorEnv(proj: string): Record<string, string | undefined> {
+    const e: Record<string, string | undefined> = {
+      ...env(), CLAUDECODE: undefined, CLAUDE_CODE_SESSION_ID: undefined, CLAUDE_PID: undefined, CLAUDE_CODE_ENTRYPOINT: undefined,
+      CLAUDE_PROJECT_DIR: undefined, CODEX_THREAD_ID: undefined, KIRO_SESSION_ID: undefined, OPENCODE: undefined, AIDLC_PROJECT_DIR: proj,
+    };
+    for (const [key, value] of Object.entries(e)) if (value === undefined) delete e[key];
+    return e;
+  }
+  // The person types `prompt`, through the prompt route every tool's hook runs.
+  function typed(proj: string, prompt: string): void {
+    const r = spawnSync(BUN, [join(proj, ".cursor", "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"], {
+      cwd: proj,
+      input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: SESSION, prompt }),
+      env: cursorEnv(proj),
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(r.status, r.stderr).toBe(0);
+  }
+  function next(proj: string, args: string[]): string {
+    const r = runOrchestrateNext(join(proj, ".cursor", "tools", "aidlc-orchestrate.ts"), proj, args, { cwd: proj, env: cursorEnv(proj) });
+    expect(r.directive, r.out).not.toBeNull();
+    return JSON.stringify(r.directive).split(proj).join("<proj>").replace(/--request [0-9a-f]{8}/g, "--request <id>");
+  }
+
+  test("after a shortcut's request, a next with nothing after it gives what the shortcut's command with their words gives", () => {
+    const [bare, passed] = [cursorProject(), cursorProject()];
+    typed(bare, `/aidlc-bugfix ${REQUEST}`);
+    typed(passed, `/aidlc-bugfix ${REQUEST}`);
+    expect(next(bare, [])).toBe(next(passed, ["--scope", "bugfix", REQUEST]));
+  });
+
+  // The setter once, then the work's own step.
+  test("after a shortcut's setting and its command, a next with nothing after it is the work's own step, not the setter again", () => {
+    const proj = cursorProject("state-mid-ideation.md");
+    typed(proj, "/aidlc-feature --depth minimal");
+    const setter = next(proj, ["--scope", "feature", "--depth", "minimal"]);
+    const after = next(proj, []);
+    expect(after).not.toBe(setter);
+    expect((JSON.parse(after) as { stage?: string }).stage).toBe("feasibility");
   });
 });
