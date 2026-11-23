@@ -1366,9 +1366,15 @@ change. See
    `awaiting-approval` or `revised` report's reply, or `next` showing it again)
    carries that line in its `change_notices`, said just before the approval
    question, so the brief does not print it; the brief kept for the gate holds
-   it after the brief. A Unit's Construction checkpoint, a
-   per-stage team Unit gate, and a gate whose one approval also covers later
-   stages with open findings of their own, show no such line. The final gate of a per-Unit stage renders every Unit
+   it after the brief. A Unit's Construction checkpoint and a
+   per-stage team Unit gate show no such line. At the one question whose
+   approval also covers later stages (Unit by Unit with Unit checkpoints off),
+   the brief shows each later stage's review with an open finding or that did
+   not finish, after the stage's own, and the line names what that one Approve
+   accepts; when it names a later stage's finding, each finding is labelled by
+   its stage and the line offers the fix asked as they approve (`--fix-finding`
+   goes with the stage whose finding it names) and not a rejection, which that
+   question's change request cannot make for a later stage. The final gate of a per-Unit stage renders every Unit
    covered by that single approval. A Unit's own approval (its Construction
    checkpoint or team Unit gate) passes `--unit "<unit>"` and shows only that
    Unit's review; at a team Unit's end-of-Unit gate that is every gated stage's

@@ -823,7 +823,7 @@ import {
 } from "./aidlc-steering.ts";
 import { chatHoldsRules, chatNeedsPersona, noteRulesDelivered, RULES_HELD_NOTE } from "./aidlc-rules-held.ts";
 import { refreshActiveMemory } from "./aidlc-includes.ts";
-import { gateApproveAcceptsLine } from "./aidlc-review-brief.ts";
+import { fixFindingsByStage, gateApproveAcceptsLine } from "./aidlc-review-brief.ts";
 
 // Read the workflow state file if it exists, else null. The engine's `next` is
 // a pure read: an absent state file is a legitimate branch (no workflow yet),
@@ -21803,17 +21803,12 @@ function approvesTogetherFromToolOutput(stdout: string): string[] {
   }
 }
 
-// A stage approved together with the first carries no --fix-finding: the gate
-// showed the first stage's review, and a follower's own R-02 is a different
-// finding.
-function approveArgs(slug: string, flags: ReportFlags, follower = false): string[] {
+function approveArgs(slug: string, flags: ReportFlags): string[] {
   const args = ["approve", slug];
   if (flags.userInput) args.push("--user-input", flags.userInput);
   if (flags.message) args.push("--message", flags.message);
   if (flags.unit) args.push("--unit", flags.unit);
-  if (!follower) {
-    for (const finding of flags.fixFindings ?? []) args.push("--fix-finding", finding);
-  }
+  for (const finding of flags.fixFindings ?? []) args.push("--fix-finding", finding);
   return args;
 }
 
@@ -23322,6 +23317,24 @@ function handleReport(args: string[], projectDir: string | undefined): void {
 
   const status = getField(stateContent, "Status") ?? "";
 
+  // A fix asked as they approve goes with the stage whose open finding it names
+  // among those one answer approves (the list the gate's brief reads), read
+  // before anything is approved.
+  const together = flags.result === "approved" && (flags.fixFindings?.length ?? 0) > 0
+    ? approvesTogetherStages(stateContent, slug)
+    : null;
+  let fixesByStage: Map<string, string[]> | null = null;
+  if (together !== null) {
+    try {
+      fixesByStage = fixFindingsByStage(pd, together, flags.fixFindings ?? []);
+    } catch (e) {
+      emit(stateRefusalDirective(`Could not complete "${slug}"`, `"${slug}"`, errorMessage(e)));
+      return;
+    }
+  }
+  const fixesOf = (stage: string): ReportFlags =>
+    fixesByStage ? { ...flags, fixFindings: fixesByStage.get(stage) ?? [] } : stage === slug ? flags : { ...flags, fixFindings: [] };
+
   // Decide the committing subcommand(s). Normal gated stages still dispatch
   // to approve only. Explicit-stage recovery may first open a missing gate:
   // this preserves the state-machine audit trail (STAGE_AWAITING_APPROVAL
@@ -23417,7 +23430,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     // (report shells out to `state.ts approve`, but agents also call it directly
     // on recovery, so a report-only guard is bypassable, issue #366). See
     // verifyReviewerPrecondition in aidlc-state.ts.
-    sequence.push(approveArgs(slug, flags));
+    sequence.push(approveArgs(slug, fixesOf(slug)));
   } else if (isFinal) {
     const completeArgs = ["complete-workflow", slug];
     if (flags.reason) completeArgs.push("--reason", flags.reason);
@@ -23527,8 +23540,8 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       return;
     }
     const steps = boxState === "in-progress"
-      ? [["gate-start", follower], approveArgs(follower, flags, true)]
-      : [approveArgs(follower, flags, true)];
+      ? [["gate-start", follower], approveArgs(follower, fixesOf(follower))]
+      : [approveArgs(follower, fixesOf(follower))];
     const followerPreflight = preflightSequenceDirective(pd, live, followerNode, steps);
     if (followerPreflight !== null) {
       emit(withChangeNotices(followerPreflight, [...changeNotices, ...said()]));
