@@ -356,6 +356,7 @@ import {
   normalizeRuntimeRecord,
   normalizeTrustRecord,
   ownedModelAccessFact,
+  otherFolderLine,
   pendingProviderIssues,
   postApplyOutstandingActions,
   shellOnlyRuntimes,
@@ -1946,6 +1947,8 @@ function showDiagnosticSection(
     return;
   }
   let output = `${section[0].toUpperCase()}${section.slice(1)} configuration for ${typedHarnessName(selected.harness)}\n`;
+  const elsewhere = otherFolderLine(projectDir, "config");
+  if (elsewhere) output += `  ${elsewhere}\n`;
   if (section === "runtime") {
     const diagnostics = data.diagnostics as ReturnType<typeof probeRuntime>;
     output += `  Hook baseline PATH: ${diagnostics.baselinePath}\n`;
@@ -2802,16 +2805,19 @@ function configCompletionMessage(
   base: string,
   actions: readonly ConfigOutstandingAction[],
   mode: "human" | "quiet" | "json",
+  projectDir: string,
 ): string {
   if (actions.length === 0 || mode === "json") return base;
   if (mode === "quiet") {
     const commands = [...new Set(actions.map((action) => action.step ?? action.command))];
     return `${base}\nOutstanding actions: ${commands.join("; ")}`;
   }
+  const elsewhere = otherFolderLine(projectDir, "config");
   // The section is the one the person runs, as the setup map names it; the
   // action's id is the diagnostic's own key and stays off the line.
   return [
     base,
+    ...(elsewhere ? [elsewhere] : []),
     "Outstanding actions:",
     ...actions.map((action) =>
       `  ${action.section}: ${action.message} - ${action.step ?? `run \`${action.command}\``}`
@@ -3212,6 +3218,7 @@ function renderSetupMap(rows: readonly SetupMapRow[]): SetupWalkSection[] {
 }
 
 function renderSetupLedger(
+  projectDir: string,
   actions: readonly ConfigOutstandingAction[],
 ): void {
   process.stdout.write(
@@ -3219,6 +3226,8 @@ function renderSetupLedger(
       actions.length === 1 ? "" : "s"
     } still need${actions.length === 1 ? "s" : ""} you\n`,
   );
+  const elsewhere = otherFolderLine(projectDir, "config");
+  if (elsewhere) writeMenuRow("    ", elsewhere);
   for (const action of actions) {
     if (action.step) writeMenuRow(`    ${action.section.padEnd(12)} `, action.step);
     else writeCommandRow(`    ${action.section.padEnd(12)} `, action.command);
@@ -3360,7 +3369,7 @@ async function runSetupWalk(
       );
     }
     if (initialLedger.length > 0) {
-      renderSetupLedger(initialLedger);
+      renderSetupLedger(projectDir, initialLedger);
     }
     return;
   }
@@ -3379,7 +3388,7 @@ async function runSetupWalk(
     return;
   }
   if (!answer) {
-    renderSetupLedger(initialLedger);
+    renderSetupLedger(projectDir, initialLedger);
     return;
   }
   for (const section of flagged) {
@@ -3414,7 +3423,7 @@ async function runSetupWalk(
     modelHarness(distribution),
     existingProjectionOutstanding(projectDir, { harnessDir, distribution }),
   );
-  renderSetupLedger(remaining);
+  renderSetupLedger(projectDir, remaining);
 }
 
 function prepareDiagnosticSection(
@@ -9279,6 +9288,11 @@ function renderFirstRunEnding(
         remaining.length === 1 ? "it can't" : "they can't"
       } be done automatically:\n\n`,
     );
+    const elsewhere = otherFolderLine(projectDir, "config");
+    if (elsewhere) {
+      writeMenuRow("    ", elsewhere);
+      process.stdout.write("\n");
+    }
     for (const action of remaining) {
       if (action.id === "runtime-aidlc-missing") {
         writeMenuRow(
@@ -13101,7 +13115,7 @@ function recordBypassesOnly(
         writeMenuLines("", [`configured flags settings for ${projectDir}`]);
       }
       if (outstandingActions.length > 0) {
-        process.stdout.write(`${menuText(configCompletionMessage("", outstandingActions, "human").trimStart())}\n`);
+        process.stdout.write(`${menuText(configCompletionMessage("", outstandingActions, "human", projectDir).trimStart())}\n`);
       }
       process.exitCode = EXIT.ok;
       return;
@@ -13110,6 +13124,7 @@ function recordBypassesOnly(
       `configured flags settings for ${projectDir}`,
       outstandingActions,
       options.mode,
+      projectDir,
     );
     emitResult(success(
       completion,
@@ -15054,6 +15069,7 @@ export async function main(
       withQuietWarnings(baseMessage),
       setupMapWillRender ? [] : outstandingActions,
       options.mode,
+      projectDir,
     );
     // AI-DLC's record is saved, but the person's Kiro session is not what they
     // asked for until the printed command runs again.
@@ -15063,7 +15079,7 @@ export async function main(
     // anything more only when something still needs them.
     if (modelsContext && options.mode === "human" && changes.length > 0 && !kiroUnsaved) {
       if (outstandingActions.length > 0) {
-        process.stdout.write(`${menuText(configCompletionMessage("", outstandingActions, "human").trimStart())}\n`);
+        process.stdout.write(`${menuText(configCompletionMessage("", outstandingActions, "human", projectDir).trimStart())}\n`);
       }
       process.exitCode = EXIT.ok;
       return;
