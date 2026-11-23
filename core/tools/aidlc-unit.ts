@@ -13587,25 +13587,30 @@ export function submoduleOverOwnCode(projectDir: string, unit: string): string |
 // AI-DLC's record of the build this workspace holds, as the Unit's pull
 // request carries it: the build's own folder, and its space's own folders
 // outside its works while git has none of that space yet (a team's new space).
-// Never another work's folder, the lead's record, or a path git ignores. The
-// space the lead's plan names is the lead's record, which reaches the
-// repository with the lead's own request: never a team's new space, whatever
-// this checkout's HEAD has of it yet (a clone made before that request merged).
+// Never another work's folder, the lead's record, or a path git ignores: in a
+// project that keeps aidlc/ out of git it is none, and no record commit is made
+// or promised. The space the lead's plan names is the lead's record, which
+// reaches the repository with the lead's own request: never a team's new space,
+// whatever this checkout's HEAD has of it yet (a clone made before that request
+// merged).
 function buildRecordPaths(pd: string): string[] {
   const own = relative(pd, activeRecordDir(pd)).split(sep).join("/");
+  const kept = (paths: string[]): string[] => {
+    const ignored = untrackedIgnored(pd, paths);
+    return paths.filter((path) => !ignored.includes(path));
+  };
   const space = own.split("/").slice(0, 3).join("/");
-  if (git(pd, ["ls-files", "--", space]).stdout.trim() !== "") return [own];
+  if (git(pd, ["ls-files", "--", space]).stdout.trim() !== "") return kept([own]);
   try {
     const build = unitBuildOf(readStateFile(pd));
-    if (build !== null && buildHomeSpace(pd, build) === own.split("/")[2]) return [own];
+    if (build !== null && buildHomeSpace(pd, build) === own.split("/")[2]) return kept([own]);
   } catch {
     // The build cannot be read here: the space's own folders go, as for a team's new space.
   }
   const works = own.split("/").slice(0, 4).join("/");
   const folders = readdirSync(join(pd, ...space.split("/")), { withFileTypes: true })
     .filter((entry) => entry.isDirectory()).map((entry) => `${space}/${entry.name}`).filter((path) => path !== works);
-  const ignored = untrackedIgnored(pd, folders);
-  return [own, ...folders.filter((path) => !ignored.includes(path))];
+  return kept([own, ...folders]);
 }
 
 // The rows of the build's own log since its record was last committed, into the
@@ -13672,6 +13677,8 @@ function practicesLeftOut(pd: string, unit: string): string[] {
 function sendBuildRecord(pd: string, remote: string, branch: string, unit: string, given: string | null): { line: string | null; went: boolean } {
   const notSent = (said: string) => ({ line: `AI-DLC's record of ${unit} did not go with it: ${gitSaid(said).replace(/([^.!?])$/, "$1.")}`, went: false });
   const paths = buildRecordPaths(pd);
+  // Git keeps none of it (aidlc/ kept out of git): no commit to make, and nothing to say.
+  if (paths.length === 0) return { line: null, went: false };
   const before = git(pd, ["rev-parse", "HEAD"]).stdout.trim();
   carryBuildOwnLog(pd);
   try {

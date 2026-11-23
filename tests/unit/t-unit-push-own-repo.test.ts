@@ -269,6 +269,46 @@ describe("a Unit on the workspace's own repository", () => {
     expect(step.kind === "run-stage" || step.ask_type === "plan-approval", JSON.stringify(step).slice(0, 800)).toBe(true);
   });
 
+  // A project that keeps aidlc/ out of git: AI-DLC's record of a Unit has no commit to go in, so the push question
+  // promises none, and the push makes only the Unit's own commit.
+  test("a project that keeps aidlc/ out of git: the push promises no record commit and makes none", () => {
+    const home = makeHome({ repos: {}, dependencies: UNITS });
+    writeFileSync(join(home.dir, ".gitignore"), `${readFileSync(join(home.dir, ".gitignore"), "utf-8")}aidlc/\n`);
+    git(home.dir, ["rm", "-r", "-q", "--cached", "aidlc"]);
+    git(home.dir, ["add", "-A"]);
+    git(home.dir, ["commit", "-q", "-m", "aidlc/ kept out of git"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    const path = seededStateFile(home.dir);
+    const state = readFileSync(path, "utf-8");
+    if (!state.includes("- **Home Location**:")) {
+      writeFileSync(path, state.replace("## Runtime State\n", `## Runtime State\n- **Home Location**: ${home.remote}\n`));
+    }
+    const shared = run(UNIT, ["share", "--plan"], home.dir);
+    expect(shared.status, shared.out).toBe(0);
+    const alice = cloneOf(home.remote, "alice");
+    // The clone has none of the lead's record: the take reads the plan by its address.
+    const took = takeIn("payments", ["refunds", ...fromHome(home)], alice);
+    expect(took.status, took.out).toBe(0);
+    const intents = join(alice, "aidlc", "spaces", "payments", "intents");
+    const record = join(intents, readdirSync(intents).find((name) => name.endsWith("-refunds"))!);
+    mkdirSync(join(alice, "src"), { recursive: true });
+    writeFileSync(join(alice, "src", "refunds.ts"), "export const built = \"refunds\";\n");
+    const stage = join(record, "construction", "refunds", "code-generation");
+    mkdirSync(stage, { recursive: true });
+    writeFileSync(join(stage, "source-manifest.json"), `${JSON.stringify({ stage: "code-generation", unit: "refunds", version: 1, writes: [{ path: "src/refunds.ts" }] })}\n`);
+    writeFileSync(join(stage, "code-summary.md"), "# Code summary\n\nrefunds.\n");
+    finishBuild(record);
+    const ask = next(alice);
+    expect(ask.ask_type, JSON.stringify(ask).slice(0, 800)).toBe("unit-push");
+    const push = (ask.choices as Array<{ label: string; detail?: string }>).find((choice) => choice.label === "Push");
+    expect(String(push?.detail)).not.toContain("AI-DLC's record");
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(git(home.remote, ["rev-list", "--count", "main..refunds"])).toBe("1");
+    expect(String(pushed.json?.notice)).not.toContain("AI-DLC's record of refunds");
+  });
+
   test("its branch starts from the lead's main as fetched, never from the clone's own main left behind", () => {
     const home = oneRepoTeams();
     const alice = cloneOf(home.remote, "alice");
