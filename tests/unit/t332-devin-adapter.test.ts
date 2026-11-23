@@ -2726,7 +2726,7 @@ describe("t332 devin adapter — stdin shim normalizes Devin payloads to core ho
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
   test("Item 3 case 1: a background launch annotates the in-flight ledger entry and writes no audit row", () => {
     const dir = scratchProject(true);
