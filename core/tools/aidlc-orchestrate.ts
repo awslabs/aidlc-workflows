@@ -3895,7 +3895,8 @@ function fillStoredSettings(flags: ParsedFlags, question: StoredQuestion): boole
  * The plan question the person was asked and has not answered: the latest copy
  * this engine kept, when it is one of its own front questions and nothing was
  * started from it. A question whose answer created work is answered, one a
- * newer request replaced waits no more (newestRequestReplaces), and a routing
+ * newer request replaced waits no more (newestRequestReplaces, retireRequest),
+ * and a routing
  * question has its own step (openRoutingQuestion). A proposal step's request
  * was never put to the person (the agent may answer the words beside finished
  * work from its status and propose nothing), so it is passed over here, as is
@@ -3914,9 +3915,14 @@ function openFrontQuestion(
   // says so instead of naming one: the agent has the question it asked in its
   // own chat, with that question's own commands. A question this one was
   // derived from (its root, such as the compose entry it was described on) is
-  // the same request, not another open question. A replaced one still counts:
-  // its own chat may still show it, and its commands still answer it there.
-  const earliest = firstFrontQuestionSince(projectDir, new Date(0).toISOString(), Number.POSITIVE_INFINITY, { shown: true });
+  // the same request, not another open question. A replaced one still counts
+  // while the request that replaced it waits: its own chat may still show it,
+  // and its commands still answer it there. Once that request has started work,
+  // the work has overtaken it (retireRequest), and it counts no more.
+  const earliest = firstFrontQuestionSince(projectDir, new Date(0).toISOString(), Number.POSITIVE_INFINITY, {
+    shown: true,
+    waiting: true,
+  });
   return { question: latest, sole: earliest === null || earliest === latest.id || earliest === latest.composedFrom };
 }
 
@@ -11786,7 +11792,8 @@ function entryLine(pd: string, selection: WorkflowSelection, unjoined: boolean):
 // is that question's answer: it runs as the command the question gave for that
 // plan, so the work starts on the request it was asked about, with the
 // settings typed with it. With more than one plan question kept unanswered (a
-// replaced request's included), a routing question open, or, with no work
+// replaced request's included while the request that replaced it waits), a
+// routing question open, or, with no work
 // selected, work listed to pick under that same name (the which-work question
 // names the work), which question it answers is not the tool's to tell, so the
 // reply goes on as handed on. Beside
