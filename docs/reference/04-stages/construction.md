@@ -1123,10 +1123,10 @@ This stage has a **two-part structure**: planning followed by generation.
 
    **Context passed to subagent:**
    - The plan and its test instructions, as the step's plan note says. On
-     Claude Code (with its SubagentStart delivery registered) and Copilot a
-     tool hands them to the developer as it starts and the message leaves
-     them out; for a parallel batch, and on Codex, opencode, Kiro CLI, Kiro
-     IDE and Cursor, the message starts with the output of
+     Claude Code (with its SubagentStart delivery registered), Copilot and
+     opencode a tool hands them to the developer as it starts and the message
+     leaves them out; for a parallel batch, and on Codex, Kiro CLI, Kiro IDE
+     and Cursor, the message starts with the output of
      `aidlc-testing-posture.ts brief --unit <unit>` (or `--stage-level`), word
      for word, which the note names. Its first line is the exact target marker,
      `AIDLC-UNIT: <directive.unit>` for unit work or
