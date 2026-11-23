@@ -743,6 +743,7 @@ import {
   writeNoGitLineSaid,
   legacyPlanApprovalOffNotice,
   noteOpenEngineQuestion,
+  openEngineQuestion,
   openPlanApprovalQuestion,
   planApprovalKeptReplyWaits,
   planApprovalOverrideOffers,
@@ -1164,6 +1165,8 @@ function projectStageValidityAdvisory(
 let engineSessionId: string | undefined;
 // This run is AI-DLC's first command (`next --entry`, their line read from the record).
 let entryCommand = false;
+// This run's command is a plan question's answer taken from a plan's name they typed (planNamedReply).
+let planNamedReplyTaken = false;
 const engineSelections = new Map<string, WorkflowSelection>();
 
 function engineSelection(projectDir: string): WorkflowSelection {
@@ -3915,6 +3918,15 @@ function openFrontQuestion(
   // its own chat may still show it, and its commands still answer it there.
   const earliest = firstFrontQuestionSince(projectDir, new Date(0).toISOString(), Number.POSITIVE_INFINITY, { shown: true });
   return { question: latest, sole: earliest === null || earliest === latest.id || earliest === latest.composedFrom };
+}
+
+// The settings typed with the request an open plan question asks about, from
+// the request's stored copy, which its answers carry: null when none were typed
+// or the stored ones no longer parse.
+function openQuestionSettings(projectDir: string, open: StoredQuestion): ParsedFlags | null {
+  const root = open.settings ? open : open.composedFrom ? readQuestion(projectDir, open.composedFrom) : null;
+  const kept = root?.settings ? parseNextFlags(root.settings.newWork) : null;
+  return kept && !kept.parseError ? kept : null;
 }
 
 /**
@@ -8064,10 +8076,15 @@ function createPrintDirective(
     // the conductor adds it; the dir name becomes `<YYMMDD>-<label>`. (A bare run
     // without --label still creates a sane name by truncating the description.)
     cmd.push(`--label '<2-3 word kebab essence>'`);
-    // The request text itself stays out of this authoritative message; the
-    // conductor derives the label from the request it already holds.
+    // The request text stays out of this authoritative message where the
+    // conductor already holds it. A plan's name that took the reply may start
+    // work from a chat that never saw the question, so there the request is
+    // handed over as the open plan question step hands it (its preview).
+    const starts = planNamedReplyTaken
+      ? ` This starts the request the plan question asked about: "${requestPreview(description)}". Say in your own words which request it starts.`
+      : "";
     labelHint =
-      ` Replace \`--label\` with a 2-3 word kebab essence of the requested work (e.g. "simple calc"), which becomes the readable folder name for this piece of work.`;
+      `${starts} Replace \`--label\` with a 2-3 word kebab essence of the requested work (e.g. "simple calc"), which becomes the readable folder name for this piece of work.`;
   }
   // The stage changes of a plan composed for this request are the ones the
   // composer validated and the gate showed. A list typed that is not theirs
@@ -11800,6 +11817,33 @@ function entryLine(pd: string, selection: WorkflowSelection, unjoined: boolean):
   const waits = openRoutingQuestion(pd) !== null || openFrontQuestion(pd) !== null || (unselected?.selectable.length ?? 0) > 0;
   return waits ? [reply] : "step";
 }
+// A plan's name alone, handed on by entryLine while one plan question waits,
+// is that question's answer: it runs as the command the question gave for that
+// plan, so the work starts on the request it was asked about, with the
+// settings typed with it. With more than one plan question kept unanswered (a
+// replaced request's included), a routing question open, or, with no work
+// selected, work listed to pick under that same name (the which-work question
+// names the work), which question it answers is not the tool's to tell, so the
+// reply goes on as handed on. Beside
+// work in hand it is taken only while the plan question is the engine's own
+// question on top of that work (openEngineQuestion): once the work has asked a
+// question of its own since (its stage's question or approval, its code plan
+// question, a guard's question) or moved on to another step, the reply is the
+// agent's to read.
+function planNamedReply(pd: string, args: string[]): string[] | null {
+  const plan = nextArgsNameOnlyAPlan(args);
+  if (plan === null || openRoutingQuestion(pd) !== null) return null;
+  const onTop = openEngineQuestion(pd);
+  const working = existsSync(engineStateFilePath(pd));
+  if (working && onTop !== "scope-confirm" && onTop !== "compose-offer") return null;
+  const listed = working ? null : unselectedRecords(pd);
+  if (listed?.selectable.some(({ intent, selector }) => intentDisplayLabel(intent) === plan || selector === plan)) return null;
+  const front = openFrontQuestion(pd);
+  if (front === null || !front.sole) return null;
+  const kept = openQuestionSettings(pd, front.question);
+  const carried = `${kept ? carriedCreationFlags(kept) : ""}${typedStageAnswers(plan, kept?.planChanges, kept?.planName).plan}`;
+  return ["--scope", plan, "--request", front.question.id, ...carried.split(" ").filter((token) => token.length > 0)];
+}
 // Their `/aidlc` line of tokens alone (a flag, a verb, a plan's name, a
 // setting, a jump: the record keeps no words for it) runs as the first command,
 // as the skill once ran `next $ARGUMENTS`, by the engine's own split of what
@@ -12249,11 +12293,8 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     const open = openFront.question;
     // The commands named here carry the stage changes typed with the request,
     // as the question's own do, from the request's stored copy.
-    const root = open.settings ? open : open.composedFrom ? readQuestion(questionDir, open.composedFrom) : null;
-    const kept = root?.settings ? parseNextFlags(root.settings.newWork) : null;
-    const stages = kept && !kept.parseError
-      ? typedStageAnswers(open.proposedScope, kept.planChanges, kept.planName)
-      : typedStageAnswers(open.proposedScope, undefined);
+    const kept = openQuestionSettings(questionDir, open);
+    const stages = typedStageAnswers(open.proposedScope, kept?.planChanges, kept?.planName);
     const answer = !openFront.sole
       // More than one plan question is open on this work, so which one they are
       // answering is the agent's to know: it ran the one it showed them, and
@@ -24423,6 +24464,7 @@ export function main(argv: string[]): void {
   const entryTail = entry ? subArgs.slice(1) : [];
   if (entry) subArgs = [];
   entryCommand = entry;
+  planNamedReplyTaken = false;
   if (engineInvocation !== null) throw new Error("Nested aidlc-orchestrate dispatch is not supported");
   const resolvedProjectDir = resolveProjectDir(projectDir);
   const commandKind = (["next", "continue", "report", "park"] as const).find((kind) => kind === subcommand);
@@ -24536,7 +24578,11 @@ export function main(argv: string[]): void {
     emit(noTypedLineStep());
     return;
   }
-  if (line !== "bare") subArgs = line;
+  if (line !== "bare") {
+    const answer = planNamedReply(resolvedProjectDir, line);
+    planNamedReplyTaken = answer !== null;
+    subArgs = answer ?? line;
+  }
   // The AI-DLC update question's answer comes off before the kept request it names runs.
   if (subcommand === "next") {
     const taken = takeUpdateAnswer(subArgs);
