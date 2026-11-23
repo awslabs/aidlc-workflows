@@ -15,7 +15,9 @@
 // (2) SCOPE-RUNNERS: one thin runner per shipped scope file whose frontmatter
 //     declares `runner: true`. A scope-runner is packaging, not definition:
 //     each is a shell that drives the engine (`aidlc-orchestrate next --scope
-//     <scope>`) to `done` with a fixed scope and no scope detection. The full
+//     <scope>`, `next --entry --scope <scope>` on Claude Code, whose first
+//     command carries none of the person's words) to `done` with a fixed scope
+//     and no scope detection. The full
 //     set of scopes is always reachable via `/aidlc --scope <name>`; runners
 //     are typeable sugar over the high-traffic ones marked in scope metadata.
 //
@@ -83,6 +85,14 @@ import {
   runtimeHarnessName,
   runtimeProjectDir,
 } from "./aidlc-runtime-paths.ts";
+
+// On Claude Code a shortcut's first command is `next --entry` with the
+// shortcut's own arguments after it, and the engine reads the person's typed
+// line from its own record (shortcutEntryWords); every other tree's shortcut
+// forwards `$ARGUMENTS`.
+function entryFirstCommand(): boolean {
+  return runtimeHarnessName() === "claude";
+}
 
 // =========================================================================
 // STAGE-RUNNER HALF
@@ -221,13 +231,14 @@ that flag without this skill.
 // it drives `intent-create`; a description without a scope goes to
 // `next --new-intent`, so the person sees the same plan offer `/aidlc` makes
 // instead of a default scope they never saw.
-// It never carries the `--stage <slug> --single` or `next --scope <name>` body
-// marker, so neither the stage-runner drift guard nor the scope-runner prune
+// It never carries the `--stage <slug> --single` or `next [--entry] --scope <name>`
+// body marker, so neither the stage-runner drift guard nor the scope-runner prune
 // ever counts it. There is no user-facing `/aidlc --init`: the workspace shell
 // ships in dist/ and the engine auto-creates the first intent - this runner
 // just makes that explicit.
 export function renderInitRunner(): string {
   const entrySkill = treeEntrySkillInvocation();
+  const entry = entryFirstCommand();
   return `---
 name: ${INIT_RUNNER_DIR}
 generated-by: aidlc-runner-gen
@@ -273,18 +284,19 @@ no standalone meaning.
 
    Print the tool's output and stop. This does not advance a stage; run
    \`${entrySkill}\` afterwards to continue. When only a scope was supplied, create
-   nothing: run step 3's command, which carries the scope, and act on what it
+   nothing: run step 3's command${entry ? " (AI-DLC reads the scope from what they typed)" : ", which carries the scope,"} and act on what it
    returns as step 3 describes.
 
 3. **The user described the work but gave no \`--scope\`** (even when the
    description starts with a scope name, as in \`feature flags for billing\`):
-   do not create it on a scope they have not seen. Pass the arguments to the engine as new
-   work; it proposes the plan that fits the description (for example \`bugfix\`
+   do not create it on a scope they have not seen. ${entry
+     ? "Run the engine's first command, which carries none of the person's words: AI-DLC reads what they typed after\n   this command from its own record as new work"
+     : "Pass the arguments to the engine as new\n   work"}; it proposes the plan that fits the description (for example \`bugfix\`
    for a described bug) or offers to compose one, and asks the user to choose.
    Work already in progress is left as it is:
 
    \`\`\`bash
-   ${aidlcToolInvocation("orchestrate")} next --new-intent $ARGUMENTS
+   ${aidlcToolInvocation("orchestrate")} next ${entry ? "--entry --new-intent" : "--new-intent $ARGUMENTS"}
    \`\`\`
 
    Before acting on each directive, read
@@ -315,6 +327,7 @@ const COMPOSE_RUNNER_DIR = "aidlc-compose";
 // existing stale or hand-edited copy.
 export function renderComposeRunner(): string {
   const entrySkill = treeEntrySkillInvocation();
+  const entry = entryFirstCommand();
   return `---
 name: ${COMPOSE_RUNNER_DIR}
 generated-by: aidlc-runner-gen
@@ -338,11 +351,12 @@ conductor runs the same forwarding loop as \`${entrySkill}\`.
 
 ## Steps
 
-1. Forward the user's \`$ARGUMENTS\` into the engine with the leading
-   \`compose\` verb (pass \`--report <path>\` / \`--new-scope\` through as-is):
+${entry
+    ? "1. Run the engine's first command, which carries none of the person's words: AI-DLC\n   reads what they typed after this command, `--report <path>` and `--new-scope`\n   included, from its own record:"
+    : "1. Forward the user's `$ARGUMENTS` into the engine with the leading\n   `compose` verb (pass `--report <path>` / `--new-scope` through as-is):"}
 
    \`\`\`bash
-   ${aidlcToolInvocation("orchestrate")} next compose $ARGUMENTS
+   ${aidlcToolInvocation("orchestrate")} next ${entry ? "--entry compose" : "compose $ARGUMENTS"}
    \`\`\`
 
 2. Act on the directive exactly as the \`aidlc\` skill's forwarding loop
@@ -653,6 +667,8 @@ export function renderRunner(scope: string, description: string): string {
   // so it reads cleanly when stitched between the lead-in and the packaging note.
   const raw = (description || `Run the AI-DLC workflow with the ${scope} scope`).trim();
   const desc = /[.!?]$/.test(raw) ? raw : `${raw}.`;
+  // A plugin's shortcut (`/<scope>`) is no line the engine reads as one, so it forwards the words on every tree.
+  const entry = entryFirstCommand() && !front?.plugin;
   return `---
 name: ${dir}
 generated-by: aidlc-runner-gen
@@ -676,7 +692,9 @@ ahead of that run-stage. Adopt it for the whole run.
 
 ## The loop
 
-1. \`directive = ${aidlcToolInvocation("orchestrate")} next --scope ${scope} $ARGUMENTS\`
+1. \`directive = ${aidlcToolInvocation("orchestrate")} next ${entry ? `--entry --scope ${scope}` : `--scope ${scope} $ARGUMENTS`}\`${entry
+  ? ", whatever they typed after the command:\n   AI-DLC reads their line from its own record."
+  : ""}
 2. Before acting on each directive, read
    \`${harnessDir()}/aidlc-common/protocols/stage-protocol.md\` once per session,
    then read every
@@ -717,10 +735,13 @@ ahead of that run-stage. Adopt it for the whole run.
    Never use \`report\` as a fallback for an engine ask answer; a selected guard
    remedy may still explicitly name a stage report.
 3. \`${aidlcToolInvocation("orchestrate")} report --stage <directive.stage> --result <outcome> [--user-input '<text>']\` only after acting on a stage directive. A redo, jump, or start-fresh request on re-entry is the sole non-stage report round-trip and uses \`report --result resumed --choice <redo|jump|fresh>\`.
-4. Pass \`$ARGUMENTS\` only to the first \`next\` in step 1: every later pass runs
+${entry
+  ? `4. Every pass after step 1 runs bare \`${aidlcToolInvocation("orchestrate")} next\`, with no
+   \`--scope\` and nothing else after it. Keep going`
+  : `4. Pass \`$ARGUMENTS\` only to the first \`next\` in step 1: every later pass runs
    bare \`${aidlcToolInvocation("orchestrate")} next\`, with no \`--scope\` and no
    \`$ARGUMENTS\` (repeating them would redo a jump or a setting the person
-   already asked for). Keep going until \`directive.kind == done\`. A \`done\`
+   already asked for). Keep going`} until \`directive.kind == done\`. A \`done\`
    without \`directive.workflow_continues\` is the real end: present the
    completion summary and stop. A \`done\` that carries it only recorded a step:
    run that bare \`next\` at once and act on what it returns, with no completion
@@ -729,14 +750,16 @@ ahead of that run-stage. Adopt it for the whole run.
    \`${aidlcToolInvocation("orchestrate")} park --person-asked\` instead and act on its
    \`parked\` directive.
 
-On that first \`next\`, pass \`$ARGUMENTS\` through verbatim after \`--scope ${scope}\`; the engine parses
-any flags (\`--status\`, \`--stage\`, …) and the \`--scope\` from the
+${entry
+  ? "That first `next --entry` carries none of the person's words, which AI-DLC reads from its own record,\nflags included; the `--scope` from the"
+  : `On that first \`next\`, pass \`$ARGUMENTS\` through verbatim after \`--scope ${scope}\`; the engine parses
+any flags (\`--status\`, \`--stage\`, …) and the \`--scope\` from the`}
 state file always wins on an existing workflow, so re-running a started workflow
 resumes it. To run a different scope, use \`${entrySkill} --scope <other>\` instead.
 
 ## Starting unrelated new work?
 
-Before you forward \`$ARGUMENTS\` on step 1, make the SAME recognise-vs-route
+${entry ? "Before step 1" : "Before you forward `$ARGUMENTS` on step 1"}, make the SAME recognise-vs-route
 judgment the \`${entrySkill}\` orchestrator makes: does this input **continue** the
 active intent, or does it describe a **genuinely new, unrelated** piece of work?
 This matters most when the active intent is already **complete**: then \`next\`
@@ -859,9 +882,12 @@ function handleScopes(rest: string[]): void {
   console.log(`Generated ${batch.length} scope-runner(s): ${batch.join(", ")}`);
 }
 
+// A plan shortcut's step 1 names its scope: `next --scope <slug>` on every
+// tree (and in a Claude Code file an older AI-DLC wrote), `next --entry --scope
+// <slug>` on Claude Code.
 function scopeRunnerSlugFromBody(body: string): string | null {
   const m = body.match(
-    /(?:aidlc\s+engine\s+orchestrate|aidlc-orchestrate\.ts)\s+next\s+--scope\s+([a-z][a-z0-9-]*)\b/,
+    /(?:aidlc\s+engine\s+orchestrate|aidlc-orchestrate\.ts)\s+next\s+(?:--entry\s+)?--scope\s+([a-z][a-z0-9-]*)\b/,
   );
   return m?.[1] ?? null;
 }
