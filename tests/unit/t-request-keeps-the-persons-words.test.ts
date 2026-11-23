@@ -732,6 +732,14 @@ describe("AI-DLC's first command carries none of the person's words", () => {
     });
   }
 
+  test("a plan's name alone as the reply carries the review level typed with the request, as its row does", () => {
+    const ask = planQuestionOpen("--review none ");
+    typed("feature");
+    const step = run(["--entry"]);
+    expect(step).toEqual(startedBy(ask, "feature"));
+    expect(step.message).toContain("--review none");
+  });
+
   test("a plan's name alone as the reply to the tailored-plan offer starts the request on that plan", () => {
     const ask = planQuestionOpen("", "compose");
     typed("bugfix");

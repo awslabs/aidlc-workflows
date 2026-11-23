@@ -3719,6 +3719,7 @@ function carriedCreationFlags(flags: ParsedFlags): string {
   for (const fence of SWITCHABLE_GUARD_FENCES) {
     if (flags.fences?.[fence]) carried.push(`--guard.${fence} ${flags.fences[fence]}`);
   }
+  if (flags.review) carried.push(`--review ${flags.review}`);
   return carried.length > 0 ? ` ${carried.join(" ")}` : "";
 }
 
@@ -3823,11 +3824,7 @@ function guardPolicyLowered(flags: ParsedFlags): boolean {
 }
 
 function carriedRoutingFlags(flags: ParsedFlags): RoutingCarried {
-  // Review rides every answer; a Guard Policy or a check typed with the request
-  // rides in the creation flags (carriedCreationFlags).
-  const extra: string[] = [];
-  if (flags.review) extra.push(`--review ${flags.review}`);
-  const existingWork = `${carriedCreationFlags(flags)}${extra.length > 0 ? ` ${extra.join(" ")}` : ""}`;
+  const existingWork = carriedCreationFlags(flags);
   const stages: string[] = [];
   if (flags.planChanges?.skip.length) stages.push(`--skip ${flags.planChanges.skip.join(",")}`);
   if (flags.planChanges?.add.length) stages.push(`--add ${flags.planChanges.add.join(",")}`);
@@ -8705,8 +8702,8 @@ function composeDispatchDirective(
     }
     // Levels, a project type, and switches typed with the request ride on to
     // creation: a typed depth replaces the plan's creationDepth, a typed test
-    // strategy or project type is added alongside it, and a typed switch is
-    // the person's value for that setting.
+    // strategy or project type is added alongside it, and a typed switch or
+    // review level is the person's value for that setting.
     const typedLevels = carriedCreationFlags(flags).trim();
     if (typedLevels) {
       parts.push(
@@ -8714,8 +8711,8 @@ function composeDispatchDirective(
           (flags.depth
             ? ", in place of any creationDepth."
             : ", alongside --depth <creationDepth> when the proposal carries one.") +
-          (carriedCeremonyFlags(flags).length > 0
-            ? " A switch typed here is the person's choice: show it on the gate's Scope settings row and pass it in place of any creationSettings flag for the same setting."
+          (carriedCeremonyFlags(flags).length > 0 || flags.review
+            ? " A switch or review level typed here is the person's choice: show it on the gate's Scope settings row and pass it in place of any creationSettings flag for the same setting."
             : ""),
       );
     }
@@ -12434,6 +12431,10 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   // A routing question's compose answer carries the settings typed with its
   // request: the compose branch applies them to the work it reshapes first.
   const routingCompose = flags.compose === true && question?.origin === "routing";
+  // A plan offer's compose answer carries the review level and the switches
+  // typed with its request on to the composer and creation, so only other
+  // compose runs are refused.
+  const offerCompose = flags.compose === true && question?.origin === "front";
   // Review changes mutate workflow configuration. Compound modes that return
   // before the config branch cannot silently discard the flag; require callers
   // to apply the override first, then invoke the other mode separately.
@@ -12444,7 +12445,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       flags.config ||
       flags.workspaceCommand ||
       flags.orchestratorVerb ||
-      (flags.compose && !routingCompose) ||
+      (flags.compose && !offerCompose && !routingCompose) ||
       flags.newScope ||
       flags.report ||
       flags.single ||
@@ -12458,9 +12459,6 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     ));
     return;
   }
-  // A plan offer's compose answer carries the switches typed with its request
-  // on to the composer and creation, so only other compose runs are refused.
-  const offerCompose = flags.compose === true && question?.origin === "front";
   if (
     flags.ceremony &&
     (flags.readOnly || flags.config || flags.workspaceCommand || (flags.compose && !offerCompose && !routingCompose) ||
