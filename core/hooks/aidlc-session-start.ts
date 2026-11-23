@@ -109,7 +109,7 @@ import {
   typedHarnessName,
 } from "../tools/aidlc-runtime-paths.ts";
 import { compareVersions } from "../tools/aidlc-channel.ts";
-import { recordCommitBlock } from "../tools/aidlc-git.ts";
+import { gitOperationUnderWay, recordCommitBlock } from "../tools/aidlc-git.ts";
 import { ownFilesToCommit, ownNewRootFiles } from "../tools/aidlc-brought-files.ts";
 import {
   catchUpAsk,
@@ -209,6 +209,10 @@ function catchUpProjectFiles(
   };
   let pending = behind();
   if (pending.length === 0) return null;
+  // A rebase, merge, cherry-pick or revert of theirs stopped where they are: a
+  // refresh now would change files git tracks in the middle of it (a rebase
+  // then refuses to go on), so it waits for a later chat's start, said nowhere.
+  if (gitOperationUnderWay(projectDir) !== null) return null;
   const trackedList = trackedReposManifestAtRoot(projectDir);
   const before = projectChanges(projectDir);
   // The child resolves its own harness, as a typed config does: this hook's

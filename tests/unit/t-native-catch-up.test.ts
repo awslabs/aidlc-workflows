@@ -448,6 +448,38 @@ describe.skipIf(SKIP_REASON !== null)("each project catches up the next time it 
     expect(outside.stdout).not.toContain("AI-DLC updated its own files");
   });
 
+  // A rebase of theirs stopped on a conflict when a chat opens: the refresh waits for a later chat's start, so their
+  // own `git add` and `git rebase --continue` go through as without AI-DLC, and nothing of AI-DLC's joins their
+  // commit; the next chat's start, with the rebase finished, refreshes as before.
+  test("a chat that opens while their rebase is stopped on a conflict changes nothing; the next start after it refreshes", () => {
+    const dir = project(earlierTree, { tracked: false });
+    const commit = (file: string, text: string, message: string): void => {
+      writeFileSync(join(dir, file), text);
+      git(dir, ["add", "--", file]);
+      git(dir, ["commit", "-q", "-m", message]);
+    };
+    git(dir, ["switch", "-q", "-c", "feature"]);
+    commit("notes.txt", "feature\n", "feature change");
+    git(dir, ["switch", "-q", "main"]);
+    commit("notes.txt", "main\n", "main change");
+    git(dir, ["switch", "-q", "feature"]);
+    const stopped = spawnSync("git", ["rebase", "main"], { cwd: dir, encoding: "utf-8", env });
+    expect(stopped.status, stopped.stdout + stopped.stderr).not.toBe(0);
+    const earlier = stampVersion(dir);
+    const started = sessionStart(dir, "catch-up, rebase stopped");
+    expect(started.status, started.stdout + started.stderr).toBe(0);
+    writeFileSync(join(dir, "notes.txt"), "feature and main\n");
+    git(dir, ["add", "--", "notes.txt"]);
+    const continued = spawnSync("git", ["rebase", "--continue"], { cwd: dir, encoding: "utf-8", env: { ...env, GIT_EDITOR: "true" } });
+    expect(continued.status, continued.stdout + continued.stderr).toBe(0);
+    expect(git(dir, ["show", "--name-only", "--format=", "HEAD"]).split("\n").filter(Boolean)).toEqual(["notes.txt"]);
+    expect(stampVersion(dir)).toBe(earlier);
+    expect(started.stdout).not.toContain("AI-DLC updated its own files");
+    const next = sessionStart(dir, "catch-up, after the rebase");
+    expect(next.status, next.stdout + next.stderr).toBe(0);
+    expect(stampVersion(dir)).toBe(AIDLC_VERSION);
+  });
+
   test("a pinned project and a newer stamp are left alone", () => {
     const pinned = project(earlierTree, { pin: true });
     expect(sessionStart(pinned, "pinned").status).toBe(0);
