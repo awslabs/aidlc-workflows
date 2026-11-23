@@ -32,6 +32,8 @@ import { putBackBeforePick, sayWritesDuringWork } from "./aidlc-before-pick.ts";
 import { buildStartListing, unitSourceManifests } from "./aidlc-brought-files.ts";
 import {
   approvalDispositionField,
+  findingNeverShown,
+  LaterStageFindingRejection,
   rejectedFindingDispositionField,
   REVIEW_FINDING_DISPOSITIONS_FIELD,
   teamUnitGateStages,
@@ -8239,11 +8241,12 @@ function verifyApprovalDecision(
   // nothing into it.
   const approvalInput = userInput?.trim();
   // A later stage the person's one approval listed stands on that reply, until its
-  // latest review since raises what a named reply's gate would bring to them.
+  // latest review since is not ready or leaves open a finding that reply never saw
+  // (its gate's brief listed every covered stage's open findings).
   const together = autonomousDecision || forceHuman || humanPresenceGuardDisabled()
     ? null
-    : approvedTogetherCover(pd, stage.slug, (review) =>
-      auditBlockField(review.block, "Verdict") !== "READY" || reviewHasUnseenFinding(pd, stage.slug));
+    : approvedTogetherCover(pd, stage.slug, (review, opened) =>
+      auditBlockField(review.block, "Verdict") !== "READY" || findingNeverShown(pd, stage, opened));
   if (!autonomousDecision && !humanPresenceGuardDisabled() && approvalInput && isNonAnswer(approvalInput)) {
     refuseForAgent(
       `Cannot approve "${stage.slug}" because the reply ${formatReceivedReply(approvalInput)} is ` +
@@ -9041,13 +9044,19 @@ function handleReject(args: string[]): void {
     );
   }
 
-  const reviewFindingDispositions = rejectedFindingDispositionField(
-    pd,
-    teamGate?.stages ?? stage,
-    rejectedFindings,
-    teamGate?.unit,
-    reopenedFindings,
-  );
+  let reviewFindingDispositions: string | undefined;
+  try {
+    reviewFindingDispositions = rejectedFindingDispositionField(
+      pd,
+      teamGate?.stages ?? stage,
+      rejectedFindings,
+      teamGate?.unit,
+      reopenedFindings,
+    );
+  } catch (e) {
+    if (e instanceof LaterStageFindingRejection) refuseForAgent(e.message);
+    throw e;
+  }
 
   if (teamGate) {
     const priorStatus = unitGateStatus(
