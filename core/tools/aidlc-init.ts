@@ -1947,7 +1947,8 @@ function showDiagnosticSection(
     return;
   }
   let output = `${section[0].toUpperCase()}${section.slice(1)} configuration for ${typedHarnessName(selected.harness)}\n`;
-  const elsewhere = otherFolderLine(projectDir, "config");
+  // `config --show` names the folder once, above every section's report.
+  const elsewhere = showingEverySection ? null : otherFolderLine(projectDir, "config");
   if (elsewhere) output += `  ${elsewhere}\n`;
   if (section === "runtime") {
     const diagnostics = data.diagnostics as ReturnType<typeof probeRuntime>;
@@ -2080,7 +2081,7 @@ function checkDiagnosticSection(
       )
     : providersUnrecorded
     ? `providers has no recorded answer for ${typedHarnessName(selected.harness)}; the shipped fallback is in use. ` +
-      `Record one with '${configCommand("providers")}'`
+      `Record one with '${configCommandForHarness(projectDir, selected.harnessDir, "providers")}'`
     : warnings.length > 0
     ? `${section} configuration has ${warnings.length} warning(s) for ${typedHarnessName(selected.harness)}: ${
       warnings.map((issue) => `${issue.id} (${issue.message})`).join("; ")
@@ -2098,7 +2099,7 @@ function checkDiagnosticSection(
             blockers.map((issue) => `${issue.id} (${issue.message})`).join("; ")
           }`,
           EXIT.failure,
-          hostStep ?? configCommand(`${section} --show`),
+          hostStep ?? configCommandForHarness(projectDir, selected.harnessDir, `${section} --show`),
         ),
     options,
   );
@@ -2873,6 +2874,9 @@ function sameFile(left: string, right: string): boolean {
 // projection names one in the source tree, so the commands this run prints
 // name this harness's tool there, not the first install the project shows.
 let configTargetHarnessDir: string | null = null;
+
+// Set while `config --show` gathers each section's report.
+let showingEverySection = false;
 
 // A note every --json refusal of this config run carries in its data, so a
 // script reading only the result learns it too (the `--harness kiro` note).
@@ -13167,8 +13171,13 @@ async function showEverySection(
     ...(options.mode === "json" ? ["--json"] : []),
   ];
   const answers: Array<{ section: string; stdout: string; output: string; code: number }> = [];
-  for (const section of CONFIG_SECTIONS) {
-    answers.push({ section, ...(await gatherConfigOutput([section, "--show", ...shared], internal)) });
+  showingEverySection = true;
+  try {
+    for (const section of CONFIG_SECTIONS) {
+      answers.push({ section, ...(await gatherConfigOutput([section, "--show", ...shared], internal)) });
+    }
+  } finally {
+    showingEverySection = false;
   }
   if (options.mode === "json") {
     const sections = Object.fromEntries(answers.map(({ section, stdout, code }) => {
@@ -13181,7 +13190,9 @@ async function showEverySection(
     emitResult(success("settings for every config section", { sections }), options);
     return;
   }
+  const elsewhere = otherFolderLine(projectDirFrom(argv), "config");
   process.stdout.write(
+    (elsewhere ? `${elsewhere}\n\n` : "") +
     answers.map(({ section, output }) => `${heading(section, process.stdout)}\n${output.replace(/\n*$/, "\n")}`)
       .join("\n"),
   );

@@ -115,4 +115,23 @@ describe.skipIf(process.platform === "win32")("doctor and config run from anothe
     expect(home.out).toContain("Providers configuration for");
     expect(home.out).not.toContain("Project folder for this report");
   });
+
+  test("config --show names the project folder once, above every section, only from another folder", () => {
+    const { project, tool } = copyProject(false);
+    const elsewhere = temp("aidlc-fix-folder-elsewhere-");
+    const away = run(tool, ["config", "--show", "--project-dir", project], elsewhere);
+    expect(away.out.split("\n")[0]).toBe(line(project, "config"));
+    expect(away.out.split(line(project, "config")).length - 1).toBe(1);
+    const home = run(tool, ["config", "--show"], project);
+    expect(home.out).not.toContain("Project folder for this report");
+  });
+
+  test("config providers --check names the project in its next step only from another folder", () => {
+    const { project, tool } = copyProject(false);
+    const elsewhere = temp("aidlc-fix-folder-elsewhere-");
+    const away = run(tool, ["config", "providers", "--check", "--project-dir", project], elsewhere);
+    expect(away.out).toContain(`Record one with 'bun ${tool} config providers --project-dir ${project}'`);
+    const home = run(tool, ["config", "providers", "--check"], project);
+    expect(home.out).toContain("Record one with 'bun .claude/tools/aidlc.ts config providers'");
+  });
 });
