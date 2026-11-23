@@ -806,24 +806,90 @@ describe("AI-DLC's first command carries none of the person's words", () => {
     });
   }
 
-  // A setting the team's locked strict keeps would be refused at creation on every answer, and the plan question would
-  // wait for the same answer again: the step's commands then carry none of the settings typed with the request, and
-  // the work starts at the team's strict.
+  // The team's locked strict outranks a lower setting typed with the request, never the request: the step's commands
+  // carry the settings typed with it, and the work starts at the team's strict with the others.
+  const teamLocksStrict = (): string => {
+    const team = join(proj, "aidlc", "spaces", "default", "memory", "team.md");
+    writeFileSync(team, readFileSync(team, "utf-8").replace("## Guard Policy\n", "## Guard Policy\n\nMode: strict\n"), "utf-8");
+    return team;
+  };
+  // The start of the team's line, whichever setting it names: its words are the setter's to pin.
+  const teamLine = (team: string): string => `Your team set Guard Policy to strict in ${team}`;
+  // How often a line is said across the steps the person and the agent read.
+  const timesSaid = (line: string, steps: unknown[]): number =>
+    steps.reduce<number>((count, step) => count + JSON.stringify(step).split(JSON.stringify(line).slice(1, -1)).length - 1, 0);
   for (const lowering of ["--guard-policy relaxed", "--plan-approval off"]) {
     test(`a plain reply while the plan question waits, the team's strict locked, ${lowering} typed: the work starts at the team's strict`, () => {
-      const team = join(proj, "aidlc", "spaces", "default", "memory", "team.md");
-      writeFileSync(team, readFileSync(team, "utf-8").replace("## Guard Policy\n", "## Guard Policy\n\nMode: strict\n"), "utf-8");
-      planQuestionOpen(`--depth comprehensive ${lowering} `);
+      const team = teamLocksStrict();
+      const asked = planQuestionOpen(`--depth comprehensive ${lowering} `);
       typed("Go ahead");
       const step = run(["--entry"]);
       const command = String(step.message).match(/run the command it gave for their choice: `[^`]*? next (--scope [^`]+)`/)?.[1];
       expect(command, String(step.message)).toBeDefined();
-      expect(command).not.toContain(lowering);
-      create(proj, run((command as string).split(" ")));
+      const go = run((command as string).split(" "));
+      create(proj, go);
       expect(recordField("Guard Policy")).toBe("strict (from team.md)");
       expect(recordField("Plan Approval")).toStartWith("on ");
+      expect(recordField("Depth")).toBe("Comprehensive");
+      expect(timesSaid(teamLine(team), [asked, step, go, run([]), run([])])).toBe(1);
     });
   }
+
+  // Every other answer that starts the work, with no work in hand and beside it, and a plan named with the request:
+  // the work starts at the team's strict, nothing is refused, and the team's line is said once.
+  describe("under a team's locked strict, a lower setting typed with a request", () => {
+    for (const lowering of ["--guard-policy relaxed", "--plan-approval off"]) {
+      for (const [where, ask] of [
+        ["with no work in hand", () => planQuestionOpen(`${lowering} `)],
+        ["beside work in hand", () => { openWork(); return newWorkPlanQuestion(`${lowering} `); }],
+      ] as const) {
+        const answers: Array<[string, (asked: PlanQuestion & { confirm_command?: string; compose_command?: string }) => Array<{ kind?: string; message?: string }>]> = [
+          ["the question's own go-ahead", (asked) => {
+            typed("Go ahead");
+            return [run(String(asked.confirm_command).replace(`${RUN} `, "").split(" "))];
+          }],
+          ["the plan's name typed as the reply", () => { typed("bugfix"); return [run(["--entry"])]; }],
+          ["a plain reply", () => {
+            typed("Go ahead");
+            const step = run(["--entry"]);
+            const command = String(step.message).match(/run the command it gave for their choice: `[^`]*? next (--scope [^`]+)`/)?.[1];
+            expect(command, String(step.message)).toBeDefined();
+            return [step, run((command as string).split(" "))];
+          }],
+          ["the tailored plan approved", (asked) => {
+            typed("Tailor a plan to this task");
+            const dispatch = run(String(asked.compose_command).replace(`${RUN} `, "").split(" "));
+            const approval = String(dispatch.message).match(/On approval, run `next (--scope <scopeName> --request [0-9a-f]{8})`/)?.[1];
+            expect(approval, String(dispatch.message)).toBeDefined();
+            laterSecond();
+            typed("Approve");
+            return [dispatch, run([...(approval as string).replace("<scopeName>", "bugfix").split(" "), ...lowering.split(" ")])];
+          }],
+        ];
+        // With no work in hand, the plain reply is the case above.
+        for (const [answer, answered] of answers.filter(([name]) => where === "beside work in hand" || name !== "a plain reply")) {
+          test(`the team's strict locked, ${lowering} typed with the request ${where}, ${answer}: the work starts at the team's strict`, () => {
+            const team = teamLocksStrict();
+            const asked = ask() as PlanQuestion & { confirm_command?: string; compose_command?: string };
+            const steps = answered(asked);
+            create(proj, steps[steps.length - 1]);
+            expect(recordField("Guard Policy")).toBe("strict (from team.md)");
+            expect(recordField("Plan Approval")).toStartWith("on ");
+            expect(timesSaid(teamLine(team), [asked, ...steps, run([]), run([])])).toBe(1);
+          });
+        }
+      }
+      test(`the team's strict locked, ${lowering} typed with a request that names its plan: the work starts at the team's strict`, () => {
+        const team = teamLocksStrict();
+        typed(`/aidlc --scope bugfix ${lowering} ${REQUEST}`);
+        const step = run(["--entry"]);
+        create(proj, step);
+        expect(recordField("Guard Policy")).toBe("strict (from team.md)");
+        expect(recordField("Plan Approval")).toStartWith("on ");
+        expect(timesSaid(teamLine(team), [step, run([]), run([])])).toBe(1);
+      });
+    }
+  });
 
   test("a plain reply while the routing question waits goes to that question, with its own commands", () => {
     routingQuestionOpen();
