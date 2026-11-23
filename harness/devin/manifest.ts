@@ -84,6 +84,9 @@ const manifest: HarnessManifest = {
   harnessDir: ".devin",
   orchestratorSkillPath: ".devin/skills/aidlc/SKILL.md",
   tierFlavor: "devin",
+  // Leave room for the host to carry the complete directive in exec output.
+  directiveMaxBytes: 19000,
+  questionOptions: 4,
   rootIntegrations: [
     {
       path: ".gitignore",
@@ -268,22 +271,14 @@ const manifest: HarnessManifest = {
   emit: null,
 
   // Devin-native runner frontmatter: generated stage/init/scope/composition
-  // runners are user-only (triggers: [user]). Devin's skill loader activates
-  // a skill only when its triggers frontmatter matches the invocation context;
-  // without an explicit triggers line the runner would not be invocable via
-  // its /aidlc-<stage> slash command. This is a Devin-only addition — the
-  // shared runner-gen reads it from harness.json and injects it into every
-  // generated runner SKILL.md.
+  // runners are user-only (triggers: [user]); they change workflow state and
+  // must not be selected automatically. The shared runner generator reads this
+  // Devin-only addition from harness.json and injects it into generated skills.
   runnerFrontmatterAdditions: ["triggers: [user]"],
 
-  // Devin-native standalone skill triggers: aidlc-knowledge and aidlc-outcomes-pack
-  // are user-invocable skills that need an explicit triggers: [user] line for
-  // Devin's skill loader. The read-only session skills (aidlc-replay,
-  // aidlc-session-cost) already carry triggers in their authored frontmatter
-  // via the user-invocable: true field which Devin maps to user triggers.
+  // Standalone skills retain their authored frontmatter: Devin's agent
+  // skill tool does not load those restricted by triggers: [user].
   frontmatterAdditions: [
-    { file: "skills/aidlc-knowledge/SKILL.md", lines: ["triggers: [user]"] },
-    { file: "skills/aidlc-outcomes-pack/SKILL.md", lines: ["triggers: [user]"] },
     ...DELEGATION_AGENTS.map((agent) => ({
       file: `agents/${agent}.md`,
       lines: [

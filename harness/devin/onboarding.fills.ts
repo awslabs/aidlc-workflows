@@ -13,34 +13,17 @@ const fills: OnboardingFills = {
     // Devin load this onboarding into every session's context.
     frontmatter: "---\ndescription: AI-DLC onboarding for Devin CLI\ntrigger: always_on\n---",
 
-    title_block: `<!--
-  Devin CLI auto-loads {{HARNESS_DIR}}/rules/aidlc.md into ambient context on
-  session start (no @-import line needed). That stub pulls the AIDLC method in
-  by reference (NOT a copy): {{HARNESS_DIR}}/rules/aidlc.md → aidlc/spaces/
-  <active-space>/memory/*.md. Edit the method there, never in
-  {{HARNESS_DIR}}/rules/aidlc.md.
--->
+    title_block: `# AI-DLC on Devin CLI
 
-# AI-DLC on Devin CLI
+For natural-language build, implementation, or change requests, read \`{{HARNESS_DIR}}/skills/aidlc/SKILL.md\` and enter its workflow with the person's request before doing the work. They need not type \`/aidlc\`. Preserve explicit \`/aidlc\` arguments. A question alone does not start a run.
 
-This project uses AI-DLC (AI-Driven Development Life Cycle), running on the **Devin CLI harness**. The workspace shell ships in \`.devin/\`; describe what you want to build and it sets up the workflow for you. Run \`/aidlc\` with a scope or description to begin; use \`/aidlc --doctor\`, \`/aidlc --version\`, and \`/aidlc --help\` for setup checks, version, and commands. \`/aidlc compose "<task>"\` proposes a plan behind an approve/edit/reject gate.
+Show questions in the person's language, preserving meaning and Plan Approval labels. Follow wait or stop directions. Name work artifacts and settings when needed, not instruction files unless asked.`,
 
-Show AI-DLC's questions and choices with their meaning unchanged, in the
-person's language; Plan Approval's choice labels stay exactly as AI-DLC gives
-them. When it has you wait for the person's answer or stop, say
-so in your own words. Do not name, link, or quote SKILL.md or any other AI-DLC
-instruction file on your own, and do not tell them a skill or rule requires
-it: they started AI-DLC to be asked. When they ask about one, answer them. The
-work's own files, such as a plan to approve, and a file AI-DLC asks the person
-to change, such as where a setting is locked, are still named by path.`,
+    prereq_bullets: `- **Runtime:** Keep \`aidlc\` and its runtime available.
+- **Model & environment:** Set model, environment, and effort in the Devin user configuration, not the project config. With \`model: inherit\`, shipped subagents use the session's model and effort. Otherwise the organization's **Default subagent model** applies (**None** disables subagents). Pin a profile with \`aidlc config models --agent <name> --model <id>\` using \`devin models list\`. Doctor checks model pins, but does not inspect the effective organization setting/model.
+- **Optional MCP:** All five MCP servers are disabled by default. Review the prerequisites, then enable selected entries with \`disabled: false\`. Context7 reads \`\${env:CONTEXT7_API_KEY}\` from the environment; use gitignored \`.devin/mcp_config.local.json\` for local settings and never commit credentials. AWS servers require \`uvx\`, Python, and AWS credentials and permissions. Enabled tools remain subject to their \`allowed-tools\` lists and host permissions. MCP tool calls are not blanket-pre-approved.`,
 
-    prereq_bullets: `- **Runtime**: Framework commands run through \`aidlc\`; keep that command and its runtime available.
-- **Model & environment (user-level)**: Model, environment, and effort settings are user-level on Devin — do NOT put them in the project config. Set your model in \`~/.config/devin/config.json\` (or \`%APPDATA%\\devin\\config.json\` on Windows). Full setup is in \`docs/guide/01-getting-started.md\` § "Devin CLI Setup".
-- **Subagent model**: Shipped AI-DLC custom profiles carry \`model: inherit\`, so every agent runs on your session's model and effort. That is measured behavior on devin 3000.11.92 and undocumented — a profile with no \`model:\` falls to the organization's **Default subagent model** instead (**None** disables subagents). To pin one agent, run \`aidlc config models --agent <name> --model <id>\` with a full ID from \`devin models list\` (Devin carries effort inside the ID, e.g. \`claude-sonnet-5-medium\`); \`/aidlc --doctor\` reports each profile's model and checks pins against the account's list, but does not inspect the effective organization setting/model. See [Devin subagent models](https://docs.devin.ai/cli/subagents#which-model-does-a-subagent-use).
-- **MCP servers (optional)**: \`.devin/mcp_config.json\` bundles five servers. All five MCP servers are disabled by default. Review prerequisites, then enable selected entries with \`disabled: false\`; leave unused servers disabled. Disabled entries expose no tools and start no processes. Context7 uses HTTP and the \`CONTEXT7_API_KEY\` header referencing \`\${env:CONTEXT7_API_KEY}\`; supply the key via the environment or gitignored \`.devin/mcp_config.local.json\` (an unset variable sends the header empty), never committed config or shell history. The AWS servers (\`aws-mcp\`, \`aws-pricing\`, \`aws-iac\`, \`aws-serverless\`) need \`uvx\`, a supported Python runtime, and AWS credentials/permissions; review the \`us-east-1\` endpoint. Missing credentials do not disable servers. Retained \`@latest\` launchers can resolve changing versions; default-off is not dependency pinning. MCP tool calls are not blanket-pre-approved. Enabled, available servers can be accessed through generic MCP tools, subject to their \`allowed-tools\` lists and host permissions. MCP availability never blocks an AIDLC workflow.`,
-
-    prereq_bullets_tail: `- **Settings**: \`.devin/config.json\` pre-approves file tools, delegation, questions, and web tools. Framework shell grants cover the \`aidlc.ts engine\` prefix, the dispatcher's listed read-only commands, and each approved \`.devin/tools/\` script, in both \`bun\` and \`bun run\` spellings. No deny list ships; compatibility imports from other tools are off except standard \`AGENTS.md\` and \`windsurf\` (older Devin builds gate \`.devin/rules\` delivery on that switch). Hooks are not a general destructive-command security boundary; use Devin/OS security controls.
-- **Personal overrides**: Use gitignored \`.devin/config.local.json\` for personal settings and \`.devin/mcp_config.local.json\` for MCP credentials; never commit secrets.`,
+    prereq_bullets_tail: `- **Settings:** Shell grants cover the \`aidlc.ts engine\` prefix and listed commands/scripts. By default, compatibility imports from other tools are off except standard \`AGENTS.md\` and Windsurf (needed for rules delivery on older Devin builds). Hooks are not a general destructive-command security boundary; use Devin and OS controls.`,
 
     hook_permissions_note: `Inspect \`/hooks\`, approve if prompted, and restart Devin CLI (not \`/clear\`). Doctor requires SessionStart evidence, not proof of current approval.`,
 

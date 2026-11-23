@@ -1775,6 +1775,47 @@ describe("t332 devin adapter — stdin shim normalizes Devin payloads to core ho
     }
   });
 
+  test("exec forwards the host shell dialect, not a caller-authored marker", () => {
+    const dir = scratchProject(false);
+    try {
+      const stub = join(dir, ".devin", "hooks", "aidlc-state-transition-guard.ts");
+      writeFileSync(stub, `const { tool_name, aidlc_shell } = await Bun.stdin.json();
+        process.stderr.write(tool_name + ":" + (aidlc_shell ?? "default")); process.exit(2);`);
+      const payload = {
+        hook_event_name: "PreToolUse",
+        cwd: dir,
+        tool_name: "exec",
+        tool_input: { command: "echo hello", shell_flavor: "powershell" },
+      };
+      expect(runAdapter(dir, "state-transition-guard", payload).stderr).toBe("Bash:powershell");
+      const other = { ...payload, aidlc_shell: "powershell", tool_input: { command: "echo hello", shell_flavor: "bash" } };
+      expect(runAdapter(dir, "state-transition-guard", other).stderr).toBe("Bash:default");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("PreToolUse records operational errors but still preserves guard refusals", () => {
+    const dir = scratchProject(false);
+    try {
+      const stub = join(dir, ".devin", "hooks", "aidlc-state-transition-guard.ts");
+      const payload = withCwd(FIXTURES.preToolUse_exec as Record<string, unknown>, dir);
+      const dropFile = join(dir, ".devin", "hooks-health", "state-transition-guard.drops");
+      writeFileSync(stub, 'process.stderr.write("refused"); process.exit(2);');
+      const denied = runAdapter(dir, "state-transition-guard", payload);
+      expect(denied.code).toBe(2);
+      expect(denied.stderr).toContain("refused");
+      expect(existsSync(dropFile)).toBe(false);
+      writeFileSync(stub, 'process.stderr.write("private diagnostic"); process.exit(1);');
+      expect(runAdapter(dir, "state-transition-guard", payload).code).toBe(0);
+      const drops = readFileSync(dropFile, "utf-8");
+      expect(drops).toContain("state-transition-guard exited 1 under the Devin adapter");
+      expect(drops).not.toContain("private diagnostic");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("17a: state-transition-guard permits the conductor's exec and still blocks a delegated one (exec→Bash reaches guard)", () => {
     // Since upstream #2601 the state tool itself refuses a direct stage-status
     // command in every spelling (ENGINE_OWNED_STATE_TRANSITIONS), and the hook
@@ -2648,6 +2689,44 @@ describe("t332 devin adapter — stdin shim normalizes Devin payloads to core ho
       ).code,
     ).toBe(0);
   }
+
+  test("empty reports from foreground, resumed and background agents are not completion evidence", () => {
+    const dir = scratchProject(true);
+    const session = "empty-report-session";
+    try {
+      launchBackground(dir, session, "agent-bg");
+      const foreground = {
+        hook_event_name: "PostToolUse",
+        session_id: session,
+        cwd: dir,
+        tool_name: "run_subagent",
+        tool_input: { profile: "subagent_explore" },
+        tool_response: { success: true, output: "Subagent agent_id=agent-fg completed successfully:\n\n  " },
+      };
+      expect(runAdapter(dir, "log-subagent", foreground).code).toBe(0);
+      expect(inflightEntries(dir).map((entry) => entry.agentId)).toEqual(["agent-bg"]);
+
+      const read = withCwd(capturedReadPostToolUse(
+        { "<session>": session, "<agent-id>": "agent-bg" },
+        "Sidekick agent-bg completed successfully:",
+      ), dir);
+      expect(runAdapter(dir, "log-subagent", read).code).toBe(0);
+      expect(runAdapter(dir, "log-subagent", read).code).toBe(0);
+      expect(inflightEntries(dir)).toEqual([]);
+
+      launchBackground(dir, session, "agent-resume");
+      expect(runAdapter(dir, "log-subagent", {
+        ...foreground,
+        tool_input: { ...foreground.tool_input, resume: "agent-resume" },
+        tool_response: { success: true, output: "Subagent agent-resume completed successfully:\r\n \t" },
+      }).code).toBe(0);
+      expect(inflightEntries(dir)).toEqual([]);
+      expect(subagentCompletedRows(dir)).toBe(0);
+      expect(readAudit(dir).match(/\*\*Event\*\*: SUBAGENT_EMPTY_REPORT/g)).toHaveLength(3);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 
   test("Item 3 case 1: a background launch annotates the in-flight ledger entry and writes no audit row", () => {
     const dir = scratchProject(true);

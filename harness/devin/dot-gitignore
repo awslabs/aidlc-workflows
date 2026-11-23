@@ -25,4 +25,7 @@ aidlc/diagnostics/
 .devin/config.local.json
 .devin/mcp_config.local.json
 .devin/.aidlc-session-start.local.json
+.devin/hooks-health/
+.aidlc/worktree-meta.json
+.aidlc/base-source-listing.tsv
 AGENTS.local.md

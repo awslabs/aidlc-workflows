@@ -464,12 +464,12 @@ describe("t331 dist/devin packaging parity + shell shape", () => {
     expect(rule).not.toContain("CLAUDE.md");
   });
 
-  // S11: onboarding reduction — the Devin native onboarding rule must be
-  // <= 16KiB (16384 bytes) UTF-8, with no duplicate DocumentKB prose and no
-  // overstated guarantees.
-  test("7b: Devin onboarding rule size <= 16KiB (16384 bytes) UTF-8", () => {
-    const rule = readFileSync(join(DEVIN_ROOT, ONBOARDING_REL));
-    expect(rule.length).toBeLessThanOrEqual(16384);
+  test("7b: both Devin onboarding projections fit the 13 KiB UTF-8 host budget", () => {
+    for (const root of [DEVIN_ROOT, join(REPO_ROOT, "dist-release", "devin")]) {
+      const rule = readFileSync(join(root, ONBOARDING_REL));
+      expect(rule.length).toBeLessThan(13 * 1024);
+      expect(rule.toString("utf-8")).toContain("read `.devin/skills/aidlc/SKILL.md` and enter its workflow");
+    }
   });
 
   test("7c: onboarding has no duplicate DocumentKB section", () => {
@@ -518,7 +518,10 @@ describe("t331 dist/devin packaging parity + shell shape", () => {
   test("8: harness.json identity — name === devin, harnessDir === .devin", () => {
     const harness = JSON.parse(
       readFileSync(join(ENGINE, "tools", "data", "harness.json"), "utf-8"),
-    ) as { name: string; harnessDir: string };
+    ) as { name: string; harnessDir: string; directiveMaxBytes: number };
+    expect(harness.directiveMaxBytes).toBe(19000);
+    const protocol = readFileSync(join(ENGINE, "aidlc-common", "protocols", "stage-protocol.md"), "utf-8");
+    expect(protocol).toContain("Include options A-D as appropriate");
     expect(harness.name).toBe("devin");
     expect(harness.harnessDir).toBe(".devin");
   });
@@ -572,6 +575,7 @@ describe("t331 dist/devin packaging parity + shell shape", () => {
       let { status, output } = runDoctor();
       expect(status, output).toBe(1);
       expect(output).toContain("Devin hook execution evidence: no valid SessionStart marker");
+      expect(output).toContain(`AI-DLC supports Devin CLI ${DEVIN_MIN_VERSION_STRING} or newer`);
       expect(output).toContain("/hooks");
       expect(output).toContain("fully restart Devin CLI");
       expect(existsSync(markerPath)).toBe(false);
@@ -662,7 +666,11 @@ describe("t331 dist/devin packaging parity + shell shape", () => {
     for (const root of [DEVIN_ROOT, join(REPO_ROOT, "dist-release", "devin")]) {
       expect(existsSync(join(root, ".devin", ".aidlc-session-start.local.json")), root).toBe(false);
       const gitignore = readFileSync(join(root, ".gitignore"), "utf-8");
-      expect(gitignore.split(/\r?\n/), root).toContain(".devin/.aidlc-session-start.local.json");
+      const lines = gitignore.split(/\r?\n/);
+      expect(lines, root).toContain(".devin/.aidlc-session-start.local.json");
+      expect(lines, root).toContain(".devin/hooks-health/");
+      expect(lines, root).toContain(".aidlc/worktree-meta.json");
+      expect(lines, root).toContain(".aidlc/base-source-listing.tsv");
     }
     const proj = mkdtempSync(join(tmpdir(), "t331-devin-gitignore-"));
     try {
@@ -903,6 +911,7 @@ describe("t331 dist/devin packaging parity + shell shape", () => {
     expect(skill).not.toContain("CLAUDE.md");
     expect(skill).not.toContain(".claude");
     expect(skill).toMatch(/^triggers:/m);
+    expect(skill).toContain("overflow file named in that notice");
     expect(skill).toContain("Harness notes (Devin CLI)");
   });
 
@@ -967,8 +976,8 @@ describe("t331 dist/devin packaging parity + shell shape", () => {
   });
 
   // S03: invocation and rule activation — generated runners carry triggers: [user],
-  // standalone skills (knowledge, outcomes-pack) carry triggers: [user], and the
-  // rules stub has trigger: always_on. Read-only skills (replay, session-cost)
+  // standalone skills stay available to the agent, and the rules stub has
+  // trigger: always_on. Read-only skills (replay, session-cost)
   // are NOT modified — they keep their existing user-invocable: true field.
   test("14: generated stage runners carry triggers: [user] (Devin invocation metadata)", () => {
     const skillsDir = join(ENGINE, "skills");
@@ -984,12 +993,13 @@ describe("t331 dist/devin packaging parity + shell shape", () => {
     }
   });
 
-  test("15: standalone skills (knowledge, outcomes-pack) carry triggers: [user]", () => {
+  test("15: standalone skills (knowledge, outcomes-pack) do not set triggers", () => {
     for (const skill of ["aidlc-knowledge", "aidlc-outcomes-pack"]) {
       const path = join(ENGINE, "skills", skill, "SKILL.md");
       const body = readFileSync(path, "utf-8");
       const fm = body.match(/^---\r?\n([\s\S]*?)\r?\n---/)![1];
-      expect(fm, `${skill}: no triggers: [user]`).toMatch(/^triggers:\s*\[user\]/m);
+      expect(fm, skill).not.toMatch(/^triggers:/m);
+      expect(fm, skill).toMatch(/^user-invocable:\s*true/m);
     }
   });
 

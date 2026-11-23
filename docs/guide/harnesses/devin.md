@@ -1,4 +1,4 @@
-# AI-DLC on Devin CLI
+# AI-DLC on Devin CLI and Desktop
 
 The Devin CLI integration is authored in `core/` and `harness/devin/`. The shared engine is projected with Devin-specific configuration, skills, and a hook adapter; shared source does not imply identical host behavior. `bun scripts/package.ts` generates local `dist/devin/` and `dist-release/devin/` outputs. Never hand-edit or commit generated distributions.
 
@@ -210,11 +210,98 @@ The [Devin engineering findings](../../reference/research/devin/index.md) distin
 
 Use the [regression and evidence checklist](../../reference/research/devin/14-regression-and-evidence.md) when AI-DLC or Devin changes. Historical runs and synthetic fixtures retain their original scope; this documentation does not claim a fresh interactive acceptance run.
 
+## Day-to-day workflow
+
+### Resume a Devin session or resume AI-DLC work
+
+A Devin session holds the conversation. An AI-DLC intent holds the work:
+its stage, decisions and approvals, audit trail, and artifacts under `aidlc/`.
+Closing a chat is not the same as parking an intent. If you want to stop the
+workflow explicitly, run `/aidlc park` and let it report where it stopped.
+
+- **Devin CLI:** local sessions persist on disk. From the same project
+  directory, run `devin -c` to continue the most recent session there,
+  `devin -r` to pick a session, or
+  `devin -r <session-id>` to reopen a specific one. Inside the running CLI,
+  `/ls` lists recent sessions in that directory and `/resume` opens the session
+  picker. These are Devin commands, not AI-DLC commands. For the flags your
+  installed build exposes, see `devin --help`. See the [Devin CLI overview]
+  and the [Cognition partner workshop's session commands].
+- **Devin Desktop:** open your project, then select the existing **Devin
+  Local** session in the [Agent Command Center] if you need its conversation.
+  Use a new Devin Local session in the same workspace if you just need the
+  saved AI-DLC work. Do not enter CLI session-picker commands in the Desktop
+  chat or assume a CLI session will appear in Desktop's session list.
+
+In either host, run `/aidlc --status` to confirm what the chat is working on,
+then `/aidlc --resume` to continue that intent from disk. If nothing is
+selected or the wrong intent is selected, select it first as shown below.
+A new conversation does not recover decisions that were only discussed and
+never saved to the project. See [Session Management](../11-session-management.md).
+
+[Devin CLI overview]: https://devin.ai/cli
+[Cognition partner workshop's session commands]: https://github.com/Cognition-Partner-Workshops/workshop-content/blob/main/courses/foundations/product/local/devin-cli-tour.md#session-management
+[Agent Command Center]: https://cognition.com/blog/introducing-devin-desktop
+
+### Switch AI-DLC intents without switching Devin sessions
+
+In the current Devin CLI or Desktop chat, enter these one at a time:
+
+```text
+/aidlc intent
+/aidlc intent <intent-slug>
+/aidlc --status
+/aidlc --resume
+```
+
+The first command lists intents in the current space and marks the active one.
+The second changes the AI-DLC binding for **this** chat; it does not switch the
+Devin transcript or check out a different Git branch. If the intent is in a
+different AI-DLC space, first use `/aidlc space switch <space-name>`.
+AI-DLC spaces are not Devin Desktop Spaces. When working in parallel, use
+separate chats for separate intents and verify the checkout before editing:
+an intent binding does not isolate the files two chats share. See
+[Spaces and Intents](../03-spaces-and-intents.md#switching-between-intents).
+
+### Preview Markdown artifacts in Devin Desktop
+
+Open the `.md` artifact from `aidlc/` in the **editor**, not the chat input.
+With that tab selected, look in the Command Palette for **Markdown: Open
+Preview** or **Markdown: Open Preview to the Side**. The side-by-side option
+keeps the editable source beside the rendered approval artifact. These are
+[Markdown editor actions](https://code.visualstudio.com/docs/languages/markdown#markdown-preview)
+in the VS Code-style IDE, not Devin slash commands. If your Desktop build or
+editor configuration does not offer them, read the source or open the file
+in another Markdown-capable editor. Previewing a file does not approve a stage;
+give the decision in the AI-DLC chat.
+
 ## Git integration
 
-Same as every harness — commit the `aidlc/` workspace tree (state, audit
-shards, memory, codekb, knowledge); the shipped `.gitignore` excludes per-user
-cursors and machine-local runtime.
+Use Git from your terminal or from the integrated terminal in Devin Desktop.
+Before editing or committing, use `git status -sb` to confirm the branch and
+`git diff` to review the work. When ready to record it, stage only intended
+paths with `git add -- <paths>`, check `git diff --cached`, and commit. Push
+the reviewed branch and open a pull request according to your team's process.
+If AI-DLC has already created commits as part of the approved plan, inspect
+them with `git log --oneline` and `git show` rather than committing the same
+work again. A commit or pull request does not supply an AI-DLC stage approval.
+
+- **One repo or a monorepo:** work from the Git root that contains `aidlc/`.
+  Review and commit the relevant code and shared `aidlc/` records together on
+  the intended branch. Packages in the monorepo do not need separate commits
+  just because they live in separate directories.
+- **Several sibling repos:** open the common AI-DLC workspace in Devin. Run
+  `git -C <repo-path> status -sb` and `git -C <repo-path> diff` for each affected
+  repo, then stage, commit, and push separately in each, using its own branch
+  and remote. Cross-link related pull requests and record any rollout order.
+  The shared intent record lives once in the parent workspace's `aidlc/`.
+  If the team versions that workspace, commit its shared AI-DLC changes there
+  without adding the child repos; otherwise the record remains on local disk.
+
+The shared records include state, audit shards, memory, code knowledge, and
+artifacts. Keep per-user cursors, machine-local runtime, and credentials out
+of Git. See [workspace layouts](../03-spaces-and-intents.md#one-repo-or-a-monorepo)
+and [what to commit](../03-spaces-and-intents.md#whats-committed-and-whats-not).
 
 ## Doctor
 

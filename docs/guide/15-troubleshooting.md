@@ -59,6 +59,19 @@ The fixed Devin CLI version is not yet confirmed. Remove the workaround only aft
 
 ---
 
+## Devin SessionStart evidence missing
+
+If `/aidlc --doctor` reports missing SessionStart evidence, check the Devin CLI
+version row. The standalone CLI support floor is **3000.10.21**. Upgrade an
+older CLI before retrying. In the CLI, inspect `/hooks` and approve the project
+hooks if prompted; in Desktop, use **Open customizations** in the Devin Local
+session. Fully restart the host and rerun doctor. If the warning persists, check
+the hook dispatch row, `.devin/hooks.v1.json`, and write access to `.devin/`.
+The version and evidence checks address different things: a supported version
+does not prove the hooks ran. See the [Devin setup guide](harnesses/devin.md).
+
+---
+
 ## Native Install Channel
 
 | Symptom or error | Resolution |

@@ -146,6 +146,7 @@ import {
   checkDevinHostAvailability,
   checkDevinVersion,
   defaultModelsListExec,
+  DEVIN_MIN_VERSION_STRING,
   parseDevinModelsList,
   type ModelsListExecFn,
 } from "./aidlc-devin-version.ts";
@@ -5462,6 +5463,7 @@ export async function collectDoctorReport(
         staleEvidence = null;
       }
     }
+    const devinVersionHint = `; check the "Devin CLI" version row (AI-DLC supports Devin CLI ${DEVIN_MIN_VERSION_STRING} or newer)`;
     if (lastHookRun && staleEvidence === null) {
       results.push({
         pass: true,
@@ -5472,13 +5474,13 @@ export async function collectDoctorReport(
         pass: false,
         severity: "warn",
         label: `Devin hook execution evidence: SessionStart last ran ${lastHookRun} (session ${markerSession}), but session ${staleEvidence.session} recorded a human turn at ${staleEvidence.timestamp} with no SessionStart evidence; hooks may not be dispatching`,
-        fix: `fully restart Devin CLI (not /clear) and rerun /aidlc --doctor; if this persists, check the "Devin hook dispatch" row and .devin/hooks.v1.json, then refresh with ${aidlcInvocation()} config`,
+        fix: `fully restart Devin CLI (not /clear) and rerun /aidlc --doctor; if this persists, check the "Devin hook dispatch" row and .devin/hooks.v1.json, then refresh with ${aidlcInvocation()} config${devinVersionHint}`,
       });
     } else {
       results.push({
         pass: false,
         label: "Devin hook execution evidence: no valid SessionStart marker; hook approval/execution is unverified",
-        fix: "inspect /hooks for the project's AI-DLC hooks and approve them if prompted, then fully restart Devin CLI (/clear is not enough) and rerun /aidlc --doctor; if evidence is still missing, check .devin/hooks.v1.json, the hook runtime, and .devin write permissions; if the \"Devin hook dispatch\" row fails, fix that first",
+        fix: `inspect /hooks for the project's AI-DLC hooks and approve them if prompted, then fully restart Devin CLI (/clear is not enough) and rerun /aidlc --doctor; if evidence is still missing, check .devin/hooks.v1.json, the hook runtime, and .devin write permissions; if the "Devin hook dispatch" row fails, fix that first${devinVersionHint}`,
       });
     }
   } else {

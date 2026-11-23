@@ -98,6 +98,7 @@ import {
   REVIEWER_DISPATCH_TTL_MS,
   reviewerDispatchPath,
   validSessionId,
+  writeHookStatusFile,
 } from "../tools/aidlc-lib.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
@@ -538,20 +539,39 @@ function runCoreWithStderr(
   input: string,
 ): { stdout: string; stderr: string; code: number } {
   const { command, authorityToken } = coreCommand(hookFile);
-  const r = Bun.spawnSync(command, {
-    stdin: Buffer.from(input, "utf-8"),
-    stdout: "pipe",
-    stderr: "pipe",
-    cwd: projectDir,
-    env: authorityToken
-      ? { ...projectEnv, AIDLC_INTERNAL_HUMAN_TURN_TOKEN: authorityToken }
-      : projectEnv,
-  });
-  return {
-    stdout: r.stdout?.toString() ?? "",
-    stderr: r.stderr?.toString() ?? "",
-    code: r.exitCode ?? 0,
+  const hook = hookFile.replace(/^aidlc-|\.ts$/g, "");
+  const noteFailure = (reason: string): void => {
+    // Keep the diagnostic bounded and do not copy raw tool input or child
+    // stderr (which may contain sensitive command arguments) into the log.
+    const message = `${hook} ${reason} under the Devin adapter`;
+    recordHookDrop(projectDir, hook, message);
+    writeHookStatusFile(join(projectDir, ".devin", "hooks-health"), `${hook}.drops`,
+      `${new Date().toISOString()}\t${message}\n`, "append");
   };
+  try {
+    const r = Bun.spawnSync(command, {
+      stdin: Buffer.from(input, "utf-8"),
+      stdout: "pipe",
+      stderr: "pipe",
+      cwd: projectDir,
+      env: authorityToken
+        ? { ...projectEnv, AIDLC_INTERNAL_HUMAN_TURN_TOKEN: authorityToken }
+        : projectEnv,
+    });
+    const code = r.exitCode ?? 1;
+    if (code !== 0 && code !== 2) {
+      noteFailure(r.signalCode ? `was stopped by ${r.signalCode}` : `exited ${code}`);
+    }
+    return {
+      stdout: r.stdout?.toString() ?? "",
+      stderr: r.stderr?.toString() ?? "",
+      code,
+    };
+  } catch {
+    noteFailure("could not start");
+    return { stdout: "", stderr: "", code: 1 };
+  }
+
 }
 
 // Re-wrap the core context output ({"additionalContext": ...}) into the
@@ -584,6 +604,12 @@ function rewriteStdinToolName(rawInput: string, devin: DevinHookInput): string {
   try {
     const parsed = JSON.parse(rawInput) as Record<string, unknown>;
     parsed.tool_name = mapped;
+    if (devin.tool_name === "exec") {
+      delete parsed.aidlc_shell;
+      if (devin.tool_input?.shell_flavor === "powershell") {
+        parsed.aidlc_shell = "powershell";
+      }
+    }
     return JSON.stringify(parsed);
   } catch {
     return rawInput;
@@ -713,7 +739,7 @@ function matchSubagentLaunchAck(output: string): string | null {
 // when the output is not a terminal envelope.
 function matchSubagentTerminal(output: string): { agentId?: string } | null {
   const out = unindentSubagentOutput(output);
-  const m = /^Subagent (?:agent_id=)?(\S+) (?:completed successfully:|exited with an error)/.exec(
+  const m = /^(?:Subagent|Sidekick) (?:agent_id=)?(\S+) (?:completed successfully:|exited with an error)/.exec(
     out,
   );
   if (m) return { agentId: m[1] };
@@ -734,7 +760,7 @@ function matchSubagentTerminal(output: string): { agentId?: string } | null {
 function matchSubagentReadTerminal(
   output: string,
 ): { agentId: string; message: string } | null {
-  const m = /^Subagent (?:agent_id=)?(\S+) (?:completed|exited with an error)/.exec(
+  const m = /^(?:Subagent|Sidekick) (?:agent_id=)?(\S+) (?:completed|exited with an error)/.exec(
     unindentSubagentOutput(output),
   );
   if (!m) return null;
@@ -760,6 +786,15 @@ function subagentTerminalMessage(output: string): string {
   return nl < 0 ? out : out.slice(nl + 1).replace(/^\s+/, "");
 }
 
+// A status header is not a report. The exact successful terminal variant
+// is distinguishable from the first-read notification, whose report is
+// delivered separately by the host.
+function isEmptySubagentReport(output: string): boolean {
+  return /^(?:Subagent|Sidekick) (?:agent_id=)?\S+ completed successfully:[ \t]*(?:\r?\n[\s]*)?$/.test(
+    unindentSubagentOutput(output),
+  );
+}
+
 // Forward a synthesized Claude-shaped SubagentStop payload to the core
 // log-subagent hook. The core completes the in-flight entry by exact agent
 // id when one is carried (falling back to the legacy session splice only
@@ -768,11 +803,12 @@ function forwardSubagentStop(
   agentType: string | undefined,
   agentId: string | undefined,
   message: string,
+  emptyReport = false,
 ): void {
   runCore(
     "aidlc-log-subagent.ts",
     JSON.stringify({
-      hook_event_name: "SubagentStop",
+      hook_event_name: emptyReport ? "SubagentEmptyReport" : "SubagentStop",
       ...(devin.session_id ? { session_id: devin.session_id } : {}),
       ...(agentType ? { agent_type: agentType } : {}),
       ...(agentId ? { agent_id: agentId } : {}),
@@ -1645,6 +1681,9 @@ export async function run(
             hook_event_name: "PreToolUse",
             tool_name: call.tool_name,
             tool_input: call.tool_input,
+            ...(call.tool_name === "Bash" && ti.shell_flavor === "powershell"
+              ? { aidlc_shell: "powershell" }
+              : {}),
             cwd,
             ...(devin.session_id ? { session_id: devin.session_id } : {}),
             ...(agentType ? { agent_type: agentType } : {}),
@@ -2034,7 +2073,7 @@ export async function run(
             ? input.resume
             : null;
         if (resume) {
-          forwardSubagentStop(profile, resume, subagentTerminalMessage(output));
+          forwardSubagentStop(profile, resume, subagentTerminalMessage(output), isEmptySubagentReport(output));
           return 0;
         }
         const launchedId =
@@ -2056,10 +2095,19 @@ export async function run(
         }
         const terminal = matchSubagentTerminal(output);
         if (terminal !== null) {
+          const emptyReport = isEmptySubagentReport(output);
+          if (emptyReport && input.is_background === true) {
+            try {
+              discardSubagentInflight(projectDir, devin.session_id);
+            } catch (error) {
+              recordHookDrop(projectDir, "log-subagent", `could not discard the empty background report's in-flight entry: ${errorMessage(error)}`);
+            }
+          }
           forwardSubagentStop(
             profile,
             terminal.agentId,
             subagentTerminalMessage(output),
+            emptyReport,
           );
           return 0;
         }
@@ -2092,6 +2140,7 @@ export async function run(
                 entry.agentType,
                 terminalRead.agentId,
                 terminalRead.message,
+                isEmptySubagentReport(output),
               );
             }
           } catch (error) {

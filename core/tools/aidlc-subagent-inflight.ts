@@ -360,13 +360,14 @@ export function completeSubagentInflight(
   projectDir: string,
   sessionId?: unknown,
   agentId?: unknown,
+  exactOnly = false,
 ): boolean {
   const identity = subagentSessionIdentity(sessionId);
   if (!identity.valid) return false;
   // A malformed agent id fails closed: a caller that cannot name its id
   // removes nothing (an exact-id completion is only ever exact).
   if (
-    agentId !== undefined &&
+    (exactOnly || agentId !== undefined) &&
     (typeof agentId !== "string" || agentId.length === 0)
   ) {
     return false;
@@ -400,7 +401,7 @@ export function completeSubagentInflight(
         // at least one annotated entry — exact-id semantics are what stop a
         // foreground completion or a repeated/foreign read from consuming a
         // background entry.
-        !sessionEntries.some((entry) => entry.agentId !== undefined)
+        !exactOnly && !sessionEntries.some((entry) => entry.agentId !== undefined)
       ) {
         // Rule 3: no annotated entries at all — the session still uses the
         // legacy first-entry splice (id-less entries can only ever be

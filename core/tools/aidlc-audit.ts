@@ -186,6 +186,7 @@ const VALID_EVENT_TYPES = new Set([
   // Subagent (hook-emitted)
   "SUBAGENT_DISPATCHED",
   "SUBAGENT_COMPLETED",
+  "SUBAGENT_EMPTY_REPORT",
   // Advisory, never a HUMAN_TURN: a Copilot prompt arrived right after a
   // subagent started in that chat and matched no recorded subagent brief.
   "SUBAGENT_PROMPT_UNMATCHED",
@@ -413,6 +414,7 @@ const EVENT_HEADINGS: Record<string, string> = {
   ARTIFACT_REUSED: "Artifact Reused",
   SUBAGENT_DISPATCHED: "Subagent Dispatched",
   SUBAGENT_COMPLETED: "Subagent Completed",
+  SUBAGENT_EMPTY_REPORT: "Subagent Empty Report",
   SUBAGENT_PROMPT_UNMATCHED: "Subagent Prompt Unmatched",
   REVIEW_VERDICT_DICTATED: "Review Verdict Dictated",
   REVIEWER_SCOPE_BLOCKED: "Reviewer Scope Blocked",
@@ -516,6 +518,7 @@ const CLI_RESERVED_EVENT_TYPES = new Set([
   // verdict reads its absence as "no reviewer finished" (#2427), so only the
   // SubagentStop hook that saw the host's completion may write it.
   "SUBAGENT_COMPLETED",
+  "SUBAGENT_EMPTY_REPORT",
   // Its pair: the record that a helper was sent, which a completion closes, so
   // only the hooks that saw the dispatch may write it.
   "SUBAGENT_DISPATCHED",
