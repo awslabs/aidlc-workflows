@@ -2471,6 +2471,47 @@ describe("t265b hook lifecycle", () => {
     });
   }
 
+  // A repo the person maps beside the workspace is the project too (insideProject), as in the workspace itself:
+  // while the plan waits, their edit of a file there the plan does not name runs at once, and one the plan names
+  // waits. The plan names a mapped repo's file by the repo's name and its path in it, never by its folder.
+  for (const list of ["repos.json", "repos.local.json"] as const) {
+    test(`while the plan waits, the person's edit in a repo mapped beside the workspace runs; one the plan names waits (${list})`, () => {
+      const proj = scratchProject();
+      const folder = `${proj}-billing-code`;
+      try {
+        seedState(proj);
+        const statePath = join(proj, RECORD_REL, "aidlc-state.md");
+        seedUnit(proj, null, { plan: true, answer: null });
+        const planFile = join(proj, RECORD_REL, "construction", "code-generation", "code-generation-plan.md");
+        writeFileSync(planFile, `${readFileSync(planFile, "utf-8")}- [ ] Step 2: change \`billing/src/charge.ts\`\n`, "utf-8");
+        mkdirSync(join(folder, "src"), { recursive: true });
+        writeFileSync(join(folder, "README.md"), "# billing\n\nTeh refunds service.\n");
+        writeFileSync(join(folder, "src", "charge.ts"), "export const charge = 1;\n");
+        mkdirSync(join(proj, "aidlc"), { recursive: true });
+        const placed = { name: "billing", path: `../${folder.split(/[\\/]/).at(-1)}` };
+        writeFileSync(join(proj, "aidlc", "repos.json"),
+          `${JSON.stringify({ repos: [list === "repos.json" ? placed : { name: "billing" }] }, null, 2)}\n`);
+        if (list === "repos.local.json") writeFileSync(join(proj, "aidlc", "repos.local.json"), `${JSON.stringify({ repos: [placed] }, null, 2)}\n`);
+        writeActiveDirectiveMarker(proj, {
+          kind: "ask",
+          ask_type: "plan-approval",
+          stage: "code-generation",
+          state_sha256: stateDigest(readFileSync(statePath, "utf-8")),
+        });
+        const notes = runHook(proj, WRITE(join(proj, "docs", "notes.md")));
+        expect(notes.code, notes.stderr).toBe(0);
+        const readme = runHook(proj, WRITE(join(folder, "README.md")));
+        expect(readme.code, readme.stderr).toBe(0);
+        const named = runHook(proj, WRITE(join(folder, "src", "charge.ts")));
+        expect(named.code, named.stderr).toBe(2);
+        expect(named.stderr).toContain("Nothing is built or changed while the plan waits for your approval.");
+      } finally {
+        rmSync(proj, { recursive: true, force: true });
+        rmSync(folder, { recursive: true, force: true });
+      }
+    });
+  }
+
   // On the kiro-ide row the person's MCP servers reach the chat, and the Kiro
   // adapter marks such a call `aidlc_external_tool: "mcp"`, outside the agent's
   // input. At any point of Code Generation it runs like their other asks (Kiro

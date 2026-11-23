@@ -37,7 +37,7 @@ import {
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
-import { SHAPES, SESSION, STATES } from "../harness/code-generation-states.ts";
+import { createCodeGenerationProject, next as stateNext, SHAPES, SESSION, writePlan } from "../harness/code-generation-states.ts";
 import { projectAt, templateProjects } from "../harness/aidlc-answers-corpus.ts";
 import { env as runEnv, exec, next as liveNext, say } from "../harness/aidlc-input-corpus.ts";
 import { isDraftStep } from "../harness/team-build.ts";
@@ -301,9 +301,14 @@ describe("a mapped repo counts as the project", () => {
     expect(workspaceTargetPath(ws, "src/x.ts")).toBe(join(ws, "src", "x.ts"));
   });
 
-  test("a build writing into a mapped repo still waits for Plan Approval", async () => {
-    const built = STATES.find((state) => state.id === "S3")!.build();
-    projects.push(built.proj);
+  // Mapped, the repo is the project's as the workspace is: a file there the waiting plan names waits for its
+  // approval, and one it does not name is beside the build, as an unnamed file in the workspace is.
+  test("a build writing into a mapped repo waits for Plan Approval where the plan names the file, as in the workspace", async () => {
+    const proj = createCodeGenerationProject();
+    projects.push(proj);
+    stateNext(proj);
+    writePlan(proj, "- [ ] Step 2: change `billing/src/refund.ts`");
+    expect(stateNext(proj).ask_type).toBe("plan-approval");
     const billing = realpathSync(mkdtempSync(join(tmpdir(), "aidlc-t-repos-billing-")));
     dirs.push(billing);
     repoAt(billing);
@@ -311,11 +316,13 @@ describe("a mapped repo counts as the project", () => {
     dirs.push(elsewhere);
     const claude = SHAPES.find((shape) => shape.name === "claude")!;
     // Not mapped yet: a write outside the project is not the plan's business.
-    expect((await claude.call(built.proj, SESSION, { tool: "Write", path: join(billing, "src", "refund.ts") })).code).toBe(0);
-    writeFileSync(join(built.proj, "repos.json"), JSON.stringify({ repos: [{ name: "billing", path: billing }] }));
-    const mapped = await claude.call(built.proj, SESSION, { tool: "Write", path: join(billing, "src", "refund.ts") });
-    expect(mapped.code, mapped.said).toBe(2);
-    expect((await claude.call(built.proj, SESSION, { tool: "Write", path: join(elsewhere, "notes.txt") })).code).toBe(0);
+    expect((await claude.call(proj, SESSION, { tool: "Write", path: join(billing, "src", "refund.ts") })).code).toBe(0);
+    writeFileSync(join(proj, "repos.json"), JSON.stringify({ repos: [{ name: "billing", path: billing }] }));
+    const named = await claude.call(proj, SESSION, { tool: "Write", path: join(billing, "src", "refund.ts") });
+    expect(named.code, named.said).toBe(2);
+    expect((await claude.call(proj, SESSION, { tool: "Write", path: join(billing, "src", "notes.ts") })).code).toBe(0);
+    expect((await claude.call(proj, SESSION, { tool: "Write", path: join(proj, "src", "notes.ts") })).code).toBe(0);
+    expect((await claude.call(proj, SESSION, { tool: "Write", path: join(elsewhere, "notes.txt") })).code).toBe(0);
   });
 });
 

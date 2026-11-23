@@ -179,7 +179,7 @@ import {
   recordStandingTurnRow,
   standingPersonTurn,
 } from "../tools/aidlc-message-store.ts";
-import { insideProject } from "../tools/aidlc-workspace-repos.ts";
+import { insideProject, mappedRepoTarget } from "../tools/aidlc-workspace-repos.ts";
 import type { planApprovalAskState } from "../tools/aidlc-plan-approval-ask.ts";
 import { aidlcToolInvocation, quoteCommandArgument, runtimeHarnessName } from "../tools/aidlc-runtime-paths.ts";
 import { claimedCheckoutReopens } from "../tools/aidlc-unit-landing.ts";
@@ -1059,26 +1059,37 @@ function isTrustedRecordTarget(
 
 // A write the person asks for while the plan waits, beside the build: a file
 // in the project, outside AI-DLC's own folders and reached through no symlink,
-// that the waiting plans do not name. A named folder covers what is under it,
-// and a bare file name covers that name anywhere. When the plans name no path,
-// only a document (Markdown or plain text) is beside the build.
+// that the waiting plans do not name. The project is the workspace and every
+// repo the person mapped elsewhere (insideProject's rule); a mapped repo's file
+// is spelled as the plans name it, `<repo>/<path>`, and its links are read from
+// that repo's folder. A named folder covers what is under it, and a bare file
+// name covers that name anywhere. When the plans name no path, only a document
+// (Markdown or plain text) is beside the build.
 const DOCUMENT_EXTENSIONS = new Set([".md", ".markdown", ".txt", ".rst", ".adoc"]);
 
 function isPlanWaitSideWrite(projectDir: string, target: string, planPaths: string[] | null): boolean {
+  let spelled: string;
   try {
     const projectLexical = resolve(projectDir);
     const targetAbs = resolve(target);
-    if (targetAbs === projectLexical || !isWithinDir(targetAbs, projectLexical)) return false;
-    if (
-      isWithinDir(targetAbs, resolve(dirname(spacesRoot(projectDir)))) ||
-      isWithinDir(targetAbs, resolve(projectLexical, harnessDir()))
-    ) return false;
-    assertNoSymlinkInChainOrThrow(realpathSync(projectLexical), relative(projectLexical, targetAbs));
+    const mapped = mappedRepoTarget(projectDir, targetAbs);
+    if (mapped !== null) {
+      assertNoSymlinkInChainOrThrow(realpathSync(mapped.root), relative(mapped.root, targetAbs));
+      spelled = mapped.spelled;
+    } else {
+      if (targetAbs === projectLexical || !isWithinDir(targetAbs, projectLexical)) return false;
+      if (
+        isWithinDir(targetAbs, resolve(dirname(spacesRoot(projectDir)))) ||
+        isWithinDir(targetAbs, resolve(projectLexical, harnessDir()))
+      ) return false;
+      assertNoSymlinkInChainOrThrow(realpathSync(projectLexical), relative(projectLexical, targetAbs));
+      spelled = relative(projectLexical, targetAbs).split(sep).join("/");
+    }
   } catch {
     return false;
   }
   if (planPaths === null || planPaths.length === 0) return DOCUMENT_EXTENSIONS.has(extname(target).toLowerCase());
-  return !plansNamePath(relative(resolve(projectDir), resolve(target)).split(sep).join("/"), planPaths);
+  return !plansNamePath(spelled, planPaths);
 }
 
 // A path into the project spelled another way than the project is (a Windows

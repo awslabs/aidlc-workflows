@@ -79,6 +79,26 @@ export function workspaceTargetPath(projectDir: string, target: string): string 
   return resolvePath(projectDir, target);
 }
 
+// The other way: a target in a repo repos.json maps elsewhere, spelled
+// `<repo>/<path>` as a plan names it, with that repo's folder. Null for any
+// other target, and for a mapped folder that is the workspace or holds it.
+export function mappedRepoTarget(projectDir: string, target: string): { spelled: string; root: string } | null {
+  const within = (path: string, dir: string): string | null => {
+    const rel = relative(dir, path);
+    return rel !== "" && !isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${sep}`) ? rel : null;
+  };
+  const workspace = resolvePath(projectDir);
+  const targetAbs = resolvePath(target);
+  for (const entry of readWorkspaceRepos(projectDir).entries.values()) {
+    if (entry.path === undefined) continue;
+    const root = resolvePath(repoDir(projectDir, entry.name));
+    if (root === workspace || within(workspace, root) !== null) continue;
+    const rel = within(targetAbs, root);
+    if (rel !== null) return { spelled: `${entry.name}/${rel.split(sep).join("/")}`, root };
+  }
+  return null;
+}
+
 // One repo however a clone spells its address: scheme, user, token, the
 // default port, host case, a trailing slash and `.git` aside, so `git@host:o/r`,
 // `ssh://git@host/o/r` and `https://host/o/r.git` are one. A local path or
