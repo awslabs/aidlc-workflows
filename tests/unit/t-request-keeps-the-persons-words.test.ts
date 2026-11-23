@@ -103,6 +103,13 @@ function recorded(proj: string): { description: string; project: string; request
   };
 }
 
+// The review level the work was created with for itself, empty when none.
+function reviewOverride(proj: string): string {
+  const intents = join(proj, "aidlc", "spaces", "default", "intents");
+  const dir = readdirSync(intents).find((name) => existsSync(join(intents, name, "aidlc-state.md"))) ?? "";
+  return getField(readFileSync(join(intents, dir, "aidlc-state.md"), "utf-8"), "Review Override") ?? "";
+}
+
 describe("the request is recorded in the person's own words", () => {
   let proj: string;
   beforeEach(() => {
@@ -145,6 +152,86 @@ describe("the request is recorded in the person's own words", () => {
     says(proj, "/aidlc Build a demo bank named Northwind Mini Bank");
     create(proj, next(proj, ["--scope", "classic", "--", "Northwind Mini Bank"]));
     expect(recorded(proj).description).toBe("Build a demo bank named Northwind Mini Bank");
+  });
+
+  // A setting typed among the words is a setting, on their line alone as on
+  // the call the skill groups, whose quotes make one argument of it.
+  test("a setting typed among their words rides the agent's grouped call, as it rides their line alone", () => {
+    says(proj, "/aidlc express: add a --review advisory option");
+    create(proj, next(proj, ["express:", "add a --review advisory option"]));
+    expect(recorded(proj).description).toBe("add a option");
+    expect(reviewOverride(proj)).toBe("advisory");
+  });
+
+  // What else their line carries into creation rides the grouped call with the setting.
+  for (const [line, carried, landed] of [
+    ["enterprise: add an endpoint --review none --skip market-research", "--review none --skip market-research", /market-research[^\n]*SKIP/],
+    ["express: add an endpoint --review advisory --project-type brownfield", "--project-type brownfield --review advisory", /Project Type\*\*: Brownfield/],
+    ["enterprise: add an endpoint --skip market-research", "--skip market-research", /market-research[^\n]*SKIP/],
+    ["express: add an endpoint --project-type brownfield", "--project-type brownfield", /Project Type\*\*: Brownfield/],
+  ] as const) {
+    test(`the grouped call carries what their line carries into creation: ${carried}`, () => {
+      says(proj, `/aidlc ${line}`);
+      const [plan, ...words] = line.split(" ");
+      const step = next(proj, [plan, words.join(" ")]);
+      expect(String(step.message)).toContain(`--label '<2-3 word kebab essence>' ${carried}\``);
+      create(proj, step);
+      const intents = join(proj, "aidlc", "spaces", "default", "intents");
+      const dir = readdirSync(intents).find((name) => existsSync(join(intents, name, "aidlc-state.md"))) ?? "";
+      expect(readFileSync(join(intents, dir, "aidlc-state.md"), "utf-8")).toMatch(landed);
+    });
+  }
+
+  test("with no plan named, the grouped call keeps a setting typed among their words for the plan question", () => {
+    says(proj, "/aidlc add a --review advisory option");
+    const step = next(proj, ["add a --review advisory option"]);
+    const id = String(step.message).match(/--request ([0-9a-f]{8})/)?.[1];
+    expect(id, String(step.message)).toBeDefined();
+    const kept = JSON.parse(readFileSync(join(proj, "aidlc", ".aidlc-sessions", "questions", `${id}.json`), "utf-8")) as {
+      settings?: { newWork?: string[] };
+    };
+    expect(kept.settings?.newWork).toEqual(["--review", "advisory"]);
+  });
+
+  // A line that also types a flag creation does not carry (a lookup, a verb) is
+  // not read as their line alone: the agent's call routes as passed.
+  test("a line with a setting and a lookup by id leaves the agent's grouped call as passed", () => {
+    says(proj, "/aidlc --review advisory document what --request deadbeef means");
+    const step = next(proj, ["document what the request option means"]);
+    expect(step.kind, JSON.stringify(step)).toBe("print");
+    expect(step.message).toContain("The person asked for new work");
+  });
+
+  // Over work in hand the call is the agent's: their line is not read as a plan change for that work.
+  test("over work in hand, a grouped call for a line with --skip routes as passed", () => {
+    seedStateFile(proj, join(FIXTURES_DIR, "state-mid-ideation.md"));
+    says(proj, "/aidlc enterprise: add an endpoint --skip market-research");
+    const step = next(proj, ["enterprise:", "add an endpoint --skip market-research"]) as { kind?: string; question?: string };
+    expect(step.kind, JSON.stringify(step)).toBe("ask");
+    expect(step.question).toContain("Is this (1) part of that work");
+  });
+
+  test("over work in hand, a grouped call keeps a setting typed among their words for the routing question", () => {
+    seedStateFile(proj, join(FIXTURES_DIR, "state-mid-ideation.md"));
+    says(proj, "/aidlc classic: add an endpoint --review none");
+    const step = next(proj, ["classic:", "add an endpoint --review none"]) as { question?: string };
+    expect(step.question).toContain('You said: "add an endpoint"');
+    expect(JSON.stringify(step)).toContain("--review none");
+  });
+
+  test("a line that opens with a verb keeps the agent's grouped call as passed", () => {
+    says(proj, "/aidlc compose a welcome email --review advisory");
+    const step = next(proj, ["compose a welcome email --review advisory"]);
+    expect(step.kind, JSON.stringify(step)).toBe("print");
+    expect(step.message).toContain("The person asked for new work");
+  });
+
+  // A call for another plan is the agent's reading of their line, and keeps its words.
+  test("a setting typed among their words stays off a call the agent makes for another plan", () => {
+    says(proj, "/aidlc bugfix: add a --review advisory option");
+    create(proj, next(proj, ["feature:", "add a --review advisory option"]));
+    expect(recorded(proj).description).toBe("add a --review advisory option");
+    expect(reviewOverride(proj)).toBe("");
   });
 
   // The plan's name typed before the task routes on that plan: the request is

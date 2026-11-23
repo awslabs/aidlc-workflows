@@ -1048,7 +1048,7 @@ export const ALLOWED: Record<string, Allowed> = {
   [`${ORCH}#freshWorkRoute`]: { use: "decides", why: "hands the request to the plan proposal step", from: [`${ORCH}#routeNext`] },
   [`${ORCH}#planProposalDirective`]: { use: "decides", why: "keeps the request as a question and previews it; reuses the question the words came through without comparing them", from: [`${ORCH}#freshWorkRoute`, `${ORCH}#routeNext`] },
   [`${ORCH}#saveReadingQuestion`]: { use: "keeps", why: "keeps the words as a routing question with the message they came in", from: [`${ORCH}#newWorkRoutingAskDirective`, `${ORCH}#routeNext`] },
-  [`${ORCH}#takePersonsOwnLine`]: { use: "keeps", why: "the /aidlc parse of the person's own line; already read is the message id" },
+  [`${ORCH}#takePersonsOwnLine`]: { use: "decides", why: "the /aidlc parse of the person's own line: whether a call quoting its words for the same plan meets a line that also types a setting (with no work selected, --skip/--add or --project-type too) and nothing else, so it is read as a bare next reads that line; already read is the message id; never what the words mean" },
   [`${ORCH}#entryTokens`]: { use: "keeps", why: "an /aidlc line of the chat's whose record keeps no words, split as typed and handed on as next's command; whether it may be read again is classifyTerminalCommand's" },
   [`${ORCH}#entryLine`]: { use: "keeps", why: "reads whether the chat's latest message is an /aidlc line, and hands a plain reply the record holds whole on as the command's one argument while a plan or routing question, or unselected work, waits" },
   [`${ORCH}#cutLineGoesOn`]: { use: "keeps", why: "hands the parse of a cut line with no whole copy to the agent's one step", from: [`${ORCH}#takePersonsOwnLine`] },
