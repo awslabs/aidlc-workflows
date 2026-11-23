@@ -8329,6 +8329,45 @@ function planNamedBesideWorkStep(plan: string, flags: ParsedFlags, stateContent:
   );
 }
 
+// The agent's `next --scope <plan>` with nothing else, over work on another
+// plan, while the plan question for a separate request is the question on top
+// of that work (planQuestionChoice): the plan's name may be the person's pick
+// for that request, so the agent reads which, once per line of theirs. Their
+// own --scope (settingTheirs) switches at once. The line is marked handed out
+// before the step is given, so the same command sent again reaches the switch;
+// a mark that cannot be kept gives no step.
+function planSentBesideWaitingRequest(
+  flags: ParsedFlags, pd: string, current: string,
+): ReturnType<typeof planQuestionChoice> {
+  const plan = flags.scope;
+  if (plan === undefined || plan === current || !validScopes().has(plan) || engineSessionId === undefined) return null;
+  if (!Object.entries(flags).every(([key, value]) => key === "scope" || value === undefined || value === false)) return null;
+  const choice = planQuestionChoice(pd, plan);
+  if (choice === null || settingTheirs(pd, engineSessionId, "scope", plan) !== null) return null;
+  const line = chatLatestMessage(pd, engineSessionId);
+  if (line === null || line.source !== "prompt" || lineHandedOut(pd, engineSessionId, line.id)) return null;
+  if (isReadOnlyEngineProbe()) return choice;
+  markLineHandedOut(pd, engineSessionId, line.id);
+  return lineHandedOut(pd, engineSessionId, line.id) ? choice : null;
+}
+
+function planOrWaitingRequestStep(
+  plan: string, choice: NonNullable<ReturnType<typeof planQuestionChoice>>, stateContent: string,
+): PrintDirective {
+  const next = `${aidlcToolInvocation("orchestrate")} next --scope ${scopeArg(plan)}`;
+  const work = activeWorkLabel(stateContent);
+  const current = (getField(stateContent, "Scope") ?? "").trim();
+  return printDirective(
+    `This command names the \`${plan}\` plan for the work on "${work}" (on the \`${current}\` plan), while the ` +
+      `person's separate request "${requestPreview(choice.question.text)}" still waits for its plan: a plan's name ` +
+      "here may pick the plan for that request or ask for this work to move. Read what they meant. To start that " +
+      `request on the \`${plan}\` plan, run \`${next} ${choice.args.slice(2).join(" ")}\` and follow what it returns. ` +
+      `For the work on "${work}" to move to the \`${plan}\` plan, run \`${next}\` again: it now moves the work; follow ` +
+      "what it returns. If you cannot tell which they meant, ask them once in plain words, then run the command for " +
+      "their answer.",
+  );
+}
+
 // The optional line offering a clean chat for new work, with the step of the
 // tool the person is in from the tree's own harness.json (its manifest's
 // newChatStep). A tree that names none, or a native engine that cannot tell the
@@ -11829,7 +11868,12 @@ function entryLine(pd: string, selection: WorkflowSelection, unjoined: boolean):
 // agent's to read.
 function planNamedReply(pd: string, args: string[]): string[] | null {
   const plan = nextArgsNameOnlyAPlan(args);
-  if (plan === null || openRoutingQuestion(pd) !== null) return null;
+  return plan === null ? null : planQuestionChoice(pd, plan)?.args ?? null;
+}
+// The open plan question a plan's name may answer, by planNamedReply's rules,
+// and the arguments of its own command for that plan.
+function planQuestionChoice(pd: string, plan: string): { question: StoredQuestion; args: string[] } | null {
+  if (openRoutingQuestion(pd) !== null) return null;
   const onTop = openEngineQuestion(pd);
   const working = existsSync(engineStateFilePath(pd));
   if (working && onTop !== "scope-confirm" && onTop !== "compose-offer") return null;
@@ -11839,7 +11883,8 @@ function planNamedReply(pd: string, args: string[]): string[] | null {
   if (front === null || !front.sole) return null;
   const kept = openQuestionSettings(pd, front.question);
   const carried = `${kept ? carriedCreationFlags(kept) : ""}${typedStageAnswers(plan, kept?.planChanges, kept?.planName).plan}`;
-  return ["--scope", plan, "--request", front.question.id, ...carried.split(" ").filter((token) => token.length > 0)];
+  const args = ["--scope", plan, "--request", front.question.id, ...carried.split(" ").filter((token) => token.length > 0)];
+  return { question: front.question, args };
 }
 // Their `/aidlc` line of tokens alone (a flag, a verb, a plan's name, a
 // setting, a jump: the record keeps no words for it) runs as the first command,
@@ -13646,6 +13691,11 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       : `print its output verbatim followed by "${stillParked}", and stop.${resumeOnYes()}`;
     if (!unitScope && flags.positionalScope && planTypedAloneBesideWork(flags, stateContent)) {
       emit(planNamedBesideWorkStep(flags.positionalScope, flags, stateContent));
+      return;
+    }
+    const waiting = unitScope ? null : planSentBesideWaitingRequest(flags, pd, currentStateScope);
+    if (waiting !== null && flags.scope !== undefined) {
+      emit(planOrWaitingRequestStep(flags.scope, waiting, stateContent));
       return;
     }
     if (

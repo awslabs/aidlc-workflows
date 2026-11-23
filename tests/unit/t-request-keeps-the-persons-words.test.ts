@@ -1,4 +1,5 @@
-// covers: function:takePersonsOwnLine, function:planNamedReply
+// covers: function:takePersonsOwnLine, function:planNamedReply, function:planQuestionChoice,
+// function:planSentBesideWaitingRequest, function:planOrWaitingRequestStep
 //
 // The request a piece of work is recorded with is the person's own words. Live
 // on opencode in Spanish: the person typed "/aidlc quiero agregar un modo oscuro
@@ -970,6 +971,96 @@ describe("AI-DLC's first command carries none of the person's words", () => {
       }
     });
   }
+
+  // A plan's name the agent sends as a switch while the plan question for separate new work is the question on top of
+  // the work in hand may pick the plan for that request or ask for the work to move: the agent gets one step that
+  // reads which, with that question's own command for the plan and the switch, and the work keeps its plan until one
+  // of them runs. A --scope typed on the person's own line, and one sent with no plan question on top, switch at once.
+  const SWITCH = "Run `bun .claude/tools/aidlc.ts engine scope change --scope express` to change scope";
+  const WORK = "Test widget feature for e-commerce platform";
+  function readsWhich(ask: PlanQuestion): { kind: string; message: string } {
+    return {
+      kind: "print",
+      message: `This command names the \`express\` plan for the work on "${WORK}" (on the \`feature\` plan), while the ` +
+        `person's separate request "${REQUEST}" still waits for its plan: a plan's name here may pick the plan for that ` +
+        "request or ask for this work to move. Read what they meant. To start that request on the `express` plan, run " +
+        `\`${RUN} ${choiceFor(ask, "express").join(" ")}\` and follow what it returns. For the work on "${WORK}" to move ` +
+        `to the \`express\` plan, run \`${RUN} --scope express\` again: it now moves the work; follow what it returns. ` +
+        "If you cannot tell which they meant, ask them once in plain words, then run the command for their answer.",
+    };
+  }
+  const scopeNow = (): string => getField(readFileSync(seededStateFile(proj), "utf-8"), "Scope") ?? "";
+  const SECOND = { AIDLC_SESSION_OVERRIDE: OTHER_CHAT };
+
+  test("a plan's name the agent sends as a switch while the plan question for new work waits gets the step that reads which, and the work keeps its plan", () => {
+    openWork();
+    const ask = newWorkPlanQuestion();
+    typed("express", SECOND, proj, OTHER_CHAT);
+    expect(run(["--scope", "express"], SECOND)).toEqual(readsWhich(ask));
+    expect(scopeNow()).toBe("feature");
+    // The request's own command starts that request; the switch, sent again, switches without the step.
+    expect(run(choiceFor(ask, "express"), SECOND).message).toContain("intent create --scope express --request ");
+    expect(run(["--scope", "express"], SECOND).message).toStartWith(SWITCH);
+  });
+
+  test("after the person answers the agent's one question, the switch sent again gets the step once more, then switches", () => {
+    openWork();
+    const ask = newWorkPlanQuestion();
+    typed("express", SECOND, proj, OTHER_CHAT);
+    expect(run(["--scope", "express"], SECOND)).toEqual(readsWhich(ask));
+    laterSecond();
+    typed("move the widget work to express", SECOND, proj, OTHER_CHAT);
+    expect(run(["--scope", "express"], SECOND)).toEqual(readsWhich(ask));
+    expect(run(["--scope", "express"], SECOND).message).toStartWith(SWITCH);
+  });
+
+  test("a plan's name the agent sends as a switch over finished work while the plan question for new work waits gets the step that reads which", () => {
+    seedStateFile(proj, join(FIXTURES_DIR, "state-completed.md"));
+    typed(`/aidlc ${REQUEST}`);
+    const id = String(run(["--entry"]).message).match(/--propose <plan> --request ([0-9a-f]{8})/)?.[1];
+    expect(id).toBeDefined();
+    laterSecond();
+    const ask = run(["--propose", "bugfix", "--request", id as string]) as PlanQuestion;
+    expect(ask.kind).toBe("ask");
+    laterSecond();
+    typed("express", SECOND, proj, OTHER_CHAT);
+    expect(run(["--scope", "express"], SECOND)).toEqual(readsWhich(ask));
+  });
+
+  // Their own line: /aidlc --scope, run as the first command or sent by the agent itself; and the plan's name on
+  // their /aidlc line, which the record keeps as the same plan.
+  for (const [line, first] of [["/aidlc --scope express", ["--entry"]], ["/aidlc --scope express", ["--scope", "express"]], ["/aidlc express", ["--scope", "express"]]] as const) {
+    test(`their own ${line} while the plan question for new work waits switches at once (next ${first.join(" ")})`, () => {
+      openWork();
+      newWorkPlanQuestion();
+      typed(line, SECOND, proj, OTHER_CHAT);
+      expect(run([...first], SECOND).message).toStartWith(SWITCH);
+    });
+  }
+
+  test("a plan's name the agent sends with a setting while the plan question for new work waits switches at once, with the setting", () => {
+    openWork();
+    newWorkPlanQuestion();
+    typed("express", SECOND, proj, OTHER_CHAT);
+    expect(run(["--scope", "express", "--depth", "minimal"], SECOND).message).toContain("engine scope change --scope express --depth minimal");
+  });
+
+  test("a plan's name the agent sends as a switch with no plan question on top, or after the work's own question, switches at once", () => {
+    openWork();
+    typed("express");
+    expect(run(["--scope", "express"]).message).toStartWith(SWITCH);
+    newWorkPlanQuestion();
+    stageQuestionOpen();
+    typed("express", SECOND, proj, OTHER_CHAT);
+    expect(run(["--scope", "express"], SECOND).message).toStartWith(SWITCH);
+  });
+
+  test("a plan's name the agent passes alone while the plan question for new work waits keeps the step that reads it", () => {
+    openWork();
+    newWorkPlanQuestion();
+    typed("express", SECOND, proj, OTHER_CHAT);
+    expect(run(["express"], SECOND).message).toStartWith("The person typed the name of the `express` plan with no words about the work");
+  });
 
   // Only a reply AI-DLC holds whole goes on: a reply the record cut keeps the step, where the agent writes it.
   test("a plain reply past the record's length while the plan question waits keeps the step", () => {
