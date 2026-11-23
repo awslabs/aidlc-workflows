@@ -126,12 +126,35 @@ describe.skipIf(process.platform === "win32")("doctor and config run from anothe
     expect(home.out).not.toContain("Project folder for this report");
   });
 
-  test("config providers --check names the project in its next step only from another folder", () => {
+  test("config providers --check names the project folder, and the project in its next step, only from another folder", () => {
     const { project, tool } = copyProject(false);
     const elsewhere = temp("aidlc-fix-folder-elsewhere-");
     const away = run(tool, ["config", "providers", "--check", "--project-dir", project], elsewhere);
+    expect(away.out.split("\n")[0]).toBe(line(project, "config"));
     expect(away.out).toContain(`Record one with 'bun ${tool} config providers --project-dir ${project}'`);
     const home = run(tool, ["config", "providers", "--check"], project);
+    expect(home.out).not.toContain("Project folder for this report");
     expect(home.out).toContain("Record one with 'bun .claude/tools/aidlc.ts config providers'");
+  });
+
+  test("config flags --check names the project folder above its result only from another folder", () => {
+    const { project, tool } = copyProject(false);
+    const elsewhere = temp("aidlc-fix-folder-elsewhere-");
+    const away = run(tool, ["config", "flags", "--check", "--project-dir", project], elsewhere);
+    expect(away.out.split("\n")[0]).toBe(line(project, "config"));
+    expect(away.out).toContain("flags configuration");
+    const home = run(tool, ["config", "flags", "--check"], project);
+    expect(home.out).not.toContain("Project folder for this report");
+    const json = run(tool, ["config", "flags", "--check", "--project-dir", project, "--json"], elsewhere);
+    expect(json.out).not.toContain("Project folder for this report");
+  });
+
+  test("config models --check names the project folder above its result only from another folder", () => {
+    const { project, tool } = copyProject(false);
+    const elsewhere = temp("aidlc-fix-folder-elsewhere-");
+    const away = run(tool, ["config", "models", "--check", "--project-dir", project], elsewhere);
+    expect(away.out.split("\n")[0]).toBe(line(project, "config"));
+    const home = run(tool, ["config", "models", "--check"], project);
+    expect(home.out).not.toContain("Project folder for this report");
   });
 });

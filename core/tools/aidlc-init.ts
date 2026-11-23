@@ -2087,6 +2087,7 @@ function checkDiagnosticSection(
       warnings.map((issue) => `${issue.id} (${issue.message})`).join("; ")
     }`
     : `${section} configuration is clean for ${typedHarnessName(selected.harness)}`;
+  writeCheckFolderLine(projectDir, options);
   emitResult(
     blockers.length === 0
       ? success(cleanMessage, {
@@ -2800,6 +2801,13 @@ function diagnosticSummary(
     ],
     notes: ["Trust seeds and permission rules were not regenerated or modified."],
   };
+}
+
+// A section check's result and its next step are for the project folder, so a
+// check run from another folder names that folder first.
+function writeCheckFolderLine(projectDir: string, options: ReturnType<typeof globalOptions>): void {
+  const elsewhere = options.mode === "human" ? otherFolderLine(projectDir, "config") : null;
+  if (elsewhere) process.stdout.write(`${elsewhere}\n`);
 }
 
 function configCompletionMessage(
@@ -4116,6 +4124,7 @@ function checkChoiceSection(
         records.project,
         plugins,
       );
+  writeCheckFolderLine(projectDir, options);
   emitResult(
     issues.length === 0
       ? success(`${section} configuration is clean for ${typedHarnessName(selected.harness)}`, {
@@ -11728,6 +11737,7 @@ function prepareModelsSection(
     // On Kiro's row the agent files' models are checked against Kiro CLI's
     // list whether or not they match the record.
     const agentModels = harness === "kiro-ide" ? kiroAgentModelReport(kiroIdeAgentFileModels(selected.root)) : null;
+    writeCheckFolderLine(projectDir, options);
     emitWithKiroAgentModels(
       drift.length === 0
         ? success(
@@ -12094,6 +12104,7 @@ function handleSettingsOnlySection(
     return true;
   }
   if (argv.includes("--check")) {
+    writeCheckFolderLine(projectDir, options);
     emitResult(success(`${section} settings files are valid`, {
       files: resolved.files,
     }), options);
