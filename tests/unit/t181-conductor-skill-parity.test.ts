@@ -239,8 +239,9 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
   const skills = harnessSkills();
   const CLAUDE_SKILL = "harness/claude/skills/aidlc/SKILL.md";
   const CODEX_SKILL = "harness/codex/skills/aidlc/SKILL.md";
+  const KIRO_IDE_SKILL = "harness/kiro-ide/skills/aidlc/SKILL.md";
   // The skills whose first command is `next --entry`: their prompt hook keeps the typed line for the engine to read.
-  const ENTRY_SKILLS = [CLAUDE_SKILL, CODEX_SKILL];
+  const ENTRY_SKILLS = [CLAUDE_SKILL, CODEX_SKILL, KIRO_IDE_SKILL];
   const FIRST_COMMAND_CARRIES_NONE = "The first `next --entry` carries none of the person's words, which AI-DLC reads " +
     "from its own record.";
 
@@ -366,7 +367,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     for (const rel of skills) {
       const body = readConductorSurface(rel);
       const step = body.split("\n").find((line) => line.trimStart().startsWith("1. directive = the JSON printed by running"));
-      // Claude Code's and Codex's step 1 takes no argument at all: what they typed, `--help` included, the engine reads.
+      // The step 1 of Claude Code, Codex and Kiro IDE takes no argument at all: what they typed, `--help` included, the engine reads.
       const help = ENTRY_SKILLS.includes(rel)
         ? "whatever they typed: `{{INVOKE}} --help` is the command-line tool's own help"
         : "`--help` goes here too, like every other argument: `{{INVOKE}} --help` is the command-line tool's own help";
@@ -379,8 +380,8 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
   // Kiro IDE's agent quoted "/aidlc classic: ..." whole as one argument, so the
   // person was asked which plan to use after naming it. Every SKILL that passes
   // the request on verbatim has the agent give a named plan its own argument.
-  // On Claude Code and Codex the first command carries none of their words, so
-  // the engine reads the plan they named from their typed line.
+  // On Claude Code, Codex and Kiro IDE the first command carries none of their
+  // words, so the engine reads the plan they named from their typed line.
   test("every shipped conductor SKILL gives a plan the person named its own argument", () => {
     const passOn = "Pass `$ARGUMENTS` through to the first `next` verbatim - the engine parses flags";
     const named = "The one thing you read first is whether the request opens with the name of a plan, as in " +
@@ -400,7 +401,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
   // reads their typed line from its own record. Only step 1 and the sentence
   // that says what it carries name the flag, which is never offered to the
   // person (the description and the argument hint list what they type).
-  test("the Claude and Codex skills' first command carries none of the person's words", () => {
+  test("the Claude, Codex and Kiro IDE skills' first command carries none of the person's words", () => {
     for (const rel of ENTRY_SKILLS) {
       const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
       const lines = body.split("\n");
