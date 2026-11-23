@@ -200,8 +200,8 @@ describe("a team takes a Unit from the plan where it is shared", () => {
     expect(recordAt(home, "refunds")?.json).toMatchObject({ unit: "refunds", taken_by: "pay", base_oid: home.plan });
     expect(readFileSync(join(record, "approved-inputs.md"), "utf-8")).toContain(
       `refunds of fixture, from the plan shared in checkout-api (${plan}), copied from its commit ${home.plan!.slice(0, 12)}. ` +
-        "These files are the lead's: approved there, read here. Change one and AI-DLC asks whether to put your change on the " +
-        "Unit's record, for the lead to decide.",
+        "These files are the lead's: approved there, read here. This lists them as they were when the Unit was taken. " +
+        "Change one and AI-DLC asks whether to put your change on the Unit's record, for the lead to decide.",
     );
   });
 
@@ -663,6 +663,10 @@ describe("a team takes a Unit from the plan where it is shared", () => {
     git(home.dir, ["push", "-q", "origin", "main"]);
     const bob = cloneOf(home.remote, "bob");
     expect(run(UNIT, ["take", "checkout-ui", "--home", HOME_RECORD], bob).status).toBe(0);
+    // Its record of what it was approved with says what a team's take says.
+    expect(readFileSync(join(buildDir(bob, "checkout-ui"), "approved-inputs.md"), "utf-8")).toMatch(
+      /copied from its commit [0-9a-f]{12}\. These files are the lead's: approved there, read here\. This lists them as they were when the Unit was taken\. Change one and AI-DLC asks whether to put your change on the Unit's record, for the lead to decide\.\n/,
+    );
     // In a space with nothing of their own, the look lists the builds here.
     inSpace(bob, "notes");
     const trace = join(tempDir("trace"), "trace.txt");
@@ -1787,7 +1791,8 @@ describe("a take of a plan with a file the lead changed after approving it", () 
       "approved, with the requirements as the lead changed them since. If it is not yours to build, tell me and I will hand it back.");
     const record = readFileSync(join(buildDir(pay, "refunds"), "approved-inputs.md"), "utf-8");
     expect(record).toContain("These files are the lead's: approved there, with the requirements as the lead changed them since, " +
-      "read here. Change one and AI-DLC asks whether to put your change on the Unit's record, for the lead to decide.");
+      "read here. This lists them as they were when the Unit was taken. Change one and AI-DLC asks whether to put your " +
+      "change on the Unit's record, for the lead to decide.");
     expect(record).toContain(`| ${REQUIREMENTS} | sha256:`);
     expect(record).toContain(`| ${QUESTIONS} | sha256:`);
     expect(record).not.toContain("requirements-analysis approved by the lead");

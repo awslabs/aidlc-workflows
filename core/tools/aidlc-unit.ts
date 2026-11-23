@@ -12050,11 +12050,12 @@ function approvedInputsText(
     "",
     planRepo !== null
       ? `${unit} of ${home.label}, from the plan shared in ${planRepo} (${home.location}), copied from its commit ` +
-        `${baseOid.slice(0, 12)}. These files are the lead's: approved there${changed}, read here. Change one and AI-DLC asks ` +
-        "whether to put your change on the Unit's record, for the lead to decide."
+        `${baseOid.slice(0, 12)}. These files are the lead's: approved there${changed}, read here. This lists them as they ` +
+        "were when the Unit was taken. Change one and AI-DLC asks whether to put your change on the Unit's record, for the " +
+        "lead to decide."
       : `${unit} of ${home.label}, from the lead's project at ${home.location} (space ${home.space}), copied from its commit ` +
-        `${baseOid.slice(0, 12)}. These files are the lead's: approved there, read here. Change one and AI-DLC ` +
-        "offers your change to the lead.",
+        `${baseOid.slice(0, 12)}. These files are the lead's: approved there, read here. This lists them as they were when ` +
+        "the Unit was taken. Change one and AI-DLC asks whether to put your change on the Unit's record, for the lead to decide.",
     "",
     "| File | Fingerprint |",
     "| --- | --- |",
