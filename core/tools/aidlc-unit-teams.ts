@@ -220,16 +220,14 @@ export function unitsInPlanOrder(projectDir: string, units: readonly string[]): 
     units.includes(unit) && all.indexOf(unit) === at);
 }
 
-// The rows since the person last chose teams, in time order, and whether a
-// Unit started at the lead's project before that (UNIT_STARTED): work that was
-// built one Unit at a time first, or switched to teams by a teammate's take.
-function sinceTeams(rows: readonly AuditShardEvent[]): { after: AuditShardEvent[]; startedBefore: boolean } {
+// The rows since the person last chose teams, in time order.
+function sinceTeams(rows: readonly AuditShardEvent[]): AuditShardEvent[] {
   const ordered = [...rows].sort((a, b) => (a.timestamp < b.timestamp ? -1 : a.timestamp > b.timestamp ? 1 : 0));
   let teamsAt = -1;
   ordered.forEach((row, at) => {
     if (row.event === "UNIT_OWNERSHIP_SET" && auditBlockField(row.block, "Mode") === "team") teamsAt = at;
   });
-  return { after: ordered.slice(teamsAt + 1), startedBefore: ordered.slice(0, Math.max(teamsAt, 0)).some((row) => row.event === "UNIT_STARTED") };
+  return ordered.slice(teamsAt + 1);
 }
 
 function listField(block: string, name: string): string[] {
@@ -237,17 +235,11 @@ function listField(block: string, name: string): string[] {
   return value === null || value === "none" ? [] : value.split(",").map((entry) => entry.trim()).filter(Boolean);
 }
 
-// Whether a Unit started at the lead's project before teams were chosen: the
-// lead was building the work one Unit at a time first.
-export function unitStartedBeforeTeams(rows: readonly AuditShardEvent[]): boolean {
-  return sinceTeams(rows).startedBefore;
-}
-
 // The Units the lead asked to build at the lead's project (`assign --here`)
 // since teams were chosen.
 export function unitsAskedHere(rows: readonly AuditShardEvent[]): Set<string> {
   const here = new Set<string>();
-  for (const row of sinceTeams(rows).after) {
+  for (const row of sinceTeams(rows)) {
     if (row.event === "UNITS_ASSIGNED") for (const unit of listField(row.block, "Here")) here.add(unit);
   }
   return here;
@@ -258,9 +250,10 @@ export function unitsAskedHere(rows: readonly AuditShardEvent[]): Set<string> {
 // here whose claim was never written, and one the lead's project builds with
 // no claim of its own (leadBuildsWithoutClaim, as the take reads it). A released claim on a Unit asked here
 // is open again. Where the lead's walk keeps every Unit nobody took
-// (`keepsWalk`: a Unit started at the lead's project before teams, or teams
-// that came from a teammate's take of solo work, where the lead was never
-// asked), only such a released Unit is left.
+// (`keepsWalk`: teams that came from a teammate's take of solo work, where the
+// lead was never asked), only such a released Unit is left. Teams the lead
+// chose once a Unit started here leave the Units not started for takes; the
+// one started stays with the walk (leadBuildsWithoutClaim).
 export function unitsLeftForTakes(
   rows: readonly AuditShardEvent[],
   units: readonly string[],

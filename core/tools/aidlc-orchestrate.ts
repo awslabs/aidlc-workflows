@@ -877,7 +877,6 @@ import {
   unitDependencies,
   unitLikelyRepos,
   unitsLeftForTakes,
-  unitStartedBeforeTeams,
   unitGateRhythmChosen,
   unitsInPlanOrder,
   unknownLikelyReposLine,
@@ -19952,10 +19951,10 @@ function leftForTakesAtHome(
   try {
     state = readStateFile(projectDir);
   } catch {
-    return { units: new Set(), keepsWalk: unitStartedBeforeTeams(rows) || takenFromSoloWork(projectDir, claims, new Set()), own: new Set() };
+    return { units: new Set(), keepsWalk: takenFromSoloWork(projectDir, claims, new Set()), own: new Set() };
   }
   const own = leadsOwnClaims(projectDir, state, claims);
-  const keepsWalk = unitStartedBeforeTeams(rows) || takenFromSoloWork(projectDir, claims, own);
+  const keepsWalk = takenFromSoloWork(projectDir, claims, own);
   const dag = resolveBoltDag(projectDir);
   if (dag.state !== "ok") return { units: new Set(), keepsWalk, own };
   const skeleton = teamSkeletonOn(state) ? dag.batches[0]?.[0] ?? null : null;

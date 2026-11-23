@@ -293,6 +293,21 @@ describe("a Unit the lead's project builds reads where its Unit Progress has it"
     expect(board).toContain(`- ${built}, here: built, waiting for your approval`);
     expect(board).not.toContain(`- ${built}, here: done`);
   });
+
+  test("teams chosen after a Unit started here: the Units not started are open to take, and the one started stays here", () => {
+    const { home } = leadKeepsTwo(false);
+    const ask = leadsChat(home.dir, { until: (d) => d.construction_checkpoint !== undefined });
+    const built = String((ask.construction_checkpoint as { unit?: string }).unit);
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    const board = teamBoard(home.dir);
+    expect(board).toContain(`- ${built}, here: built, waiting for your approval`);
+    for (const unit of ["refunds", "checkout-ui", "reporting"].filter((name) => name !== built)) {
+      expect(board, board).toMatch(new RegExp(`- ${unit}, open: `));
+    }
+    // The lead's next step builds none of them here.
+    const step = next(home.dir);
+    expect(step.kind === "run-stage" && step.unit !== built, JSON.stringify(step).slice(0, 600)).toBe(false);
+  });
 });
 
 describe("a teammate's take offer", () => {
