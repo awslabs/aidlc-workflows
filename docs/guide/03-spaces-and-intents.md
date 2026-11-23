@@ -18,7 +18,8 @@ how that works and where everything lives.
 
 When you run `aidlc config`, it projects the selected engine into your
 harness's own directory (`.claude/` on Claude Code, `.kiro/` on Kiro, `.codex/`
-on Codex, `.cursor/` on Cursor, `.aidlc/` on opencode and GitHub Copilot), plus
+on Codex, `.cursor/` on Cursor, `.aidlc/` on opencode and GitHub Copilot,
+`.devin/` on Devin CLI), plus
 the folders that harness itself reads (`.agents/skills/` on Codex, `.opencode/`
 on opencode, `.github/` on GitHub Copilot). Those are the *only* parts of the
 layout that differ by harness. From then on, everything AI-DLC produces lives under one

@@ -1,0 +1,241 @@
+# 04-r2-blocked-calls — REVIEWER_SCOPE_BLOCKED audit rows
+# NOTE: the final audit shard contains 7 REVIEWER_SCOPE_BLOCKED rows, not six —
+# the extra row at 16:01:10Z (infrastructure-design / scoring-engine) fired during the last
+# reviewer dispatch, which was then interrupted by the user stop. It is included here for completeness.
+
+## 2026-09-20T13:28:49Z — F1 (heredoc token false positive)
+
+Audit row (verbatim):
+## Reviewer Scope Blocked
+**Timestamp**: 2026-09-20T13:28:49Z
+**Event**: REVIEWER_SCOPE_BLOCKED
+**Tool**: Bash
+**Target**: construction
+**Stage**: functional-design
+**Unit**: scoring-engine
+
+Blocked child tool call:
+  tool: exec
+  command: mkdir -p <home>/devin-e2e-reviewer-scope/aidlc/spaces/default/intents/260919-challenge-scorer/.aidlc-engine/reviews/functional-design/units/scoring-engine/a059054bed7d0313 && cat > <home>/devin-e2e-reviewer-scope/aidlc/spaces/default/intents/260919-challenge-scorer/.aidlc-engine/reviews/functional-design/units/scoring-engine/a059054bed7d0313/1.review.md <<'EOF'
+## Review
+
+**Verdict:** READY
+**Reviewer:** aidlc-architecture-reviewer-agent
+**Date:** 2026-09-20T13:28:03Z
+**Iteration:** 1
+
+### Findings
+
+| ID | Severity | Location | Finding | Required action | Status |
+|---|---|---|---|---|---|
+| R-01 | Major | aidlc/spaces/default/intents/260919-challenge-scorer/inception/contract-design/contract-summary.md > C1 shared-schema vs construction/scoring-engine/functional-design/entities.md + functional-spec.md | The design deliberately diverges from the published C1 schema on three points: Rubric fields renamed to `correctness_weight`/`style_weight`/`performance_weight` (C1 shows `correctness`/`style`/`performance`); `score_submission`/`build_scoreboard` gained a `time_budget_seconds` parameter absent from C1's signatures; `failure_kind` was added to `SubmissionInput`/`SubmissionScore`/`ScoreboardRow`. The divergence is intentional (Q&A Q1/Q2/Q5 resolve carried-over findings R-01/R-02/R-06, and C1 itself defers pinning to Functional Design), but the shared contract document is now stale — the consuming unit `packaging-config` must build against the renamed fields and new signatures, not the C1 text. | Confirm at the approval gate that packaging-config's functional design consumes the pinned signatures (`*_weight` fields, `time_budget_seconds` parameter, `failure_kind` propagation); optionally update contract-summary.md to match the pinned design. | New |
+| R-02 | Minor | aidlc/spaces/default/intents/260919-challenge-scorer/construction/scoring-engine/functional-design/entities.md > SubmissionInput.failed | `failed` is marked `required: true` while also carrying `default: false` — contradictory at the schema level (a required field does not need a default; the default implies it is optional on construction). Harmless but mildly ambiguous for the implementer. | Pick one: either drop `default: false` (caller must always supply it) or mark `required: false` and keep the default. | New |
+| R-03 | Minor | aidlc/spaces/default/intents/260919-challenge-scorer/construction/scoring-engine/functional-design/entities.md > entity list | The `DimensionScores` entity listed under ScoringEngine in inception/domain-design/components.md is silently absent from entities.md — its three attributes are folded into `SubmissionScore`. This is a reasonable simplification, but it is an undocumented deviation from the upstream entity inventory. | No rework needed; note at the gate that DimensionScores was intentionally absorbed into SubmissionScore (or add a one-line note in entities.md). | New |
+
+### Validation Tool Results
+
+| Tool | Result | Interpretation |
+|---|---|---|
+| Manual YAML/JSON well-formedness check | PASS | entities.md and rules.md fenced YAML parse cleanly; traceability.json is valid JSON. |
+| Formula vs. pinned stories check | PASS | BR1.2 (passed/total×100, failed→0, error on tests_total==0), BR1.3 (max(0,100−10×violations), runs when failed), BR1.4 (min(1,budget/runtime)×100, runtime 0→100, failed→0), BR1.5 clamp, BR2.1 (total DESC, submission_id ASC), BR2.3 (failed ⇒ 0.0 correctness/performance, style kept) all match components.md/unit-of-work.md. |
+| Traceability coverage check | PASS | All 15 owned ACs (AC1.1.1–AC2.1.3) map to existing BR IDs; reverse array legitimately explains BR2.3 (cross-unit, AC3.2.x owned by packaging-config) and BR9.1 (architectural constraint) as intentional orphans. |
+| Purity check | PASS | No I/O, argv, sys.exit, third-party deps, or `challenge_scorer.config` imports anywhere in the design; BR9.1 encodes the boundary. |
+
+### Summary
+
+The functional design is internally consistent, implements the pinned formulas exactly, resolves the four carried-over contract findings concretely, and preserves the purity boundary — a developer could build the engine from it. The one finding worth the human's attention is R-01: the design intentionally supersedes the C1 contract text, so the consumer unit must be built against the pinned (renamed/extended) signatures rather than the stale contract-summary.
+EOF
+echo done
+
+Tool result received (verbatim):
+Tool rejected: This review cannot open "construction" because it belongs to another unit; the current review covers scoring-engine. Use the files supplied with the review and the files under this unit's construction path. If the design depends on another unit, note that integration point in the findings instead of opening its files. Write scoring-engine literally in shell paths because variables cannot be checked, and keep searches inside the current unit.
+
+## 2026-09-20T13:29:19Z — F1 (heredoc token false positive)
+
+Audit row (verbatim):
+## Reviewer Scope Blocked
+**Timestamp**: 2026-09-20T13:29:19Z
+**Event**: REVIEWER_SCOPE_BLOCKED
+**Tool**: Bash
+**Target**: construction
+**Stage**: functional-design
+**Unit**: scoring-engine
+
+Blocked child tool call:
+  tool: exec
+  command: mkdir -p <home>/devin-e2e-reviewer-scope/aidlc/spaces/default/intents/260919-challenge-scorer/.aidlc-engine/reviews/functional-design/units/scoring-engine/a059054bed7d0313 && cat > <home>/devin-e2e-reviewer-scope/aidlc/spaces/default/intents/260919-challenge-scorer/.aidlc-engine/reviews/functional-design/units/scoring-engine/a059054bed7d0313/1.review.md <<'EOF'
+## Review
+
+**Verdict:** READY
+**Reviewer:** aidlc-architecture-reviewer-agent
+**Date:** 2026-09-20T13:28:03Z
+**Iteration:** 1
+
+### Findings
+
+| ID | Severity | Location | Finding | Required action | Status |
+|---|---|---|---|---|---|
+| R-01 | Major | aidlc/spaces/default/intents/260919-challenge-scorer/inception/contract-design/contract-summary.md > C1 shared-schema, vs aidlc/spaces/default/intents/260919-challenge-scorer/construction/scoring-engine/functional-design/entities.md and functional-spec.md | The design deliberately diverges from the published C1 schema on three points: Rubric fields renamed to `correctness_weight`/`style_weight`/`performance_weight` (C1 shows `correctness`/`style`/`performance`); `score_submission`/`build_scoreboard` gained a `time_budget_seconds` parameter absent from C1's signatures; `failure_kind` was added to `SubmissionInput`/`SubmissionScore`/`ScoreboardRow`. The divergence is intentional (Q&A Q1/Q2/Q5 resolve carried-over findings R-01/R-02/R-06, and C1 itself defers signature pinning to Functional Design), but the shared contract document is now stale — the consuming unit U2 must build against the renamed fields and new signatures, not the C1 text. | Confirm at the approval gate that the consumer unit's functional design consumes the pinned signatures (`*_weight` fields, `time_budget_seconds` parameter, `failure_kind` propagation); optionally update contract-summary.md to match the pinned design. | New |
+| R-02 | Minor | aidlc/spaces/default/intents/260919-challenge-scorer/construction/scoring-engine/functional-design/entities.md > SubmissionInput.failed | `failed` is marked `required: true` while also carrying `default: false` — contradictory at the schema level (a required field does not need a default; the default implies it is optional on construction). Harmless but mildly ambiguous for the implementer. | Pick one: either drop `default: false` (caller must always supply it) or mark `required: false` and keep the default. | New |
+| R-03 | Minor | aidlc/spaces/default/intents/260919-challenge-scorer/construction/scoring-engine/functional-design/entities.md > entity list | The `DimensionScores` entity listed under ScoringEngine in inception/domain-design/components.md is silently absent from entities.md — its three attributes are folded into `SubmissionScore`. This is a reasonable simplification, but it is an undocumented deviation from the upstream entity inventory. | No rework needed; note at the gate that DimensionScores was intentionally absorbed into SubmissionScore (or add a one-line note in entities.md). | New |
+
+### Validation Tool Results
+
+| Tool | Result | Interpretation |
+|---|---|---|
+| Manual YAML/JSON well-formedness check | PASS | entities.md and rules.md fenced YAML parse cleanly; traceability.json is valid JSON. |
+| Formula vs. pinned stories check | PASS | BR1.2 (passed/total x100, failed to 0, error on tests_total==0), BR1.3 (max(0,100-10x violations), runs when failed), BR1.4 (min(1,budget/runtime) x100, runtime 0 to 100, failed to 0), BR1.5 clamp, BR2.1 (total DESC, submission_id ASC), BR2.3 (failed implies 0.0 correctness/performance, style kept) all match components.md/unit-of-work.md. |
+| Traceability coverage check | PASS | All 15 owned ACs (AC1.1.1 to AC2.1.3) map to existing BR IDs; reverse array legitimately explains BR2.3 (cross-unit, AC3.2.x owned by the sibling unit) and BR9.1 (architectural constraint) as intentional orphans. |
+| Purity check | PASS | No I/O, argv, sys.exit, third-party deps, or config-layer imports anywhere in the design; BR9.1 encodes the boundary. |
+
+### Summary
+
+The functional design is internally consistent, implements the pinned formulas exactly, resolves the four carried-over contract findings concretely, and preserves the purity boundary — a developer could build the engine from it. The one finding worth the human's attention is R-01: the design intentionally supersedes the C1 contract text, so the consumer unit must be built against the pinned (renamed/extended) signatures rather than the stale contract-summary.
+EOF
+echo done
+
+Tool result received (verbatim):
+Tool rejected: This review cannot open "construction" because it belongs to another unit; the current review covers scoring-engine. Use the files supplied with the review and the files under this unit's construction path. If the design depends on another unit, note that integration point in the findings instead of opening its files. Write scoring-engine literally in shell paths because variables cannot be checked, and keep searches inside the current unit.
+
+## 2026-09-20T13:30:04Z — F1 (heredoc token false positive)
+
+Audit row (verbatim):
+## Reviewer Scope Blocked
+**Timestamp**: 2026-09-20T13:30:04Z
+**Event**: REVIEWER_SCOPE_BLOCKED
+**Tool**: Bash
+**Target**: construction
+**Stage**: functional-design
+**Unit**: scoring-engine
+
+Blocked child tool call:
+  tool: exec
+  command: cat > <home>/devin-e2e-reviewer-scope/aidlc/spaces/default/intents/260919-challenge-scorer/.aidlc-engine/reviews/functional-design/units/scoring-engine/a059054bed7d0313/1.review.md <<'EOF'
+## Review
+
+**Verdict:** READY
+**Reviewer:** aidlc-architecture-reviewer-agent
+**Date:** 2026-09-20T13:28:03Z
+**Iteration:** 1
+
+### Findings
+
+| ID | Severity | Location | Finding | Required action | Status |
+|---|---|---|---|---|---|
+| R-01 | Major | contract-summary.md > C1 shared-schema, vs scoring-engine entities.md and functional-spec.md | The design deliberately diverges from the published C1 schema on three points: Rubric fields renamed to `correctness_weight`/`style_weight`/`performance_weight` (C1 shows `correctness`/`style`/`performance`); `score_submission`/`build_scoreboard` gained a `time_budget_seconds` parameter absent from C1's signatures; `failure_kind` was added to `SubmissionInput`/`SubmissionScore`/`ScoreboardRow`. The divergence is intentional (Q&A Q1/Q2/Q5 resolve carried-over findings R-01/R-02/R-06, and C1 itself defers signature pinning to Functional Design), but the shared contract document is now stale — the consuming unit U2 must build against the renamed fields and new signatures, not the C1 text. | Confirm at the approval gate that the consumer unit's functional design consumes the pinned signatures (`*_weight` fields, `time_budget_seconds` parameter, `failure_kind` propagation); optionally update contract-summary.md to match the pinned design. | New |
+| R-02 | Minor | entities.md > SubmissionInput.failed | `failed` is marked `required: true` while also carrying `default: false` — contradictory at the schema level (a required field does not need a default; the default implies it is optional on construction). Harmless but mildly ambiguous for the implementer. | Pick one: either drop `default: false` (caller must always supply it) or mark `required: false` and keep the default. | New |
+| R-03 | Minor | entities.md > entity list | The `DimensionScores` entity listed under ScoringEngine in inception/domain-design/components.md is silently absent from entities.md — its three attributes are folded into `SubmissionScore`. This is a reasonable simplification, but it is an undocumented deviation from the upstream entity inventory. | No rework needed; note at the gate that DimensionScores was intentionally absorbed into SubmissionScore (or add a one-line note in entities.md). | New |
+
+### Validation Tool Results
+
+| Tool | Result | Interpretation |
+|---|---|---|
+| Manual YAML/JSON well-formedness check | PASS | entities.md and rules.md fenced YAML parse cleanly; traceability.json is valid JSON. |
+| Formula vs. pinned stories check | PASS | BR1.2 (passed/total x100, failed to 0, error on tests_total==0), BR1.3 (max(0,100-10x violations), runs when failed), BR1.4 (min(1,budget/runtime) x100, runtime 0 to 100, failed to 0), BR1.5 clamp, BR2.1 (total DESC, submission_id ASC), BR2.3 (failed implies 0.0 correctness/performance, style kept) all match components.md/unit-of-work.md. |
+| Traceability coverage check | PASS | All 15 owned ACs (AC1.1.1 to AC2.1.3) map to existing BR IDs; reverse array legitimately explains BR2.3 (cross-unit, AC3.2.x owned by the sibling unit) and BR9.1 (architectural constraint) as intentional orphans. |
+| Purity check | PASS | No I/O, argv, sys.exit, third-party deps, or config-layer imports anywhere in the design; BR9.1 encodes the boundary. |
+
+### Summary
+
+The functional design is internally consistent, implements the pinned formulas exactly, resolves the four carried-over contract findings concretely, and preserves the purity boundary — a developer could build the engine from it. The one finding worth the human's attention is R-01: the design intentionally supersedes the C1 contract text, so the consumer unit must be built against the pinned (renamed/extended) signatures rather than the stale contract-summary.
+EOF
+echo done
+
+Tool result received (verbatim):
+Tool rejected: This review cannot open "construction" because it belongs to another unit; the current review covers scoring-engine. Use the files supplied with the review and the files under this unit's construction path. If the design depends on another unit, note that integration point in the findings instead of opening its files. Write scoring-engine literally in shell paths because variables cannot be checked, and keep searches inside the current unit.
+
+## 2026-09-20T15:17:54Z — F4 (cd project root)
+
+Audit row (verbatim):
+## Reviewer Scope Blocked
+**Timestamp**: 2026-09-20T15:17:54Z
+**Event**: REVIEWER_SCOPE_BLOCKED
+**Tool**: Bash
+**Target**: <project-dir>
+**Stage**: nfr-design
+**Unit**: packaging-config
+
+Blocked child tool call:
+  tool: exec
+  command: cd <home>/devin-e2e-reviewer-scope && python3 -c "import json; json.load(open('aidlc/spaces/default/intents/260919-challenge-scorer/construction/packaging-config/nfr-design/traceability.json'))" ; date -u +"%Y-%m-%dT%H:%M:%SZ"
+
+Tool result received (verbatim):
+Tool rejected: This review cannot open "<home>/devin-e2e-reviewer-scope" because it belongs to another unit; the current review covers packaging-config. Use the files supplied with the review and the files under this unit's construction path. If the design depends on another unit, note that integration point in the findings instead of opening its files. Write packaging-config literally in shell paths because variables cannot be checked, and keep searches inside the current unit.
+
+## 2026-09-20T15:37:07Z — R2 (sibling refusal)
+
+Audit row (verbatim):
+## Reviewer Scope Blocked
+**Timestamp**: 2026-09-20T15:37:07Z
+**Event**: REVIEWER_SCOPE_BLOCKED
+**Tool**: Bash
+**Target**: aidlc/spaces/default/intents/260919-challenge-scorer/construction/packaging-config/nfr-requirements/security-requirements.md
+**Stage**: nfr-design
+**Unit**: scoring-engine
+
+Blocked child tool call:
+  tool: exec
+  command: cat aidlc/spaces/default/intents/260919-challenge-scorer/construction/packaging-config/nfr-requirements/security-requirements.md
+
+Tool result received (verbatim):
+Tool rejected: This review cannot open "aidlc/spaces/default/intents/260919-challenge-scorer/construction/packaging-config/nfr-requirements/security-requirements.md" because it belongs to another unit; the current review covers scoring-engine. Use the files supplied with the review and the files under this unit's construction path. If the design depends on another unit, note that integration point in the findings instead of opening its files. Write scoring-engine literally in shell paths because variables cannot be checked, and keep searches inside the current unit.
+
+## 2026-09-20T15:38:50Z — R2 (sibling refusal)
+
+Audit row (verbatim):
+## Reviewer Scope Blocked
+**Timestamp**: 2026-09-20T15:38:50Z
+**Event**: REVIEWER_SCOPE_BLOCKED
+**Tool**: Bash
+**Target**: aidlc/spaces/default/intents/260919-challenge-scorer/construction/scoring-engine/nfr-requirements/security-requirements.md
+**Stage**: nfr-design
+**Unit**: packaging-config
+
+Blocked child tool call:
+  tool: exec
+  command: cat aidlc/spaces/default/intents/260919-challenge-scorer/construction/scoring-engine/nfr-requirements/security-requirements.md
+
+Tool result received (verbatim):
+Tool rejected: This review cannot open "aidlc/spaces/default/intents/260919-challenge-scorer/construction/scoring-engine/nfr-requirements/security-requirements.md" because it belongs to another unit; the current review covers packaging-config. Use the files supplied with the review and the files under this unit's construction path. If the design depends on another unit, note that integration point in the findings instead of opening its files. Write packaging-config literally in shell paths because variables cannot be checked, and keep searches inside the current unit.
+
+## 2026-09-20T16:01:10Z — R2 (sibling refusal)
+
+Audit row (verbatim):
+## Reviewer Scope Blocked
+**Timestamp**: 2026-09-20T16:01:10Z
+**Event**: REVIEWER_SCOPE_BLOCKED
+**Tool**: Bash
+**Target**: aidlc/spaces/default/intents/260919-challenge-scorer/construction/packaging-config/nfr-requirements/security-requirements.md
+**Stage**: infrastructure-design
+**Unit**: scoring-engine
+
+Blocked child tool call:
+  tool: exec
+  command: cat aidlc/spaces/default/intents/260919-challenge-scorer/construction/packaging-config/nfr-requirements/security-requirements.md
+
+Tool result received (verbatim):
+Tool rejected: This review cannot open "aidlc/spaces/default/intents/260919-challenge-scorer/construction/packaging-config/nfr-requirements/security-requirements.md" because it belongs to another unit; the current review covers scoring-engine. Use the files supplied with the review and the files under this unit's construction path. If the design depends on another unit, note that integration point in the findings instead of opening its files. Write scoring-engine literally in shell paths because variables cannot be checked, and keep searches inside the current unit.
+
+# Child final-report excerpts quoting the refusal — the two nfr-design fix-pass re-reviews
+
+## Re-review scoring-engine NFR design @ 2026-09-20T15:37:04.171568107Z — Subagent agent_id=fa7bb18d completed successfully:
+
+Subagent agent_id=fa7bb18d completed successfully:
+
+Mandated cat result (verbatim):
+
+> Tool rejected: This review cannot open "aidlc/spaces/default/intents/260919-challenge-scorer/construction/packaging-config/nfr-requirements/security-requirements.md" because it belongs to another unit; the current review covers scoring-engine. Use the files supplied with the review and the files under this unit's construction path. If the design depends on another unit, note that integration point in the findings instead of opening its files. Write scoring-engine literally in shell paths because variables cannot be checked, and keep searches inside the current unit.
+
+---
+
+## Re-review packaging-config NFR design @ 2026-09-20T15:38:46.366467335Z — Subagent agent_id=8d933c9e completed successfully:
+
+Subagent agent_id=8d933c9e completed successfully:
+
+**Reviewer:** aidlc-architecture-reviewer-agent
+
+**Mandated tool result (verbatim):**
+
+```
+Tool rejected: This review cannot open "aidlc/spaces/default/intents/260919-challenge-scorer/construction/scoring-engine/nfr-requirements/security-requirements.md" because it belongs to another unit; the current review covers packaging-config. Use the files supplied with the review and the files under this unit's construction path. If the design depends on another unit, note that integration point in the findings instead of opening its files. Write packaging-config literally in shell paths because variables cannot be checked, and keep searches inside the current unit.
+```

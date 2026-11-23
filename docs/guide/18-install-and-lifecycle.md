@@ -64,7 +64,13 @@ packages. The upstream Bun tracking includes `oven-sh/bun#15829` and
 `oven-sh/bun#29681`.
 
 The installer includes every harness runtime together, for `--harness`
-`claude`, `codex`, `copilot`, `cursor`, `kiro`, `kiro-v2`, and `opencode`:
+`claude`, `codex`, `copilot`, `cursor`, `devin`, `kiro`, `kiro-v2`, and `opencode`.
+
+For Devin, the standalone CLI support floor is **3000.10.21** (`devin --version`).
+See [AI-DLC on Devin CLI and Desktop](harnesses/devin.md) for hook activation
+and host-specific setup.
+
+To install:
 
 ```bash
 tmp="$(mktemp -d)"

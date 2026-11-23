@@ -663,7 +663,7 @@ describe("t340 Kiro IDE ignore sources doctor", () => {
     // runs the launcher in the plugin's own folder.
     cpSync(join(repo, "dist", "plugins", "test-pro", "kiro-ide", ".kiro"), join(project, ".kiro"), { recursive: true });
     const composeEnv: NodeJS.ProcessEnv = { ...process.env, PATH: "" };
-    for (const name of ["AIDLC_HARNESS_DIR", "AIDLC_HARNESS_NAME", "AIDLC_PLUGIN_ROOT", "AIDLC_PROJECT_DIR", "CLAUDE_PLUGIN_ROOT", "CLAUDE_PROJECT_DIR", "PLUGIN_ROOT"]) {
+    for (const name of ["AIDLC_HARNESS_DIR", "AIDLC_HARNESS_NAME", "AIDLC_PLUGIN_ROOT", "AIDLC_PROJECT_DIR", "CLAUDE_PLUGIN_ROOT", "CLAUDE_PROJECT_DIR", "PLUGIN_ROOT", "DEVIN_PLUGIN_ROOT"]) {
       delete composeEnv[name];
     }
     const compose = spawnSync(process.execPath, ["./.kiro/aidlc-plugins/aidlc-test-pro/hooks/aidlc-plugin-compose.ts", ".kiro", "kiro-ide"], {

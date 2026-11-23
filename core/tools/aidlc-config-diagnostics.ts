@@ -64,6 +64,7 @@ import {
   withoutBom,
   withSpace,
 } from "./aidlc-distribution.ts";
+import { DEVIN_MIN_VERSION_STRING } from "./aidlc-devin-version.ts";
 import {
   aidlcInvocation,
   discoverProjectHarnesses,
@@ -86,6 +87,7 @@ import { personaTwinRels } from "./aidlc-plugin.ts";
 import { readBoundedRegularFile } from "./aidlc-inline-context.ts";
 import { KIRO_IDE_STEERING } from "./aidlc-includes.ts";
 import {
+  HARNESS_HONESTY,
   HARNESS_PRODUCT_NAMES,
   isModelHarness,
   sessionSetsAgentModels,
@@ -130,11 +132,14 @@ export function harnessOwnsModelAccess(
   return HARNESS_OWNED_MODEL_ACCESS.has(harness);
 }
 
-// On hosts where the session sets every agent's model (Copilot, Cursor), no
-// provider answer means the session's own model access, as the Models row
-// says: not a gap for setup, doctor or `--check`. Bedrock stays a choice there.
+// On hosts where the session sets every agent's model (Copilot, Cursor), and
+// on Devin where per-agent pins still run on the session's own model access
+// (Devin carries effort inside the model ID), no provider answer means the
+// session's own model access, as the Models row says: not a gap for setup,
+// doctor or `--check`. Bedrock stays a choice there.
 export function providerAnswerIsTheSession(harness: ModelHarness): boolean {
-  return !harnessOwnsModelAccess(harness) && sessionSetsAgentModels(harness);
+  return !harnessOwnsModelAccess(harness) &&
+    (sessionSetsAgentModels(harness) || !HARNESS_HONESTY[harness].effort);
 }
 
 export function sessionModelAccessFact(harness: ModelHarness): string {
@@ -161,6 +166,8 @@ export function providerMenuCopy(
       return { bedrock: "record the manual Copilot BYOK provider setup" };
     case "cursor":
       return { bedrock: "record the manual Cursor provider setup" };
+    case "devin":
+      return { bedrock: "record the manual Devin CLI provider setup" };
   }
 }
 export type ProviderPendingStatus = "pending" | "done";
@@ -583,6 +590,7 @@ export function readConfigDiagnosticRecords(harnessRoot: string): ConfigDiagnost
     distribution !== "codex" &&
     distribution !== "copilot" &&
     distribution !== "cursor" &&
+    distribution !== "devin" &&
     distribution !== "kiro" &&
     distribution !== "kiro-ide" &&
     distribution !== "opencode"
@@ -950,6 +958,12 @@ const HARNESS_CLI: Record<
     required: true,
     minimumVersion: "1.18.29",
     install: "Install or upgrade opencode to 1.18.29 or later; OpenCode 2 works too.",
+  },
+  devin: {
+    command: "devin",
+    required: true,
+    minimumVersion: DEVIN_MIN_VERSION_STRING,
+    install: `Install Devin CLI ${DEVIN_MIN_VERSION_STRING} or later and ensure \`devin --version\` works.`,
   },
 };
 

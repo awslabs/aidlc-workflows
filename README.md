@@ -3,7 +3,7 @@
 AI-DLC (AI-Driven Development Life Cycle) turns AI coding assistants into
 structured, verifiable software-delivery workflows. One harness-neutral core
 runs natively in Claude Code, Kiro CLI, Kiro IDE, Codex CLI, Cursor, opencode,
-and GitHub Copilot.
+GitHub Copilot, and Devin CLI.
 
 ![version](https://img.shields.io/badge/version-2.11.4-blue)
 ![license](https://img.shields.io/badge/license-MIT--0-green)
@@ -56,9 +56,9 @@ aidlc config --harness claude
 aidlc doctor
 ```
 
-Replace `claude` with `kiro`, `kiro-v2`, `codex`, `cursor`, `opencode`, or
-`copilot`. Running `aidlc config` without `--harness` starts the interactive
-setup when a terminal is available. If you use Kiro IDE's own terminal in a
+Replace `claude` with `kiro`, `kiro-v2`, `codex`, `cursor`, `opencode`,
+`copilot`, or `devin`. Running `aidlc config` without `--harness` starts the
+interactive setup when a terminal is available. If you use Kiro IDE's own terminal in a
 project folder you have not trusted yet, Kiro first asks whether you trust it.
 Choose **Trust Folder & Continue** only for your own project or one you have
 checked, because trusting lets the folder's `.kiro` hooks run commands on your
@@ -92,6 +92,7 @@ guide in the table below. The complete walkthrough is in
 | Cursor | `aidlc config --harness cursor` | Open Cursor or run `agent` | `/aidlc` | [Cursor](docs/guide/harnesses/cursor.md) |
 | opencode >= 1.18.29 / OpenCode 2 | `aidlc config --harness opencode` | `opencode` | `/aidlc` | [opencode](docs/guide/harnesses/opencode.md) |
 | GitHub Copilot CLI >= 1.0.74 / VS Code >= 1.130 | `aidlc config --harness copilot` | Copilot CLI or VS Code | `/aidlc` | [GitHub Copilot](docs/guide/harnesses/copilot.md) |
+| Devin CLI >= 3000.10.21 | `aidlc config --harness devin` | Devin CLI | `/aidlc` | [Devin CLI](docs/guide/harnesses/devin.md) |
 
 AI-DLC 2.11.3 and earlier, and the 2.11.4 previews of 2026-11-04 and 2026-11-05, read the two Kiro names the other way: Kiro is `--harness kiro-ide` and Kiro CLI (V2) is `--harness kiro`, and they do not know `kiro-v2`. `--harness kiro-ide` names Kiro on those releases and on this one.
 

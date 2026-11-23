@@ -142,6 +142,20 @@ import {
 } from "./aidlc-inline-context.ts";
 import { workspaceManifestChecks } from "./aidlc-workspace-doctor.ts";
 import {
+  checkDevinDesktop,
+  checkDevinHostAvailability,
+  checkDevinVersion,
+  defaultModelsListExec,
+  DEVIN_MIN_VERSION_STRING,
+  parseDevinModelsList,
+  type ModelsListExecFn,
+} from "./aidlc-devin-version.ts";
+import {
+  auditDevinImportConfig,
+  devinUserLayerOverridesProject,
+  userDevinConfigPath,
+} from "./aidlc-devin-config.ts";
+import {
   hostedAddressOwner,
   parseWorkspaceManifest,
   type WorkspaceManifest,
@@ -585,7 +599,15 @@ import {
   syncFolderLabel,
   syncServiceHolding,
 } from "./aidlc-runtime-paths.ts";
-import { HARNESS_PRODUCT_NAMES } from "./aidlc-model-policy.ts";
+import {
+  HARNESS_PRODUCT_NAMES,
+  markdownSurfaceValues,
+  modelAgentStem,
+  readAgentTiers,
+  type AgentTiers,
+} from "./aidlc-model-policy.ts";
+import { modelsCommand } from "./aidlc-config-command.ts";
+import { resolveAidlcSettings } from "./aidlc-settings.ts";
 import { copyRuntimeUrl } from "./aidlc-release.ts";
 import { personGitNameField } from "./aidlc-git-name.ts";
 import { type EngineInvocation, renderEngineInvocation } from "./aidlc-guard-operation.ts";
@@ -1737,9 +1759,11 @@ function pluginRootCandidatesFromEnv(): string[] {
     process.env.CLAUDE_PLUGIN_ROOT,
     process.env.PLUGIN_ROOT,
     process.env.AIDLC_PLUGIN_ROOT,
+    process.env.DEVIN_PLUGIN_ROOT,
   ]
     .map((value) => value?.trim() ?? "")
-    .filter((value) => value.length > 0);
+    .filter((value) => value.length > 0)
+    .map((value) => resolve(value));
   return [...new Set(roots)];
 }
 
@@ -1791,6 +1815,7 @@ async function handlePluginSync(projectDir: string, pluginRoot: string | undefin
       AIDLC_PLUGIN_ROOT: item.root,
       CLAUDE_PLUGIN_ROOT: item.root,
       PLUGIN_ROOT: item.root,
+      DEVIN_PLUGIN_ROOT: item.root,
     };
     if (isCompiledExecutable()) {
       const envKeys = [
@@ -1800,6 +1825,7 @@ async function handlePluginSync(projectDir: string, pluginRoot: string | undefin
         "AIDLC_PLUGIN_ROOT",
         "CLAUDE_PLUGIN_ROOT",
         "PLUGIN_ROOT",
+        "DEVIN_PLUGIN_ROOT",
         "AIDLC_COMPILED_EXECUTABLE",
         "AIDLC_PLUGIN_RULES_BY_SYNC",
       ] as const;
@@ -3713,6 +3739,104 @@ export function kiroIdeIgnoreSourceChecks(
     : [{ pass: true, label: `${KIRO_IGNORE_PREFIX} none hide ${harness}/ (${sources.length} file(s) checked)` }];
 }
 
+// Side-effect-free dispatch probe for the Devin adapter's compiled-mode argv.
+// The adapter's coreCommand only builds argv strings — no hook executes — so
+// resolving each emitted command through the compiled dispatcher's grammar
+// proves the adapter↔dispatcher contract without touching workflow state.
+// This catches the class of bug where the adapter emits a verb the dispatcher
+// rejects (a bare `hook` exits 2 "unknown command 'hook'", blocking every
+// guard with a misleading reason and silently skipping every advisory hook).
+type DevinDispatchProbe =
+  | { ok: true; total: number }
+  | { ok: false; total: number; failures: string[] }
+  | { ok: false; adapterPath: string; reason: string };
+
+type DevinAdapterProbeExports =
+  | {
+      ok: true;
+      hookFiles: readonly string[];
+      coreCommand: (
+        file: string,
+        executable?: string,
+      ) => { command: string[]; authorityToken: string };
+    }
+  | { ok: false; adapterPath: string; reason: string };
+
+async function loadDevinAdapterForProbe(
+  adapterPath: string,
+): Promise<DevinAdapterProbeExports> {
+  try {
+    if (!existsSync(adapterPath)) {
+      return { ok: false, adapterPath, reason: "adapter file not found" };
+    }
+    // Same import shape the dispatcher's runAdapter uses; the adapter guards
+    // its entry point with import.meta.main, so importing only loads exports.
+    const mod = (await import(pathToFileURL(adapterPath).href)) as {
+      CORE_HOOK_FILES?: readonly string[];
+      coreCommand?: (
+        file: string,
+        executable?: string,
+      ) => { command: string[]; authorityToken: string };
+    };
+    if (typeof mod.coreCommand !== "function" || !Array.isArray(mod.CORE_HOOK_FILES)) {
+      return {
+        ok: false,
+        adapterPath,
+        reason: "coreCommand or CORE_HOOK_FILES is not exported",
+      };
+    }
+    return {
+      ok: true,
+      hookFiles: mod.CORE_HOOK_FILES,
+      coreCommand: mod.coreCommand,
+    };
+  } catch (error) {
+    return { ok: false, adapterPath, reason: errorMessage(error) };
+  }
+}
+
+async function devinHookDispatchProbe(projectDir: string): Promise<DevinDispatchProbe> {
+  const { resolveAction, resolveHookPath } = await import("./aidlc.ts");
+  const adapterPath = resolveHookPath("aidlc-devin-adapter.ts", "devin", projectDir);
+  const loaded = await loadDevinAdapterForProbe(adapterPath);
+  if (!loaded.ok) return loaded;
+  const adapterDir = dirname(adapterPath);
+  const failures: string[] = [];
+  for (const file of loaded.hookFiles) {
+    const { command, authorityToken } = loaded.coreCommand(file, "aidlc");
+    const argv = command.slice(1);
+    if (authorityToken) {
+      // record-human-turn runs on the dispatcher's internal route, never
+      // `engine hook` — the check is that the argv names the route and an
+      // installed hook file.
+      if (argv[0] !== "--internal-aidlc-record-human-turn" || !existsSync(argv[1] ?? "")) {
+        failures.push(
+          `\`aidlc ${argv.join(" ")}\` → internal route does not name an installed hook file`,
+        );
+      }
+      continue;
+    }
+    const action = resolveAction(argv, true);
+    const hookName = file.replace(/^aidlc-|\.ts$/g, "");
+    // Probe beside the adapter, not action.path: action.path re-resolves
+    // through the caller's cwd/env, while the child actually runs the file
+    // the installed runtime ships.
+    const reason = action.type !== "hook"
+      ? ("message" in action && typeof action.message === "string" && action.message.trim()
+        ? action.message.trim()
+        : `resolves to ${action.type}, not a hook`)
+      : action.name !== hookName
+        ? `resolves to hook '${action.name}'`
+        : !existsSync(join(adapterDir, file))
+          ? "missing hook file"
+          : null;
+    if (reason) failures.push(`\`aidlc ${argv.join(" ")}\` → ${reason}`);
+  }
+  return failures.length > 0
+    ? { ok: false, total: loaded.hookFiles.length, failures }
+    : { ok: true, total: loaded.hookFiles.length };
+}
+
 // What stops working when an AI-DLC hook's file is switched off (Kiro IDE's
 // Agent Hooks writes the flag; a committed file carries it). Legacy names stay
 // while config has not yet removed their files.
@@ -3982,6 +4106,98 @@ export function harnessTreeVersionsCheck(projectDir: string): DoctorCheck | null
   };
 }
 
+// The "Devin subagent model" row(s): a fact read of the installed
+// .devin/agents/*.md `model:` lines for the shipped agent set, not a fixed
+// advisory. A profile with no model: at all runs the organization's default
+// subagent model rather than the session's (measured on 3000.11.92;
+// model: inherit is the parent-model value), so that is the warn case. A
+// pinned id is checked against the account's own `devin models list` when a
+// CLI binary was found; the exec goes through an injectable seam
+// (aidlc-devin-version.ts) so unit tests never spawn a real devin.
+export function devinSubagentModelChecks(
+  projectDir: string,
+  binaryPath: string | null,
+  exec: ModelsListExecFn = defaultModelsListExec,
+): DoctorCheck[] {
+  const invoke = aidlcInvocation();
+  let tiers: AgentTiers;
+  try {
+    tiers = readAgentTiers(join(projectDir, ".devin"));
+  } catch (error) {
+    return [{
+      pass: false,
+      severity: "warn",
+      label: `Devin subagent model: installed agent data could not be read (${errorMessage(error)})`,
+      fix: `refresh with \`${invoke} config\``,
+    }];
+  }
+  const agentsDir = join(projectDir, ".devin", "agents");
+  const missing: string[] = [];
+  const pinned: Array<{ agent: string; model: string }> = [];
+  for (const name of Object.keys(tiers).sort()) {
+    const stem = modelAgentStem(name);
+    const path = join(agentsDir, `${stem}.md`);
+    const model = existsSync(path)
+      ? markdownSurfaceValues(readFileSync(path, "utf-8"), "effort").model
+      : undefined;
+    if (!model) missing.push(stem);
+    else if (model !== "inherit") pinned.push({ agent: name, model });
+  }
+  if (missing.length > 0) {
+    return [{
+      pass: false,
+      severity: "warn",
+      label: `Devin subagent model: ${missing.length} AI-DLC agent(s) have no model set and use your organization's default subagent model, not your session's (e.g. ${missing[0]})`,
+      fix: `refresh with \`${invoke} config\``,
+    }];
+  }
+  // `models list` runs only when a pin needs verifying; an unreadable list is
+  // said on the pass row, never turned into a false "not listed" warning.
+  let listed: Set<string> | null = null;
+  if (binaryPath !== null && pinned.length > 0) {
+    const result = exec(binaryPath);
+    if (!result.timedOut && result.exitCode === 0) {
+      const ids = parseDevinModelsList(result.stdout);
+      if (ids.size > 0) listed = ids;
+    }
+  }
+  // The fix commands name the settings layer that actually records the pin —
+  // a settings mutation refuses without exactly one of them, and a command
+  // printed by doctor has to run as printed.
+  const sources = resolveAidlcSettings(projectDir).sources;
+  const layerFlag = (agent: string): string => {
+    const source = sources[`models.agents.${agent}.model.devin`];
+    return source === "machine"
+      ? "--global"
+      : source === "project"
+      ? "--project"
+      : "--local";
+  };
+  const checks: DoctorCheck[] = [];
+  for (const pin of pinned) {
+    if (listed !== null && !listed.has(pin.model)) {
+      const layer = layerFlag(pin.agent);
+      checks.push({
+        pass: false,
+        severity: "warn",
+        label: `Devin subagent model: ${pin.agent} is set to ${pin.model}, which your Devin account does not list; Devin runs it on your session's model instead`,
+        fix: `set an ID from \`devin models list\` with \`${modelsCommand(projectDir, "devin", `--agent ${pin.agent} --model <id> ${layer} --yes`)}\`, or go back to inheriting with \`${modelsCommand(projectDir, "devin", `--agent ${pin.agent} --model default ${layer} --yes`)}\``,
+      });
+    }
+  }
+  if (checks.length > 0) return checks;
+  const pinsText = pinned.length > 0
+    ? `, except ${pinned.map((pin) => `${pin.agent} (${pin.model})`).join(", ")}`
+    : "";
+  const unchecked = pinned.length > 0 && listed === null
+    ? " (not checked against your account: devin models list unavailable)"
+    : "";
+  return [{
+    pass: true,
+    label: `Devin subagent model: AI-DLC agents use your Devin session's model and effort${pinsText}${unchecked}`,
+  }];
+}
+
 // The path a person adds to Claude Code or Codex once, named so it can be
 // copied. It warns when the folder lists another release's plugins, or holds
 // files AI-DLC did not write, which keep updates from refreshing it.
@@ -4194,6 +4410,14 @@ export async function collectDoctorReport(
       if (currentHarnessDir === ".cursor") {
         trustFiles.push(join(harnessRoot, "cli.json"));
       }
+      if (currentHarnessDir === ".devin") {
+        // Devin splits the contract: config.json carries the permissions.allow
+        // Exec grants; hooks.v1.json carries the hook `command` entries.
+        trustFiles.push(
+          join(harnessRoot, "config.json"),
+          join(harnessRoot, "hooks.v1.json"),
+        );
+      }
       if (currentHarnessName === "copilot") {
         trustFiles.push(join(projectDir, ".github", "hooks", "aidlc.json"));
       }
@@ -4290,6 +4514,12 @@ export async function collectDoctorReport(
           hashes.every((hash) => seedText.includes(`trusted_hash = "${hash}"`));
       } else if (currentHarnessDir === ".cursor") {
         nativePermission = commands.includes(cursorTrustedShell());
+      } else if (currentHarnessDir === ".devin") {
+        // Devin `Exec(...)` is a PREFIX match, so the exact
+        // `Exec(aidlc engine)` grant already covers every hook command it
+        // prefixes — and a bare `Exec(aidlc engine *)` spelling must not
+        // stand in for it.
+        nativePermission = commands.includes(`Exec(${trustedCommand()})`);
       } else if (currentHarnessName === "copilot") {
         // Copilot has no project command allowlist. Its folder-trust contract
         // is checked separately below; this row verifies native hook wiring.
@@ -4770,6 +5000,7 @@ export async function collectDoctorReport(
       );
     }
     if (harness === ".cursor") tsHooks.push("aidlc-cursor-adapter");
+    if (harness === ".devin") tsHooks.push("aidlc-devin-adapter");
     for (const h of tsHooks) {
       const hookPath = join(projectDir, harness, "hooks", `${h}.ts`);
       results.push({
@@ -4805,6 +5036,15 @@ export async function collectDoctorReport(
       }
     }
   }
+
+  // Read across every per-clone audit shard (single shard in the common case).
+  // Both hook-health and state-drift checks use the same intent-scoped ledger,
+  // and the Devin section-4 rows link SessionStart evidence to HUMAN_TURN
+  // entries from the same read.
+  const doctorSelection = resolveWorkflowSelection(projectDir);
+  const doctorIntent = doctorSelection.intent ?? undefined;
+  const auditAllShards = readAllAuditShards(projectDir, doctorIntent, doctorSelection.space);
+  const auditShardEvents = readAuditShardEvents(projectDir, doctorIntent, doctorSelection.space);
 
   // 4. Harness wiring config present. Claude Code: settings.json (hooks +
   // permissions live there). Kiro CLI: agents/aidlc.json plus
@@ -4974,6 +5214,275 @@ export async function collectDoctorReport(
     // bash or edit map; the person's ask or deny is gone here, said once.
     const shortForm = openCodeGlobalShortFormNote();
     if (shortForm) results.push({ pass: true, severity: "warn", label: shortForm });
+  } else if (harness === ".devin") {
+    for (const [file, what, from] of [
+      ["hooks.v1.json", "hook wiring", "dist/devin/.devin/hooks.v1.json"],
+      ["config.json", "permissions + read_config_from", "dist/devin/.devin/config.json"],
+      ["mcp_config.json", "MCP servers", "dist/devin/.devin/mcp_config.json"],
+      ["rules/aidlc.md", "standing method rule (auto-loaded pointer)", "dist/devin/.devin/rules/aidlc.md"],
+    ] as const) {
+      results.push({
+        pass: existsSync(join(projectDir, harness, file)),
+        label: `${file} present (${what})`,
+        fix: `copy from \`${from}\``,
+      });
+    }
+    // Compatibility-import isolation (read_config_from). The project file is
+    // the team contract; whether the USER layer overrides it depends on the
+    // build — before 3000.11.92 the user config wins, from 3000.11.92 a
+    // `false` at any layer wins — so the two rows are reported separately
+    // and doctor never computes an "effective" value — `devin skills list` /
+    // `devin mcp list` print the truth. Unreadable files are skipped
+    // silently (the presence rows above cover that);
+    // .devin/config.local.json is deliberately not read.
+    const devinVerResult = checkDevinVersion();
+    // `projectRcf` is null when the file is unreadable — the user-row branch
+    // below then treats every user-side override as still imported.
+    let projectRcf: Record<string, unknown> | null = null;
+    try {
+      const parsedProject = JSON.parse(
+        readFileSync(join(projectDir, harness, "config.json"), "utf-8"),
+      );
+      const projectAudit = auditDevinImportConfig(parsedProject);
+      const rcf =
+        parsedProject !== null &&
+        typeof parsedProject === "object" &&
+        "read_config_from" in parsedProject
+          ? (parsedProject as Record<string, unknown>).read_config_from
+          : undefined;
+      projectRcf =
+        rcf !== null && typeof rcf === "object"
+          ? (rcf as Record<string, unknown>)
+          : {};
+      if (projectAudit.enabled.length > 0) {
+        results.push({
+          pass: false,
+          severity: "warn",
+          label:
+            `Devin compatibility imports: .devin/config.json leaves ${projectAudit.enabled.map((k) => `\`${k}\``).join(", ")} at Devin's default (enabled)`,
+          fix:
+            "set them to false (see dist/devin/.devin/config.json); a sibling AI-DLC harness in this project would otherwise re-import the same skills and rename /aidlc to /devin:aidlc + /github:aidlc",
+        });
+      } else {
+        results.push({
+          pass: true,
+          label:
+            "Devin compatibility imports: all 7 documented sources explicitly decided in .devin/config.json",
+        });
+      }
+    } catch {
+      // .devin/config.json unreadable or unparsable — the presence row covers it.
+    }
+    const userConfigPath = userDevinConfigPath();
+    let userConfig: unknown;
+    let userConfigPresent = false;
+    try {
+      userConfig = JSON.parse(readFileSync(userConfigPath, "utf-8"));
+      userConfigPresent = true;
+    } catch {
+      // No user file, or it does not parse — either way nothing to audit.
+    }
+    if (!userConfigPresent) {
+      results.push({
+        pass: true,
+        label:
+          "Devin compatibility imports: no user-level read_config_from override",
+      });
+    } else {
+      const userAudit = auditDevinImportConfig(userConfig);
+      // Only keys the user file actually SETS are overrides — absent keys
+      // mean the user decided nothing (the audit's `enabled` counts absent
+      // as enabled because that is Devin's project-layer semantics).
+      const userRcf =
+        userConfig !== null &&
+        typeof userConfig === "object" &&
+        "read_config_from" in userConfig
+          ? (userConfig as Record<string, unknown>).read_config_from
+          : undefined;
+      const userKeys =
+        userRcf !== null && typeof userRcf === "object"
+          ? new Set(Object.keys(userRcf as Record<string, unknown>))
+          : new Set<string>();
+      const overrides = userAudit.enabled.filter((k) => userKeys.has(k));
+      if (overrides.length > 0) {
+        if (
+          devinVerResult.parsedVersion !== null &&
+          !devinUserLayerOverridesProject(devinVerResult.parsedVersion)
+        ) {
+          // False-wins only applies where the project file actually sets
+          // `false` — a user `true` still imports a key the project leaves
+          // absent or `null` on ≥3000.11.92.
+          const stillOn = overrides.filter(
+            (k) => projectRcf === null || projectRcf[k] !== false,
+          );
+          if (stillOn.length === 0) {
+            results.push({
+              pass: true,
+              label:
+                `Devin compatibility imports: ${userConfigPath} enables ${overrides.map((k) => `\`${k}\``).join(", ")}, but on Devin ${devinVerResult.parsedVersion.join(".")} a project \`false\` wins, so this project keeps them off`,
+            });
+          } else {
+            results.push({
+              pass: false,
+              severity: "warn",
+              label:
+                `Devin compatibility imports: ${userConfigPath} enables ${stillOn.map((k) => `\`${k}\``).join(", ")} and .devin/config.json does not set them to false, so Devin imports them` +
+                (stillOn.includes("claude")
+                  ? "; `claude` also loads .claude/settings.json hooks, so a Claude Code install of AI-DLC in this project runs its hooks too"
+                  : ""),
+              fix:
+                "remove the key from your user config, or accept that a coexisting Copilot/OpenCode/… harness is imported into Devin on this machine; verify with `devin skills list` / `devin mcp list`",
+            });
+          }
+        } else {
+          results.push({
+            pass: false,
+            severity: "warn",
+            label:
+              `Devin compatibility imports: ${userConfigPath} enables ${overrides.map((k) => `\`${k}\``).join(", ")} — on Devin CLI before 3000.11.92 the user config overrides the project file for this setting` +
+              (overrides.includes("claude")
+                ? "; `claude` also loads .claude/settings.json hooks, so a Claude Code install of AI-DLC in this project runs its hooks too"
+                : ""),
+            fix:
+              "remove the key from your user config, or accept that a coexisting Copilot/OpenCode/… harness is imported into Devin on this machine; verify with `devin skills list` / `devin mcp list`",
+          });
+        }
+      } else {
+        results.push({
+          pass: true,
+          label:
+            "Devin compatibility imports: no user-level read_config_from override",
+        });
+      }
+    }
+    // Three independent Devin host rows:
+    //   1. Devin host availability — passes when the standalone CLI is on
+    //      PATH or the Desktop editor application exists; fails when
+    //      neither host is found.
+    //   2. Standalone devin CLI — PATH-only discovery plus the shared
+    //      version floor for AIDLC's required capabilities (hooks.v1.json,
+    //      triggers frontmatter, run_subagent, ask_user_question with
+    //      multi_select). A missing CLI is advisory because Desktop-only
+    //      use is supported; a found binary that is broken, unparseable, or
+    //      below the floor is a hard failure even when Desktop is installed.
+    //   3. Devin Desktop installation — the actual editor application at
+    //      OS-appropriate paths, never the bundled CLI. Filesystem
+    //      discovery only; launch/session execution is not verified.
+    //      Absence is advisory because CLI-only use is supported.
+    // See core/tools/aidlc-devin-version.ts for the discovery/exec/parse
+    // logic and the injectable test seams.
+    const devinDesktopResult = checkDevinDesktop();
+    const hostAvailability = checkDevinHostAvailability(
+      devinVerResult.binaryPath,
+      devinDesktopResult.appPath,
+    );
+    results.push({
+      pass: hostAvailability.pass,
+      label: hostAvailability.label,
+      fix: hostAvailability.fix,
+    });
+    results.push({
+      pass: devinVerResult.pass,
+      severity: devinVerResult.severity,
+      label: devinVerResult.label,
+      fix: devinVerResult.fix || undefined,
+    });
+    results.push({
+      pass: devinDesktopResult.pass,
+      severity: devinDesktopResult.severity,
+      label: devinDesktopResult.label,
+      fix: devinDesktopResult.fix,
+    });
+    results.push(
+      ...devinSubagentModelChecks(projectDir, devinVerResult.binaryPath),
+    );
+    // Devin hook dispatch: every core-hook argv the adapter can emit in
+    // compiled mode must resolve in the compiled dispatcher — without running
+    // any hook (side-effect-free probe; see devinHookDispatchProbe).
+    const dispatch = await devinHookDispatchProbe(projectDir);
+    if (dispatch.ok) {
+      results.push({
+        pass: true,
+        label: `Devin hook dispatch: all ${dispatch.total} core-hook commands the adapter emits resolve to installed hooks`,
+      });
+    } else if ("failures" in dispatch) {
+      results.push({
+        pass: false,
+        label: `Devin hook dispatch is broken: ${dispatch.failures.length} of ${dispatch.total} core-hook commands do not resolve (e.g. ${dispatch.failures[0]})`,
+        fix: `refresh the install with \`${aidlcInvocation()} config\` (or upgrade aidlc); every AI-DLC hook on Devin is blocked or skipped until this passes`,
+      });
+    } else {
+      results.push({
+        pass: false,
+        label: `Devin hook dispatch: adapter not loadable at ${dispatch.adapterPath} (${dispatch.reason})`,
+        fix: `refresh the install with \`${aidlcInvocation()} config\` (or upgrade aidlc); every AI-DLC hook on Devin is blocked or skipped until this passes`,
+      });
+    }
+    // Hook execution evidence is historical: SessionStart writes a local marker.
+    // Missing or invalid evidence leaves hook approval/execution unverified.
+    // A marker carrying a sessionId links the evidence to a Devin session:
+    // when a newer HUMAN_TURN lands under a DIFFERENT session with no fresher
+    // marker, hooks stopped dispatching between the two — warn instead of
+    // pass. Linking by session id, not heartbeat age: a normal long session
+    // legitimately has newer heartbeats than its SessionStart marker, and
+    // record-human-turn does not route through the dispatch path the probe
+    // checks, so it keeps recording when SessionStart can no longer run.
+    let lastHookRun: string | undefined;
+    let markerSession: string | undefined;
+    try {
+      const marker = JSON.parse(readFileSync(
+        join(projectDir, harness, ".aidlc-session-start.local.json"),
+        "utf-8",
+      )) as { lastRun?: unknown; sessionId?: unknown } | null;
+      if (
+        typeof marker?.lastRun === "string" &&
+        new Date(marker.lastRun).toISOString() === marker.lastRun
+      ) {
+        lastHookRun = marker.lastRun;
+        if (typeof marker.sessionId === "string" && marker.sessionId) {
+          markerSession = marker.sessionId;
+        }
+      }
+    } catch {}
+    let staleEvidence: { session: string; timestamp: string } | null = null;
+    if (lastHookRun && markerSession) {
+      let turnTimestamp = "";
+      for (const event of auditShardEvents) {
+        if (event.event !== "HUMAN_TURN") continue;
+        const session = auditBlockField(event.block, "Session");
+        if (session && event.timestamp > turnTimestamp) {
+          turnTimestamp = event.timestamp;
+          staleEvidence = { session, timestamp: event.timestamp };
+        }
+      }
+      if (
+        staleEvidence === null ||
+        staleEvidence.session === markerSession ||
+        !(Date.parse(staleEvidence.timestamp) > Date.parse(lastHookRun))
+      ) {
+        staleEvidence = null;
+      }
+    }
+    const devinVersionHint = `; check the "Devin CLI" version row (AI-DLC supports Devin CLI ${DEVIN_MIN_VERSION_STRING} or newer)`;
+    if (lastHookRun && staleEvidence === null) {
+      results.push({
+        pass: true,
+        label: `Devin hook execution evidence: SessionStart last ran ${lastHookRun} (historical evidence only; current hook approval is not verified)`,
+      });
+    } else if (staleEvidence) {
+      results.push({
+        pass: false,
+        severity: "warn",
+        label: `Devin hook execution evidence: SessionStart last ran ${lastHookRun} (session ${markerSession}), but session ${staleEvidence.session} recorded a human turn at ${staleEvidence.timestamp} with no SessionStart evidence; hooks may not be dispatching`,
+        fix: `fully restart Devin CLI (not /clear) and rerun /aidlc --doctor; if this persists, check the "Devin hook dispatch" row and .devin/hooks.v1.json, then refresh with ${aidlcInvocation()} config${devinVersionHint}`,
+      });
+    } else {
+      results.push({
+        pass: false,
+        label: "Devin hook execution evidence: no valid SessionStart marker; hook approval/execution is unverified",
+        fix: `inspect /hooks for the project's AI-DLC hooks and approve them if prompted, then fully restart Devin CLI (/clear is not enough) and rerun /aidlc --doctor; if evidence is still missing, check .devin/hooks.v1.json, the hook runtime, and .devin write permissions; if the "Devin hook dispatch" row fails, fix that first${devinVersionHint}`,
+      });
+    }
   } else {
     const settingsPath = join(projectDir, harness, "settings.json");
     results.push({
@@ -5402,12 +5911,6 @@ export async function collectDoctorReport(
     }
   }
 
-  // Read across every per-clone audit shard (single shard in the common case).
-  // Both hook-health and state-drift checks use the same intent-scoped ledger.
-  const doctorSelection = resolveWorkflowSelection(projectDir);
-  const doctorIntent = doctorSelection.intent ?? undefined;
-  const auditAllShards = readAllAuditShards(projectDir, doctorIntent, doctorSelection.space);
-  const auditShardEvents = readAuditShardEvents(projectDir, doctorIntent, doctorSelection.space);
   const stateMdPath = stateFilePath(projectDir, doctorIntent, doctorSelection.space);
   let stateContent = "";
   try {
@@ -5616,6 +6119,7 @@ export async function collectDoctorReport(
   // day later or when the file is deleted. A hook's normal decisions are in its
   // .trace file, never counted.
   const advisoryEntries: string[] = [];
+  let repairDropsRecorded = false;
   const recentEntries: string[] = [];
   const recentFiles: string[] = [];
   const recentSinceMs = Date.now() - HOOK_FAILURE_RECENT_MS;
@@ -5631,6 +6135,16 @@ export async function collectDoctorReport(
             .filter((l) => l.trim().length > 0 && !legacyStopHookTraceLine(hook, l));
           if (lines.length === 0) continue;
           const reasons = lines.map((l) => l.split("\t").slice(1).join(" "));
+          if (hook === "testing-contract-repair") {
+            repairDropsRecorded = true;
+            results.push({
+              pass: false,
+              severity: "warn",
+              label: `Testing-posture contract was read via repair (historical): ${lines.length} read(s); ${[...new Set(reasons)].join("; ")}`,
+              fix: `Inspect the named plan file(s) and ${join(healthDir, f)}. Regenerate valid Testing Contract JSON through the normal plan-approval workflow; investigate the writer. Retire this log only after investigation. This history does not prove current corruption or a fixed Devin CLI version.`,
+            });
+            continue;
+          }
           const degraded = reasons.filter((r) => r.includes("[degraded]"));
           if (degraded.length > 0) {
             const last = shownHookReason(reasons[reasons.length - 1], 160);
@@ -5673,7 +6187,7 @@ export async function collectDoctorReport(
       pass: true,
       label: `Hook drops recorded (advisory): ${advisoryEntries.join("; ")} - a hook recorded something it could not report at the time and carried on; read the named .drops file(s) under .aidlc-engine/hooks-health/ for the detail, then delete them once investigated`,
     });
-  } else if (recentEntries.length === 0) {
+  } else if (recentEntries.length === 0 && !repairDropsRecorded) {
     results.push({
       pass: true,
       label: "Hook drops: none recorded",

@@ -1,0 +1,34 @@
+test_add_check_streaks_end_to_end (tests.test_cli.CliTests) ... ok
+test_corrupt_file_is_clear_error_without_traceback (tests.test_cli.CliTests) ... ok
+test_duplicate_add_and_unknown_check_are_errors_on_stderr (tests.test_cli.CliTests) ... ok
+test_empty_name_is_an_error (tests.test_cli.CliTests) ... ok
+test_file_option_after_subcommand (tests.test_cli.CliTests) ... ok
+test_file_option_before_subcommand_creates_file_on_first_write (tests.test_cli.CliTests) ... ok
+test_help_describes_every_command (tests.test_cli.CliTests) ... ok
+test_second_check_same_day_is_friendly_no_op (tests.test_cli.CliTests) ... ok
+test_streaks_with_no_habits_prints_empty_message (tests.test_cli.CliTests) ... ok
+test_without_file_option_uses_default_path (tests.test_cli.CliTests) ... ok
+test_add_habit_stores_trimmed_name (tests.test_core.AddHabitTests) ... ok
+test_duplicate_differing_only_in_case_is_rejected (tests.test_core.AddHabitTests) ... ok
+test_duplicate_name_is_rejected (tests.test_core.AddHabitTests) ... ok
+test_empty_and_whitespace_names_are_rejected (tests.test_core.AddHabitTests) ... ok
+test_check_matches_case_insensitively_and_keeps_spelling (tests.test_core.CheckHabitTests) ... ok
+test_check_records_today (tests.test_core.CheckHabitTests) ... ok
+test_second_check_same_day_is_a_no_op (tests.test_core.CheckHabitTests) ... ok
+test_unknown_habit_raises (tests.test_core.CheckHabitTests) ... ok
+test_last_check_two_days_ago_is_zero (tests.test_core.CurrentStreakTests) ... ok
+test_no_dates_is_zero (tests.test_core.CurrentStreakTests) ... ok
+test_today_and_two_previous_days_is_three (tests.test_core.CurrentStreakTests) ... ok
+test_today_with_gap_before_is_one (tests.test_core.CurrentStreakTests) ... ok
+test_yesterday_and_day_before_without_today_is_two (tests.test_core.CurrentStreakTests) ... ok
+test_default_path_is_habits_json_in_home (tests.test_storage.StorageTests) ... ok
+test_invalid_json_raises_storage_error_and_leaves_file_unchanged (tests.test_storage.StorageTests) ... ok
+test_missing_file_loads_as_no_habits (tests.test_storage.StorageTests) ... ok
+test_save_then_load_round_trips_names_and_iso_dates (tests.test_storage.StorageTests) ... ok
+test_wrong_shape_raises_storage_error (tests.test_storage.StorageTests) ... ok
+
+----------------------------------------------------------------------
+Ran 28 tests in 0.134s
+
+OK
+exit=0

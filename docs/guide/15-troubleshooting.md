@@ -45,6 +45,30 @@ This chapter covers common issues and their solutions, organized by symptom.
 | Windows: git says `Filename too long` for a file under `aidlc/`, or a review or questions file cannot be written | The project folder is too deep: without long paths turned on, Windows tools and Git refuse paths over 260 characters, and AI-DLC's records sit deep under the project folder. `aidlc config` says so in one line, and `aidlc doctor` shows a `Project folder` row with how deep the folder is and how much the records add. Move the project to a shorter folder (for example `C:\src\<name>`), or turn long paths on: as an administrator, run `New-ItemProperty -Path HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem -Name LongPathsEnabled -Value 1 -PropertyType DWORD -Force` in PowerShell, then run `git config --global core.longpaths true`. AI-DLC reads these two settings and says nothing when both are on; it never changes them, your folder or your git settings. Copilot CLI asks before every read of a path over 260 characters (`copilot -p` refuses it), whatever these two settings say, so with Copilot CLI only a shorter folder takes those questions away, and the line is said either way. |
 | Workflow stuck or misbehaving, need help | Run `/aidlc --doctor --export` and share the produced `.tar.gz` (redacted; no work product). To also cover what only your AI tool's own chat log shows (refusals, repeated questions, approvals), ask for an issue report with `/aidlc-issue-report` (Codex: `$aidlc-issue-report`): the run's records and the tool's events with names and text replaced by labels, checked before you send them; doctor's findings are in it, the archive itself is not sent (run `/aidlc --doctor --export` again if the team asks for it) |
 | A Bolt attempt was set aside | Ask the assistant to invoke the saved abort result's `restore_operation` with its exact argv; hints are display-only. Evidence-only attempts have no saved files to restore. See [getting the files back](#a-bolt-attempt-was-set-aside-getting-the-files-back) |
+| `Testing-posture contract was read via repair (historical)` doctor warning | See [Testing Contract read via repair](#testing-contract-read-via-repair) below |
+
+---
+
+## Testing Contract read via repair
+
+A `Testing-posture contract was read via repair (historical)` warning from `/aidlc --doctor` means a file-backed contract read needed the temporary raw LF/CR/tab JSON-string repair and still passed the existing version and hash checks. The warning names affected files and counts successful repair reads, not unique incidents. It is non-failing and shared across harnesses; it does not identify which writer caused the corruption.
+
+Inspect the named plan and the intent's `.aidlc-hooks-health/testing-contract-repair.drops`. Regenerate valid contract JSON through the normal plan-approval workflow rather than editing approved records in place. Retire the log manually only after investigating it; fixing a file does not erase historical events. No plan content is logged, and read-only Stop/route engine probes do not write repair telemetry. Logging remains best-effort if the health directory is unwritable.
+
+The fixed Devin CLI version is not yet confirmed. Remove the workaround only after recording a vendor-confirmed fixed version, verifying a captured write/read escape regression, raising the supported baseline accordingly, and regenerating affected stored plans through normal approval. Neither the current supported version nor absence of log entries proves the host bug is fixed.
+
+---
+
+## Devin SessionStart evidence missing
+
+If `/aidlc --doctor` reports missing SessionStart evidence, check the Devin CLI
+version row. The standalone CLI support floor is **3000.10.21**. Upgrade an
+older CLI before retrying. In the CLI, inspect `/hooks` and approve the project
+hooks if prompted; in Desktop, use **Open customizations** in the Devin Local
+session. Fully restart the host and rerun doctor. If the warning persists, check
+the hook dispatch row, `.devin/hooks.v1.json`, and write access to `.devin/`.
+The version and evidence checks address different things: a supported version
+does not prove the hooks ran. See the [Devin setup guide](harnesses/devin.md).
 
 ---
 

@@ -1,0 +1,26 @@
+[claude] regenerated dist/claude/.claude
+[claude] regenerated dist-release/claude/.claude
+[codex] regenerated dist/codex/.codex
+[codex] regenerated dist-release/codex/.codex
+[copilot] regenerated dist/copilot/.aidlc
+[copilot] regenerated dist-release/copilot/.aidlc
+[cursor] regenerated dist/cursor/.cursor
+[cursor] regenerated dist-release/cursor/.cursor
+[devin] regenerated dist/devin/.devin
+[devin] regenerated dist-release/devin/.devin
+[kiro] regenerated dist/kiro/.kiro
+[kiro] regenerated dist-release/kiro/.kiro
+[kiro-ide] regenerated dist/kiro-ide/.kiro
+[kiro-ide] regenerated dist-release/kiro-ide/.kiro
+[opencode] regenerated dist/opencode/.aidlc
+[opencode] regenerated dist-release/opencode/.aidlc
+[plugin:test-pro] emitted dist/plugins/test-pro/claude/
+[plugin:test-pro] emitted dist/plugins/test-pro/codex/
+[plugin:test-pro] emitted dist/plugins/test-pro/copilot/
+[plugin:test-pro] emitted dist/plugins/test-pro/cursor/
+[plugin:test-pro] emitted dist/plugins/test-pro/devin/
+[plugin:test-pro] emitted dist/plugins/test-pro/kiro/
+[plugin:test-pro] emitted dist/plugins/test-pro/kiro-ide/
+[plugin:test-pro] emitted dist/plugins/test-pro/opencode/
+=== --check ===
+package --check: deterministic across two independent build(s) for claude, codex, copilot, cursor, devin, kiro, kiro-ide, opencode.

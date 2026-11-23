@@ -1,0 +1,301 @@
+WARNING: claude CLI not found -- live integration/e2e tests may fail or skip
+AI-DLC Testing Harness
+======================
+Guard profile: fixture (synthetic guard skips and direct audit authority enabled)
+
+## Unit Tests (single-component isolation)
+
+=== START t265-plan-approval-guard.test.ts ===
+bun test v1.3.14 (0d9b296a)
+
+tests/unit/t265-plan-approval-guard.test.ts:
+(pass) t265a plan-approval decision table > blocks the developer dispatch when no unit has any plan [19.98ms]
+(pass) t265a plan-approval decision table > blocks when the plan exists but Plan Approval is unanswered [0.19ms]
+(pass) t265a plan-approval decision table > allows once the marked unit's plan is approved [0.08ms]
+(pass) t265a plan-approval decision table > allows a zero-unit dispatch only through the explicit stage marker [0.14ms]
+(pass) t265a plan-approval decision table > a prompt naming only an unapproved unit blocks even when a sibling is approved [0.08ms]
+(pass) t265a plan-approval decision table > contextual sibling mentions do not change the explicit target [0.05ms]
+(pass) t265a plan-approval decision table > missing, unknown, or conflicting target markers block [0.11ms]
+(pass) t265a plan-approval decision table > duplicate copies of the same marker remain unambiguous [0.06ms]
+(pass) t265a plan-approval decision table > a workflow with no known units blocks outright (the reported failure) [0.06ms]
+(pass) t265a plan-approval decision table > missing, conflicting, or stale Testing Contract markers block [0.07ms]
+(pass) t265a plan-approval decision table > out-of-scope calls always allow: other tools, other agents, other stages [0.04ms]
+(pass) t265a plan-approval decision table > display-cased Current Stage still guards (normalizeStageName) [0.06ms]
+(pass) t265a plan-approval decision table > unit markers are explicit, line-scoped, non-empty, and de-duplicated [0.17ms]
+(pass) t265a plan-approval decision table > stage markers are explicit, normalized, and de-duplicated [0.04ms]
+(pass) t265a plan-approval decision table > only an explicit answer on the Plan Approval question authorizes generation [1.56ms]
+(pass) t265a plan-approval decision table > only a blank visible Plan Approval section is a pending mandatory stop [0.20ms]
+(pass) t265a plan-approval decision table > blockReason names the scope and the stage steps [0.06ms]
+(pass) t265a plan-approval decision table > blockReason names the missing target marker for a markerless brief [0.02ms]
+(pass) t265a plan-approval decision table > blockReason names several for multiple targets [0.02ms]
+(pass) t265b hook lifecycle > a review section appended to the instructions after approval blocks the dispatch and begin [638.52ms]
+(pass) t265b hook lifecycle > a handoff that quotes the plan's excluded review appendix is refused; the brief command hands off the body [1938.22ms]
+(pass) t265b hook lifecycle > blocks the unplanned dispatch with exit 2 + a redirecting reason [133.44ms]
+(pass) t265b hook lifecycle > still blocks when the plan exists but the tag is blank; allows once answered [1041.43ms]
+(pass) t265b hook lifecycle > zero-unit stage-level evidence resolves, fingerprints, and authorizes dispatch [1219.06ms]
+(pass) t265b hook lifecycle > native forwarding can resume Plan Approval without authorizing generation (#1047) [4660.19ms]
+(pass) t265b hook lifecycle > direct abort recovery keeps source/native admission parity without a selection marker or Plan Approval [1166.37ms]
+(pass) t265b hook lifecycle > native redo requires the issued recovery's human selection and leaves generation closed [541.13ms]
+(pass) t265b hook lifecycle > selected native redo admits no different target, scope, direction, flags, commands or wrappers [1706.58ms]
+(pass) t265b hook lifecycle > native backward recovery must match the actual current position [471.13ms]
+(pass) t265b hook lifecycle > native reset requires current selection rather than an earlier state or another remedy [987.05ms]
+(pass) t265b hook lifecycle > native reset checks the effective plan and rejects a forward target even with a reset direction [948.03ms]
+(pass) t265b hook lifecycle > the shipped Bun entry point permits planning before directive publication [4614.34ms]
+(pass) t265b hook lifecycle > the shipped Bun entry point permits planning with pending approval [20018.09ms]
+(pass) t265b hook lifecycle > a redundant absolute cd permits recovery without changing execution context [957.90ms]
+(pass) t265b hook lifecycle > a removed shell continuation cannot authorize a different cwd [158.08ms]
+(skip) t265b hook lifecycle > Windows cwd casing preserves recovery without authorizing workspace changes
+(pass) t265b hook lifecycle > planning through the Bun entry point requires a real installed file [252.34ms]
+(pass) t265b hook lifecycle > zero-unit inline generation is refused before approval and allowed after approval [13769.19ms]
+(pass) t265b hook lifecycle > a conductor-authored Approve Plan markdown answer has no authority receipt [2401.26ms]
+(pass) t265b hook lifecycle > aidlc-log emits Plan Approval authority only after its prompt and a later human turn [1940.32ms]
+(pass) t265b hook lifecycle > a bare numeric reply reaches the offered-choice match instead of being parsed away [270.51ms]
+(pass) t265b hook lifecycle > a JSON-quoted reply still unwraps to the offered label [274.75ms]
+(pass) t265b hook lifecycle > a session-tagged human reply certifies only its own session while another session is current [1147.41ms]
+(pass) t265b hook lifecycle > Plan Approval rechecks the source floor after acquiring the audit lock [960.72ms]
+(pass) t265b hook lifecycle > missing and legacy directive markers fail closed instead of selecting stage-level authority [274.60ms]
+(pass) t265b hook lifecycle > record-directory symlink and junction aliases cannot exempt workspace writes [801.01ms]
+(pass) t265b hook lifecycle > a symlinked workspace root preserves trusted planning paths without trusting child symlinks [1070.57ms]
+(pass) t265b hook lifecycle > unit-bound inline generation consumes the active unit's existing approval [1429.62ms]
+(pass) t265b hook lifecycle > approved bytes cannot replay across targets, and survive a reissued directive [511.71ms]
+(pass) t265b hook lifecycle > fingerprint CLI requires an explicit target that matches the directive [488.22ms]
+(pass) t265b hook lifecycle > an empty plan file remains blocked even with an explicit approval answer [281.50ms]
+(pass) t265b hook lifecycle > a post-approval plan or instruction change invalidates the fingerprint [500.67ms]
+(pass) t265b hook lifecycle > autonomous Construction still requires the mandatory per-unit approval [499.39ms]
+(pass) t265b hook lifecycle > an interleaved code-generation directive stays guarded while Current Stage remains earlier [502.60ms]
+(pass) t265b hook lifecycle > fail-open outside identified generation paths; missing authority fails closed [412.70ms]
+(pass) t265b hook lifecycle > a block appends a PLAN_APPROVAL_BLOCKED audit row when a shard exists [131.70ms]
+(pass) t265b hook lifecycle > Facet A — a 2>/dev/null redirect on a framework-tool invocation does not trap the early-exit [128.04ms]
+(pass) t265b hook lifecycle > Facet A — a 2>&1 pipe around a framework-tool invocation does not trap the early-exit [129.40ms]
+(pass) t265b hook lifecycle > Facet A — a real file redirect still tracks the mutation target (regression guard) [130.98ms]
+(pass) t265b hook lifecycle > Facet C — git add short-circuits to non-opaque at the code-generation boundary [128.87ms]
+(pass) t265b hook lifecycle > Facet C — git commit short-circuits to non-opaque at the code-generation boundary [122.53ms]
+(pass) t265b hook lifecycle > Facet C — git push remains blocked at the code-generation boundary [128.77ms]
+(pass) t265 compound Git checkpoint exemption > blocks echo x > src/app.ts with load-steering before approval [129.25ms]
+(pass) t265 compound Git checkpoint exemption > blocks git add -A && echo x > src/app.ts with load-steering before approval [128.97ms]
+(pass) t265 compound Git checkpoint exemption > blocks git add -A ; echo x > src/app.ts with load-steering before approval [138.18ms]
+(pass) t265 compound Git checkpoint exemption > blocks git add -A && git push with load-steering before approval [130.72ms]
+(pass) t265 compound Git checkpoint exemption > blocks echo x > src/app.ts with run-stage before approval [133.25ms]
+(pass) t265 compound Git checkpoint exemption > blocks git add -A && echo x > src/app.ts with run-stage before approval [134.52ms]
+(pass) t265 compound Git checkpoint exemption > blocks git add -A ; echo x > src/app.ts with run-stage before approval [133.34ms]
+(pass) t265 compound Git checkpoint exemption > blocks git add -A && git push with run-stage before approval [132.34ms]
+(pass) t265 compound Git checkpoint exemption > allows checkpoint-only Bash payload: git commit -m "checkpoint" [134.70ms]
+(pass) t265 compound Git checkpoint exemption > allows checkpoint-only Bash payload: git add -A && git commit -m "checkpoint" [126.85ms]
+(pass) t265 compound Git checkpoint exemption > does not exempt checkpoint redirection or evaluation: git add -A > src/app.ts [136.93ms]
+(pass) t265 compound Git checkpoint exemption > does not exempt checkpoint redirection or evaluation: git commit -m "$(echo x > src/app.ts)" [132.57ms]
+(pass) t265c registrations > Plan Approval source validation and receipt emission share one audit lock [0.25ms]
+(pass) t265c registrations > code-generation stage requires the explicit dispatch unit marker [0.10ms]
+(pass) t265c registrations > all native projections emit the Plan Approval prerequisite commands [0.60ms]
+(pass) t265c registrations > claude: settings.json wires the guard on the Task matcher [0.26ms]
+(pass) t265c registrations > codex: hooks.json wires the plan-approval-guard adapter target [0.04ms]
+(pass) t265c registrations > copilot: the shared tool guard invokes the plan-approval guard [0.12ms]
+(pass) t265c registrations > kiro: the conductor agent registers the guard on the subagent matcher [0.12ms]
+(pass) t265c registrations > opencode: the plugin consults the guard on task dispatches [0.09ms]
+(pass) t265c registrations > cursor: the adapter runs the guard before recording a Task spawn [0.18ms]
+(pass) t265c registrations > kiro-ide: populated PreToolUse payloads route through the plan guard [0.12ms]
+(pass) t265c registrations > the documented off-switch is scoped to the dispatch hook [13.93ms]
+
+1 tests skipped:
+(skip) t265b hook lifecycle > Windows cwd casing preserves recovery without authorizing workspace changes
+
+ 84 pass
+ 1 skip
+ 0 fail
+ 659 expect() calls
+Ran 85 tests across 1 file. [71.73s]
+--- PASS: t265-plan-approval-guard.test.ts ---
+=== DONE t265-plan-approval-guard.test.ts (PASS) ===
+
+=== START t328-plan-approval-runtime-authority.test.ts ===
+bun test v1.3.14 (0d9b296a)
+
+tests/unit/t328-plan-approval-runtime-authority.test.ts:
+(pass) t328 Plan Approval runtime authority > a solo Stop-hook probe between challenge mint and receipt write leaves Plan Approval intact [740.32ms]
+(pass) t328 Plan Approval runtime authority > rejects malformed Plan Approval violation records [188.16ms]
+(pass) t328 Plan Approval runtime authority > accepts the native Claude AskUserQuestion PostToolUse response [551.75ms]
+(pass) t328 Plan Approval runtime authority > directive churn preserves authority while a moved stage or attempt retires it [1167.77ms]
+(pass) t328 Plan Approval runtime authority > concurrent first-generation guards serialize and share one validated publication [1249.99ms]
+(pass) t328 Plan Approval runtime authority > a persistent mutation crossing generation publication cannot remain certified [1148.74ms]
+(pass) t328 Plan Approval runtime authority > active directive publication cannot retire authority during generation start [1067.35ms]
+(pass) t328 Plan Approval runtime authority > receipt certification excludes concurrent legacy challenge reissue [816.66ms]
+(pass) t328 Plan Approval runtime authority > rejects a source mutation that lands after validation but before certification completes [1072.79ms]
+(pass) t328 human-only break-glass override > only a typed UserPromptSubmit prompt records the override request [1919.91ms]
+(pass) t328 human-only break-glass override > answer --override is refused without the typed phrase, with a mismatched reason, and after consumption [1741.70ms]
+(pass) t328 human-only break-glass override > answer --override is refused while [Answer] is blank [642.66ms]
+(pass) t328 human-only break-glass override > a missing request answers with the human-only guidance and nothing else, even when the answer is blank [462.07ms]
+(pass) t328 human-only break-glass override > an edited request file or one typed under another intent is not a request [1265.59ms]
+(pass) t328 human-only break-glass override > a PLAN_APPROVAL_OVERRIDDEN row that cannot be appended leaves no receipt and spends no request [2188.95ms]
+(pass) t328 human-only break-glass override > an unbindable workspace mints an override receipt that verify, begin, and the dispatch guard accept [3306.07ms]
+(pass) t328 human-only break-glass override > an orphaned response is recoverable through the typed phrase [1348.56ms]
+(pass) t328 human-only break-glass override > a normal receipt that succeeds under --override records no override [998.49ms]
+(pass) t328 human-only break-glass override > the guard off-switch writes one GUARD_DISABLED row per streak [764.03ms]
+(pass) t328 decision refuses a challenge no answer could ever accept > an unbindable workspace is refused before any challenge is minted, with ordered remedies [270.97ms]
+(pass) t328 decision refuses a challenge no answer could ever accept > a planned source recorded as unbindable is judged as drift once the workspace binds [299.68ms]
+(pass) t328 decision refuses a challenge no answer could ever accept > a successful decision prints the challenge id and file [362.45ms]
+(pass) t328 the Codex (Recommended) label decorator > "Approve Plan (Recommended)" pairs as Approve Plan [334.47ms]
+(pass) t328 the Codex (Recommended) label decorator > "Approve Plan (recommended) " pairs, case and whitespace tolerant [343.12ms]
+(pass) t328 the Codex (Recommended) label decorator > "Approve Planx" does not pair [611.66ms]
+(pass) t328 the Codex (Recommended) label decorator > the decorator is stripped once and only at the end [0.28ms]
+(pass) t328 decision refuses while hooks are provably not firing > a workflow that advanced more than the doctor's slack after the last heartbeat is refused before minting [419.70ms]
+(pass) t328 decision refuses while hooks are provably not firing > no heartbeats at all is not evidence of dead hooks [279.95ms]
+(pass) Item 1 session isolation > a reply for a session with no pending challenge is not recorded against the current session [782.39ms]
+(pass) Item 1 session isolation > certification for a session with no records does not borrow another session's pair [651.15ms]
+(pass) Item 1 session isolation > a session holding only a challenge cannot certify through another session's complete pair [496.36ms]
+(pass) Item 1 session isolation > a reply pairs with the supplied session's own challenge while the pointer names another session [525.76ms]
+(pass) Item 1 session isolation > certification uses only the supplied session's pair (session-a certifies while the pointer names session-b) [499.61ms]
+(pass) Item 1 session isolation > certification uses only the supplied session's pair (session-b certifies while the pointer names session-a) [505.05ms]
+(pass) Item 1 session isolation > a mismatched intent refuses same-session and cross-session certification [520.78ms]
+(pass) Item 1 session isolation > a response paired with the wrong challenge id or choice never certifies [495.02ms]
+(pass) Item 1 session isolation > Request Changes under a session without a pair cannot withdraw the durable receipt or consume another session [503.45ms]
+(pass) Item 1 session isolation > a same-session Request Changes withdraws the decision and the durable receipt [735.90ms]
+(pass) Item 1 session isolation > a blank or unknown supplied session never falls back to another session's authority [781.45ms]
+(pass) Item 1 session isolation > the .current-session pointer is never consulted between decision, response, and certification [520.15ms]
+
+ 40 pass
+ 0 fail
+ 466 expect() calls
+Ran 40 tests across 1 file. [33.27s]
+--- PASS: t328-plan-approval-runtime-authority.test.ts ---
+=== DONE t328-plan-approval-runtime-authority.test.ts (PASS) ===
+
+=== START t334-change-control-plan-approval.test.ts ===
+bun test v1.3.14 (0d9b296a)
+
+tests/unit/t334-change-control-plan-approval.test.ts:
+(pass) t334 (1) relaxed accepts source drift at the checkpoint record and re-baselines the tag > drift between the fingerprint and the decision is recorded once, told once, and the tag moves [890.94ms]
+(pass) t334 (2) relaxed accepts source drift at the answer and certifies the source found > drift between the decision and the answer records once; the receipt carries the new source and generation begins [1033.35ms]
+(pass) t334 (3) relaxed accepts source drift at generation start and re-baselines the receipt > drift after approval is accepted once through the shipped begin and dispatch guard [1595.08ms]
+(pass) t334 (4) strict is today's refusal, in the human's words > drift before the answer refuses and names the file; re-presenting completes it [1343.10ms]
+(pass) t334 (4) strict is today's refusal, in the human's words > drift between the fingerprint and the decision refuses the decision; re-fingerprinting recovers without a receipt [756.10ms]
+(pass) t334 (4) strict is today's refusal, in the human's words > drift after approval refuses generation, keeps the receipt, and carries the remedy beside the sentence [932.47ms]
+(pass) t334 (5) the approval's content members reopen approval under both values > an edited plan, instructions, or Testing Contract is refused under strict [742.59ms]
+(pass) t334 (5) the approval's content members reopen approval under both values > an edited plan, instructions, or Testing Contract is refused under relaxed [818.79ms]
+
+ 8 pass
+ 0 fail
+ 165 expect() calls
+Ran 8 tests across 1 file. [8.26s]
+--- PASS: t334-change-control-plan-approval.test.ts ---
+=== DONE t334-change-control-plan-approval.test.ts (PASS) ===
+
+=== START t340-default-scope-resolver.test.ts ===
+bun test v1.3.14 (0d9b296a)
+
+tests/unit/t340-default-scope-resolver.test.ts:
+(pass) t340 shared implicit scope resolution > recorded feature scope drives empty-project next and intent-create without --scope [393.55ms]
+(pass) t340 shared implicit scope resolution > an explicit classic environment overrides recorded feature for both consumers [297.07ms]
+(pass) t340 shared implicit scope resolution > neither environment nor recorded default falls back to classic [198.01ms]
+(pass) t340 shared implicit scope resolution > unknown environment scope reaches next's canonical error instead of recorded fallback [169.07ms]
+(pass) t340 shared implicit scope resolution > missing scope data preserves the default and doctor JSON diagnostics [189.98ms]
+
+ 5 pass
+ 0 fail
+ 25 expect() calls
+Ran 5 tests across 1 file. [1270.00ms]
+--- PASS: t340-default-scope-resolver.test.ts ---
+=== DONE t340-default-scope-resolver.test.ts (PASS) ===
+
+=== START t340-grouped-plan-approval.test.ts ===
+bun test v1.3.14 (0d9b296a)
+
+tests/unit/t340-grouped-plan-approval.test.ts:
+(pass) t340 grouped Plan Approval lifecycle and guard composition > approved native and installed unified swarm commands pass PreToolUse and reach native authority checks [6562.82ms]
+(pass) t340 grouped Plan Approval lifecycle and guard composition > swarm PreToolUse refuses missing approvals and foreign Unit or project targets in both command forms [31699.46ms]
+(pass) t340 grouped Plan Approval lifecycle and guard composition > approved swarm admission excludes compound commands, redirections, preloads and project environment prefixes [9907.30ms]
+(pass) t340 grouped Plan Approval lifecycle and guard composition > real checkpoint next and completion next preserve every grouped receipt and keep the review routes reachable [7314.73ms]
+(pass) t340 grouped Plan Approval lifecycle and guard composition > split successful starts of the same approved group preserve its checkpoint successor [3991.21ms]
+(pass) t340 grouped Plan Approval lifecycle and guard composition > a proven pending subset retains the original group and still checks its completed peer's plan [3143.36ms]
+(pass) t340 grouped Plan Approval lifecycle and guard composition > unmerged evidence cannot narrow a protected group to pending units [2830.60ms]
+(pass) t340 grouped Plan Approval lifecycle and guard composition > legacy evidence cannot narrow a protected group to pending units [2829.78ms]
+(pass) t340 grouped Plan Approval lifecycle and guard composition > wrong-batch evidence cannot narrow a protected group to pending units [2828.91ms]
+(pass) t340 grouped Plan Approval lifecycle and guard composition > wrong-start-set evidence cannot narrow a protected group to pending units [2824.46ms]
+(pass) t340 grouped Plan Approval lifecycle and guard composition > later-start evidence cannot narrow a protected group to pending units [2870.37ms]
+(pass) t340 grouped Plan Approval lifecycle and guard composition > stale evidence cannot narrow a protected group to pending units [2863.39ms]
+(pass) t340 grouped Plan Approval lifecycle and guard composition > foreign evidence cannot narrow a protected group to pending units [2808.38ms]
+(pass) t340 grouped Plan Approval lifecycle and guard composition > missing convergence cannot turn a run-stage marker into grouped authority [3215.91ms]
+(pass) t340 grouped Plan Approval lifecycle and guard composition > partial convergence cannot turn a run-stage marker into grouped authority [3182.38ms]
+(pass) t340 grouped Plan Approval lifecycle and guard composition > wrong-batch convergence cannot turn a run-stage marker into grouped authority [3191.39ms]
+(pass) t340 grouped Plan Approval lifecycle and guard composition > wrong-start-set convergence cannot turn a run-stage marker into grouped authority [3205.56ms]
+(pass) t340 grouped Plan Approval lifecycle and guard composition > foreign-start-member convergence cannot turn a run-stage marker into grouped authority [3192.15ms]
+(pass) t340 grouped Plan Approval lifecycle and guard composition > plan changes still invalidate the protected group [2343.18ms]
+(pass) t340 grouped Plan Approval lifecycle and guard composition > source changes still invalidate the protected group [2348.85ms]
+(pass) t340 grouped Plan Approval lifecycle and guard composition > attempt changes still invalidate the protected group [2330.23ms]
+(pass) t340 grouped Plan Approval lifecycle and guard composition > workflow changes still invalidate the protected group [2324.00ms]
+(pass) t340 grouped Plan Approval lifecycle and guard composition > dag changes still invalidate the protected group [2331.07ms]
+(pass) t340 grouped Plan Approval lifecycle and guard composition > set changes still invalidate the protected group [2309.12ms]
+(pass) t340 grouped Plan Approval lifecycle and guard composition > legacy convergence rows cannot grant a native checkpoint approval [2606.12ms]
+(pass) t340 initial worktree approval preflight > same source and ancestor bases pass without changing receipts, source, audit, HEAD or worktrees [5115.19ms]
+(pass) t340 initial worktree approval preflight > dirty approved source refuses before a child exists (legacy autonomous: %s) [2753.79ms]
+(pass) t340 initial worktree approval preflight > dirty approved source refuses before a child exists (legacy autonomous: %s) [1169.94ms]
+
+ 28 pass
+ 0 fail
+ 647 expect() calls
+Ran 28 tests across 1 file. [124.15s]
+--- PASS: t340-grouped-plan-approval.test.ts ---
+=== DONE t340-grouped-plan-approval.test.ts (PASS) ===
+
+=== START t340-plan-approval-batch.test.ts ===
+bun test v1.3.14 (0d9b296a)
+
+tests/unit/t340-plan-approval-batch.test.ts:
+(pass) t340 exact reviewed Code Generation batch approval > absolute manifest path cannot read outside the active record [1351.80ms]
+(pass) t340 exact reviewed Code Generation batch approval > parent traversal manifest path cannot read outside the active record [1344.67ms]
+(pass) t340 exact reviewed Code Generation batch approval > manifest path cannot traverse a symlinked parent inside the active record [1349.87ms]
+(pass) t340 exact reviewed Code Generation batch approval > manifest larger than 64 KiB is refused before approval [1337.99ms]
+(pass) t340 exact reviewed Code Generation batch approval > malformed manifest reports invalid JSON without exposing file contents [1405.24ms]
+(pass) t340 exact reviewed Code Generation batch approval > a record-relative manifest at the size limit certifies every member and generation consumes ordinary receipts [2813.78ms]
+(pass) t340 exact reviewed Code Generation batch approval > no receipt without the actual offered response in this session [1961.25ms]
+(pass) t340 exact reviewed Code Generation batch approval > same reviewed batch, reordered manifest and reissued directive keep the response [2262.86ms]
+(pass) t340 exact reviewed Code Generation batch approval > duplicate selection creates no partial challenge [829.22ms]
+(pass) t340 exact reviewed Code Generation batch approval > foreign selection creates no partial challenge [840.98ms]
+(pass) t340 exact reviewed Code Generation batch approval > subset selection creates no partial challenge [852.40ms]
+(pass) t340 exact reviewed Code Generation batch approval > noncanonical selection creates no partial challenge [852.25ms]
+(pass) t340 exact reviewed Code Generation batch approval > name change after review refuses all receipts [1289.53ms]
+(pass) t340 exact reviewed Code Generation batch approval > plan change after review refuses all receipts [1296.79ms]
+(pass) t340 exact reviewed Code Generation batch approval > instructions change after review refuses all receipts [1296.12ms]
+(pass) t340 exact reviewed Code Generation batch approval > attempt change after review refuses all receipts [1312.24ms]
+(pass) t340 exact reviewed Code Generation batch approval > set change after review refuses all receipts [1285.79ms]
+(pass) t340 exact reviewed Code Generation batch approval > source change after review refuses all receipts [1307.53ms]
+(pass) t340 exact reviewed Code Generation batch approval > progress checkboxes, a terminal review appendix and line endings preserve every grouped receipt [3900.55ms]
+(pass) t340 exact reviewed Code Generation batch approval > plan body changes after approval invalidate every group member [2186.68ms]
+(pass) t340 exact reviewed Code Generation batch approval > instructions changes after approval invalidate every group member [2216.97ms]
+(pass) t340 exact reviewed Code Generation batch approval > instructions review appendix changes after approval invalidate every group member [2508.24ms]
+(pass) t340 exact reviewed Code Generation batch approval > nonterminal review changes after approval invalidate every group member [2235.12ms]
+(pass) t340 exact reviewed Code Generation batch approval > re-fingerprinting changed content rotates the group challenge and needs a new human response [2120.85ms]
+(pass) t340 exact reviewed Code Generation batch approval > changing the live unit set after approval also retires the remaining unit's group receipt [2046.71ms]
+(pass) t340 exact reviewed Code Generation batch approval > incomplete receipt set cannot authorize even the member whose receipt exists [2651.00ms]
+(pass) t340 exact reviewed Code Generation batch approval > Request Changes withdraws the whole reviewed group and spends the response [4259.15ms]
+(pass) t340 exact reviewed Code Generation batch approval > filesystem failure after receipt writes rolls back all authority and preserves the response [3352.58ms]
+(pass) t340 exact reviewed Code Generation batch approval > loss of the shared commit marker leaves every receipt non-authorizing [2515.71ms]
+(pass) t340 exact reviewed Code Generation batch approval > an obstructed member destination refuses without changing any runtime authority [2670.81ms]
+(pass) t340 exact reviewed Code Generation batch approval > failed rejection restores previous receipts and keeps the human response for retry [3630.98ms]
+(pass) t340 exact reviewed Code Generation batch approval > legacy batch flags refuse with a single-unit fallback and no challenge [394.15ms]
+(pass) t340 exact reviewed Code Generation batch approval > single route remains compatible, stage-level=%s, including protected choices [712.56ms]
+(pass) t340 exact reviewed Code Generation batch approval > single route remains compatible, stage-level=%s, including protected choices [707.32ms]
+(pass) t340 exact reviewed Code Generation batch approval > a grouped response cannot be spent through the single-unit answer route [2025.25ms]
+
+ 35 pass
+ 0 fail
+ 398 expect() calls
+Ran 35 tests across 1 file. [65.64s]
+--- PASS: t340-plan-approval-batch.test.ts ---
+=== DONE t340-plan-approval-batch.test.ts (PASS) ===
+
+## Integration Tests (Claude CLI end-to-end)
+
+==============================
+SUMMARY
+==============================
+Guard profile: fixture (synthetic guard skips and direct audit authority enabled)
+Test files: 6
+Failed files: 0
+Total assertions: 201
+Failed assertions: 0
+Coverage: INCOMPLETE
+Executed test cases: 200
+Skipped test cases: 1
+Skipped files: 0
+==============================
+RESULT: PASS
+EXIT=0

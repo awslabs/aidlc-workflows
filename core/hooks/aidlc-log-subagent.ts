@@ -1,4 +1,4 @@
-// SubagentStop hook: Emit SUBAGENT_COMPLETED when a subagent finishes.
+// SubagentStop records a completion; an empty Devin report records failure instead.
 //
 // Receives JSON on stdin with subagent info. Audits only while a workflow is
 // running or a stage run on its own is open on it, or with no work while such a
@@ -121,9 +121,12 @@ export async function run(input: string): Promise<number> {
       ? validSessionId(rawSessionId)
       : null;
 
+  const emptyReport = parsed.hook_event_name === "SubagentEmptyReport";
   let completionError = "";
   try {
-    completeSubagentInflight(projectDir, rawSessionId);
+    // An empty report closes its own annotated entry, never an unrelated
+    // unannotated background launch under the same Devin session.
+    completeSubagentInflight(projectDir, rawSessionId, parsed.agent_id || undefined, emptyReport);
   } catch (error) {
     completionError = errorMessage(error);
   }
@@ -194,6 +197,14 @@ export async function run(input: string): Promise<number> {
   };
   if (dispatchAgent !== null) fields["Dispatch Agent"] = dispatchAgent;
   if (agentId) fields["Agent ID"] = agentId;
+  if (emptyReport) {
+    try {
+      appendAuditEntry("SUBAGENT_EMPTY_REPORT", fields, projectDir, intent, space);
+    } catch (e) {
+      recordHookDrop(projectDir, "log-subagent", `empty report not recorded: ${errorMessage(e)}`, intent, space);
+    }
+    return 0;
+  }
   if (agentMessage) fields.Message = agentMessage;
   // What a reviewer left in the review file of every request still open for
   // it, at the moment it finished: a side-by-side Unit's too, recorded in the

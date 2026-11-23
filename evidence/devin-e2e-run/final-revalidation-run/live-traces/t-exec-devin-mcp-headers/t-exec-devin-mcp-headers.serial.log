@@ -1,0 +1,19 @@
+Test: t-exec-devin-mcp-headers.serial.test.ts
+File: <home>/sources/aidlc-workflows/tests/e2e/t-exec-devin-mcp-headers.serial.test.ts
+Status: PASS
+Guard profile: fixture (synthetic guard skips and direct audit authority enabled)
+Exit code: 0
+Executed test cases: 1
+Skipped test cases: 0
+Timestamp: 2026-09-23T00:03:08Z
+
+--- Output ---
+bun test v1.3.14 (0d9b296a)
+
+tests/e2e/t-exec-devin-mcp-headers.serial.test.ts:
+(pass) t-exec-devin MCP ${env:VAR} header resolution via devin -p > server receives the resolved env value and an empty string for the unset variable [7552.99ms]
+
+ 1 pass
+ 0 fail
+ 8 expect() calls
+Ran 1 test across 1 file. [7.59s]

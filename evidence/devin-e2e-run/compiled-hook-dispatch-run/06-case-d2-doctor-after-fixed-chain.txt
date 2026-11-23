@@ -1,0 +1,96 @@
+== Case D2 — doctor on p-b after the fixed chain (Case B) ==
+Fixture: /tmp/aidlc-inv/p-b — marker + 4 hook heartbeats present from Case B
+cwd: /tmp/aidlc-inv/p-b
+command: env -u CLAUDE_PROJECT_DIR -u AIDLC_PROJECT_DIR -u AIDLC_HARNESS_DIR -u AIDLC_HARNESS_NAME DEVIN_PROJECT_DIR=/tmp/aidlc-inv/p-b $BIN doctor --verbose --project-dir /tmp/aidlc-inv/p-b
+exit: 1
+command: ... $BIN doctor --verbose --project-dir /tmp/aidlc-inv/p-b --json
+exit: 1 (JSON alongside: 06-case-d2-doctor-after-fixed-chain.json)
+
+== full --verbose output ==
+AI-DLC doctor
+
+Machine
+  ok    Runtime hook PATH: bun is not required by the selected projection
+  warn  Runtime hook PATH: aidlc is missing
+        fix: Add ~/.local/bin to the login-independent PATH the harness inherits (the PATH line in /etc/environment, ENV_PATH in /etc/login.defs, or a PATH= line in ~/.config/environment.d/*.conf), not only an interactive shell rc file.
+  ok    Harness CLI: devin devin 3000.11.3 (9c803229faa4) at <home>/.local/bin/devin
+  fail  Installed runtime: active version marker unavailable
+        fix: run `aidlc config --harness <name>`
+  fail  Command pointer is missing or does not select an active version
+        fix: re-run `aidlc update --version <version> --from <release-directory>`
+  ok    Rollback target: none recorded
+  ok    Project pin registry: no stale registrations
+  ok    Transaction staging: no abandoned directories
+  ok    Transaction recovery: no quarantined directories
+  ok    Devin host availability: standalone CLI found
+  ok    devin CLI version 3000.11.3 >= 3000.10.21
+  warn  Devin Desktop installation: not found (checked OS-appropriate application paths; CLI-only use remains supported)
+        fix: Install Devin Desktop if this project is intended for Desktop use; CLI-only Devin projects can ignore this warning.
+  warn  Update: update cache is absent
+        fix: run `aidlc update --check`
+
+Project (.devin, devin)
+  ok    Instruction file: framework-owned file intact
+  fail  Native command trust is incomplete: 0 Bun-shaped entries, native hooks missing, native permission/trust missing
+        fix: refresh the project with `aidlc config`
+  ok    Project runtime stamp: 2.10.0 (devin)
+  ok    aidlc-write-audit-log.ts present
+  ok    aidlc-sync-workflow-state.ts present
+  ok    aidlc-validate-state.ts present
+  ok    aidlc-log-subagent.ts present
+  ok    aidlc-session-start.ts present
+  ok    aidlc-session-end.ts present
+  ok    aidlc-statusline.ts present
+  ok    aidlc-devin-adapter.ts present
+  ok    hooks.v1.json present (hook wiring)
+  ok    config.json present (permissions + read_config_from)
+  ok    mcp_config.json present (MCP servers)
+  ok    rules/aidlc.md present (standing method rule (auto-loaded pointer))
+  ok    Devin compatibility imports: all 7 documented sources explicitly decided in .devin/config.json
+  ok    Devin compatibility imports: no user-level read_config_from override
+  warn  Devin subagent model: shipped AI-DLC custom profiles omit model: and use the default subagent model, not automatic parent-model inheritance (documented router default: SWE-1.6; effective organization setting/model not inspected)
+        fix: Ask an organization/enterprise admin to review "Default subagent model" and select the desired model (select your primary model there to align unpinned profiles); None disables subagents. Custom profile model: overrides follow Devin configuration, not the parent model picker.
+  ok    Devin hook execution evidence: SessionStart last ran 2026-10-08T21:18:20.422Z (historical evidence only; current hook approval is not verified)
+  ok    AWS_AIDLC_DEFAULT_SCOPE (unset - no project default)
+  ok    Enabled plugins: all enabled (no selection); enabled stage counts: aidlc=30, bootstrap=3
+  ok    Plugin selection flags: harness.json agrees with stage-graph.json
+  ok    Composed plugin surface: all enabled plugin stages and recorded contributions are present
+  ok    workspace shell ready (.devin/ + aidlc/spaces/default/memory/)
+  ok    Submodules: no .gitmodules at workspace root
+  ok    Hooks last fired: review-freeze 2026-10-08T21:18:22Z, validate-state 2026-10-08T21:18:20Z, continue-workflow 2026-10-08T21:18:22Z, plan-approval-guard 2026-10-08T21:18:21Z
+  ok    Hook drops: none recorded
+  ok    Runtime locks: none leaked
+  ok    Orphan worktrees: 0 observed
+  ok    Stale branches: 0 (0 bolt-* observed)
+  ok    Orphan state files: 0 observed
+  ok    Orphan audit: 0 observed
+  ok    Practices staleness: state file absent (informational)
+  ok    MERGE_DISPATCH: 0 orphan INVOKED (0 bracketed)
+  ok    Composed scope durability: no composed scopes
+  ok    Duplicate producers: every consumed artifact has a single producer
+  ok    Intent registry: all rows match their record dirs
+  warn  Workspace records: 8 uncommitted change(s) under aidlc/ (advisory - the shared records travel by git; commit & push so teammates get them: `git add aidlc/ && git commit && git push`)
+        fix: run `aidlc doctor --verbose`, correct the named condition, then rerun `aidlc doctor`
+  warn  Plugins: 1 need attention - host:inventory-unavailable
+        fix: host inventory unavailable; run sync through the host SessionStart adapter
+  ok    Models: recorded policy is expressible
+  ok    Flags: no recorded project answers
+  ok    Providers: using shipped fallback; no recorded answers
+  ok    Workspace siblings: complete projection is present
+
+Framework integrity
+  ok    Enabled stage compile coverage: every enabled stage file is in the full graph
+  ok    Agent filename/name consistency: all agent files match declared names
+  ok    Scope filename/name consistency: all scope files match declared names
+  ok    Cycle detection: 0 cycles
+  ok    Orphan stage files: 33 graph entries all have files
+  ok    Uncompiled stage files: 0 stage files missing from the compiled graph
+  ok    Scope validation: 11 scopes valid (47 advisories)
+  ok    Schema validation: 33/33 stages validated
+  ok    Graph references: 122 artifacts + edges resolved
+  ok    Keyword overlap: no conflicts
+  ok    Rule drift: no team/project rule overlaps org policy
+  ok    Paired sensor coverage: no sensor-bound rules (0 feedforward-only)
+
+3 problems, 6 warnings.
+Warnings are advisory - if everything works, ignore them.

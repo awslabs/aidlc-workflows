@@ -82,6 +82,8 @@ const LIVE_MODEL_GATES = [
   "AIDLC_CODEX_EXEC_LIVE",
   "AIDLC_COPILOT_EXEC_LIVE",
   "AIDLC_CURSOR_RUN_LIVE",
+  "AIDLC_DEVIN_EXEC_LIVE",
+  "AIDLC_DEVIN_ACP_LIVE",
   "AIDLC_KIRO_IDE_LIVE",
   "AIDLC_OPENCODE_RUN_LIVE",
 ] as const;
@@ -500,7 +502,7 @@ if (args.noLlm) {
 
 if (args.debug) {
   process.env.AIDLC_TEST_DEBUG = "true";
-  process.stdout.write(`Debug driver traces: ${logDir}/{sdk,tui,kiro-acp}-drive-*.ndjson\n`);
+  process.stdout.write(`Debug driver traces: ${logDir}/{sdk,tui,kiro-acp,devin-acp}-drive-*.ndjson\n`);
 }
 
 if (args.fullProfile && args.debug) {
@@ -1153,7 +1155,7 @@ async function runBunTestFile(
     process.stdout.write(`  log: ${displayLogDirPath(join(logDir, `${name}.log`))}\n`);
     process.stdout.write(context
       ? `  driver traces: ${displayLogDirPath(context.artifacts)}/*.ndjson\n`
-      : `  driver traces: ${displayLogDirPath(logDir)}/{sdk,tui,kiro-acp}-drive-*.ndjson\n`);
+      : `  driver traces: ${displayLogDirPath(logDir)}/{sdk,tui,kiro-acp,devin-acp}-drive-*.ndjson\n`);
   }
 
   const actualFile = context ? join(context.worker.root, relative(REPO_ROOT, file)) : file;

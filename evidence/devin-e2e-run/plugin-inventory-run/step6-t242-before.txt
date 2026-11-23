@@ -1,0 +1,54 @@
+bun test v1.3.14 (0d9b296a)
+
+tests/unit/t242-plugin-state.test.ts:
+(pass) t242 plugin manifest and hash contract > normalizes one host manifest and strips exactly the aidlc- namespace [61.78ms]
+(pass) t242 plugin manifest and hash contract > rejects invalid namespace, key, version, and host-version mismatch [87.69ms]
+(pass) t242 plugin manifest and hash contract > hashes sorted relative paths and LF-normalized source before token substitution [28.01ms]
+(pass) t242 fixture-proved host inventories > Claude reads registry v2, exact installPath, and enabledPlugins [43.58ms]
+(pass) t242 fixture-proved host inventories > Claude uses settings for disablement and the registry for uninstall state [50.47ms]
+(pass) t242 fixture-proved host inventories > Claude downgrades malformed enablement settings to unavailable inventory [33.31ms]
+(pass) t242 fixture-proved host inventories > Codex enumerates declared IDs and their fixed semver cache path [20.86ms]
+(pass) t242 fixture-proved host inventories > Codex accepts the documented local marketplace cache leaf [39.91ms]
+(pass) t242 fixture-proved host inventories > Codex rejects traversal marketplace IDs before reading outside its cache [23.20ms]
+(pass) t242 fixture-proved host inventories > Codex collapses stale semver cache directories to the newest version [76.37ms]
+(pass) t242 fixture-proved host inventories > Codex uses config disablement and ignores a cache retained after removal [39.32ms]
+(pass) t242 fixture-proved host inventories > Kiro and a disappeared full registry remain current-root-only [35.03ms]
+(pass) t242 fixture-proved host inventories > Devin reads its native .devin-plugin manifest as current-root-only [13.33ms]
+448 |     expect(discovered).toEqual(expect.objectContaining({
+449 |       capability: "current-root-only",
+450 |       harness: "devin",
+451 |       invalid: [],
+452 |     }));
+453 |     expect(discovered.installed).toHaveLength(1);
+                                       ^
+error: expect(received).toHaveLength(expected)
+
+Expected length: 1
+Received length: 0
+
+      at <anonymous> (<home>/sources/aidlc-workflows/tests/unit/t242-plugin-state.test.ts:453:34)
+(fail) t242 fixture-proved host inventories > Devin discovers its plugin from DEVIN_PLUGIN_ROOT alone [16.70ms]
+(pass) t242 fixture-proved host inventories > Devin's CLAUDE_PLUGIN_ROOT and DEVIN_PLUGIN_ROOT aliases for one root count once [1.19ms]
+(pass) t242 fixture-proved host inventories > duplicate installed identities are invalid and name every manifest [100.86ms]
+(pass) t242 pure status comparator > covers every full-inventory state and keeps version/hash independent [0.52ms]
+(pass) t242 pure status comparator > default rendering exposes only the three actions and verbose keeps taxonomy [0.38ms]
+(pass) t242 pure status comparator > current-root-only never infers disabled or missing aggregate state [0.05ms]
+(pass) t242 transactional sync and ownership-safe prune > aggregate sync writes a deterministic stamp and is idempotent [5513.21ms]
+(pass) t242 transactional sync and ownership-safe prune > concurrent syncs converge and the loser replans as an idempotent no-op [1721.81ms]
+(pass) t242 transactional sync and ownership-safe prune > public JSON and doctor expose the shared exact comparator state [697.51ms]
+(pass) t242 transactional sync and ownership-safe prune > one transaction rolls back all plugin bytes on an injected commit fault [811.01ms]
+(pass) t242 transactional sync and ownership-safe prune > sync rejects content whose plugin owner differs from the host manifest key [703.55ms]
+(pass) t242 transactional sync and ownership-safe prune > a version upgrade replaces prior hash-proven primitive files [1641.28ms]
+(pass) t242 transactional sync and ownership-safe prune > same-version source drift replaces prior hash-proven primitive files [1681.68ms]
+(pass) t242 transactional sync and ownership-safe prune > sync refuses to replace a locally modified owned primitive [863.76ms]
+(pass) t242 transactional sync and ownership-safe prune > plain sync retains missing content; explicit prune removes only hash-proven ownership [1694.90ms]
+(pass) t242 transactional sync and ownership-safe prune > prune refuses a locally modified owned file without deleting it [857.67ms]
+(pass) t242 transactional sync and ownership-safe prune > interactive prune confirmation resolves on a line without waiting for EOF [3.13ms]
+
+1 tests failed:
+(fail) t242 fixture-proved host inventories > Devin discovers its plugin from DEVIN_PLUGIN_ROOT alone [16.70ms]
+
+ 29 pass
+ 1 fail
+ 86 expect() calls
+Ran 30 tests across 1 file. [26.74s]

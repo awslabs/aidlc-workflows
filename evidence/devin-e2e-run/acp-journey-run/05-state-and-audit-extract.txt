@@ -1,0 +1,105 @@
+=== source: aidlc/spaces/default/intents/261022-expense-tracker/aidlc-state.md (selected lines) ===
+- **Scope**: poc
+- **Start Date**: 2026-10-22T23:14:15Z
+- **State Version**: 8
+- **Stages to Execute**: 0.1, 0.2, 0.3, 1.1, 2.3, 3.5, 3.6
+- **Depth**: Minimal
+- **Test Strategy**: Minimal
+- **Guard Policy**: strict (set by you)
+- **Sensors**: on (from scope poc)
+- **Learnings**: on (from scope poc)
+- **Summary Confirmation**: on (from scope poc)
+- **Plan Approval**: on (set by a command)
+- **Total Stages**: 7
+- **Completed**: 7
+- **In Progress**: none
+
+=== source: the intent's audit shard (galaxybook-be7f78ae0890.md) — event counts ===
+     47 ARTIFACT_UPDATED
+     27 QUESTION_REPLIED
+     26 SENSOR_FIRED
+     25 SENSOR_PASSED
+     22 ARTIFACT_CREATED
+     19 HUMAN_TURN
+     18 DECISION_RECORDED
+     10 QUESTION_ANSWERED
+      7 STAGE_STARTED
+      7 STAGE_COMPLETED
+      5 SUBAGENT_COMPLETED
+      5 STAGE_AWAITING_APPROVAL
+      4 SUMMARY_CONFIRMATION_RECORDED
+      4 REVIEW_REQUESTED
+      4 REVIEW_COMPLETED
+      4 PHASE_VERIFIED
+      4 PHASE_STARTED
+      4 PHASE_COMPLETED
+      4 GATE_APPROVED
+      1 WORKSPACE_SCANNED
+      1 WORKSPACE_SCAFFOLDED
+      1 WORKSPACE_INITIALISED
+      1 WORKFLOW_STARTED
+      1 WORKFLOW_COMPLETED
+      1 STAGE_REVISING
+      1 SENSOR_FAILED
+      1 PLAN_APPROVAL_RECORDED
+      1 PHASE_SKIPPED
+      1 GATE_REJECTED
+      1 ERROR_LOGGED
+
+=== audit excerpts referenced by SUMMARY.md ===
+## Gate Rejected
+**Timestamp**: 2026-10-22T23:22:35Z
+**Event**: GATE_REJECTED
+**Stage**: intent-capture
+**Feedback**: Request Changes: say in the intent statement that CSV storage and command-line use are firm requirements
+**Conductor Summary**: Request Changes
+
+
+## Plan Approval Recorded
+**Timestamp**: 2026-10-22T23:34:56Z
+**Event**: PLAN_APPROVAL_RECORDED
+**Stage**: code-generation
+**Details**: Approve Plan
+**Checkpoint**: plan-approval
+**Plan Target**: stage:code-generation
+**Run floor**: STAGE_STARTED:2026-10-22T23:32:39Z#1
+**Approval Fingerprint**: sha256:v3:1dcebe2fee1f366f8492beb946af4f758a602c1eb79bb73eb3659b9e2b4b5a9b
+**Questions File**: aidlc/spaces/default/intents/261022-expense-tracker/construction/code-generation/code-generation-questions.md
+
+## Error Logged
+**Timestamp**: 2026-10-22T23:24:29Z
+**Event**: ERROR_LOGGED
+**Tool**: aidlc-log
+**Command**: aidlc-log review --stage intent-capture --reviewer aidlc-product-lead-agent --iteration 2
+**Error**: Cannot start review iteration 2 for "intent-capture" because the next iteration is 1. Retry with --iteration 1.
+
+
+## Sensor Failed
+**Timestamp**: 2026-10-22T23:21:55Z
+**Event**: SENSOR_FAILED
+**Fire id**: b66aed1e
+**Sensor ID**: claim-sources
+**Stage slug**: intent-capture
+**Output path**: aidlc/spaces/default/intents/261022-expense-tracker/ideation/intent-capture/intent-statement.md
+**Detail path**: aidlc/spaces/default/intents/261022-expense-tracker/.aidlc-engine/sensors/intent-capture/claim-sources-b66aed1e.md
+**Findings count**: 4
+
+
+## Workflow Completion
+**Timestamp**: 2026-10-22T23:50:49Z
+**Event**: WORKFLOW_COMPLETED
+**Scope**: poc
+**Details**: Scope: poc, 7 stages completed
+
+
+=== SUBAGENT_COMPLETED rows (agent type / id) ===
+**Agent Type**: aidlc-product-lead-agent
+**Agent ID**: 0df5f519
+**Agent Type**: aidlc-product-lead-agent
+**Agent ID**: 9b19dd55
+**Agent Type**: aidlc-product-lead-agent
+**Agent ID**: 7c31136e
+**Agent Type**: aidlc-developer-agent
+**Agent ID**: 67a10c9d
+**Agent Type**: aidlc-architecture-reviewer-agent
+**Agent ID**: df89bbf2

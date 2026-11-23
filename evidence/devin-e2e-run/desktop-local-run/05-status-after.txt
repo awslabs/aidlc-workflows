@@ -1,0 +1,39 @@
+/aidlc --status INSIDE the Devin Desktop session (post-workflow)
+================================================================
+
+Captured verbatim from the attended session.
+
+AI-DLC Workflow Status
+==============================
+Project:        Create a dependency-free Python 3 program named hello.py that
+                prints exactly ok followed by a newline. Add unittest coverage
+                in test_hello.py. Use only the Python standard library. The
+                verification command is python -m unittest -v.
+Scope:          express
+Phase:          OPERATION
+Current Stage:  Observability Setup (4.4)
+Status:         Completed
+Active Agent:   aidlc-operations-agent
+Change Control: relaxed (from scope express)
+Sensors: on (from scope express)
+Learnings: on (from scope express)
+Summary Confirmation: on (from scope express)
+Completion:     6/9 stages (67%) - 3 skipped
+
+Phase Progress:
+  INITIALIZATION   ███ 3/3
+  INCEPTION        █ 1/1
+  CONSTRUCTION     ██ 2/2
+  OPERATION        SSS 0/3
+
+Validity:       Untracked completions - advisory; routing continues
+Untracked:      workspace-scaffold, workspace-detection, state-init
+
+Last Completed: build-and-test
+Next Stage:     none
+
+Note: the "Untracked completions" advisory covers the three bootstrap
+initialization stages (they complete before stage-tracking instrumentation);
+advisory only, routing unaffected. OPERATION stages (deployment-pipeline,
+deployment-execution, observability-setup) skipped per the audit
+WORKFLOW_COMPLETED reason: no deployable target for a standalone script.

@@ -1,0 +1,41 @@
+Verbose mode: logging to <home>/sources/aidlc-workflows/tests/logs/2026-09-23T00-02-06Z-p30156
+Debug driver traces: <home>/sources/aidlc-workflows/tests/logs/2026-09-23T00-02-06Z-p30156/{sdk,tui,kiro-acp}-drive-*.ndjson
+WARNING: claude CLI not found -- live integration/e2e tests may fail or skip
+AI-DLC Testing Harness
+======================
+Guard profile: fixture (synthetic guard skips and direct audit authority enabled)
+
+## E2E Tests (full lifecycle)
+
+=== START t-exec-devin-status.serial.test.ts ===
+Debug artifacts for t-exec-devin-status.serial.test.ts:
+  log: logs/2026-09-23T00-02-06Z-p30156/t-exec-devin-status.serial.log
+  driver traces: logs/2026-09-23T00-02-06Z-p30156/{sdk,tui,kiro-acp}-drive-*.ndjson
+bun test v1.3.14 (0d9b296a)
+
+tests/e2e/t-exec-devin-status.serial.test.ts:
+(pass) t-exec-devin-status — /aidlc --status on the shipped dist/devin via devin -p > no-state: status renders 'no active workflow' and scaffolds nothing [36532.50ms]
+
+ 1 pass
+ 0 fail
+ 5 expect() calls
+Ran 1 test across 1 file. [36.57s]
+--- PASS: t-exec-devin-status.serial.test.ts ---
+=== DONE t-exec-devin-status.serial.test.ts (PASS) ===
+
+==============================
+SUMMARY
+==============================
+Guard profile: fixture (synthetic guard skips and direct audit authority enabled)
+Test files: 1
+Failed files: 0
+Total assertions: 1
+Failed assertions: 0
+Coverage: COMPLETE
+Executed test cases: 1
+Skipped test cases: 0
+Skipped files: 0
+Log directory: logs/2026-09-23T00-02-06Z-p30156
+==============================
+RESULT: PASS
+EXIT=0

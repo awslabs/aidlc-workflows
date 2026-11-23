@@ -1,0 +1,42 @@
+# 13-environment
+
+## Versions
+$ devin --version
+devin 3000.10.31 (b98cc431)
+
+$ bun --version
+1.3.14
+
+## Session (sessions table row, final snapshot sessions.db)
+id: stylish-jester
+model: swe-2-medium
+title: Python Coding-Challenge Scorer: Scoring Engine & Packaging
+working_directory: <home>/devin-e2e-reviewer-scope
+created_at: 1789851455 (2026-09-19T20:57:35Z)
+last_activity_at: 1789920092 (2026-09-20T16:01:32Z)
+
+## Run project install commit
+$ git -C ~/devin-e2e-reviewer-scope log --oneline | head
+6eecf15 install aidlc devin tree (c29db7cc + Item 4 reviewer-window)
+
+## Installed adapter
+$ sha256sum .devin/hooks/aidlc-devin-adapter.ts
+cad43b5fb4a843c7cf00480b4d19b514fea6746bac9f639af048f4c474425fa3  <home>/devin-e2e-reviewer-scope/.devin/hooks/aidlc-devin-adapter.ts
+grep -c openReviewerWindow: 2
+grep -c closeReviewerWindow: 9
+grep -c namesReviewerWindow: 2
+
+## reviewer-scope matcher line(s) in .devin/hooks.v1.json
+  "PreToolUse": [
+    { "matcher": "", "hooks": [{ "type": "command", "command": "bun \"$DEVIN_PROJECT_DIR/.devin/hooks/aidlc-devin-adapter.ts\" reviewer-scope" }] },
+  "PostToolUse": [
+
+## Reviewer profile allowed-tools
+aidlc-architecture-reviewer-agent.md: allowed-tools: [read, write, edit, grep, glob, exec]
+aidlc-product-lead-agent.md:       allowed-tools: [read, write, edit, grep, glob, exec]
+
+## Source repo
+$ git -C <home>/sources/aidlc-workflows rev-parse HEAD
+c29db7cc7bf91199d6121ecd0ba985cc7911431e  (branch feat/devin-harness; the Item 4 change is uncommitted worktree state)
+$ git -C <home>/sources/aidlc-workflows status --short | wc -l
+19

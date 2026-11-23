@@ -1,0 +1,6 @@
+test_prints_ok (test_hello.TestHello.test_prints_ok) ... ok
+
+----------------------------------------------------------------------
+Ran 1 test in 0.069s
+
+OK

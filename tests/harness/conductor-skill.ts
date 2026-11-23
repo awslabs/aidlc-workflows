@@ -14,6 +14,7 @@ export const CONDUCTOR_SKILL_FILES = {
   codex: ["SKILL.md"],
   copilot: ["SKILL.md"],
   cursor: ["SKILL.md"],
+  devin: ["SKILL.md"],
   "kiro-ide": ["SKILL.md", "workflow.md"],
   kiro: ["SKILL.md"],
   opencode: ["SKILL.md"],

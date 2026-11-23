@@ -1,0 +1,2 @@
+prompt-1.txt: /aidlc I want a small Python command-line habit tracker that saves to a JSON file: add a habit, check a habit off for today, and show the current streak for each habit. Please include tests. Before you write any code I want to approve the plan, and I'd like to confirm your summary of my answers before you move on.
+prompt-2.txt: STOP

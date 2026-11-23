@@ -1,0 +1,30 @@
+# L1+L2 evidence — lifecycle ordering (2026-09-19, session cosmic-minnow, intent 260919-hello-script)
+
+## Parent run_subagent dispatch (sessions.db node 80/88, pre-merge arguments)
+{"title":"Read AGENTS.md first heading","profile":"subagent_explore","is_background":true,"task":"Read the file .../AGENTS.md and report back the text of its first heading..."}
+
+## Launch ack (node 89, tool result 2026-09-19T17:11:13.370Z)
+"Background subagent started with agent_id=3e9497b8. You can wait for this agent to finish using the read_subagent tool, otherwise you will automatically be notified with a <subagent_completion_notification> when it completes."
+
+## Stop carve-out (continue-workflow.drops, verbatim)
+2026-09-19T17:11:21Z	a background subagent is still in flight for this session; allowing the stop (pending-subagent carve-out)
+
+## read_subagent call (node 100) args: {agent_id: 3e9497b8} — non-blocking, after the completion notification
+## read_subagent result (node 102, tool result 2026-09-19T17:11:35.784Z)
+"Subagent 3e9497b8 completed. Its full report is delivered in the <subagent_completion_notification> message; you do not need to read it again."
+
+## Audit rows for SUBAGENT_COMPLETED (exactly one; timestamp = read time, NOT launch time)
+## Subagent Completed
+**Timestamp**: 2026-09-19T17:11:35Z
+**Event**: SUBAGENT_COMPLETED
+**Agent Type**: subagent_explore
+**Agent ID**: 3e9497b8
+**Message**: Subagent 3e9497b8 completed. Its full report is delivered in the <subagent_completion_notification> message; you do not need to read it again.
+
+---
+
+## Artifact Updated
+**Timestamp**: 2026-09-19T17:11:55Z
+
+## Ledger after terminal read
+ls: cannot access '<home>/devin-e2e-background-lifecycle/aidlc/.aidlc-subagent-inflight': No such file or directory

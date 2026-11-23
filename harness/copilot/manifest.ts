@@ -189,6 +189,9 @@ const manifest: HarnessManifest = {
           // The variant shipped before the method include read aidlc/active-memory/
           // (the engine's copy of the active space's method).
           "sha256:2a818c7c6a39421df576d70829d4d2c960809df3d60b32ca1a0659965c56433a",
+          // The variant shipped by the Devin-harness work before the upstream
+          // merge.
+          "sha256:630438af52f221fcb89cf41b16ed3a1c042a496d2839311f9921a6c4e0a8ede5",
           // The variant whose onboarding said the init runner with a scope
           // always creates the work in one step (a scope alone now asks first).
           "sha256:0274b7bd2c26f8fc6158aafd6632a99aced247305d2aa09d1c60312283de7e69",
@@ -197,6 +200,9 @@ const manifest: HarnessManifest = {
           "sha256:6130b11ceb91e334f30940d3a3a1f40b41e82519ac777b0177c089b35f348442",
           // The variant whose setter rows named no --person-words.
           "sha256:ad6ccb9e0d8fbfc3224448ed45c6d3b278ffb8afdffe697ef2f362cfafeb44bf",
+          // The variant shipped by the Devin-harness work before the 0f39a808
+          // merge (branch-era).
+          "sha256:2821ab2aa7bed053d82a2dbe31b8629bb3cba8e051207e1a8eb49f00e2d4b258",
           // The variant whose Guards paragraph did not say a remark about a check is not a request to change it.
           "sha256:fde31c458f35dc77c83845acdad3d4715a4c87a219f2004fc6c96625c7933d29",
           // The variant whose Guards paragraph had the agent work out and ask the wider-place
@@ -205,12 +211,19 @@ const manifest: HarnessManifest = {
           // The variant whose Guards paragraph said the clear with no file named clears a
           // switch everywhere it is recorded (from a chat it now leaves the shared file).
           "sha256:b0f5e39317a501be8567bbb0ecbdff651116abc28a500b9c451b732ca8f2e088",
+          // The variant shipped by the Devin-harness work before this merge
+          // (branch-era).
+          "sha256:bd7a3a74e81cc207b899565bbb30da1da201d7b6fd0e99d332f25abc2c4a5d49",
+          // The variant shipped upstream at the merge point (ffd75428).
           // The variant whose Guards setters passed the person's words (--person-words);
           // they now name the message the person asked in (--message <id>).
           "sha256:b87a3ec2c39cb24074c6fa37f626e9d150d435d18069fbd0c762fdbd70719c5c",
+          // Recognize the root shipped with the Devin integration.
+          "sha256:874371d366720f13d36fbb912ae542b775be53424d9fe0fc71b02c79e45584b8",
           // The variant whose Documentation section and Copilot guide line named this
           // repository's docs/ folder.
           "sha256:a885fe6b7137ba16e0c24ce168b30ef5c780fe9991fc2d6bdff10cc15ad83c05",
+          "sha256:7b09e1c003a983ea0c328b7935b2305f35efb8a0927a0bc9f0f7c21c6b3e13d4",
         ],
       },
     },
