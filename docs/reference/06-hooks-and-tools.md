@@ -1924,14 +1924,38 @@ name or a linked parent folder, is judged as one in the project's own spelling),
 and on the kiro-ide row a call to one of the person's MCP servers (the Kiro
 adapter marks it `aidlc_external_tool: "mcp"`; Kiro's own approval card and the
 person's Kiro settings decide whether it runs).
+The guard keeps the build to the plan the person approved; it is a guardrail,
+not a sandbox. A program the agent runs (a test run, a build, `python
+script.py`) passes it by design, and whether that program may run at all is for
+the host tool's permission prompt and the person's own settings.
 A command the guard cannot read whole keeps the build's verdict: one with
 whitespace, a line continuation or an escaped operator (`\>`, `\&`) the lexer
 does not decode, one that can hide a command or a write target (a variable, a
 `$(...)`, `<(...)` or backtick substitution, a changed `PATH`), one that hands text to a
 shell or evaluator (`bash -c`, `sh -c`, `eval`, `source`, `pwsh`, a shell
 script run by name such as `./run.sh` or `deploy.ps1`, or a runtime given its
-program on the command line such as `bun -e` or `python -c`), or a PowerShell
-command it cannot read as plain PowerShell. A heredoc that only `cat` or `tee`
+program on the command line such as `bun -e` or `python -c`), a read command
+that starts another program (`startsProgram`) or writes a file through an
+option (`writesThroughOption`), or a PowerShell command it cannot read as plain
+PowerShell. The read commands that start another program are ripgrep with
+`--pre`, `--pre-glob`, `--hostname-bin` or `-z`/`--search-zip`, sort with
+`--compress-program`, file with `-z`/`--uncompress` or
+`-Z`/`--uncompress-noreport`, `git grep` with `-O`/`--open-files-in-pager`, and
+a read subcommand of git handed a program through `-c` or `--config-env` (an
+external diff or diff driver, a file-system monitor, a hook, a content filter,
+a signature program, or another config file; any other setting, such as `-c
+core.quotePath=false`, is a read), in any shortened spelling the command
+accepts; a word that is another option's value is not an option (`rg --regexp
+--pre` searches for the text `--pre`). A variable set
+on the command line counts the same way: `RIPGREP_CONFIG_PATH` before ripgrep
+(a config file's lines are options), `GIT_EXTERNAL_DIFF` or `GIT_CONFIG_COUNT`,
+`GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM` or `GIT_CONFIG_PARAMETERS` before a
+read subcommand of git, and `LESSOPEN` or `LESSCLOSE` before `more`. The
+options that write a file are sort's `-o`/`--output`, uniq's second operand,
+file's `-C`/`--compile` and git's `--output`. What the person's own git
+configuration or environment already names stays theirs (`git diff --ext-diff`
+runs only a driver their configuration defines), and a pager, or a command
+handed to one (`more '+!cmd'`), never starts without a terminal. A heredoc that only `cat` or `tee`
 reads (`cat > <file> <<'EOF'`, `tee <file> <<'EOF'`), with a quoted delimiter or
 a body the shell does not expand, is data: its write is judged as the same
 write by a plain redirect (`heredocReading` in review-freeze-command.ts, the
