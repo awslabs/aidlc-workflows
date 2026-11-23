@@ -305,6 +305,48 @@ describe("t314 standalone plugin validator", () => {
     );
   });
 
+  test("a plugin's templates are flat lowercase artifact files with `##` headings; markers and shapeless ones are warned", () => {
+    const root = fixture();
+    const manifestPath = join(root, ".aidlc-plugin", "plugin.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf-8")) as {
+      aidlc: { rulesLevel?: string; contributes: Record<string, string> };
+    };
+    manifest.aidlc.contributes.memory = "memory/";
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf-8");
+
+    const memoryFindings = (kind: "errors" | "warnings") =>
+      validatePluginRoot(root)[kind].filter((finding) => finding.rule === "memory-template")
+        .map((finding) => `${finding.file} ${finding.rule}`).sort();
+
+    // A well-formed template: no error, no warning, and no rulesLevel needed
+    // (the level belongs to rules.md alone).
+    write(join(root, "memory", "templates", "integration-test-plan.md"), "# Plan\n\n## Scope\n\n## Branch Coverage\n");
+    expect(validatePluginRoot(root).errors).toEqual([]);
+    expect(memoryFindings("warnings")).toEqual([]);
+
+    // Not a flat lowercase <artifact>.md: refused.
+    write(join(root, "memory", "templates", "Bad Name.md"), "## Scope\n");
+    expect(validatePluginRoot(root).errors).toContainEqual(
+      expect.objectContaining({ rule: "memory-template", file: "memory/templates/Bad Name.md" }),
+    );
+    rmSync(join(root, "memory", "templates", "Bad Name.md"));
+    write(join(root, "memory", "templates", "nested", "plan.md"), "## Scope\n");
+    expect(validatePluginRoot(root).errors).toContainEqual(
+      expect.objectContaining({ rule: "memory-template", file: "memory/templates/nested/plan.md" }),
+    );
+    rmSync(join(root, "memory", "templates", "nested"), { recursive: true });
+
+    // A questions/timestamp marker is never shape-checked; a template without
+    // `##` headings requires nothing. Both are authoring smells, said once.
+    write(join(root, "memory", "templates", "stage-questions.md"), "## Asked\n");
+    write(join(root, "memory", "templates", "shapeless.md"), "just prose, no headings\n");
+    expect(validatePluginRoot(root).errors).toEqual([]);
+    expect(memoryFindings("warnings")).toEqual([
+      "memory/templates/shapeless.md memory-template",
+      "memory/templates/stage-questions.md memory-template",
+    ]);
+  });
+
   test("dependencies name core and at most one base plugin, with a range npm can read", () => {
     const withDependencies = (dependencies: string[]): string[] => {
       const root = fixture();

@@ -1847,8 +1847,7 @@ async function handlePluginSync(projectDir: string, pluginRoot: string | undefin
 
 function pluginSyncRules(projectDir: string, root: string): string[] {
   try {
-    const line = mergePluginRulesFromRoot(projectDir, harnessDir(), root, isPluginEnabled);
-    return line === null ? [] : [line];
+    return mergePluginRulesFromRoot(projectDir, harnessDir(), root, isPluginEnabled);
   } catch (error) {
     die(`plugin sync failed for ${root}: ${errorMessage(error)}`);
   }

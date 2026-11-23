@@ -87,7 +87,8 @@ export type PluginValidationRule =
   | "memory-level"
   | "memory-lock"
   | "memory-setting"
-  | "memory-file";
+  | "memory-file"
+  | "memory-template";
 
 export interface PluginValidationFinding {
   file: string;
@@ -987,6 +988,45 @@ function validateManifest(
 // refused.
 const RULE_PHASE_FILES = ["ideation", "inception", "construction", "operation"].map((phase) => `phases/${phase}.md`);
 
+// Keep in sync with pluginRulesSource's TEMPLATE_FILE in aidlc-plugin.ts: the
+// engine reads one flat lowercase file per artifact under memory/templates/.
+const TEMPLATE_REL = /^templates\/[a-z0-9][a-z0-9-]*\.md$/;
+
+// A template's `##` headings are the sections the required-sections sensor
+// requires of the artifact at the gate, and the skeleton the agent fills.
+function validateMemoryTemplate(memory: string, rel: string, display: string, findings: MutableFindings): void {
+  if (!TEMPLATE_REL.test(rel)) {
+    addError(
+      findings,
+      display,
+      "memory-template",
+      "a plugin's templates are memory/templates/<artifact>.md: one flat file per artifact, lowercase letters, digits and dashes",
+      "Name the file after the artifact whose shape it requires, directly under memory/templates/.",
+    );
+    return;
+  }
+  const stem = rel.slice("templates/".length, -".md".length);
+  if (stem.endsWith("-questions") || stem.endsWith("-timestamp")) {
+    addWarning(
+      findings,
+      display,
+      "memory-template",
+      "questions and timestamp markers are never shape-checked, so this template is ignored at the gate",
+      "Ship templates only for the prose artifacts a stage produces.",
+    );
+    return;
+  }
+  if (!readFileSync(join(memory, rel), "utf-8").split(/\r?\n/).some((line) => line.trim().startsWith("## "))) {
+    addWarning(
+      findings,
+      display,
+      "memory-template",
+      "the template has no `##` headings, so it requires no section at the gate",
+      "Add the `##` headings the artifact must carry; the required-sections sensor checks exactly those.",
+    );
+  }
+}
+
 function validateMemory(root: string, findings: MutableFindings): void {
   const memory = join(root, "memory");
   if (!existsSync(memory)) return;
@@ -1013,13 +1053,17 @@ function validateMemory(root: string, findings: MutableFindings): void {
   const fieldNames = [...new Set([...SETTING_FIELDS.values()].flat())];
   for (const rel of files) {
     const display = `memory/${rel}`;
+    if (rel.startsWith("templates/")) {
+      validateMemoryTemplate(memory, rel, display, findings);
+      continue;
+    }
     if (rel !== "rules.md" && !RULE_PHASE_FILES.includes(rel)) {
       addWarning(
         findings,
         display,
         "memory-file",
-        "a plugin's rules are memory/rules.md and memory/phases/<ideation|inception|construction|operation>.md; this file is not read",
-        "Move its rules into memory/rules.md or the phase file they belong to.",
+        "a plugin's rules are memory/rules.md, memory/phases/<ideation|inception|construction|operation>.md and memory/templates/<artifact>.md; this file is not read",
+        "Move its rules into memory/rules.md, the phase file they belong to, or memory/templates/.",
       );
       continue;
     }

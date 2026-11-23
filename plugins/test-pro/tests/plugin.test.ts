@@ -54,6 +54,17 @@ describe("test-pro plugin own content validation", () => {
       walkMarkdownFiles(join(PLUGIN_ROOT, "contributions")).length,
     ).toBeGreaterThan(0);
   });
+
+  test("ships the section policy for its integration test plan, and the projection carries it", () => {
+    const template = readFileSync(
+      join(PLUGIN_ROOT, "memory", "templates", "test-pro-integration-test-plan.md"),
+      "utf-8",
+    );
+    expect(template).toContain("## Branch Coverage");
+    expect(
+      readFileSync(join(PLUGIN_DIST, "memory", "templates", "test-pro-integration-test-plan.md"), "utf-8"),
+    ).toBe(template);
+  });
 });
 
 describe(`${PLUGIN_NAME} plugin — sensor tools honor the main(argv) contract`, () => {

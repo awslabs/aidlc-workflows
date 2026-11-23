@@ -1050,7 +1050,7 @@ Before creating any artifact file, validate:
 
 ### Template overrides
 Before writing artifact `X` (keyed by the output filename stem — artifact `X` writes to `X.md`), resolve its template in this order, override-before-default, first hit wins:
-1. **team template** — `aidlc/spaces/<space>/memory/templates/X.md` (the active space's hand-authored override);
+1. **team template** — `aidlc/spaces/<space>/memory/templates/X.md` (the active space's override: hand-authored, or placed there by a plugin's sync — the team's own file at that path always wins);
 2. **framework default** — the engine-shipped default `X.md` *if one ships* (none ship at GA, so this normally misses);
 3. **else** — no template: follow the stage's existing prose.
 
