@@ -2,7 +2,10 @@
 // agent. The agent names the message that left it (`--message <id>`, or the
 // message the question was logged naming); the engine proves the message is
 // theirs, unspent and this chat's, and the record names it with their whole
-// words. No quote is compared: words the agent passes with the flag (the form
+// words. With none named, the answer stands on a reply of theirs since its
+// question was logged, or is refused with the step to ask them: a reply from
+// before the question gave the agent nothing to choose unless it names it. No
+// quote is compared: words the agent passes with the flag (the form
 // from before --message) are its own text, kept as such and claiming nothing,
 // so a misread shows in the record instead of being hunted by a matcher. In a
 // live run on Claude Code the agent once recorded its own summary as the
@@ -40,14 +43,16 @@ function project(): string {
   return p;
 }
 
-function run(p: string, args: string[], input?: string, chat = CHAT): { status: number; out: string } {
+function run(
+  p: string, args: string[], input?: string, chat = CHAT, extra: Record<string, string> = {},
+): { status: number; out: string } {
   const r = spawnSync(BUN, args, {
     cwd: p,
     encoding: "utf-8",
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     env: {
       ...process.env, AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0", AIDLC_UNATTENDED: "0", AIDLC_SESSION_OVERRIDE: chat,
-      CLAUDE_PROJECT_DIR: p, AIDLC_PROJECT_DIR: p,
+      CLAUDE_PROJECT_DIR: p, AIDLC_PROJECT_DIR: p, ...extra,
     },
     ...(input === undefined ? {} : { input }),
   });
@@ -93,16 +98,18 @@ const claimed = (row: { block: string }) =>
   fieldOf(row, "Answer Source") === "chosen by the agent, reading their message";
 
 describe("t-on-instruction-words: a choice left to the agent names the message that left it", () => {
-  test("the agent's own words never stand for theirs: recorded as its text, with no claim", () => {
+  test("the agent's own words never stand for theirs: kept as its text, the claim only on their reply", () => {
     const p = project();
-    typed(p, "Build a local CLI that converts CSV to JSON, and approve each gate.");
     askQuestions(p);
+    typed(p, "Build a local CLI that converts CSV to JSON, and approve each gate.");
+    const id = latestId(p);
     for (const quote of ["Grounded from the user request (approve each gate); confirm at summary.", "up to you", "ok"]) {
       const r = leftToAgent(p, [quote]);
       expect(r.status, r.out).toBe(0);
     }
     for (const row of answers(p)) {
-      expect(claimed(row)).toBe(false);
+      expect(claimed(row)).toBe(true);
+      expect(fieldOf(row, "Message Id")).toBe(id);
       expect(fieldOf(row, "Instruction")).toBeNull();
     }
     expect(fieldOf(answers(p)[0], "Conductor Summary")).toBe("Grounded from the user request (approve each gate); confirm at summary.");
@@ -139,14 +146,14 @@ describe("t-on-instruction-words: a choice left to the agent names the message t
 
   test("words in a file are the agent's own too", () => {
     const p = project();
-    typed(p, "up to you & $HOME");
     askQuestions(p);
+    typed(p, "up to you & $HOME");
     const dir = join(seededRecordDir(p), ".aidlc-engine", "answer-text");
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, "mine.txt"), "whatever you think\n");
     const r = log(p, ["answer", "--stage", STAGE, "--details", "A", "--on-instruction-file", ".aidlc-engine/answer-text/mine.txt"]);
     expect(r.status, r.out).toBe(0);
-    expect(claimed(answers(p)[0])).toBe(false);
+    expect(fieldOf(answers(p)[0], "Person Reply")).toBe("up to you & $HOME");
     expect(fieldOf(answers(p)[0], "Conductor Summary")).toBe("whatever you think");
   });
 
@@ -187,13 +194,138 @@ describe("t-on-instruction-words: a choice left to the agent names the message t
     expect(claimed(answers(p)[0])).toBe(true);
   });
 
-  test("a message with no words of theirs proves nothing: the answer is the agent's own, with no claim", () => {
+  // A live opencode run: the person approved the previous stage, and the same
+  // turn ran on into this one, where the agent answered its questions for them
+  // with no message of theirs since. The step names only this chat's messages
+  // on this work, by id and time, never their words.
+  test("no reply of theirs since the question, none named: refused with the step to ask them, nothing recorded", () => {
     const p = project();
-    typed(p, "");
+    typed(p, "Approve, the ninth gate");
+    const approve = latestId(p);
+    appendAuditEntry("GATE_APPROVED", { Stage: "intent-capture", "Message Id": approve }, p);
+    const other = saveMessage(p, {
+      session: "t-on-instruction-other-chat", at: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"), source: "prompt",
+      text: "you pick the answers", picker: null, words: "you pick the answers",
+      settings: [], route: { scope: null, newIntent: false, skip: [], add: [], projectType: null },
+    });
     askQuestions(p);
     const r = leftToAgent(p, []);
+    expect(r.status, r.out).not.toBe(0);
+    expect(r.out).toContain(
+      "no reply of the person's is on record since this question was asked. Ask them, end the turn, and record the " +
+        "choice they make.",
+    );
+    expect(r.out).toContain(`${approve} (sent `);
+    expect(r.out).not.toContain(other.id);
+    expect(r.out).not.toContain("you pick the answers");
+    expect(r.out).not.toContain("the ninth gate");
+    expect(answers(p)).toHaveLength(0);
+  });
+
+  test("left before the question existed, in the message an approval spent: recorded by naming it", () => {
+    const p = project();
+    typed(p, "Approve, and choose the recommended answers for the next stage");
+    const id = latestId(p);
+    appendAuditEntry("GATE_APPROVED", { Stage: "intent-capture", "Message Id": id }, p);
+    askQuestions(p);
+    const r = leftToAgent(p, ["--message", id]);
     expect(r.status, r.out).toBe(0);
+    expect(claimed(answers(p)[0])).toBe(true);
+    expect(fieldOf(answers(p)[0], "Message Id")).toBe(id);
+  });
+
+  // The floor is the question's own row. A reply after the last decision and
+  // before the question was logged left the agent no choice to make unless it
+  // names that reply; a plain answer keeps its own floor and records on it.
+  test("a reply from before the question was logged, none named: refused, that reply offered; named, recorded", () => {
+    const p = project();
+    typed(p, "Approve");
+    appendAuditEntry("GATE_APPROVED", { Stage: "intent-capture", "Message Id": latestId(p) }, p);
+    typed(p, "use the recommended answers for what you ask next");
+    const id = latestId(p);
+    askQuestions(p);
+    const bare = leftToAgent(p, []);
+    expect(bare.status, bare.out).not.toBe(0);
+    expect(bare.out).toContain(`${id} (sent `);
+    expect(bare.out).toContain("run the same command with --message <id>");
+    expect(answers(p)).toHaveLength(0);
+    const named = leftToAgent(p, ["--message", id]);
+    expect(named.status, named.out).toBe(0);
+    expect(claimed(answers(p)[0])).toBe(true);
+    expect(fieldOf(answers(p)[0], "Message Id")).toBe(id);
+  });
+
+  // The person's own switch for a session nobody can reply in: nothing is
+  // refused, and the row claims no choice on a reply from before the question.
+  test("with the human presence off switch, nothing is refused, and a reply from before the question carries no claim", () => {
+    const p = project();
+    typed(p, "A for all three");
+    const id = latestId(p);
+    askQuestions(p);
+    const r = run(p, [LOG, "answer", "--stage", STAGE, "--details", "Q5: A", "--on-instruction", "--project-dir", p],
+      undefined, CHAT, { AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1" });
+    expect(r.status, r.out).toBe(0);
+    expect(fieldOf(answers(p)[0], "Message Id")).toBe(id);
     expect(claimed(answers(p)[0])).toBe(false);
-    expect(fieldOf(answers(p)[0], "Message Id")).toBeNull();
+  });
+
+  test("the plain answer keeps its floor: a reply from before the question was logged records it", () => {
+    const p = project();
+    typed(p, "Approve");
+    appendAuditEntry("GATE_APPROVED", { Stage: "intent-capture", "Message Id": latestId(p) }, p);
+    typed(p, "A for all three");
+    const id = latestId(p);
+    askQuestions(p);
+    const r = log(p, ["answer", "--stage", STAGE, "--details", "Q5: A; Q6: A; Q7: A"]);
+    expect(r.status, r.out).toBe(0);
+    expect(fieldOf(answers(p)[0], "Message Id")).toBe(id);
+    expect(claimed(answers(p)[0])).toBe(false);
+  });
+
+  test("a reply after the question was logged, none named: recorded on that reply, the claim beside it", () => {
+    const p = project();
+    typed(p, "Approve");
+    appendAuditEntry("GATE_APPROVED", { Stage: "intent-capture", "Message Id": latestId(p) }, p);
+    askQuestions(p);
+    typed(p, "up to you");
+    const id = latestId(p);
+    const r = leftToAgent(p, []);
+    expect(r.status, r.out).toBe(0);
+    const row = answers(p)[0];
+    expect(claimed(row)).toBe(true);
+    expect(fieldOf(row, "Message Id")).toBe(id);
+    expect(fieldOf(row, "Person Reply")).toBe("up to you");
+  });
+
+  // The line that started the work is kept before any row of the work names
+  // it, so no turn of it is on the record: the step names it, and the agent
+  // records the choice on it instead of asking again.
+  test("a choice left in the line that started the work, none named: the step names that message, and naming it records", () => {
+    const p = project();
+    const opening = saveMessage(p, {
+      session: CHAT, at: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"), source: "prompt",
+      text: "/aidlc build it and pick the defaults", picker: null, words: "build it and pick the defaults",
+      settings: [], route: { scope: null, newIntent: false, skip: [], add: [], projectType: null },
+    });
+    appendAuditEntry("WORKFLOW_STARTED", { Request: "/aidlc build it and pick the defaults" }, p);
+    askQuestions(p);
+    const bare = leftToAgent(p, []);
+    expect(bare.status, bare.out).not.toBe(0);
+    expect(bare.out).toContain(`${opening.id} (sent `);
+    expect(answers(p)).toHaveLength(0);
+    const named = leftToAgent(p, ["--message", opening.id]);
+    expect(named.status, named.out).toBe(0);
+    expect(claimed(answers(p)[0])).toBe(true);
+  });
+
+  // Presence is a fact about the turn: a reply whose words the host left
+  // empty is still theirs, and the row names its turn with no words claimed.
+  test("a reply with no words kept, after the question: recorded on its turn, no words on the row", () => {
+    const p = project();
+    askQuestions(p);
+    typed(p, "");
+    const r = leftToAgent(p, []);
+    expect(r.status, r.out).toBe(0);
+    expect(fieldOf(answers(p)[0], "Person Reply")).toBeNull();
   });
 });

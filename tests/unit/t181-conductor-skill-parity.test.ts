@@ -237,6 +237,9 @@ describe("an approved code plan is built as it is", () => {
 
 describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () => {
   const skills = harnessSkills();
+  const CLAUDE_SKILL = "harness/claude/skills/aidlc/SKILL.md";
+  const FIRST_COMMAND_CARRIES_NONE = "The first `next --entry` carries none of the person's words, which AI-DLC reads " +
+    "from its own record.";
 
   test("the matrix-derived harness-SKILL set covers every shipped tree", () => {
     expect(skills.length).toBe(HARNESS_MATRIX.length);
@@ -360,9 +363,11 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     for (const rel of skills) {
       const body = readConductorSurface(rel);
       const step = body.split("\n").find((line) => line.trimStart().startsWith("1. directive = the JSON printed by running"));
-      if (!step?.includes("`--help` goes here too, like every other argument: `{{INVOKE}} --help` is the command-line tool's own help")) {
-        missing.push(rel);
-      }
+      // Claude Code's step 1 takes no argument at all: what they typed, `--help` included, the engine reads.
+      const help = rel === CLAUDE_SKILL
+        ? "whatever they typed: `{{INVOKE}} --help` is the command-line tool's own help"
+        : "`--help` goes here too, like every other argument: `{{INVOKE}} --help` is the command-line tool's own help";
+      if (!step?.includes(help)) missing.push(rel);
       if (body.includes("Every invocation starts here")) missing.push(`${rel}  still overrides the steps before the loop`);
     }
     expect(missing).toEqual([]);
@@ -371,7 +376,9 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
   // Kiro IDE's agent quoted "/aidlc classic: ..." whole as one argument, so the
   // person was asked which plan to use after naming it. Every SKILL that passes
   // the request on verbatim has the agent give a named plan its own argument;
-  // Codex already forwards the words as separate arguments.
+  // Codex already forwards the words as separate arguments. On Claude Code the
+  // first command carries none of their words, so the engine reads the plan
+  // they named from their typed line.
   test("every shipped conductor SKILL gives a plan the person named its own argument", () => {
     const passOn = "Pass `$ARGUMENTS` through to the first `next` verbatim - the engine parses flags";
     const named = "The one thing you read first is whether the request opens with the name of a plan, as in " +
@@ -380,12 +387,33 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       "when the opening word is part of what they want built (`/aidlc classic car rental website`), it stays in the request.";
     const missing = skills.flatMap((rel) => {
       const body = readConductorSurface(rel);
+      if (rel === CLAUDE_SKILL) return body.includes(FIRST_COMMAND_CARRIES_NONE) ? [] : [`${rel}: no first-command rule`];
       if (!body.includes(passOn)) {
         return body.includes("as separate arguments, never re-quoted into one string") ? [] : [`${rel}: no pass-on rule`];
       }
       return body.includes(named) ? [] : [rel];
     });
     expect(missing).toEqual([]);
+  });
+
+  // AI-DLC's first command no longer carries the person's words: the engine
+  // reads their typed line from its own record. Only step 1 and the sentence
+  // that says what it carries name the flag, which is never offered to the
+  // person (the description and the argument hint list what they type).
+  test("the Claude skill's first command carries none of the person's words", () => {
+    const body = readFileSync(join(REPO_ROOT, CLAUDE_SKILL), "utf-8");
+    const lines = body.split("\n");
+    const step = lines.find((line) => line.trimStart().startsWith("1. directive = the JSON printed by running"));
+    expect(step).toContain("running `{{INVOKE}} engine orchestrate next --entry` bare (no shell capture, no pipe), whatever they typed:");
+    expect(body).toContain(FIRST_COMMAND_CARRIES_NONE);
+    // One command with no exception: no sentence sends anything of theirs after `next`.
+    expect(body).not.toContain("goes after `next`");
+    expect(body).not.toContain("in place of `--entry`");
+    expect(body).not.toContain("$ARGUMENTS");
+    expect(lines.filter((line) => line.includes("--entry"))).toEqual([step as string, lines.find((line) => line.includes(FIRST_COMMAND_CARRIES_NONE)) as string]);
+    for (const rel of skills.filter((r) => r !== CLAUDE_SKILL)) {
+      expect(readConductorSurface(rel), rel).not.toContain("--entry");
+    }
   });
 
   // Claude Code shows the stop note to the person ("Stop hook feedback", or

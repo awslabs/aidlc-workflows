@@ -14,7 +14,7 @@
 // the normal revise gate re-entry.
 //
 // The predicate (unrecordedRevisionSinceGateOpen), all four conjuncts required,
-// over one chronological interleave of six event types across every shard:
+// over one chronological interleave of seven event types across every shard:
 //   1. an anchor exists: the LAST ORGANIC (non-Recovered) STAGE_AWAITING_APPROVAL
 //      for the slug or the LAST STAGE_STARTED for it, whichever is later (report
 //      synthesizes a Recovered=true gate row right before approve when the
@@ -25,7 +25,10 @@
 //   4. an ARTIFACT_CREATED/ARTIFACT_UPDATED to a declared produces file AFTER the
 //      FIRST post-anchor HUMAN_TURN and BEFORE the LAST one (the approving turn),
 //      which excludes a pre-response reviewer write and post-approval notes (the
-//      critical false-positive guard).
+//      critical false-positive guard), with no stage-level REVIEW_COMPLETED for
+//      the slug between that write and the approving turn (a review recorded
+//      before the person answered read the edit - scenario 3c; a later write or
+//      a per-Unit review row clears nothing - scenario 3d).
 // A write to the stage's own questions files (summaryOwnedReviewInput) is never
 // one of those writes: it notes the person's answers, so a stage's question
 // rounds are no revision, with or without a gate opened (scenarios 15 and 15b).
@@ -502,6 +505,71 @@ describe("t205: approve-time gate-revision backstop", () => {
     expect(accepted.rc).toBe(0);
     expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
   });
+
+  // --- Scenario 3c: the same revision with a review of the stage recorded
+  // after it and before the approving turn: the review read the edit before the
+  // person answered, so it is the edit they approve, not a revision nobody
+  // recorded. No backfill; Revision Count stays 0.
+  test("3c: a revision a review read before the approving turn is not backfilled", () => {
+    seedStateFile(proj, "state-mid-inception.md");
+    const slug = field(proj, "Current Stage");
+    guarded(proj, ["checkbox", `${slug}=in-progress`]);
+    recordReview(proj, slug, 1);
+    guarded(proj, ["gate-start", slug]);
+    recordHumanTurn(proj);
+    fireArtifact(
+      proj,
+      join(
+        seededRecordDir(proj),
+        "inception",
+        "requirements-analysis",
+        "requirements.md",
+      ),
+    );
+    recordReview(proj, slug, 2);
+    recordHumanTurn(proj);
+
+    const r = guarded(proj, ["approve", slug, "--user-input", "Approve"]);
+    expect(r.rc, r.out).toBe(0);
+    expect(field(proj, "Revision Count")).toBe("0");
+    expect(eventCount(proj, "GATE_REJECTED")).toBe(0);
+    expect(eventCount(proj, "STAGE_REVISING")).toBe(0);
+    expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
+  });
+
+  // --- Scenario 3d: what a review clears. A write after the review, before
+  // the approving turn, is still a revision nobody recorded; so is one whose
+  // only review between it and that turn is a per-Unit review row, which
+  // covers one Unit's document and clears no stage write.
+  for (const after of ["a later write", "a per-Unit review"] as const) {
+    test(`3d: a revision followed by ${after} before the approving turn still backfills`, () => {
+      seedStateFile(proj, "state-mid-inception.md");
+      const slug = field(proj, "Current Stage");
+      const doc = join(seededRecordDir(proj), "inception", "requirements-analysis", "requirements.md");
+      guarded(proj, ["checkbox", `${slug}=in-progress`]);
+      recordReview(proj, slug, 1);
+      guarded(proj, ["gate-start", slug]);
+      recordHumanTurn(proj);
+      fireArtifact(proj, doc);
+      if (after === "a later write") {
+        recordReview(proj, slug, 2);
+        fireArtifact(proj, doc);
+      } else {
+        appendAuditEntry("REVIEW_COMPLETED", {
+          Stage: slug, Unit: "unit-a", Reviewer: "aidlc-product-lead-agent", Iteration: "2", Verdict: "READY",
+        }, proj);
+      }
+      recordHumanTurn(proj);
+
+      const refused = guarded(proj, ["approve", slug, "--user-input", "Approve"]);
+      expect(refused.rc, refused.out).not.toBe(0);
+      expect(field(proj, "Revision Count")).toBe("1");
+      const rejected = auditBlocks(proj).filter((b) => b.event === "GATE_REJECTED" && b.stage === slug);
+      expect(rejected).toHaveLength(1);
+      expect(rejected[0].recovered).toBe(true);
+      expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
+    });
+  }
 
   // --- Scenario 4: a properly recorded reject cycle - the backstop must not pile
   // a spurious second (Recovered) reject on top. gate-start; HUMAN_TURN; revise

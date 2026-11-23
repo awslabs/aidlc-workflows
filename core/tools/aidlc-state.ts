@@ -32,6 +32,8 @@ import { putBackBeforePick, sayWritesDuringWork } from "./aidlc-before-pick.ts";
 import { buildStartListing, unitSourceManifests } from "./aidlc-brought-files.ts";
 import {
   approvalDispositionField,
+  findingNeverShown,
+  LaterStageFindingRejection,
   rejectedFindingDispositionField,
   REVIEW_FINDING_DISPOSITIONS_FIELD,
   teamUnitGateStages,
@@ -673,13 +675,13 @@ function auditTailHasFields(
 // rather than silently under-record the revision (leaving Revision Count 0 and
 // no audit pair for a revision the user actually saw happen).
 //
-// Chronological interleave of six event types across every shard (Timestamp,
+// Chronological interleave of seven event types across every shard (Timestamp,
 // then buffer position as the tiebreak): the SAME sort idiom humanActedSinceGate
 // uses (aidlc-lib.ts). readAllAuditShards concatenates per-clone shards in
 // FILENAME order, which is NOT time order, so a raw-position scan could misrank
 // an older event living in a lexically-later shard. findAllEvents is NOT usable
 // here: it filters ONE event type per call, and this predicate needs one
-// interleaved ordering across all six to reason about "after the gate opened".
+// interleaved ordering across all seven to reason about "after the gate opened".
 //
 // The four conjuncts, all required:
 //   1. an anchor exists: the LAST ORGANIC (non-Recovered) STAGE_AWAITING_APPROVAL
@@ -694,7 +696,18 @@ function auditTailHasFields(
 //   3. at least one HUMAN_TURN after the anchor (the human responded at the
 //      gate), AND
 //   4. at least one ARTIFACT_CREATED/ARTIFACT_UPDATED to a declared produces file
-//      AFTER the FIRST post-anchor HUMAN_TURN and BEFORE the LAST one.
+//      AFTER the FIRST post-anchor HUMAN_TURN and BEFORE the LAST one, with no
+//      stage-level REVIEW_COMPLETED for this slug between that write and the
+//      LAST turn.
+//
+// A review recorded after the write and before the person's last turn read the
+// changed document before they answered: that edit is the one their approval
+// stands on, not a revision nobody recorded. A review recorded only after their
+// last turn covers nothing here, so an approval given before a finding it
+// raises still meets this backstop. A per-Unit review row clears no write: it
+// covers one Unit's document, and the write may be another's. Whether the
+// review still covers the current bytes is the approval's own reviewer check
+// (freshReviewReceipts), which runs next.
 //
 // A declared produces file here is never one of the stage's own questions files
 // (summaryOwnedReviewInput): a write there notes the person's answers, so a
@@ -757,6 +770,7 @@ function unrecordedRevisionSinceGateOpen(
     "HUMAN_TURN",
     "ARTIFACT_CREATED",
     "ARTIFACT_UPDATED",
+    "REVIEW_COMPLETED",
   ]);
   const blocks = audit.replace(/\r\n/g, "\n").split(/\n---\n/);
   const events: {
@@ -765,6 +779,7 @@ function unrecordedRevisionSinceGateOpen(
     event: string;
     stage: string | null;
     file: string | null;
+    unit: string | null;
     recovered: boolean;
   }[] = [];
   const withdrawn = withdrawnTurnPositions(blocks);
@@ -778,6 +793,7 @@ function unrecordedRevisionSinceGateOpen(
       event: ev,
       stage: auditField(blocks[i], "Stage"),
       file: auditField(blocks[i], "File"),
+      unit: auditField(blocks[i], "Unit"),
       recovered: auditField(blocks[i], "Recovered") === "true",
     });
   }
@@ -835,18 +851,22 @@ function unrecordedRevisionSinceGateOpen(
   if (firstHuman === -1) return false;
   if (!anchorIsGateOpen && !wroteBeforeHuman) return false;
   // 4. A produces-file artifact write after the first post-anchor human turn
-  // and before the last one (the approving turn; see the function comment).
+  // and before the last one (the approving turn), that no stage-level review of
+  // this stage recorded before that turn read (see the function comment).
+  let unreviewedWrite = false;
   for (let i = firstHuman + 1; i < lastHuman; i++) {
     const e = events[i];
-    if (
+    if (e.event === "REVIEW_COMPLETED" && e.stage === stage.slug && !e.unit) {
+      unreviewedWrite = false;
+    } else if (
       (e.event === "ARTIFACT_CREATED" || e.event === "ARTIFACT_UPDATED") &&
       e.file !== null &&
       producesArtifactFile(shown, e.file, recordedRepos)
     ) {
-      return true;
+      unreviewedWrite = true;
     }
   }
-  return false;
+  return unreviewedWrite;
 }
 
 // --- Slug + small helpers (used by fork/merge handlers below; declared
@@ -7286,16 +7306,22 @@ function failedCheckWhere(stage: GateStage, rel: string, failedOutputs: string |
 
 // What the person hears when a gate opens, or is shown again, while a check
 // still fails on a declared output (#2201): one line per failing check, in
-// plain words (the agent corrects from the detail file the sensors protocol
-// module names), at most three lines and then a count; then one line, however
+// plain words, at most three lines and then a count; then one line, however
 // many, for the checks that could not run (their script crashed or did not
 // start, so they checked nothing). The orchestrator carries them in the gate
 // reply's `narration`, beside what the stage produced, which every harness's
-// agent says to the person with the approval question. Nothing is re-fired; a
-// check that passed later, or never ran, says nothing, and an unreadable record
-// says nothing about the checks. A team's Unit gate speaks for that Unit's
-// outputs and writes only.
-export function failedCheckNotices(pd: string, stage: GateStage, unit: string | null = null): string[] {
+// agent says to the person with the approval question. `details` are the
+// detail files of every failing check, for the agent alone: the sensors protocol has
+// it correct from them when the person asks, and without their names it listed
+// the sensors folder for the newest, a shell line that can stop for the
+// person. Nothing is re-fired; a check that passed later, or never ran, says
+// nothing, and an unreadable record says nothing about the checks. A team's
+// Unit gate speaks for that Unit's outputs and writes only.
+export function failedCheckReport(
+  pd: string,
+  stage: GateStage,
+  unit: string | null = null,
+): { lines: string[]; details: string[] } {
   let failed: LatestCheckResults["failed"];
   let couldNotRun: LatestCheckResults["couldNotRun"];
   try {
@@ -7305,12 +7331,15 @@ export function failedCheckNotices(pd: string, stage: GateStage, unit: string | 
     // empty environment, as plan approval reads its own switch): it stops
     // checks from running in that process, not the record from being read.
     const stateContent = readStateFile(pd);
-    if (resolveCeremony("sensors", getField(stateContent, "Scope"), stateContent, {}, pd).value === "off") return [];
+    if (resolveCeremony("sensors", getField(stateContent, "Scope"), stateContent, {}, pd).value === "off") {
+      return { lines: [], details: [] };
+    }
     ({ failed, couldNotRun } = latestCheckResults(pd, stage, unit));
   } catch {
-    return [];
+    return { lines: [], details: [] };
   }
   const lines = failedCheckLines(stage, failed);
+  const details = [...new Set(failed.flatMap((f) => f.detail === null ? [] : [f.detail]))];
   if (couldNotRun.length > 0) {
     const checks = [...new Set(couldNotRun.map(({ id }) => checkName(id)))];
     const files = [...new Set(couldNotRun.map(({ rel }) => rel))];
@@ -7323,7 +7352,16 @@ export function failedCheckNotices(pd: string, stage: GateStage, unit: string | 
     const where = `${failedCheckWhere(stage, files[0], null)}${others > 0 ? ` and ${others} other file${others === 1 ? "" : "s"}` : ""}`;
     lines.push(`${who} could not run on ${where}.`);
   }
-  return lines;
+  return { lines, details };
+}
+
+export function failedCheckNotices(pd: string, stage: GateStage, unit: string | null = null): string[] {
+  return failedCheckReport(pd, stage, unit).lines;
+}
+
+/** Where the findings of the failing checks are, for the agent: the review hand-off's words and the gate's. */
+export function findingsInSentence(files: readonly string[]): string {
+  return `The findings are in ${files.join(", ")}.`;
 }
 
 function checkName(id: string): string {
@@ -7444,7 +7482,7 @@ export function completionChecksStep(
     ? "it records the review request without checking again, and the gate checks again and says what is left."
     : "it opens the gate, which checks again and says what is left.";
   return `Before the ${handOff}, this stage's checks ran on its documents. ${failedCheckLines(stage, failed).join(" ")} ` +
-    `The findings are in ${details.join(", ")}. Fix what is yours in those documents, then run \`${again}\` again: ${next}`;
+    `${findingsInSentence(details)} Fix what is yours in those documents, then run \`${again}\` again: ${next}`;
 }
 
 // Whether every required output of the scope (the stage's, or one Unit's) is
@@ -8132,10 +8170,13 @@ function verifyApprovalDecision(
   // it: "Approve", "Accept as-is", "Add User Stories" alike. The engine reads
   // nothing into it.
   const approvalInput = userInput?.trim();
-  // A later stage the person's one approval listed stands on that reply.
+  // A later stage the person's one approval listed stands on that reply, until its
+  // latest review since is not ready or leaves open a finding that reply never saw
+  // (its gate's brief listed every covered stage's open findings).
   const together = autonomousDecision || forceHuman || humanPresenceGuardDisabled()
     ? null
-    : approvedTogetherCover(pd, stage.slug);
+    : approvedTogetherCover(pd, stage.slug, (review, opened) =>
+      auditBlockField(review.block, "Verdict") !== "READY" || findingNeverShown(pd, stage, opened));
   if (!autonomousDecision && !humanPresenceGuardDisabled() && approvalInput && isNonAnswer(approvalInput)) {
     refuseForAgent(
       `Cannot approve "${stage.slug}" because the reply ${formatReceivedReply(approvalInput)} is ` +
@@ -8930,13 +8971,19 @@ function handleReject(args: string[]): void {
     );
   }
 
-  const reviewFindingDispositions = rejectedFindingDispositionField(
-    pd,
-    teamGate?.stages ?? stage,
-    rejectedFindings,
-    teamGate?.unit,
-    reopenedFindings,
-  );
+  let reviewFindingDispositions: string | undefined;
+  try {
+    reviewFindingDispositions = rejectedFindingDispositionField(
+      pd,
+      teamGate?.stages ?? stage,
+      rejectedFindings,
+      teamGate?.unit,
+      reopenedFindings,
+    );
+  } catch (e) {
+    if (e instanceof LaterStageFindingRejection) refuseForAgent(e.message);
+    throw e;
+  }
 
   if (teamGate) {
     const priorStatus = unitGateStatus(
