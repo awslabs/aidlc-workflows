@@ -43,6 +43,9 @@ import {
   squashOnHost,
   TICKET_RULE_WORDS,
   leadRecordOnItsOwnBranch,
+  fetchRecords,
+  personsNext,
+  UTILITY,
 } from "../harness/team-build.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
@@ -124,6 +127,58 @@ describe("a Unit on the workspace's own repository", () => {
     git(dir, ["push", "-q", "origin", into]);
     git(host, ["branch", "-D", branch]);
   }
+
+  // The lead's record as main had it before the teams answer: Inception pushed, then teams chosen and the plan
+  // shared with nothing committed (the share commits nothing), so a teammate's clone reads the lead's work as
+  // work one person builds. The build taken there from the plan reads the plan all the same.
+  function teamsChosenAfterThePush(): { home: ReturnType<typeof makeHome>; alice: string; chat: NodeJS.ProcessEnv } {
+    const home = makeHome({ repos: {}, dependencies: UNITS });
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    const path = seededStateFile(home.dir);
+    const state = readFileSync(path, "utf-8");
+    if (!state.includes("- **Home Location**:")) {
+      writeFileSync(path, state.replace("## Runtime State\n", `## Runtime State\n- **Home Location**: ${home.remote}\n`));
+    }
+    const shared = run(UNIT, ["share", "--plan"], home.dir);
+    expect(shared.status, shared.out).toBe(0);
+    const alice = cloneOf(home.remote, "alice");
+    expect(readFileSync(seededStateFile(alice), "utf-8")).not.toContain("Unit Ownership");
+    const record = builtHere(alice, "refunds", "refunds.ts");
+    const chat = personsChat("t-unit-own-repo-before-teams");
+    expect(hook(alice, chat, { hook_event_name: "UserPromptSubmit", session_id: "t-unit-own-repo-before-teams", prompt: "build refunds" }).status).toBe(0);
+    finishBuild(record);
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    // Once in the chat the Units still open are offered; then the build is finished, waiting for the lead.
+    expect(personsNext(alice, chat, "t-unit-own-repo-before-teams").ask_type).toBe("unit-take");
+    expect(personsNext(alice, chat, "t-unit-own-repo-before-teams").kind).toBe("done");
+    return { home, alice, chat };
+  }
+  const planRepoName = (home: ReturnType<typeof makeHome>): string =>
+    (JSON.parse(git(home.remote, ["show", `refs/aidlc/plans/${fixtureIntentId8(home.dir)}:plan.json`])) as { plan_repo: { name: string } }).plan_repo.name;
+
+  test("a clone of the lead's record from before the teams answer hears the lead's turn-down of its Unit", () => {
+    const { home, alice, chat } = teamsChosenAfterThePush();
+    const session = "t-unit-own-repo-before-teams";
+    const down = run(UNIT, ["turned-down", "refunds", "--repo", planRepoName(home), "--person-words", "the retry logic belongs in the client"], home.dir);
+    expect(down.status, down.out).toBe(0);
+    const step = personsNext(alice, chat, session);
+    expect((step.change_notices ?? []) as string[], JSON.stringify(step).slice(0, 1500)).toContain(
+      `refunds was turned down in ${planRepoName(home)} by the lead: "the retry logic belongs in the client".`,
+    );
+    expect(step.ask_type, JSON.stringify(step).slice(0, 1500)).toBe("unit-turned-down");
+    expect(run(UTILITY, ["status"], alice).out).not.toContain("waiting for its merge");
+  });
+
+  test("a clone of the lead's record from before the teams answer hears its Unit merged and is offered the next", () => {
+    const { home, alice, chat } = teamsChosenAfterThePush();
+    mergeOnHost(home.remote, "refunds", "squash");
+    fetchRecords(home.dir);
+    expect(next(home.dir).kind).not.toBe("error");
+    const step = personsNext(alice, chat, "t-unit-own-repo-before-teams");
+    expect(JSON.stringify(step).slice(0, 2000)).toContain("Your refunds is merged.");
+    expect(step.ask_type, JSON.stringify(step).slice(0, 1500)).toBe("unit-take");
+  });
 
   test("its branch starts from the lead's main as fetched, never from the clone's own main left behind", () => {
     const home = oneRepoTeams();

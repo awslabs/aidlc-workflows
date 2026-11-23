@@ -561,12 +561,16 @@ export function leadWorkHere(projectDir: string, homeWork: string): { space: str
 }
 
 // A build taken from the plan where it is shared: of team work, wherever the
-// lead's work is (a clone of a workspace several teams share has it on disk).
-// Solo work's second person takes from the lead's work here.
+// lead's work is (a clone of a workspace several teams share has it on disk),
+// or one whose clone keeps the copy of that work's plan its take read at the
+// build's Home Location, whatever this clone's copy of the lead's record says
+// (a clone made before the lead chose teams reads that work as one person's).
+// Solo work's second person takes from the lead's work here, with no plan.
 export function takenFromPlan(projectDir: string, build: UnitBuild): boolean {
   if (!isGitAddress(build.homeLocation)) return false;
   const here = leadWorkHere(projectDir, build.homeWork);
-  return here === null || isTeamUnitOwnership(readStateFile(projectDir, here.dirName, here.space));
+  return here === null || isTeamUnitOwnership(readStateFile(projectDir, here.dirName, here.space)) ||
+    planCommitOf(projectDir, copyOf(build.homeLocation, planRecordRef(idSuffix(build.homeWork)))) !== "";
 }
 
 // The line said once when a lead's file the build follows cannot be read: the

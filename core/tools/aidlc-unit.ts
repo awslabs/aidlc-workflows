@@ -13330,14 +13330,18 @@ function buildsHome(projectDir: string, build: UnitBuild): HomeWork {
   if (here !== null) {
     // The home is where the take was made: a build taken from the plan at an
     // address the lead's work here does not record (a clone made before the
-    // lead's share reached it) reads that plan, so its writes go where its take went.
+    // lead's share reached it), or one this clone's copy of the lead's record
+    // reads as one person's work (a clone made before the lead chose teams),
+    // reads that plan, so its writes go where its take went and the lead's
+    // word on the plan reaches it.
     let found: HomeWork | null = null;
     try {
       found = findHomeWork(projectDir, here.dirName, here.space);
     } catch (error) {
       if (!isGitAddress(build.homeLocation)) throw error;
     }
-    if (found !== null && (!isGitAddress(build.homeLocation) || sameGitAddress(found.location, build.homeLocation))) return found;
+    if (found !== null && !(found.solo && takenFromPlan(projectDir, build)) &&
+      (!isGitAddress(build.homeLocation) || sameGitAddress(found.location, build.homeLocation))) return found;
     return planHomeAt(projectDir, build);
   }
   const lead = planHomeOfBuild(projectDir, build);
