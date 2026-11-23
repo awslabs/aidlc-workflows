@@ -128,8 +128,8 @@ function commandOutputs(stdout: string): string[] {
 }
 
 // Codex exec can keep a finished command's output as empty. True when the turn
-// ran exactly the engine's `next` (with `--resume` at most, nothing composed
-// around it) and Codex kept nothing of what it printed.
+// ran exactly the engine's `next` (with `--entry` or `--resume` at most, nothing
+// composed around it) and Codex kept nothing of what it printed.
 function blankEngineNext(stdout: string): boolean {
   return stdout.split("\n").filter((entry) => entry.trim()).some((line) => {
     const event = JSON.parse(line) as {
@@ -140,7 +140,7 @@ function blankEngineNext(stdout: string): boolean {
       typeof event.item.command !== "string") return false;
     const argv = exactCodexUtilityArgv(event.item.command);
     const next = argv !== null && argv.slice(0, 3).join(" ") === "engine orchestrate next" &&
-      argv.slice(3).every((flag) => flag === "--resume");
+      argv.slice(3).every((flag) => flag === "--entry" || flag === "--resume");
     return next && event.item.aggregated_output === "" && event.item.exit_code === 0;
   });
 }

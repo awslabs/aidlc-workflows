@@ -11750,7 +11750,7 @@ function cutMessageStep(shape: ParsedFlags, message: StoredMessage, reply: boole
   );
 }
 
-// AI-DLC's first command (`next --entry`, the Claude Code skill's step 1)
+// AI-DLC's first command (`next --entry`, step 1 of the Claude Code and Codex skills)
 // carries none of the person's words: the bare `next` reads the words of their
 // typed line from the record (takePersonsOwnLine), and a line of tokens alone
 // runs as the command before this is asked (entryTokens). With no `/aidlc` line of

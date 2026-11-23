@@ -14,7 +14,7 @@
 //           pending grid-EXECUTE ahead of it). Seeded from a fixture rather than
 //           a subprocess intent-create so the deterministic tier stays
 //           fixture-driven, the same posture the front + reviewer twins take.
-//   beat 1: codex exec `/aidlc compose "drop market research and team formation
+//   beat 1: codex exec `$aidlc compose "drop market research and team formation
 //           ..."` - the conductor dispatches the composer, proposes SKIP flips
 //           (the engine holds the compose question open itself; no file is
 //           written), and ends the turn AT the approve/edit/reject gate (numbered prose:
@@ -264,7 +264,7 @@ describe("t-exec-codex-compose-inflight - in-flight recompose over exec + exec r
         const b1 = codexTurn(
           proj,
           home,
-          'Use the $aidlc skill to run: /aidlc compose "drop market research and team formation from this workflow - we already know the market and the team"',
+          '$aidlc compose "drop market research and team formation from this workflow - we already know the market and the team"',
         );
         expect(b1.rc, codexExecDiagnostic(b1)).toBe(0);
         const b1Session = sessionIdOf(b1.stderr);
