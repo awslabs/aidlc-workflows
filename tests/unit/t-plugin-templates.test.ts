@@ -19,6 +19,7 @@ import {
   mergePluginRules,
   pluginTemplateStripRemovals,
   readRulesRecord,
+  readTemplatesRecord,
   rulesRecordGaps,
   stripPluginRules,
 } from "../../dist/claude/.claude/tools/aidlc-plugin.ts";
@@ -66,7 +67,7 @@ describe("a plugin's templates in every space", () => {
         "The required-sections sensor checks their ## headings at the gate; a file of your own at the same path is kept as yours.",
     ]);
     for (const space of ["default", "alpha"]) expect(readFileSync(planPath(proj, space), "utf-8")).toBe(PLAN_V1);
-    expect(readRulesRecord(proj, "test-pro")?.templates).toEqual({ [PLAN]: { sha256: sha(PLAN_V1), kept: [] } });
+    expect(readTemplatesRecord(proj, "test-pro")).toEqual({ [PLAN]: { sha256: sha(PLAN_V1), kept: [] } });
     expect(mergePluginRules(proj, p)).toEqual([]);
     expect(readFileSync(planPath(proj, "default"), "utf-8")).toBe(PLAN_V1);
   });
@@ -92,13 +93,13 @@ describe("a plugin's templates in every space", () => {
     expect(lines[1]).toBe("Kept your own aidlc/spaces/alpha/memory/templates/test-plan.md; test-pro's template did not replace it.");
     expect(readFileSync(planPath(proj, "alpha"), "utf-8")).toBe(OWN);
     expect(readFileSync(planPath(proj, "default"), "utf-8")).toBe(PLAN_V1);
-    expect(readRulesRecord(proj, "test-pro")?.templates?.[PLAN].kept).toEqual(["alpha"]);
+    expect(readTemplatesRecord(proj, "test-pro")?.[PLAN].kept).toEqual(["alpha"]);
     expect(mergePluginRules(proj, p)).toEqual([]);
     expect(readFileSync(planPath(proj, "alpha"), "utf-8")).toBe(OWN);
     rmSync(planPath(proj, "alpha"));
     expect(mergePluginRules(proj, p)).toEqual([]);
     expect(readFileSync(planPath(proj, "alpha"), "utf-8")).toBe(PLAN_V1);
-    expect(readRulesRecord(proj, "test-pro")?.templates?.[PLAN].kept).toEqual([]);
+    expect(readTemplatesRecord(proj, "test-pro")?.[PLAN].kept).toEqual([]);
   });
 
   test("a hand edit makes the file the person's: kept, said once, never written back", () => {
@@ -121,7 +122,7 @@ describe("a plugin's templates in every space", () => {
     mergePluginRules(proj, p);
     expect(readFileSync(planPath(proj, "default"), "utf-8")).toBe(PLAN_V2);
     expect(readFileSync(planPath(proj, "alpha"), "utf-8")).toBe(OWN);
-    expect(readRulesRecord(proj, "test-pro")?.templates?.[PLAN].sha256).toBe(sha(PLAN_V2));
+    expect(readTemplatesRecord(proj, "test-pro")?.[PLAN].sha256).toBe(sha(PLAN_V2));
   });
 
   test("a template the plugin stopped shipping goes where its bytes prove it, and the person's stays", () => {
@@ -133,7 +134,7 @@ describe("a plugin's templates in every space", () => {
     mergePluginRules(proj, p);
     expect(existsSync(planPath(proj, "default"))).toBe(false);
     expect(readFileSync(planPath(proj, "alpha"), "utf-8")).toBe(OWN);
-    expect(readRulesRecord(proj, "test-pro")?.templates).toBeUndefined();
+    expect(readTemplatesRecord(proj, "test-pro")).toBeNull();
   });
 
   test("off strips exactly the plugin's files and keeps the record; prune forgets it", () => {
@@ -145,12 +146,13 @@ describe("a plugin's templates in every space", () => {
     expect(stripPluginRules(proj, "test-pro", true)).toBe(true);
     expect(existsSync(planPath(proj, "default"))).toBe(false);
     expect(readFileSync(planPath(proj, "alpha"), "utf-8")).toBe(OWN);
-    expect(readRulesRecord(proj, "test-pro")?.templates?.[PLAN].sha256).toBe(sha(PLAN_V1));
+    expect(readTemplatesRecord(proj, "test-pro")?.[PLAN].sha256).toBe(sha(PLAN_V1));
     // On again: the merge places the plugin's bytes back.
     expect(mergePluginRules(proj, p)).toEqual([]);
     expect(readFileSync(planPath(proj, "default"), "utf-8")).toBe(PLAN_V1);
     stripPluginRules(proj, "test-pro", false);
     expect(readRulesRecord(proj, "test-pro")).toBeNull();
+    expect(readTemplatesRecord(proj, "test-pro")).toBeNull();
   });
 
   test("a new space copies the plugin's template and never the team's own", () => {
@@ -179,6 +181,45 @@ describe("a plugin's templates in every space", () => {
     rmSync(planPath(proj, "default"));
     writeFileSync(planPath(proj, "alpha"), OWN);
     expect(rulesRecordGaps(proj, "test-pro")).toEqual(["template missing from aidlc/spaces/default/memory/templates/test-plan.md"]);
+  });
+
+  test("two plugins shipping the same artifact's template: the second says a conflict, never 'your own'", () => {
+    const proj = project(["default"]);
+    const first = plugin({ [PLAN]: PLAN_V1 }, "alpha-pro");
+    const second = plugin({ [PLAN]: PLAN_V2 }, "beta-pro");
+    mergePluginRules(proj, first);
+    const lines = mergePluginRules(proj, second);
+    expect(lines).toEqual([
+      "aidlc/spaces/default/memory/templates/test-plan.md is alpha-pro's; beta-pro's template for the same artifact was not applied.",
+    ]);
+    expect(readFileSync(planPath(proj, "default"), "utf-8")).toBe(PLAN_V1);
+    expect(mergePluginRules(proj, second)).toEqual([]);
+    expect(readFileSync(planPath(proj, "default"), "utf-8")).toBe(PLAN_V1);
+  });
+
+  test("a first merge where every space keeps its own says no placement line", () => {
+    const proj = project();
+    writeFileSync(planPath(proj, "default"), OWN);
+    writeFileSync(planPath(proj, "alpha"), OWN);
+    const p = plugin({ [PLAN]: PLAN_V1 });
+    const lines = mergePluginRules(proj, p);
+    expect(lines.some((line) => line.includes("templates are in"))).toBe(false);
+    expect(lines).toHaveLength(2);
+    for (const line of lines) expect(line).toStartWith("Kept your own ");
+  });
+
+  test("a template a later plugin version adds says its own line; the recorded one says nothing again", () => {
+    const proj = project(["default"]);
+    const p = plugin({ [PLAN]: PLAN_V1 });
+    mergePluginRules(proj, p);
+    writeFileSync(join(p.root, "memory", "templates", "risk-register.md"), "# Risks\n\n## Open Risks\n");
+    const lines = mergePluginRules(proj, p);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toStartWith("test-pro's templates are in each space's memory/templates: risk-register.md.");
+    expect(readFileSync(join(proj, "aidlc", "spaces", "default", "memory", "templates", "risk-register.md"), "utf-8"))
+      .toBe("# Risks\n\n## Open Risks\n");
+    // The record of its own, beside the rules record, that proves ownership.
+    expect(existsSync(join(proj, "aidlc", "plugin-templates", "test-pro.json"))).toBe(true);
   });
 
   test("a CRLF checkout still proves the plugin's bytes: no rewrite, and off still strips it", () => {

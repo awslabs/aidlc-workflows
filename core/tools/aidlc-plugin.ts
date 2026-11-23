@@ -15,6 +15,7 @@ import { homedir, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
+import { TEMPLATE_FILE_NAME } from "./aidlc-artifact-vocabulary.ts";
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { projectInvocationTokens } from "./aidlc-command.ts";
 import {
@@ -1953,18 +1954,8 @@ function rulesBlockText(content: string, key: string, path: string): string | nu
 // plugin's default, and the sections it placed (a space's memory-relative file
 // and the sha256 of the section). One record per project, beside the rule files
 // every harness in it shares, so each harness and each clone keep the level the
-// person chose. `templates` records the plugin's memory/templates files the
-// same way (the sha256 of the plugin's LF bytes is the proof of ownership —
-// the file itself carries no marker, so the skeleton the agent fills stays
-// clean), plus the spaces whose own file at that path won, so the kept line is
-// said once and never again.
-export type TemplateRecord = { sha256: string; kept: string[] };
-export type RulesRecord = {
-  schemaVersion: 1;
-  level: RulesLevel;
-  files: Record<string, string>;
-  templates?: Record<string, TemplateRecord>;
-};
+// person chose.
+export type RulesRecord = { schemaVersion: 1; level: RulesLevel; files: Record<string, string> };
 
 const RULE_PHASES = PHASES.filter((phase) => phase !== "initialization");
 
@@ -1988,15 +1979,67 @@ export function readRulesRecord(projectDir: string, key: string): RulesRecord | 
     const parsed = readJson(path);
     if (
       isPlainObject(parsed) && RULES_LEVELS.includes(parsed.level as RulesLevel) &&
-      isPlainObject(parsed.files) && Object.values(parsed.files).every((value) => typeof value === "string") &&
-      (parsed.templates === undefined ||
-        (isPlainObject(parsed.templates) && Object.values(parsed.templates).every((value) =>
-          isPlainObject(value) && typeof value.sha256 === "string" &&
-          Array.isArray(value.kept) && value.kept.every((space) => typeof space === "string")
-        )))
+      isPlainObject(parsed.files) && Object.values(parsed.files).every((value) => typeof value === "string")
     ) return parsed as RulesRecord;
   } catch {
     // An unreadable record is rebuilt by the next merge.
+  }
+  return null;
+}
+
+// The template files a plugin placed: a memory-relative templates/<artifact>.md
+// and the sha256 of the plugin's LF bytes — the proof of ownership, since the
+// file itself carries no marker and the skeleton the agent fills stays clean —
+// plus the spaces whose own file at that path won, so the kept line is said
+// once and never again. A record of its own beside the rules record: an engine
+// from before templates rewrites aidlc/plugin-rules/<key>.json whole on its
+// own merge and would drop a field it does not know, losing the proof for
+// every clone the project shares the record with.
+export type TemplateRecord = { sha256: string; kept: string[] };
+
+const TEMPLATES_RECORD_DIR = ["aidlc", "plugin-templates"] as const;
+
+function templatesRecordPath(projectDir: string, key: string): string {
+  return join(projectDir, ...TEMPLATES_RECORD_DIR, `${key}.json`);
+}
+
+export function readTemplatesRecord(projectDir: string, key: string): Record<string, TemplateRecord> | null {
+  const path = templatesRecordPath(projectDir, key);
+  if (!existsSync(path)) return null;
+  try {
+    const parsed = readJson(path);
+    if (
+      isPlainObject(parsed) && isPlainObject(parsed.templates) &&
+      Object.values(parsed.templates).every((value) =>
+        isPlainObject(value) && typeof value.sha256 === "string" &&
+        Array.isArray(value.kept) && value.kept.every((space) => typeof space === "string")
+      )
+    ) return parsed.templates as Record<string, TemplateRecord>;
+  } catch {
+    // An unreadable record is rebuilt by the next merge.
+  }
+  return null;
+}
+
+function writeTemplatesRecord(projectDir: string, key: string, templates: Record<string, TemplateRecord>): void {
+  if (Object.keys(templates).length === 0) {
+    rmSync(templatesRecordPath(projectDir, key), { force: true });
+    return;
+  }
+  mkdirSync(join(projectDir, ...TEMPLATES_RECORD_DIR), { recursive: true });
+  writeFileSync(templatesRecordPath(projectDir, key), `${JSON.stringify({ schemaVersion: 1, templates }, null, 2)}\n`);
+}
+
+// The plugin whose recorded template bytes an existing file carries, for the
+// conflict line when two plugins ship the same artifact's template: the first
+// plugin's file is not the person's, and the line must not claim it is.
+function otherTemplateOwner(projectDir: string, selfKey: string, rel: string, sha: string): string | null {
+  const dir = join(projectDir, ...TEMPLATES_RECORD_DIR);
+  if (!existsSync(dir)) return null;
+  for (const file of readdirSync(dir).filter((name) => /^[a-z][a-z0-9-]*\.json$/.test(name)).sort()) {
+    const key = file.slice(0, -5);
+    if (key === selfKey) continue;
+    if (readTemplatesRecord(projectDir, key)?.[rel]?.sha256 === sha) return key;
   }
   return null;
 }
@@ -2009,10 +2052,6 @@ function writeRulesRecord(projectDir: string, key: string, record: RulesRecord):
 function sha256Text(text: string): string {
   return createHash("sha256").update(text).digest("hex");
 }
-
-// Keep in sync with validateMemory's TEMPLATE_REL in aidlc-plugin-validate.ts:
-// one flat lowercase file per artifact under memory/templates/.
-const TEMPLATE_FILE = /^[a-z0-9][a-z0-9-]*\.md$/;
 
 // The plugin's template bytes and an on-disk copy are compared in LF, so a
 // CRLF checkout (Git's core.autocrlf) still proves the plugin's ownership.
@@ -2039,7 +2078,7 @@ function pluginRulesSource(
   if (existsSync(templatesDir) && lstatSync(templatesDir).isDirectory()) {
     for (const name of readdirSync(templatesDir).sort()) {
       const path = join(templatesDir, name);
-      if (!TEMPLATE_FILE.test(name) || !lstatSync(path).isFile()) continue;
+      if (!TEMPLATE_FILE_NAME.test(name) || !lstatSync(path).isFile()) continue;
       templates.set(`templates/${name}`, templateLf(readFileSync(path, "utf-8")));
     }
   }
@@ -2086,7 +2125,7 @@ function placementLine(key: string, level: RulesLevel, files: string[]): string 
     `${entrySkillInvocation()} plugin select --rules-level ${key}=${others[0]}`;
 }
 
-// The templates line said once, when a plugin's templates land for the first time.
+// The templates line, said once per template when it first lands somewhere.
 function templatePlacementLine(key: string, rels: string[]): string {
   const names = rels.map((rel) => rel.slice("templates/".length)).join(", ");
   return `${key}'s templates are in each space's memory/templates: ${names}. ` +
@@ -2099,56 +2138,70 @@ function keptTemplateLine(key: string, shown: string): string {
 }
 
 // Whole-file placement for a plugin's templates: a missing file gets the
-// plugin's bytes, the plugin's own previous bytes get its update, and any
-// other bytes are the person's file — kept, never overwritten, said once.
-// Returns the record entries and the lines to say.
+// plugin's bytes, the plugin's own previous bytes get its update, another
+// plugin's recorded bytes stay that plugin's (said once as a conflict, not as
+// the person's file), and any other bytes are the person's file — kept, never
+// overwritten, said once. Returns the record entries and the lines to say.
 function mergePluginTemplates(
   projectDir: string,
   key: string,
   source: Map<string, string>,
-  record: RulesRecord | null,
+  prior: Record<string, TemplateRecord> | null,
 ): { templates: Record<string, TemplateRecord>; lines: string[] } {
   const templates: Record<string, TemplateRecord> = {};
   const lines: string[] = [];
+  const landedNew: string[] = [];
   for (const [rel, content] of source) {
-    const prior = record?.templates?.[rel];
-    const keptBefore = new Set(prior?.kept ?? []);
+    const recorded = prior?.[rel];
+    const keptBefore = new Set(recorded?.kept ?? []);
     const kept: string[] = [];
+    let landed = false;
     for (const memoryDir of spaceMemoryDirs(projectDir)) {
       const path = join(memoryDir, rel);
       if (!existsSync(path)) {
         mkdirSync(dirname(path), { recursive: true });
         writeFileSync(path, content);
+        landed = true;
         continue;
       }
       if (!lstatSync(path).isFile()) continue;
       const existing = templateLf(readFileSync(path, "utf-8"));
-      if (existing === content) continue;
-      if (prior !== undefined && sha256Text(existing) === prior.sha256) {
+      if (existing === content) {
+        landed = true;
+        continue;
+      }
+      const existingSha = sha256Text(existing);
+      if (recorded !== undefined && existingSha === recorded.sha256) {
         writeFileSync(path, content);
+        landed = true;
         continue;
       }
       const space = basename(dirname(memoryDir));
       kept.push(space);
       if (!keptBefore.has(space)) {
-        lines.push(keptTemplateLine(key, relative(projectDir, path).split(sep).join("/")));
+        const shown = relative(projectDir, path).split(sep).join("/");
+        const owner = otherTemplateOwner(projectDir, key, rel, existingSha);
+        lines.push(
+          owner === null
+            ? keptTemplateLine(key, shown)
+            : `${shown} is ${owner}'s; ${key}'s template for the same artifact was not applied.`,
+        );
       }
     }
+    if (landed && recorded === undefined) landedNew.push(rel);
     templates[rel] = { sha256: sha256Text(content), kept: kept.sort() };
   }
   // A template the plugin stopped shipping goes with it; a person's file at
   // that path (bytes the record does not prove) stays.
-  for (const [rel, prior] of Object.entries(record?.templates ?? {})) {
+  for (const [rel, recorded] of Object.entries(prior ?? {})) {
     if (source.has(rel)) continue;
     for (const memoryDir of spaceMemoryDirs(projectDir)) {
       const path = join(memoryDir, rel);
       if (!existsSync(path) || !lstatSync(path).isFile()) continue;
-      if (sha256Text(templateLf(readFileSync(path, "utf-8"))) === prior.sha256) rmSync(path, { force: true });
+      if (sha256Text(templateLf(readFileSync(path, "utf-8"))) === recorded.sha256) rmSync(path, { force: true });
     }
   }
-  if (source.size > 0 && Object.keys(record?.templates ?? {}).length === 0) {
-    lines.unshift(templatePlacementLine(key, [...source.keys()]));
-  }
+  if (landedNew.length > 0) lines.unshift(templatePlacementLine(key, landedNew));
   return { templates, lines };
 }
 
@@ -2167,7 +2220,9 @@ export function mergePluginRules(
   const source = pluginRulesSource(plugin.root);
   const record = readRulesRecord(projectDir, plugin.key);
   if (source === null) {
-    if (record !== null) stripPluginRules(projectDir, plugin.key, false);
+    if (record !== null || readTemplatesRecord(projectDir, plugin.key) !== null) {
+      stripPluginRules(projectDir, plugin.key, false);
+    }
     return [];
   }
   const level = requested ?? record?.level ?? source.level ?? "project";
@@ -2183,12 +2238,12 @@ export function mergePluginRules(
       if (after !== before) writeFileSync(path, after);
     }
   }
-  const merged = mergePluginTemplates(projectDir, plugin.key, source.templates, record);
+  const merged = mergePluginTemplates(projectDir, plugin.key, source.templates, readTemplatesRecord(projectDir, plugin.key));
+  writeTemplatesRecord(projectDir, plugin.key, merged.templates);
   writeRulesRecord(projectDir, plugin.key, {
     schemaVersion: 1,
     level,
     files: Object.fromEntries([...blocks].map(([rel, block]) => [rel, sha256Text(block)])),
-    ...(Object.keys(merged.templates).length > 0 ? { templates: merged.templates } : {}),
   });
   const said = source.files.has("rules.md") && (record === null || record.level !== level);
   return [...(said ? [placementLine(plugin.key, level, [...blocks.keys()])] : []), ...merged.lines];
@@ -2246,6 +2301,7 @@ export function mergePluginRulesFromRoot(
 // pruning it forgets it.
 export function stripPluginRules(projectDir: string, key: string, keepLevel: boolean): boolean {
   const record = readRulesRecord(projectDir, key);
+  const templates = readTemplatesRecord(projectDir, key);
   let stripped = false;
   for (const memoryDir of spaceMemoryDirs(projectDir)) {
     for (const rel of ruleFilesIn(memoryDir)) {
@@ -2257,7 +2313,7 @@ export function stripPluginRules(projectDir: string, key: string, keepLevel: boo
         stripped = true;
       }
     }
-    for (const [rel, prior] of Object.entries(record?.templates ?? {})) {
+    for (const [rel, prior] of Object.entries(templates ?? {})) {
       const path = join(memoryDir, rel);
       if (!existsSync(path) || !lstatSync(path).isFile()) continue;
       if (sha256Text(templateLf(readFileSync(path, "utf-8"))) === prior.sha256) {
@@ -2266,7 +2322,10 @@ export function stripPluginRules(projectDir: string, key: string, keepLevel: boo
       }
     }
   }
-  if (record !== null && !keepLevel) rmSync(rulesRecordPath(projectDir, key), { force: true });
+  if (!keepLevel) {
+    if (record !== null) rmSync(rulesRecordPath(projectDir, key), { force: true });
+    if (templates !== null) rmSync(templatesRecordPath(projectDir, key), { force: true });
+  }
   return stripped;
 }
 
@@ -2289,10 +2348,10 @@ export function pluginRulesStripWrites(projectDir: string, key: string): Array<{
 // of the plugin's whose bytes the record proves, project-relative. A person's
 // file at the path stays off the list.
 export function pluginTemplateStripRemovals(projectDir: string, key: string): string[] {
-  const record = readRulesRecord(projectDir, key);
+  const templates = readTemplatesRecord(projectDir, key);
   const removals: string[] = [];
   for (const memoryDir of spaceMemoryDirs(projectDir)) {
-    for (const [rel, prior] of Object.entries(record?.templates ?? {})) {
+    for (const [rel, prior] of Object.entries(templates ?? {})) {
       const path = join(memoryDir, rel);
       if (!existsSync(path) || !lstatSync(path).isFile()) continue;
       if (sha256Text(templateLf(readFileSync(path, "utf-8"))) === prior.sha256) {
@@ -2327,12 +2386,7 @@ export function movePluginRules(projectDir: string, harnessDir: string, key: str
       moved = true;
     }
   }
-  writeRulesRecord(projectDir, key, {
-    schemaVersion: 1,
-    level,
-    files,
-    ...(record?.templates !== undefined ? { templates: record.templates } : {}),
-  });
+  writeRulesRecord(projectDir, key, { schemaVersion: 1, level, files });
   return moved
     ? placementLine(key, level, Object.keys(files).sort())
     : `${key}'s rules will be in ${level}.md, in a section of their own at the end, ${
@@ -2348,13 +2402,13 @@ export function movePluginRules(projectDir: string, harnessDir: string, key: str
 function rulesNeedMerge(projectDir: string, plugin: InstalledPlugin, requested?: RulesLevel): boolean {
   const source = pluginRulesSource(plugin.root);
   const record = readRulesRecord(projectDir, plugin.key);
+  const recordTemplates = readTemplatesRecord(projectDir, plugin.key) ?? {};
   if (source === null) {
-    return record !== null && (Object.keys(record.files).length > 0 || Object.keys(record.templates ?? {}).length > 0);
+    return (record !== null && Object.keys(record.files).length > 0) || Object.keys(recordTemplates).length > 0;
   }
   if (record === null || (requested !== undefined && requested !== record.level)) return true;
   const blocks = rulesBlocks(plugin.key, source, record.level);
   if (Object.keys(record.files).sort().join("\n") !== [...blocks.keys()].sort().join("\n")) return true;
-  const recordTemplates = record.templates ?? {};
   if (Object.keys(recordTemplates).sort().join("\n") !== [...source.templates.keys()].sort().join("\n")) return true;
   return spaceMemoryDirs(projectDir).some((memoryDir) =>
     [...blocks].some(([rel, block]) => {
@@ -2399,7 +2453,7 @@ export function rulesRecordGaps(projectDir: string, key: string): string[] {
     }
     // A template file that is gone composes again at the next sync; one with
     // other bytes is the person's file and is no gap.
-    for (const rel of Object.keys(record.templates ?? {}).sort()) {
+    for (const rel of Object.keys(readTemplatesRecord(projectDir, key) ?? {}).sort()) {
       const path = join(memoryDir, rel);
       if (!existsSync(path)) {
         gaps.push(`template missing from ${relative(projectDir, path).split(sep).join("/")}`);
@@ -2428,7 +2482,7 @@ export function copyPluginRulesToSpace(projectDir: string, fromMemoryDir: string
       const after = placeRulesBlock(before, key, block.replace(/\r\n/g, "\n"), to);
       if (after !== before) writeFileSync(to, after);
     }
-    for (const [rel, info] of Object.entries(record.templates ?? {}).sort(([a], [b]) => a.localeCompare(b))) {
+    for (const [rel, info] of Object.entries(readTemplatesRecord(projectDir, key) ?? {}).sort(([a], [b]) => a.localeCompare(b))) {
       const from = join(fromMemoryDir, rel);
       const to = join(toMemoryDir, rel);
       if (!existsSync(from) || !lstatSync(from).isFile() || existsSync(to)) continue;

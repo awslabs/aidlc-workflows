@@ -18,6 +18,12 @@ export const KNOWN_CODEKB_STAGES: ReadonlySet<string> = new Set([
   "reverse-engineering",
 ]);
 
+// One flat lowercase file per artifact under memory/templates/ (a space's, or
+// a plugin's to ship): the stem is the artifact the required-sections sensor
+// keys the template by. The plugin memory reader and the plugin validator both
+// read template-name legality through this one rule.
+export const TEMPLATE_FILE_NAME = /^[a-z0-9][a-z0-9-]*\.md$/;
+
 // A run of fully-qualified emoji, optionally ZWJ-joined, then whitespace is
 // decoration, so an information-sign emoji before `Sources` still names the
 // `Sources` section. A bare text-presentation symbol (copyright, trademark, a

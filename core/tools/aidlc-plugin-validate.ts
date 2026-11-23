@@ -35,7 +35,9 @@ import {
   type ValidationContext,
   validateStageFrontmatter,
 } from "./aidlc-stage-schema.ts";
+import { TEMPLATE_FILE_NAME } from "./aidlc-artifact-vocabulary.ts";
 import { resolveHarnessPath } from "./aidlc-runtime-paths.ts";
+import { parseH2Headings } from "./aidlc-sensor-required-sections.ts";
 import { CORE_COMMAND_WORDS, PLUGIN_COMMAND_NAME_RE, PLUGIN_COMMAND_SCRIPT_RE } from "./aidlc-command.ts";
 
 export type PluginValidationRule =
@@ -988,14 +990,11 @@ function validateManifest(
 // refused.
 const RULE_PHASE_FILES = ["ideation", "inception", "construction", "operation"].map((phase) => `phases/${phase}.md`);
 
-// Keep in sync with pluginRulesSource's TEMPLATE_FILE in aidlc-plugin.ts: the
-// engine reads one flat lowercase file per artifact under memory/templates/.
-const TEMPLATE_REL = /^templates\/[a-z0-9][a-z0-9-]*\.md$/;
-
 // A template's `##` headings are the sections the required-sections sensor
 // requires of the artifact at the gate, and the skeleton the agent fills.
 function validateMemoryTemplate(memory: string, rel: string, display: string, findings: MutableFindings): void {
-  if (!TEMPLATE_REL.test(rel)) {
+  const parts = rel.split("/");
+  if (parts.length !== 2 || !TEMPLATE_FILE_NAME.test(parts[1])) {
     addError(
       findings,
       display,
@@ -1016,7 +1015,7 @@ function validateMemoryTemplate(memory: string, rel: string, display: string, fi
     );
     return;
   }
-  if (!readFileSync(join(memory, rel), "utf-8").split(/\r?\n/).some((line) => line.trim().startsWith("## "))) {
+  if (parseH2Headings(readFileSync(join(memory, rel), "utf-8")).length === 0) {
     addWarning(
       findings,
       display,

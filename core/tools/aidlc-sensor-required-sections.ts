@@ -99,9 +99,10 @@ function parseFlags(argv: string[]): Flags {
 }
 
 // Parse the distinct, ordered `^## ` headings of a markdown body (trimmed,
-// deduped by exact text). Shared by the output scan and the template scan so
-// the produced shape and the checked shape are compared on identical terms.
-function parseH2Headings(body: string): string[] {
+// deduped by exact text). Shared by the output scan, the template scan and the
+// plugin validator's template check, so the produced shape, the checked shape
+// and the authored shape are all read on identical terms.
+export function parseH2Headings(body: string): string[] {
 	const seen = new Set<string>();
 	const headings: string[] = [];
 	for (const rawLine of body.split(/\r?\n/)) {
