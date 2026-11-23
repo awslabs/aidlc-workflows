@@ -6,9 +6,10 @@
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
 } from "../harness/test-budget.ts";
-import { afterEach, describe, expect, mock, test, setDefaultTimeout } from "bun:test";
-import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { afterAll, afterEach, describe, expect, mock, test, setDefaultTimeout } from "bun:test";
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { delimiter, join } from "node:path";
 import type { SDKMessage, query as sdkQuery } from "@anthropic-ai/claude-agent-sdk";
 import type {
   CapturedAskUserQuestion,
@@ -34,6 +35,12 @@ let scenario: (input: QueryInput) => AsyncGenerator<SDKMessage> = (): AsyncGener
 mock.module("@anthropic-ai/claude-agent-sdk", () => ({
   query: (input: QueryInput) => scenario(input),
 }));
+// The SDK drive starts the claude first on PATH, on the model the run names; the transport is mocked, so stand-ins do.
+const claudeBin = mkdtempSync(join(tmpdir(), "aidlc-sdk-gate-claude-"));
+writeFileSync(join(claudeBin, process.platform === "win32" ? "claude.exe" : "claude"), "", { mode: 0o755 });
+process.env.PATH = `${claudeBin}${delimiter}${process.env.PATH ?? ""}`;
+process.env.ANTHROPIC_DEFAULT_OPUS_MODEL = "stand-in-model";
+afterAll(() => rmSync(claudeBin, { recursive: true, force: true }));
 const {
   buildAnswers,
   driveAidlc,

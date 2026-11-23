@@ -1,6 +1,7 @@
 // covers: subcommand:aidlc-orchestrate:wait, function:handleWait, function:unrecordedFinishSince,
 // hook:aidlc-log-subagent, hook:aidlc-deliver-stage-rules, audit:SUBAGENT_COMPLETED, audit:REVIEW_COMPLETED,
-// function:leadFinishRecorded, function:resumeNext
+// function:helperFinishRecorded, function:resumeNext,
+// file:aidlc-common/protocols/stage-protocol-reviewer.md, file:aidlc-common/protocols/stage-protocol-ensemble.md
 
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
@@ -562,10 +563,10 @@ describe("t341 orchestrate wait: a review holds until its reviewer has finished"
 // stage's summary and traceability are the conductor's to write after the
 // developer returns, so a wait on the files could not see it back; given that
 // id, the artifacts wait settles on that helper's finish instead.
-describe("t341 orchestrate wait: artifacts with the lead's host id", () => {
+describe("t341 orchestrate wait: artifacts with a helper's host id", () => {
   const SUBAGENT_HOOK = join(AIDLC_SRC, "hooks", "aidlc-log-subagent.ts");
   const DEVELOPER = "aidlc-developer-agent";
-  const OUT = `lead ${DEVELOPER} (no finish recorded yet)`;
+  const out = (agentId: string) => `helper ${agentId} (no finish recorded yet)`;
 
   function run(args: string[], input?: string): { status: number; out: string } {
     const r = spawnSync(process.execPath, args, {
@@ -587,8 +588,8 @@ describe("t341 orchestrate wait: artifacts with the lead's host id", () => {
     expect(run([SUBAGENT_HOOK], JSON.stringify({ hook_event_name: "SubagentStop", agent_type: agentType, agent_id: agentId })).status).toBe(0);
   }
 
-  function leadWait(agentId: string): Record<string, unknown> {
-    const r = run([ORCHESTRATE, "wait", "--stage", "code-generation", "--for", "artifacts", "--agent-id", agentId,
+  function helperWait(agentId: string, stage = "code-generation"): Record<string, unknown> {
+    const r = run([ORCHESTRATE, "wait", "--stage", stage, "--for", "artifacts", "--agent-id", agentId,
       "--timeout", "1", "--project-dir", project]);
     expect(r.status, r.out).toBe(0);
     return JSON.parse(r.out.trim().split("\n").pop() ?? "") as Record<string, unknown>;
@@ -596,18 +597,18 @@ describe("t341 orchestrate wait: artifacts with the lead's host id", () => {
 
   test("holds while that helper works and settles at its finish, before the conductor writes the summary", () => {
     project = activeIntentProject("state-construction.md");
-    const working = leadWait("dev-1");
+    const working = helperWait("dev-1");
     expect(working.status).toBe("waiting");
-    expect(working.missing).toEqual([OUT]);
+    expect(working.missing).toEqual([out("dev-1")]);
     expect(String(working.next)).toContain("keep running this command in this same turn until it settles");
     expect(String(working.next)).toContain("When the host's own notice says this helper finished or stopped");
     expect(String(working.next)).toContain("resumed after the host quit while the helper worked, that helper is gone");
 
     returns("dev-1");
-    const back = leadWait("dev-1");
+    const back = helperWait("dev-1");
     expect(back.status).toBe("settled");
     expect(back.missing).toEqual([]);
-    expect(String(back.next)).toContain("The lead's finish is recorded");
+    expect(String(back.next)).toContain("The helper's finish is recorded");
     // The same call without the id still waits on the files the conductor writes after the lead.
     const files = run([ORCHESTRATE, "wait", "--stage", "code-generation", "--for", "artifacts", "--timeout", "1", "--project-dir", project]);
     const fileWait = JSON.parse(files.out.trim().split("\n").pop() ?? "") as Record<string, unknown>;
@@ -615,12 +616,45 @@ describe("t341 orchestrate wait: artifacts with the lead's host id", () => {
     expect((fileWait.missing as string[]).some((entry) => entry.includes("code-generation/code-summary.md"))).toBe(true);
   });
 
+  test("a pipeline link's id: the wait names that helper, not the stage's lead, and settles at its finish", () => {
+    project = activeIntentProject("state-mid-inception.md");
+    const working = helperWait("arch-1", "reverse-engineering");
+    expect(working.status).toBe("waiting");
+    expect(working.missing).toEqual([out("arch-1")]);
+    returns("arch-1", "aidlc-architect-agent");
+    expect(helperWait("arch-1", "reverse-engineering").status).toBe("settled");
+  });
+
+  test("a stage run on its own before any intent: the id wait reads the space's record instead of refusing", () => {
+    project = createOrchestrationTestProject();
+    const opened = run([ORCHESTRATE, "next", "--stage", "reverse-engineering", "--single", "--project-dir", project]);
+    expect(opened.status, opened.out).toBe(0);
+    const working = helperWait("scan-1", "reverse-engineering");
+    expect(working.status).toBe("waiting");
+    expect(working.missing).toEqual([out("scan-1")]);
+    returns("scan-1");
+    expect(helperWait("scan-1", "reverse-engineering").status).toBe("settled");
+    // Another stage, whose run on its own is not the open one, is still refused.
+    const other = run([ORCHESTRATE, "wait", "--stage", "code-generation", "--for", "artifacts", "--agent-id", "scan-1",
+      "--timeout", "1", "--project-dir", project]);
+    expect(other.status, other.out).toBe(1);
+    expect(other.out).toContain("No active intent record resolves");
+  });
+
+  test("no intent and no stage run on its own: the id wait still refuses, as a file wait does", () => {
+    project = createOrchestrationTestProject();
+    const r = run([ORCHESTRATE, "wait", "--stage", "reverse-engineering", "--for", "artifacts", "--agent-id", "scan-1",
+      "--timeout", "1", "--project-dir", project]);
+    expect(r.status, r.out).toBe(1);
+    expect(r.out).toContain("No active intent record resolves");
+  });
+
   test("another helper's finish does not settle it", () => {
     project = activeIntentProject("state-construction.md");
     returns("dev-earlier");
-    expect(leadWait("dev-now").missing).toEqual([OUT]);
+    expect(helperWait("dev-now").missing).toEqual([out("dev-now")]);
     returns("dev-now");
-    expect(leadWait("dev-now").status).toBe("settled");
+    expect(helperWait("dev-now").status).toBe("settled");
   });
 
   test("an --agent-id with no id, or with another target, is refused with the usage", () => {
@@ -640,10 +674,37 @@ describe("t341 orchestrate wait: artifacts with the lead's host id", () => {
 
   test("its way back after a resumed chat names the stage run on its own when that is the step issued last", () => {
     project = activeIntentProject("state-construction.md");
-    expect(String(leadWait("dev-1").next)).toMatch(/orchestrate next` instead/);
+    expect(String(helperWait("dev-1").next)).toMatch(/orchestrate next` instead/);
     writeActiveDirectiveMarker(project, {
       kind: "run-stage", stage: "code-generation", single: true, state_sha256: stateDigest(readFileSync(seededStateFile(project), "utf-8")),
     });
-    expect(String(leadWait("dev-1").next)).toContain("orchestrate next --stage code-generation --single` instead");
+    expect(String(helperWait("dev-1").next)).toContain("orchestrate next --stage code-generation --single` instead");
+  });
+});
+
+// Claude Code starts reviewers, support agents and pipeline links in the
+// background too. Its own tree's bindings say to run the wait at once and keep
+// it in the same turn, so the chat is not left idle past its prompt cache.
+describe("t341 orchestrate wait: Claude Code's bindings wait in the same turn for every background helper", () => {
+  function claudeBinding(module: string): string {
+    const text = readFileSync(join(AIDLC_SRC, "aidlc-common", "protocols", module), "utf-8");
+    const from = text.indexOf("### Claude Code\n");
+    expect(from).toBeGreaterThanOrEqual(0);
+    const rest = text.slice(from + 1).search(/\n#{2,3} /);
+    return text.slice(from, rest === -1 ? undefined : from + 1 + rest);
+  }
+
+  test("a reviewer: the review wait at once, kept in the same turn", () => {
+    const binding = claudeBinding("stage-protocol-reviewer.md");
+    expect(binding).toContain("run step 3's `--for review` wait at once");
+    expect(binding).toContain("keep running it in the same turn rather than ending the turn for Claude Code's notice");
+    expect(binding).toContain("When the person writes meanwhile, stop waiting and re-run `next` first");
+  });
+
+  test("support agents and pipeline links: their waits at once, kept in the same turn", () => {
+    const binding = claudeBinding("stage-protocol-ensemble.md");
+    expect(binding).toContain("for a pipeline link Claude Code started in the background, add `--agent-id <that link's agentId>` to the `--for artifacts` wait");
+    expect(binding).toContain("for support agents it started in the background, run the §11 `--for collaborators` wait");
+    expect(binding).toContain("Run it at once and keep running it in the same turn while it answers `waiting`, as for the lead");
   });
 });

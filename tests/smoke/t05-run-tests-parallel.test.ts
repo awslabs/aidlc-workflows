@@ -972,4 +972,47 @@ describe("t05 run-tests.sh --parallel flag (migrated from t05-run-tests-parallel
       rmSync(fixtureDir, { recursive: true, force: true });
     }
   }, PER_TEST_TIMEOUT);
+
+  test("a test's git reaches only local repositories unless the case names another transport", () => {
+    const plant = join(TESTS_ROOT, "integration", "tZZ-git-transport-t05.test.ts");
+    const fixtureDir = mkdtempSync(join(tmpdir(), "aidlc-t05-git-transport-"));
+    const local = join(fixtureDir, "local.git");
+    expect(spawnSync("git", ["init", "-q", "--bare", local], { encoding: "utf8" }).status).toBe(0);
+    // Nothing listens on port 9 of the loopback, so even a git that ignored the setting would be refused there and
+    // look no name up.
+    writeFileSync(
+      plant,
+      [
+        'import { expect, test } from "bun:test";',
+        'import { spawnSync } from "node:child_process";',
+        "",
+        "const lsRemote = (address: string, env: NodeJS.ProcessEnv = process.env) =>",
+        "  spawnSync(\"git\", [\"ls-remote\", address], {",
+        '    encoding: "utf8",',
+        '    env: { ...env, GIT_TERMINAL_PROMPT: "0", LC_ALL: "C", NO_PROXY: "127.0.0.1", no_proxy: "127.0.0.1" },',
+        "  });",
+        "",
+        'test("git refuses every transport but a local one unless the call names it", () => {',
+        '  expect(process.env.GIT_ALLOW_PROTOCOL).toBe("file");',
+        '  expect(lsRemote("https://127.0.0.1:9/x.git").stderr).toContain("transport \'https\' not allowed");',
+        '  expect(lsRemote("ssh://127.0.0.1:9/x.git").stderr).toContain("transport \'ssh\' not allowed");',
+        `  expect(lsRemote(${JSON.stringify(local)}).status).toBe(0);`,
+        '  const named = lsRemote("https://127.0.0.1:9/x.git", { ...process.env, GIT_ALLOW_PROTOCOL: "file:https" });',
+        '  expect(named.status).not.toBe(0);',
+        '  expect(named.stderr).not.toContain("not allowed");',
+        "});",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    try {
+      // A wider setting the runner inherits does not reach the test.
+      const r = run(["--integration", "--filter", "tZZ-git-transport-t05"], { GIT_ALLOW_PROTOCOL: "file:https:ssh" });
+      expect(r.status, r.out).toBe(0);
+      expect(r.out).toContain("=== START tZZ-git-transport-t05.test.ts ===");
+    } finally {
+      rmSync(plant, { force: true });
+      rmSync(fixtureDir, { recursive: true, force: true });
+    }
+  }, PER_TEST_TIMEOUT);
 });

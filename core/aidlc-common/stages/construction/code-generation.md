@@ -456,43 +456,15 @@ its context. The delegation prompt below carries everything it needs.
 
 The aidlc-developer-agent persona and its knowledge are loaded automatically by the named agent. Do NOT manually inject the persona in the prompt.
 
-Include in the delegation prompt:
-- First, verbatim and unedited, the output of
-  `bun {{HARNESS_DIR}}/tools/aidlc-testing-posture.ts brief --unit
-  <directive.unit>` (or `--stage-level` for a zero-Unit directive). Its first
-  line is the exact target marker (`AIDLC-UNIT: <directive.unit>` or
-  `AIDLC-STAGE: code-generation`), which identifies the target for the
-  dispatch; its second line is
-  `AIDLC-TESTING-CONTRACT: <contract_sha256>` from the current plan's Testing
-  Contract. With its fence on, the plan-approval guard rejects a missing,
-  different, or stale hash. Do not write either marker yourself and do not repeat either marker
-  for contextual dependencies.
+Include in the delegation prompt (the step's plan note says how the developer gets the
+plan and its test instructions; for a step with no plan note, start the message with the
+output of `bun {{HARNESS_DIR}}/tools/aidlc-testing-posture.ts brief --unit <directive.unit>`
+(or `--stage-level` for a zero-Unit directive), word for word):
 - Design artifacts for the CURRENT UNIT ONLY (not all units)
 - A 1-2 line summary of each inception-phase artifact with its file path (requirements summary, stories summary, domain design summary) — the subagent can Read specific files if it needs full content
-- The current plan and unit-test-instructions.md are already in that output:
-  the plan with a terminal `## Review` appendix removed (when a review recorded under the
-  earlier protocol left one), task markers reset to `[ ]`, and spacing
-  normalized; the instructions byte for byte. The plan is also this stage's
-  review artifact; the review itself lives in its record, not in the plan. Only
-  what was fingerprinted was approved. After a permitted content-change
-  continuation, use the updated brief without describing the edits as approved.
-  The excluded appendix is never work to execute. With its fence on, the
-  plan-approval guard refuses a handoff that quotes it. Do not read the
-  plan file into the prompt yourself; the subagent ticks its progress in the
-  plan file, not in the prompt. When a build of this plan was interrupted and
-  the plan is unchanged since that build started, the output also carries a
-  `## Progress before the interruption`
-  section after its two marker lines: the steps done (the ones the plan file
-  ticks or, with none ticked, the ones whose named files changed since the build
-  started), any file a done step names that is not in the project (the step may
-  say not to add it: redo the step only if it should have made that file), and
-  the step to continue at. When neither says what is done (no tick, and no step
-  naming a file the engine can check), that section says the build wrote code
-  and the plan marks none of its steps: check each step against the project,
-  tick the box of each one that is done, and carry on from the first that is not
 - Project workspace details (languages, frameworks, conventions from aidlc-state.md)
 - Instructions to execute each plan step sequentially and mark checkboxes as
-  completed, starting where that progress section says when the output has one.
+  completed, starting where the brief's progress section says when it has one.
   Task markers are excluded from the approval fingerprint, so ticking
   a box never changes the content binding; other edits follow Step 3's
   after-approval rules
@@ -590,7 +562,12 @@ must be one existing workspace-relative implementation or test file. When the
 person asks to leave planned work out of this build (for example "skip the
 remaining stories"), do it: list each item they left out as `Deferred` (not
 built in this Unit), with their words as its `target`, and carry on; the
-approved plan stays as it is, and the approval says what was left out:
+approved plan stays as it is, and the approval says what was left out.
+An `N/A` row takes its reason as its `target`; to hand the ID to another Unit,
+name that Unit on its own as the `target`, its directory or `U{n}` ID and
+nothing else (for example `u2-profile`). That Unit must be on the story's row
+in `unit-of-work-story-map.md`, and the ID counts as built only when that Unit
+builds it, so Build and Test lists it as uncovered if no Unit did:
 
 ```json
 {

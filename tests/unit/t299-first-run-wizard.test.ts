@@ -777,6 +777,27 @@ describe("t299 first-run setup wizard", () => {
     expect(readFileSync(join(result.project, ".gitignore"), "utf-8").startsWith("aidlc/\n")).toBe(true);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  test("recommended defaults in a git repository say once what git does not track of the setup, before setup is complete", () => {
+    const said = "Note: git does not track AI-DLC's setup for Claude Code in this project yet: .claude/, aidlc/, " +
+      ".gitignore, .mcp.json and aidlc.settings.json. Commit them so teammates who use Claude Code get the same setup.";
+    const result = runWizard("\n", {
+      gitOnPath: true,
+      prepare: (project) => {
+        rmSync(join(project, ".git"), { recursive: true, force: true });
+        expect(spawnSync("git", ["init", "-q", project]).status).toBe(0);
+      },
+    });
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    const out = result.stdout.replace(/\s+/g, " ");
+    expect(out.split("git does not track AI-DLC's setup"), out).toHaveLength(2);
+    expect(out).toContain(said);
+    expect(out.indexOf(said)).toBeLessThan(out.indexOf("Setup complete."));
+    // Config at a terminal in the set-up project walks its sections and does not refresh the setup: nothing said.
+    const walk = runWizard("n\n", { gitOnPath: true, project: result.project });
+    expect(walk.stdout).toContain("using the existing copied projection");
+    expect(walk.stdout).not.toContain("git does not track");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("recommended defaults on Kiro CLI describe one effort for the whole interactive session", () => {
     const result = runWizard("\n", {
       harnesses: { kiro: { found: true, version: "kiro-cli 1.0.0" } },

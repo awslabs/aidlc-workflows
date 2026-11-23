@@ -36,6 +36,7 @@ import {
   fixture,
   git,
   interruptAfterBoltStart,
+  ISOLATED_GIT_ENV,
   nextDirective,
   plan,
   prepare,
@@ -588,7 +589,10 @@ describe("t344 Bolt worktrees carry the main checkout's submodules (#1352)", () 
   test("prepare sets the submodule up in the worktree, and landing leaves the main checkout's submodule as it was", () => {
     const pd = fixture(["alpha"], CHECK, true);
     const registered = git(pd, ["config", "--get", "submodule.vendor/sub.url"]);
-    const prepared = prepare(pd);
+    // Without the runner's GIT_ALLOW_PROTOCOL, git keeps its own rule for a submodule's local clone, so the engine's
+    // own setting for it is what lets the copy through.
+    const { GIT_ALLOW_PROTOCOL: _runnerSetting, ...stockGit } = ISOLATED_GIT_ENV;
+    const prepared = prepare(pd, ["alpha"], false, stockGit);
     expect(prepared.code, `${prepared.out}\n${prepared.err}`).toBe(0);
     expect(readFileSync(join(wt(pd), "vendor", "sub", "lib.ts"), "utf-8")).toBe(SUBMODULE_SOURCE);
     writeUnitSource(pd, "alpha", 2);

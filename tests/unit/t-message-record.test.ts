@@ -549,8 +549,8 @@ describe("the human-turn hook keeps one record of each message", () => {
 // A choice the person left to the agent names the message that left it (log
 // answer --on-instruction --message): on every host hook path the HUMAN_TURN
 // row names the message the hook kept, and the answer's record keeps its whole
-// words by that id. Words the agent passes with the flag are its own and claim
-// nothing.
+// words by that id. With none named and no reply since the question, the
+// answer is refused and the step names that id, never the words.
 describe("a typed prompt's message backs a choice the person left to the agent", () => {
   const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
   const log = (proj: string, args: string[]) => {
@@ -561,7 +561,7 @@ describe("a typed prompt's message backs a choice the person left to the agent",
   };
   const answers = (proj: string) => readAuditShardEvents(proj).filter((row) => row.event === "QUESTION_ANSWERED");
   for (const harness of HARNESSES) {
-    test(`${harness}: their message is recorded by the id the hook kept, and the agent's own words claim nothing`, () => {
+    test(`${harness}: their message is recorded by the id the hook kept, and with none named the step names it`, () => {
       const proj = withWork();
       const words = "Q1 is B. Use the recommended answers for the rest!";
       say(proj, words, harness);
@@ -580,17 +580,15 @@ describe("a typed prompt's message backs a choice the person left to the agent",
       const mine = log(proj, [
         "answer", "--stage", "requirements-analysis", "--details", "Q3: A", "--on-instruction", "grounded from the request",
       ]);
-      expect(mine.status, mine.out).toBe(0);
-      const own = answers(proj).at(-1)?.block ?? "";
-      expect(auditBlockField(own, "Answer Source")).toBeNull();
-      expect(auditBlockField(own, "Message Id")).toBeNull();
-      expect(auditBlockField(own, "Conductor Summary")).toBe("grounded from the request");
+      expect(mine.status, mine.out).not.toBe(0);
+      expect(mine.out).toContain(`${id} (sent `);
+      expect(mine.out).not.toContain(words);
       const unknown = log(proj, [
         "answer", "--stage", "requirements-analysis", "--details", "Q4: A", "--on-instruction", "--message", "0badc0de",
       ]);
       expect(unknown.status, unknown.out).not.toBe(0);
       expect(unknown.out).toContain("no message record 0badc0de");
-      expect(answers(proj)).toHaveLength(2);
+      expect(answers(proj)).toHaveLength(1);
     });
   }
 });

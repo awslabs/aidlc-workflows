@@ -80,7 +80,9 @@ import {
   type AnswerScript,
   type CapturedToolResult,
   type DriveResult,
+  type DriveTurnEnd,
   driveAidlc,
+  offersSeparateWork,
   separateWorkOptionIndex,
 } from "../harness/sdk-drive.ts";
 import {
@@ -126,6 +128,19 @@ const SEPARATE_WORK: AnswerScript = {
     return at < 0 ? undefined : { optionIndex: at };
   },
 };
+
+/**
+ * The same answer when the agent lists the engine's question in the chat
+ * instead of the question box, as a person answers it: the number the list
+ * gave separate new work. No box and no such listed choice is no answer, and
+ * the drive ends without the second piece of work, which the journey fails on.
+ */
+function separateWorkInChat(turn: DriveTurnEnd): string | undefined {
+  if (turn.turn !== 1 || turn.askedQuestions > 0) return undefined;
+  const line = turn.assistantText.split("\n").find((text) => /^\s*\d+\.\s/.test(text) && offersSeparateWork(text));
+  const number = line?.match(/^\s*(\d+)\./)?.[1];
+  return number ? `${number}, a separate new piece of work` : undefined;
+}
 
 /** Read every codekb artifact filename for a repo, tolerant of WHERE the store
  *  anchors. The engine resolves the per-repo codekb to the SPACE-LEVEL
@@ -330,7 +345,9 @@ describe("t-journey-workspace (live SDK multi-repo·intent·space journey)", () 
           /(?:aidlc-orchestrate\.ts["']?|engine orchestrate)\s+next\b/.test(command)
         );
         expect(r2Next.length).toBeGreaterThan(0);
-        for (const command of r2Next) {
+        // AI-DLC's first command (`next --entry`) carries none of the person's words: the engine reads their typed
+        // line from its own record, and the record checks below show what it ran.
+        for (const command of r2Next.filter((next) => !/\snext --entry$/.test(next))) {
           expect(command).toMatch(/--single\b/);
           expect(command).toMatch(/--stage(?:=|\s+)(?:["'])?reverse-engineering\b/);
         }
@@ -383,12 +400,15 @@ describe("t-journey-workspace (live SDK multi-repo·intent·space journey)", () 
 
         // --- Step 3: create a SECOND intent alongside active A -----------------
         // In the person's words: with A active the engine asks where the new
-        // work goes, and they pick separate new work (SEPARATE_WORK).
+        // work goes, and they pick separate new work (SEPARATE_WORK), or give
+        // its number in their next message when the agent listed the question
+        // in the chat (separateWorkInChat).
         const r3 = await driveAidlc(
           `/aidlc --scope poc "build a standalone metrics dashboard"`,
           {
             projectDir: root,
             answerScript: SEPARATE_WORK,
+            nextMessage: separateWorkInChat,
             timeoutMs: operationBudget(VERB_DRIVE_MS),
             stopAfterToolResult: STOP_AFTER_CREATION,
           },
