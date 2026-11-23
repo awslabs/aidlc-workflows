@@ -185,6 +185,8 @@ import {
   planApprovalAskIsOpen,
   TESTING_POSTURE_SUBCOMMANDS,
   hooksNeverRanHere,
+  CEREMONY_ENV,
+  resolveProjectFlag,
   readWorkspaceSourceSnapshot,
   recordedSourceListingUnderCurrentBoundary,
 } from "./aidlc-lib.ts";
@@ -2038,11 +2040,16 @@ export function briefHandedAtStart(projectDir: string): boolean {
  * Whether a tool hands this install's developer its brief, by the start
  * context or by the input rewrite. Not where the work's hooks never ran (a
  * host that runs none, with the presence check switched off): no tool runs to
- * hand it over, so the conductor passes it.
+ * hand it over, so the conductor passes it. Not by the rewrite with the
+ * plan-approval check switched off: only that check refuses a start a tool
+ * left without the brief (a project's opencode adapter from before an update
+ * drops the rewrite), so the conductor passes it (the rewrite adds nothing to
+ * a message that already carries it).
  */
 export function briefHandedByTool(projectDir: string): boolean {
   if (hooksNeverRanHere(projectDir)) return false;
-  return briefHandedAtStart(projectDir) || BRIEF_REWRITE_HARNESSES.has(runtimeHarnessName(projectDir));
+  return briefHandedAtStart(projectDir) || (BRIEF_REWRITE_HARNESSES.has(runtimeHarnessName(projectDir)) &&
+    resolveProjectFlag(CEREMONY_ENV.plan_approval, process.env, projectDir) !== "1");
 }
 
 /** The sentence the rewrite's copy of the brief opens with. */

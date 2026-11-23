@@ -42,7 +42,8 @@
 //   - the plan-approval guard lets a developer start that names no target and
 //     carries no brief through only where the start hands the plan over (Claude
 //     Code with its SubagentStart entry registered), and refuses it
-//     everywhere else; the step's note says which.
+//     everywhere else; the step's note says which (with the plan-approval check
+//     switched off, Copilot and opencode get the brief command).
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -1432,6 +1433,30 @@ describe("the developer is handed its plan as it starts", () => {
         const label = `${harness}, hooks ${hooksRan ? "ran" : "never ran"}`;
         expect(note.includes("from AI-DLC as it starts"), label).toBe(hooksRan);
         expect(note.includes("Start the developer's message with the output of `"), label).toBe(!hooksRan);
+      }
+    }
+  });
+
+  test("with the plan-approval check switched off, the tools that hand the brief by rewrite get the brief command", () => {
+    for (const harness of ["claude", "copilot", "opencode"]) {
+      for (const switchedOff of [false, true]) {
+        const proj = project();
+        registerStartDelivery(proj);
+        appendAuditEntry("STAGE_STARTED", { Stage: "code-generation" }, proj);
+        writePlan(proj);
+        expect(next(proj).ask_type).toBe("plan-approval");
+        approve(proj);
+        // Nothing would refuse a start a tool left without the brief (a
+        // project's opencode adapter from before an update drops it), so the
+        // conductor passes it.
+        const run = runOrchestrateNext(ORCHESTRATE, proj, [], {
+          env: { ...env(proj), AIDLC_HARNESS_NAME: harness, ...(switchedOff ? { AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "1" } : {}) },
+        });
+        const note = String((run.directive as { plan_note?: string } | null)?.plan_note ?? "");
+        const label = `${harness}, check ${switchedOff ? "switched off" : "on"}`;
+        const passed = switchedOff && harness !== "claude";
+        expect(note.includes("Start the developer's message with the output of `"), label).toBe(passed);
+        expect(note.includes("from AI-DLC as it starts"), label).toBe(!passed);
       }
     }
   });
