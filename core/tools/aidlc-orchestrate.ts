@@ -11786,8 +11786,10 @@ function entryLine(pd: string, selection: WorkflowSelection, unjoined: boolean):
 // is that question's answer: it runs as the command the question gave for that
 // plan, so the work starts on the request it was asked about, with the
 // settings typed with it. With more than one plan question kept unanswered (a
-// replaced request's included), or a routing question open, which question it
-// answers is not the tool's to tell, so the reply goes on as handed on. Beside
+// replaced request's included), a routing question open, or, with no work
+// selected, work listed to pick under that same name (the which-work question
+// names the work), which question it answers is not the tool's to tell, so the
+// reply goes on as handed on. Beside
 // work in hand it is taken only while the plan question is the engine's own
 // question on top of that work (openEngineQuestion): once the work has asked a
 // question of its own since (its stage's question or approval, its code plan
@@ -11797,7 +11799,10 @@ function planNamedReply(pd: string, args: string[]): string[] | null {
   const plan = nextArgsNameOnlyAPlan(args);
   if (plan === null || openRoutingQuestion(pd) !== null) return null;
   const onTop = openEngineQuestion(pd);
-  if (existsSync(engineStateFilePath(pd)) && onTop !== "scope-confirm" && onTop !== "compose-offer") return null;
+  const working = existsSync(engineStateFilePath(pd));
+  if (working && onTop !== "scope-confirm" && onTop !== "compose-offer") return null;
+  const listed = working ? null : unselectedRecords(pd);
+  if (listed?.selectable.some(({ intent, selector }) => intentDisplayLabel(intent) === plan || selector === plan)) return null;
   const front = openFrontQuestion(pd);
   if (front === null || !front.sole) return null;
   const kept = openQuestionSettings(pd, front.question);

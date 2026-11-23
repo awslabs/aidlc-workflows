@@ -1201,7 +1201,7 @@ export const ALLOWED_UNREACHED: Record<string, Allowed> = {
   [`${LIB}#kiroTurnOrigin`]: { use: "decides", why: "host-text identity: the Kiro templates (P1)" },
   [`${LIB}#kiroChatRecordOrigin`]: { use: "decides", why: "host-text identity: the Kiro chat record's mark for this prompt (P1)" },
   // A plain reply entryLine hands on (STRUCTURE_RESULT), read before `next` reads it.
-  [`${ORCH}#planNamedReply`]: { use: "decides", why: "the exact plan token alone (nextArgsNameOnlyAPlan) as the reply while one plan question waits and, beside work in hand, is the engine's own question on top of it (openEngineQuestion): that question's own command for that plan" },
+  [`${ORCH}#planNamedReply`]: { use: "decides", why: "the exact plan token alone (nextArgsNameOnlyAPlan) as the reply while one plan question waits and, beside work in hand, is the engine's own question on top of it (openEngineQuestion) and, with no work selected, names no work listed to pick (unselectedRecords): that question's own command for that plan" },
   // The `[Answer]:` line read inline from a questions file's text, the person's when they answer in the file.
   [`${ORCH}#questionsCount`]: { use: "decides", why: "the presence shape: how many of a stage's [Answer]: lines hold an answer, for the review line" },
   [`${ORCH}#answeredQuestionsFile`]: { use: "decides", why: "the presence shape: whether a stage's questions file holds its questions (an [Answer]: tag, filled or blank)" },

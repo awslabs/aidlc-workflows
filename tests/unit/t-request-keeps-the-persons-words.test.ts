@@ -582,6 +582,7 @@ describe("AI-DLC's first command carries none of the person's words", () => {
   // engine hands it on from its record as the one argument the agent would have passed, so it meets what those words
   // meet, never a new request made of the reply.
   const OTHER_CHAT = "01995000-7a11-7000-8000-0000000000d2";
+  const THIRD_CHAT = "01995000-7a11-7000-8000-0000000000d3";
   // The record keeps whole seconds, and no person replies within the second they typed their line, so the reply
   // lands in a later one.
   function laterSecond(): void {
@@ -648,10 +649,10 @@ describe("AI-DLC's first command carries none of the person's words", () => {
     expect(JSON.stringify(run(["--request", id as string]))).toContain("You said:");
     laterSecond();
   }
-  // Work another chat started, two pieces, none selected in this one.
-  function workHereNotSelected(): void {
+  // Work another chat started, two pieces by default, none selected in this one.
+  function workHereNotSelected(labels = ["price fix", "tax rounding"]): void {
     removeWorkspaceRecord(proj);
-    for (const label of ["price fix", "tax rounding"]) {
+    for (const label of labels) {
       const r = spawnSync(BUN, [join(AIDLC_SRC, "tools", "aidlc-utility.ts"), "intent-create", "--scope", "bugfix",
         "--label", label, "--arguments", `fix the ${label}`, "--project-dir", proj], {
         cwd: proj, env: envWith({ AIDLC_SESSION_OVERRIDE: OTHER_CHAT }), encoding: "utf-8",
@@ -852,6 +853,28 @@ describe("AI-DLC's first command carries none of the person's words", () => {
     expect(JSON.stringify(step)).not.toContain("intent create");
     expect(sameStep(step)).toBe(sameStep(run(["bugfix"])));
   });
+
+  // With no work selected, a new chat is asked which work to carry on, by the work's names. A plan's name that is
+  // also one of those names answers either question, so it goes on as passed; any other plan's name answers the plan
+  // question.
+  for (const [reply, picks] of [["security-patch", true], ["express", false]] as const) {
+    test(`${reply} alone from a new chat shown the work to pick, ${picks ? "the name of listed work" : "naming no listed work"}, while another chat's plan question waits ${picks ? "gets what that name passed by the agent gets" : "starts that request"}`, () => {
+      workHereNotSelected(["security patch", "tax rounding"]);
+      const ask = newWorkPlanQuestion();
+      const third = { AIDLC_SESSION_OVERRIDE: THIRD_CHAT };
+      typed("/aidlc", third, proj, THIRD_CHAT);
+      expect(JSON.stringify(run(["--entry"], third))).toContain("Pick one to carry on.");
+      laterSecond();
+      typed(reply, third, proj, THIRD_CHAT);
+      const step = run(["--entry"], third);
+      if (picks) {
+        expect(JSON.stringify(step)).not.toContain("intent create");
+        expect(sameStep(step)).toBe(sameStep(run([reply], third)));
+      } else {
+        expect(step).toEqual(startedBy(ask, reply, third));
+      }
+    });
+  }
 
   // Only a reply AI-DLC holds whole goes on: a reply the record cut keeps the step, where the agent writes it.
   test("a plain reply past the record's length while the plan question waits keeps the step", () => {
