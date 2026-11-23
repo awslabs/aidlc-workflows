@@ -81,14 +81,14 @@ function next(proj: string, args: string[]): { kind?: string; message?: string }
 }
 
 // The creation step `next` hands the agent for a plan the person named, run as
-// the agent runs it.
-function create(proj: string, step: { message?: string }): void {
+// the agent runs it (in the chat `extra` names, by default the person's).
+function create(proj: string, step: { message?: string }, extra: Record<string, string> = {}): void {
   const command = String(step.message).match(/Run `[^`]*?engine (intent create [^`]*)`/)?.[1];
   expect(command, String(step.message)).toBeDefined();
   const args = (command as string).replace("<2-3 word kebab essence>", "the-work").split(" ")
     .map((arg) => arg.replace(/^["'](.*)["']$/, "$1"));
   const r = spawnSync(BUN, [DISPATCHER, "engine", ...args, "--project-dir", proj], {
-    cwd: proj, env: env(), encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    cwd: proj, env: { ...env(), ...extra }, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
   });
   expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
 }
@@ -929,6 +929,216 @@ describe("AI-DLC's first command carries none of the person's words", () => {
     laterSecond();
     typed("bugfix");
     expect(run(["--entry"]).message).toStartWith("The person picked the `bugfix` plan");
+  });
+
+  // A plan question the person left behind, rewording that request or dropping it for another one whose work then
+  // started, has been overtaken by that work: it no longer counts as one still waiting, so the plan question asked
+  // after it is the only one, and a reply from a new chat answers that one. Its own commands still answer it.
+  const OLDER = "add a farewell message when the greeter exits";
+  const REWORDED = "add a farewell message when the greeter exits, in the same style as the greeting";
+  const ANOTHER = "add a whisper option that prints the greeting in lower case";
+  const WAITS = "has not answered the plan question";
+  const finishedWork = (): void => seedStateFile(proj, join(FIXTURES_DIR, "state-completed.md"));
+  const OVERTAKEN = [
+    ["reworded before any work was here", (): void => {}, REWORDED],
+    ["dropped beside work in progress", openWork, ANOTHER],
+    ["dropped beside finished work", finishedWork, ANOTHER],
+  ] as const;
+  type Step = PlanQuestion & { message?: string; choices?: Array<{ label: string; command?: string }> };
+  // The plan question for `words` typed in `chat`, wherever the project stands, the agent following each step as it
+  // reads it: words beside a plan question still waiting are something else, words beside work in hand are separate
+  // new work, and the agent proposes bugfix.
+  function planQuestionFor(words: string, chat = SESSION): PlanQuestion {
+    const extra = { AIDLC_SESSION_OVERRIDE: chat };
+    typed(`/aidlc ${words}`, extra, proj, chat);
+    let step = run(["--entry"], extra) as Step;
+    for (let hop = 0; hop < 6; hop++) {
+      const message = String(step.message ?? "");
+      const separate = step.choices?.find((choice) => choice.label === "Separate new piece of work")?.command;
+      if (separate !== undefined) {
+        laterSecond();
+        typed("2", extra, proj, chat);
+        step = run(separate.replace(`${RUN} `, "").split(" "), extra) as Step;
+        continue;
+      }
+      if (step.kind === "ask") {
+        laterSecond();
+        return step;
+      }
+      const other = message.startsWith(`The person ${WAITS}`) ? message.match(/next (--request-file \S+?)`/)?.[1] : undefined;
+      const propose = message.match(/--propose <plan> --request ([0-9a-f]{8})/)?.[1];
+      const kept = message.match(/next --request ([0-9a-f]{8})/)?.[1];
+      if (other !== undefined) step = run(other.split(" "), extra) as Step;
+      else if (propose !== undefined) {
+        laterSecond();
+        step = run(["--propose", "bugfix", "--request", propose], extra) as Step;
+      } else {
+        expect(kept, message.slice(0, 400)).toBeDefined();
+        step = run(["--request", kept as string], extra) as Step;
+      }
+    }
+    throw new Error(`no plan question for ${words}`);
+  }
+  // The person picks `plan` on the plan question in `chat`, and the agent there runs the creation it returns.
+  function startIn(ask: PlanQuestion, plan: string, chat = SESSION): void {
+    const extra = { AIDLC_SESSION_OVERRIDE: chat };
+    typed(plan, extra, proj, chat);
+    create(proj, run(choiceFor(ask, plan), extra), extra);
+    laterSecond();
+  }
+  // The older request's plan question left behind as `way` says and a newer request started; then the plan question
+  // for the latest request, beside that work.
+  function overtakenThenAsked(setup: () => void, newer: string): { older: PlanQuestion; latest: PlanQuestion } {
+    setup();
+    const older = planQuestionFor(OLDER);
+    startIn(planQuestionFor(newer), "bugfix");
+    return { older, latest: planQuestionFor(REQUEST) };
+  }
+  // The request each piece of work here was started with.
+  function startedRequests(): string[] {
+    const intents = join(proj, "aidlc", "spaces", "default", "intents");
+    return readdirSync(intents).filter((name) => existsSync(join(intents, name, "project-description.json")))
+      .map((name) => JSON.parse(readFileSync(join(intents, name, "project-description.json"), "utf-8")) as string);
+  }
+  const NEW_CHAT = { AIDLC_SESSION_OVERRIDE: OTHER_CHAT };
+  const askedAbout = (words: string): string => `The person ${WAITS} they were asked about "${words}"`;
+  // What words over work in hand get first; a plain reply with no question waiting gets NO_LINE_STEP.
+  const WORDS_OVER_WORK = /^Work is in progress\b.*the person's words may ask/s;
+
+  for (const [way, setup, newer] of OVERTAKEN) {
+    test(`a plan's name alone from a new chat starts the latest plan question's request, an earlier one ${way} and overtaken by the work started since`, () => {
+      const { latest } = overtakenThenAsked(setup, newer);
+      typed("express", NEW_CHAT, proj, OTHER_CHAT);
+      const step = run(["--entry"], NEW_CHAT);
+      expect(step).toEqual(startedBy(latest, "express", NEW_CHAT));
+      create(proj, step, NEW_CHAT);
+      expect(startedRequests()).toContain(REQUEST);
+    });
+
+    test(`a plain reply from a new chat gets the step naming the latest plan question's request, an earlier one ${way} and overtaken by the work started since`, () => {
+      const { latest } = overtakenThenAsked(setup, newer);
+      typed("Yes, go ahead with that", NEW_CHAT, proj, OTHER_CHAT);
+      const step = run(["--entry"], NEW_CHAT);
+      expect(step.message).toStartWith(askedAbout(REQUEST));
+      expect(step.message).toContain(`next ${choiceFor(latest, "bugfix").join(" ")}\``);
+    });
+
+    test(`a request ${way}: once a later one has started, their words in a new chat and their next request no longer meet its plan question`, () => {
+      setup();
+      planQuestionFor(OLDER);
+      startIn(planQuestionFor(newer), "bugfix");
+      typed("carry on", NEW_CHAT, proj, OTHER_CHAT);
+      expect(run(["--entry"], NEW_CHAT)).toEqual({ kind: "print", message: NO_LINE_STEP });
+      typed(`/aidlc ${REQUEST}`);
+      const words = run([]);
+      expect(words.message).toMatch(WORDS_OVER_WORK);
+      expect(words.message).toMatch(/next --request [0-9a-f]{8}`/);
+    });
+  }
+
+  test("with question-retention-days set, a plan's name alone from a new chat starts the latest plan question's request, an earlier one overtaken by the work started since", () => {
+    const previous = process.env.AIDLC_QUESTION_RETENTION_DAYS;
+    process.env.AIDLC_QUESTION_RETENTION_DAYS = "30";
+    try {
+      const { latest } = overtakenThenAsked(openWork, ANOTHER);
+      typed("express", NEW_CHAT, proj, OTHER_CHAT);
+      expect(run(["--entry"], NEW_CHAT)).toEqual(startedBy(latest, "express", NEW_CHAT));
+    } finally {
+      if (previous === undefined) delete process.env.AIDLC_QUESTION_RETENTION_DAYS;
+      else process.env.AIDLC_QUESTION_RETENTION_DAYS = previous;
+    }
+  });
+
+  // A request parked in its own chat, not dropped: the engine cannot tell the two apart, so once a later request has
+  // started in another chat it is overtaken the same way, and its own chat's commands still start it.
+  test("a request parked in its own chat while a later one starts in another: a plain reply from a new chat gets the ordinary step, and its own command there still starts it", () => {
+    openWork();
+    const parked = planQuestionFor(OLDER);
+    startIn(planQuestionFor(ANOTHER, OTHER_CHAT), "bugfix", OTHER_CHAT);
+    const third = { AIDLC_SESSION_OVERRIDE: THIRD_CHAT };
+    typed("Yes, go ahead with that", third, proj, THIRD_CHAT);
+    expect(run(["--entry"], third)).toEqual({ kind: "print", message: NO_LINE_STEP });
+    typed("bugfix");
+    const own = run(choiceFor(parked, "bugfix"));
+    expect(own.message).toContain(`intent create ${choiceFor(parked, "bugfix").join(" ")}`);
+    create(proj, own);
+    expect(startedRequests()).toEqual(expect.arrayContaining([OLDER, ANOTHER]));
+  });
+
+  // Only a plan question asked before the request that started work is overtaken by it.
+  test("an older request started while a later one's plan question waits in another chat: a plain reply from a new chat gets the step naming the later one", () => {
+    const older = planQuestionFor(OLDER);
+    planQuestionFor(REQUEST, OTHER_CHAT);
+    startIn(older, "bugfix");
+    const third = { AIDLC_SESSION_OVERRIDE: THIRD_CHAT };
+    typed("Yes, go ahead with that", third, proj, THIRD_CHAT);
+    expect(run(["--entry"], third).message).toStartWith(askedAbout(REQUEST));
+  });
+
+  test("a request asked in another chat while an earlier one waited for its plan to be proposed is still the one waiting once the earlier one starts", () => {
+    typed(`/aidlc ${OLDER}`);
+    const id = String(run([]).message).match(/--propose <plan> --request ([0-9a-f]{8})/)?.[1];
+    expect(id).toBeDefined();
+    laterSecond();
+    planQuestionFor(REQUEST, OTHER_CHAT);
+    const older = run(["--propose", "bugfix", "--request", id as string]);
+    expect(older.kind).toBe("ask");
+    laterSecond();
+    startIn(older, "bugfix");
+    const third = { AIDLC_SESSION_OVERRIDE: THIRD_CHAT };
+    typed("Yes, go ahead with that", third, proj, THIRD_CHAT);
+    expect(run(["--entry"], third).message).toStartWith(askedAbout(REQUEST));
+  });
+
+  // With question-retention-days set, a request's first copy can expire while its plan question is kept; nothing then
+  // tells which questions were asked before that request, so none is taken as overtaken by it.
+  test("a request asked in another chat is still the one waiting once an earlier one starts whose first copy has expired", () => {
+    const previous = process.env.AIDLC_QUESTION_RETENTION_DAYS;
+    process.env.AIDLC_QUESTION_RETENTION_DAYS = "1";
+    try {
+      expiredFirstCopy();
+    } finally {
+      if (previous === undefined) delete process.env.AIDLC_QUESTION_RETENTION_DAYS;
+      else process.env.AIDLC_QUESTION_RETENTION_DAYS = previous;
+    }
+  });
+  function expiredFirstCopy(): void {
+    typed(`/aidlc ${OLDER}`);
+    const id = String(run([]).message).match(/--propose <plan> --request ([0-9a-f]{8})/)?.[1];
+    expect(id).toBeDefined();
+    laterSecond();
+    planQuestionFor(REQUEST, OTHER_CHAT);
+    const older = run(["--propose", "bugfix", "--request", id as string]);
+    expect(older.kind).toBe("ask");
+    laterSecond();
+    rmSync(join(proj, "aidlc", ".aidlc-sessions", "questions", `${id}.json`));
+    startIn(older, "bugfix");
+    const third = { AIDLC_SESSION_OVERRIDE: THIRD_CHAT };
+    typed("Yes, go ahead with that", third, proj, THIRD_CHAT);
+    expect(run(["--entry"], third).message).toStartWith(askedAbout(REQUEST));
+  }
+
+  test("two plan questions still waiting beside work in progress, nothing started since: a plan's name alone from a new chat picks neither request", () => {
+    openWork();
+    planQuestionFor(OLDER);
+    planQuestionFor(REQUEST, OTHER_CHAT);
+    const third = { AIDLC_SESSION_OVERRIDE: THIRD_CHAT };
+    typed("express", third, proj, THIRD_CHAT);
+    const step = run(["--entry"], third);
+    expect(JSON.stringify(step)).not.toContain("intent create");
+    expect(sameStep(step)).toBe(sameStep(run(["express"], third)));
+  });
+
+  // Work a teammate started arrives with no question of this checkout behind it, so it overtakes none of them.
+  test("two plan questions still waiting, then work listed that no question here started: a plan's name alone from a new chat picks neither request", () => {
+    planQuestionFor(OLDER);
+    planQuestionFor(REQUEST);
+    workHereNotSelected(["price fix"]);
+    const third = { AIDLC_SESSION_OVERRIDE: THIRD_CHAT };
+    typed("express", third, proj, THIRD_CHAT);
+    const step = run(["--entry"], third);
+    expect(JSON.stringify(step)).not.toContain("intent create");
+    expect(sameStep(step)).toBe(sameStep(run(["express"], third)));
   });
 
   test("a plan's name alone while a question the work asked after the plan question waits gets what that name passed by the agent gets", () => {
