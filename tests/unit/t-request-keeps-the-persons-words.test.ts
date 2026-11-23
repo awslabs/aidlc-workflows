@@ -1,4 +1,4 @@
-// covers: function:takePersonsOwnLine
+// covers: function:takePersonsOwnLine, function:planNamedReply
 //
 // The request a piece of work is recorded with is the person's own words. Live
 // on opencode in Spanish: the person typed "/aidlc quiero agregar un modo oscuro
@@ -362,10 +362,10 @@ describe("AI-DLC's first command carries none of the person's words", () => {
     expect(r.directive, r.out).not.toBeNull();
     return r.directive as { kind?: string; message?: string };
   }
-  function typed(prompt: string, extra: Record<string, string | undefined> = {}, at = proj): void {
+  function typed(prompt: string, extra: Record<string, string | undefined> = {}, at = proj, chat = SESSION): void {
     const r = spawnSync(BUN, [DISPATCHER, "engine", "hook", "record-human-turn"], {
       cwd: at,
-      input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: SESSION, prompt }),
+      input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: chat, prompt }),
       env: { ...envWith(extra), CLAUDE_PROJECT_DIR: at, AIDLC_PROJECT_DIR: at },
       encoding: "utf-8",
       timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
@@ -582,16 +582,64 @@ describe("AI-DLC's first command carries none of the person's words", () => {
   // engine hands it on from its record as the one argument the agent would have passed, so it meets what those words
   // meet, never a new request made of the reply.
   const OTHER_CHAT = "01995000-7a11-7000-8000-0000000000d2";
+  const THIRD_CHAT = "01995000-7a11-7000-8000-0000000000d3";
   // The record keeps whole seconds, and no person replies within the second they typed their line, so the reply
   // lands in a later one.
   function laterSecond(): void {
     const second = Math.floor(Date.now() / 1000);
     while (Math.floor(Date.now() / 1000) === second) Bun.sleepSync(25);
   }
-  function planQuestionOpen(): void {
-    typed(`/aidlc ${REQUEST}`);
+  type PlanQuestion = { kind?: string; scope_commands?: Array<{ scope: string; command: string }> };
+  // The plan question for their request, proposing `plan` (`compose`: the tailored-plan offer), with `settings`
+  // typed before the request.
+  function planQuestionOpen(settings = "", plan = "bugfix"): PlanQuestion {
+    typed(`/aidlc ${settings}${REQUEST}`);
     const id = String(run([]).message).match(/--request ([0-9a-f]{8})/)?.[1];
-    expect(run(["--propose", "bugfix", "--request", id as string]).kind).not.toBe("error");
+    const ask = run(["--propose", plan, "--request", id as string]);
+    expect(ask.kind).toBe("ask");
+    laterSecond();
+    return ask as PlanQuestion;
+  }
+  // The arguments of the command the plan question gave for `plan`.
+  function choiceFor(ask: PlanQuestion, plan: string): string[] {
+    const command = ask.scope_commands?.find((row) => row.scope === plan)?.command;
+    expect(command, JSON.stringify(ask)).toBeDefined();
+    return (command as string).replace(`${RUN} `, "").split(" ");
+  }
+  // What the step of that command gives where a plan's name took the reply: the same, and the request it starts,
+  // handed to an agent that may never have seen the question, to name the work and say which request it started.
+  function startedBy(ask: PlanQuestion, plan: string, extra: Record<string, string | undefined> = {}): { kind?: string; message?: string } {
+    const own = run(choiceFor(ask, plan), extra);
+    expect(own.message).toContain(" Replace `--label`");
+    const starts = ` This starts the request the plan question asked about: "${REQUEST}". Say in your own words which request it starts.`;
+    return { ...own, message: String(own.message).replace(" Replace `--label`", `${starts} Replace \`--label\``) };
+  }
+  // The plan question for their request asked as separate new work beside the work in hand (the routing question's
+  // separate-work answer, then the plan proposed), in a later second than anything before it.
+  function newWorkPlanQuestion(): PlanQuestion {
+    typed(`/aidlc ${REQUEST}`);
+    const kept = String(run([]).message).match(/next --request ([0-9a-f]{8})/)?.[1];
+    const routing = run(["--request", kept as string]) as { choices?: Array<{ label: string; command?: string }> };
+    const separate = routing.choices?.find((choice) => choice.label === "Separate new piece of work")?.command;
+    expect(separate, JSON.stringify(routing)).toBeDefined();
+    laterSecond();
+    typed("2");
+    const id = String(run((separate as string).replace(`${RUN} `, "").split(" ")).message).match(/--propose <plan> --request ([0-9a-f]{8})/)?.[1];
+    // The agent proposes in a later second than the routing answer, as a live run does.
+    laterSecond();
+    const ask = run(["--propose", "bugfix", "--request", id as string]) as PlanQuestion;
+    expect(ask.kind).toBe("ask");
+    laterSecond();
+    return ask;
+  }
+  // The work in hand's own stage question, asked now: the stage started and its question logged.
+  function stageQuestionOpen(): void {
+    appendAuditEntry("STAGE_STARTED", { Stage: "feasibility" }, proj);
+    const asked = spawnSync(BUN, [join(AIDLC_SRC, "tools", "aidlc-log.ts"), "decision", "--stage", "feasibility",
+      "--decision", "Which shape should the first cut take?", "--options", "poc,mvp", "--project-dir", proj], {
+      cwd: proj, env: envWith({}), encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(asked.status, `${asked.stdout}${asked.stderr}`).toBe(0);
     laterSecond();
   }
   function routingQuestionOpen(): void {
@@ -601,10 +649,10 @@ describe("AI-DLC's first command carries none of the person's words", () => {
     expect(JSON.stringify(run(["--request", id as string]))).toContain("You said:");
     laterSecond();
   }
-  // Work another chat started, two pieces, none selected in this one.
-  function workHereNotSelected(): void {
+  // Work another chat started, two pieces by default, none selected in this one.
+  function workHereNotSelected(labels = ["price fix", "tax rounding"]): void {
     removeWorkspaceRecord(proj);
-    for (const label of ["price fix", "tax rounding"]) {
+    for (const label of labels) {
       const r = spawnSync(BUN, [join(AIDLC_SRC, "tools", "aidlc-utility.ts"), "intent-create", "--scope", "bugfix",
         "--label", label, "--arguments", `fix the ${label}`, "--project-dir", proj], {
         cwd: proj, env: envWith({ AIDLC_SESSION_OVERRIDE: OTHER_CHAT }), encoding: "utf-8",
@@ -646,13 +694,187 @@ describe("AI-DLC's first command carries none of the person's words", () => {
     expect(JSON.stringify(run(["--request", kept as string]))).toContain(JSON.stringify(REQUEST).slice(1, -1));
   });
 
-  test("a plan's name alone as the reply while the plan question waits picks that plan, as the agent passing it did", () => {
+  // A plan's name alone is the plan question's answer: it starts the request that question asked about, on that
+  // plan, as the question's own command for it does, and nobody is asked what to work on.
+  for (const plan of ["bugfix", "express"]) {
+    test(`${plan} alone as the reply while the plan question waits starts its request on ${plan}, as that choice's command does`, () => {
+      const ask = planQuestionOpen();
+      typed(plan);
+      const step = run(["--entry"]);
+      expect(step).toEqual(startedBy(ask, plan));
+      expect(step.message).toContain(`intent create --scope ${plan} --request `);
+      holdsNoneOfTheirWords(step);
+      create(proj, step);
+      expect(recorded(proj).description).toBe(REQUEST);
+    });
+  }
+
+  test("a plan's name alone as the reply from a second chat starts the request the question asked about, and the step names it", () => {
+    const ask = planQuestionOpen();
+    const second = { AIDLC_SESSION_OVERRIDE: OTHER_CHAT };
+    typed("feature", second, proj, OTHER_CHAT);
+    const step = run(["--entry"], second);
+    expect(step).toEqual(startedBy(ask, "feature", second));
+    expect(step.message).toContain(`This starts the request the plan question asked about: "${REQUEST}".`);
+    create(proj, step);
+    expect(recorded(proj).description).toBe(REQUEST);
+  });
+
+  // The settings ride every plan; a stage change only the plans that have that stage, as their rows carry it.
+  for (const [plan, takes] of [["feature", true], ["bugfix", false]] as const) {
+    test(`${plan} alone as the reply carries what its row carries of the settings and stage changes typed with the request`, () => {
+      const ask = planQuestionOpen("--depth minimal --skip market-research ");
+      typed(plan);
+      const step = run(["--entry"]);
+      expect(step).toEqual(startedBy(ask, plan));
+      expect(step.message).toContain("--depth minimal");
+      expect(String(step.message).includes("--skip market-research")).toBe(takes);
+    });
+  }
+
+  test("a plan's name alone as the reply to the tailored-plan offer starts the request on that plan", () => {
+    const ask = planQuestionOpen("", "compose");
+    typed("bugfix");
+    expect(run(["--entry"])).toEqual(startedBy(ask, "bugfix"));
+  });
+
+  test("a plan's name alone as the reply to the plan question for new work beside work in hand starts that new work", () => {
+    openWork();
+    const ask = newWorkPlanQuestion();
+    typed("express");
+    const step = run(["--entry"]);
+    expect(step).toEqual(startedBy(ask, "express"));
+    expect(step.message).toContain("intent create --scope express --request ");
+  });
+
+  // The plan question asked after the work's own question is the one on top: the plan's name typed from a new chat
+  // answers it, whether the work waits at its approval or on its stage's question.
+  test("a plan's name alone from a new chat, the plan question asked while the work waits at its approval, starts that new work", () => {
+    openWork();
+    const path = seededStateFile(proj);
+    writeFileSync(path, readFileSync(path, "utf-8").replace("- [-] feasibility", "- [?] feasibility"), "utf-8");
+    appendAuditEntry("STAGE_STARTED", { Stage: "feasibility" }, proj);
+    appendAuditEntry("STAGE_AWAITING_APPROVAL", { Stage: "feasibility" }, proj);
+    laterSecond();
+    const ask = newWorkPlanQuestion();
+    const second = { AIDLC_SESSION_OVERRIDE: OTHER_CHAT };
+    typed("express", second, proj, OTHER_CHAT);
+    const step = run(["--entry"], second);
+    expect(step).toEqual(startedBy(ask, "express", second));
+    expect(step.message).toContain("intent create --scope express --request ");
+  });
+
+  test("a plan's name alone from a new chat, the plan question asked after the work's own stage question, starts that new work", () => {
+    openWork();
+    stageQuestionOpen();
+    const ask = newWorkPlanQuestion();
+    const second = { AIDLC_SESSION_OVERRIDE: OTHER_CHAT };
+    typed("poc", second, proj, OTHER_CHAT);
+    const step = run(["--entry"], second);
+    expect(step).toEqual(startedBy(ask, "poc", second));
+    expect(step.message).toContain("intent create --scope poc --request ");
+  });
+
+  test("a plan's name alone from a new chat, the plan question asked beside finished work, starts that new work", () => {
+    seedStateFile(proj, join(FIXTURES_DIR, "state-completed.md"));
+    typed(`/aidlc ${REQUEST}`);
+    const id = String(run(["--entry"]).message).match(/--propose <plan> --request ([0-9a-f]{8})/)?.[1];
+    expect(id).toBeDefined();
+    laterSecond();
+    const ask = run(["--propose", "bugfix", "--request", id as string]) as PlanQuestion;
+    expect(ask.kind).toBe("ask");
+    laterSecond();
+    const second = { AIDLC_SESSION_OVERRIDE: OTHER_CHAT };
+    typed("express", second, proj, OTHER_CHAT);
+    const step = run(["--entry"], second);
+    expect(step).toEqual(startedBy(ask, "express", second));
+    expect(step.message).toContain("intent create --scope express --request ");
+  });
+
+  test("a plan's name typed before the plan question was asked meets what that choice's command meets", () => {
+    typed(`/aidlc ${REQUEST}`);
+    const id = String(run([]).message).match(/--request ([0-9a-f]{8})/)?.[1];
+    laterSecond();
+    typed("bugfix");
+    laterSecond();
+    const ask = run(["--propose", "bugfix", "--request", id as string]) as PlanQuestion;
+    const step = run(["--entry"]);
+    expect(step).toEqual(run(choiceFor(ask, "bugfix")));
+    expect(step.message).toStartWith("Nothing was started: the person has not answered the plan question yet");
+  });
+
+  // Where the line is not the plan question's answer by its shape alone, or which question it answers cannot be told,
+  // it reaches `next` as the arguments it came as, and planNamedReply takes no part: the agent's own `next <plan>`, an
+  // /aidlc line of it, a plan's name and more words, an older request's plan question still kept, a routing question
+  // open, a question the work asked after the plan question.
+  test("the agent passing a plan's name, or an /aidlc line of it, while the plan question waits still asks what the work is for", () => {
     planQuestionOpen();
     typed("bugfix");
-    const step = run(["--entry"]);
-    expect(step.message).toStartWith("The person picked the `bugfix` plan");
-    holdsNoneOfTheirWords(step);
+    expect(run(["bugfix"]).message).toStartWith("The person picked the `bugfix` plan");
+    laterSecond();
+    typed("/aidlc bugfix");
+    expect(run(["--entry"]).message).toStartWith("The person picked the `bugfix` plan");
   });
+
+  test("a plan's name and more words as the reply while the plan question waits gets the step that reads both ways", () => {
+    planQuestionOpen();
+    typed("bugfix please");
+    expect(run(["--entry"]).message).toStartWith("`bugfix` is the name of a plan and also the first word of what the person typed");
+  });
+
+  test("a plan's name alone while an older request's plan question is still kept picks neither request", () => {
+    planQuestionOpen();
+    typed("/aidlc add a shout option that prints the greeting in capitals");
+    const newer = run(["--entry"]);
+    const other = String(newer.message).match(/next (--request-file \S+?)`/)?.[1];
+    expect(other, String(newer.message)).toBeDefined();
+    const id = String(run((other as string).split(" ")).message).match(/--request ([0-9a-f]{8})/)?.[1];
+    expect(run(["--propose", "bugfix", "--request", id as string]).kind).toBe("ask");
+    laterSecond();
+    typed("bugfix");
+    expect(run(["--entry"]).message).toStartWith("The person picked the `bugfix` plan");
+  });
+
+  test("a plan's name alone while a question the work asked after the plan question waits gets what that name passed by the agent gets", () => {
+    openWork();
+    newWorkPlanQuestion();
+    stageQuestionOpen();
+    const second = { AIDLC_SESSION_OVERRIDE: OTHER_CHAT };
+    typed("poc", second, proj, OTHER_CHAT);
+    const step = run(["--entry"], second);
+    expect(JSON.stringify(step)).not.toContain("intent create");
+    expect(sameStep(step)).toBe(sameStep(run(["poc"], second)));
+  });
+
+  test("a plan's name alone while the routing question waits gets what that name passed by the agent gets", () => {
+    routingQuestionOpen();
+    typed("bugfix");
+    const step = run(["--entry"]);
+    expect(JSON.stringify(step)).not.toContain("intent create");
+    expect(sameStep(step)).toBe(sameStep(run(["bugfix"])));
+  });
+
+  // With no work selected, a new chat is asked which work to carry on, by the work's names. A plan's name that is
+  // also one of those names answers either question, so it goes on as passed; any other plan's name answers the plan
+  // question.
+  for (const [reply, picks] of [["security-patch", true], ["express", false]] as const) {
+    test(`${reply} alone from a new chat shown the work to pick, ${picks ? "the name of listed work" : "naming no listed work"}, while another chat's plan question waits ${picks ? "gets what that name passed by the agent gets" : "starts that request"}`, () => {
+      workHereNotSelected(["security patch", "tax rounding"]);
+      const ask = newWorkPlanQuestion();
+      const third = { AIDLC_SESSION_OVERRIDE: THIRD_CHAT };
+      typed("/aidlc", third, proj, THIRD_CHAT);
+      expect(JSON.stringify(run(["--entry"], third))).toContain("Pick one to carry on.");
+      laterSecond();
+      typed(reply, third, proj, THIRD_CHAT);
+      const step = run(["--entry"], third);
+      if (picks) {
+        expect(JSON.stringify(step)).not.toContain("intent create");
+        expect(sameStep(step)).toBe(sameStep(run([reply], third)));
+      } else {
+        expect(step).toEqual(startedBy(ask, reply, third));
+      }
+    });
+  }
 
   // Only a reply AI-DLC holds whole goes on: a reply the record cut keeps the step, where the agent writes it.
   test("a plain reply past the record's length while the plan question waits keeps the step", () => {
