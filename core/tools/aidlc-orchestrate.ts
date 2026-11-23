@@ -11453,6 +11453,9 @@ function nextEngagesWorkflow(args: string[], flags: ParsedFlags = parseNextFlags
     !isRefusedModifierNextArgv(args);
 }
 
+// What a call that only quotes the person's words carries: the words and the plan.
+const QUOTED_LINE_KEYS = new Set(["intent", "scope", "positionalScope"]);
+
 // The person's own line, when the agent's command carries none of it. On a
 // workspace with no work yet, an agent that ran `next` bare, or `next --scope
 // <x>` with no words and no `--request`, handed the engine nothing of what the
@@ -11502,7 +11505,11 @@ function nextEngagesWorkflow(args: string[], flags: ParsedFlags = parseNextFlags
 // (requestAsTyped); words it cannot line up keep the spacing their line typed
 // (withTypedSpacing): Kiro CLI's call carries one argument per word, so the
 // parse joined their "Hello,  World!" with one space. Only the request's words
-// change: every other flag and the command's arguments stay the agent's.
+// change: every other flag and the command's arguments stay the agent's. A call
+// that quotes their words whole for the plan their line names (or for none when
+// it names none) reads a setting their line typed among them as their line alone
+// does: the quotes make one argument of "add a --review advisory option", so the
+// agent's call carries none of it.
 function takePersonsOwnLine(flags: ParsedFlags, pd: string): string[] | null {
   if (engineSessionId === undefined || isReadOnlyEngineProbe()) return null;
   if (flags.request !== undefined) return null;
@@ -11517,6 +11524,24 @@ function takePersonsOwnLine(flags: ParsedFlags, pd: string): string[] | null {
     const own = parseNextFlags(argv);
     if (own.parseError || own.intent === undefined || own.untakenFlag !== undefined) return null;
     const plan = flags.scope ?? flags.positionalScope ?? null;
+    // A call that only quotes their words, for the plan their line names (in the
+    // same form) or for none when it names none, on a line of words and settings
+    // alone, is read as a bare `next` reads that same line, setting and all;
+    // where that reading does not take it, the call stays.
+    const quotesTheirLine = typedSettingModifiers(own).length > 0 &&
+      flags.scope === own.scope && flags.positionalScope === own.positionalScope &&
+      Object.entries(flags).every(([key, value]) =>
+        QUOTED_LINE_KEYS.has(key) || value === undefined || value === false) &&
+      Object.entries(own).every(([key, value]) => QUOTED_LINE_KEYS.has(key) || value === undefined ||
+        value === false || typedSettingModifiers({ [key]: value } as ParsedFlags).length > 0) &&
+      chatLatestMessage(pd, engineSessionId)?.id === message.id;
+    if (quotesTheirLine) {
+      const passed = { ...flags };
+      for (const key of QUOTED_LINE_KEYS) delete (flags as unknown as Record<string, unknown>)[key];
+      const taken = takePersonsOwnLine(flags, pd);
+      if (taken !== null) return taken;
+      Object.assign(flags, passed);
+    }
     const words = personsWordsText(message.words);
     const step = own.readingStep;
     // A plan-word reading takes no flag and trims its line: the arguments' own
