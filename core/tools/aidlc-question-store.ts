@@ -804,15 +804,21 @@ export function takeRestartRequest(projectDir: string, id: string): "taken" | "r
  * any of them still finds that work. Every other plan question asked before
  * this request, and still unanswered, has been overtaken by the work it
  * starts: it is marked replaced by it, so it waits no more, and its own
- * commands still answer it.
+ * commands still answer it. Where question-retention-days may have removed
+ * this request's first copy, or its own copy cannot be read, nothing tells
+ * which questions came before it, and none is marked.
  */
 export function retireRequest(projectDir: string, id: string): void {
   if (!QUESTION_ID.test(id)) return;
   const own = readStoredQuestion(projectDir, id);
   const root = own?.composedFrom ?? id;
   const chain = new Set([root]);
-  // The request was asked when its first copy was; an unreadable own copy marks nothing.
-  const asked = own === null ? Number.NaN : Date.parse((readStoredQuestion(projectDir, root) ?? own).createdAt);
+  // The request was asked when its first copy was, or when its own was where that first copy is gone by design (a
+  // composition entry once its description is approved).
+  const first = root === id ? own : readStoredQuestion(projectDir, root);
+  const asked = own === null || (first === null && retentionDays(projectDir) !== null)
+    ? Number.NaN
+    : Date.parse((first ?? own).createdAt);
   const overtaken: StoredQuestion[] = [];
   try {
     for (const name of readdirSync(recordFileTargetOrThrow(projectDir, questionRel(projectDir)))) {

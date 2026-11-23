@@ -994,6 +994,34 @@ describe("AI-DLC's first command carries none of the person's words", () => {
     expect(run(["--entry"], third).message).toStartWith(askedAbout(REQUEST));
   });
 
+  // With question-retention-days set, a request's first copy can expire while its plan question is kept; nothing then
+  // tells which questions were asked before that request, so none is taken as overtaken by it.
+  test("a request asked in another chat is still the one waiting once an earlier one starts whose first copy has expired", () => {
+    const previous = process.env.AIDLC_QUESTION_RETENTION_DAYS;
+    process.env.AIDLC_QUESTION_RETENTION_DAYS = "1";
+    try {
+      expiredFirstCopy();
+    } finally {
+      if (previous === undefined) delete process.env.AIDLC_QUESTION_RETENTION_DAYS;
+      else process.env.AIDLC_QUESTION_RETENTION_DAYS = previous;
+    }
+  });
+  function expiredFirstCopy(): void {
+    typed(`/aidlc ${OLDER}`);
+    const id = String(run([]).message).match(/--propose <plan> --request ([0-9a-f]{8})/)?.[1];
+    expect(id).toBeDefined();
+    laterSecond();
+    planQuestionFor(REQUEST, OTHER_CHAT);
+    const older = run(["--propose", "bugfix", "--request", id as string]);
+    expect(older.kind).toBe("ask");
+    laterSecond();
+    rmSync(join(proj, "aidlc", ".aidlc-sessions", "questions", `${id}.json`));
+    startIn(older, "bugfix");
+    const third = { AIDLC_SESSION_OVERRIDE: THIRD_CHAT };
+    typed("Yes, go ahead with that", third, proj, THIRD_CHAT);
+    expect(run(["--entry"], third).message).toStartWith(askedAbout(REQUEST));
+  }
+
   test("two plan questions still waiting beside work in progress, nothing started since: a plan's name alone from a new chat picks neither request", () => {
     openWork();
     planQuestionFor(OLDER);
