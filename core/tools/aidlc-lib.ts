@@ -214,6 +214,7 @@ import {
   isTeamUnitOwnership,
   keepIntentEntryInRecord,
   keepRecordKeptEntries,
+  writeTextIfChanged,
   knownAuditShardName,
   legacyBoltName,
   legacyWorktreePath,
@@ -5173,7 +5174,7 @@ export function writeIntentRegistry(projectDir: string, all: IntentRegistryEntry
   const unreadable = text !== null && !conflicted && text.trim() !== "" && registryList(text) === null;
   mkdirSync(dirname(path), { recursive: true });
   const keptAs = bytes && unreadable ? keepUnreadableRegistry(path, bytes) : null;
-  writeFileAtomic(path, `${JSON.stringify(list, null, 2)}\n`);
+  writeTextIfChanged(path, `${JSON.stringify(list, null, 2)}\n`);
   const shown = (file: string) => toPosix(relative(projectDir, file));
   const line = conflicted
     ? `Your list of work, ${shown(path)}, had a git conflict: every piece of work ` +
