@@ -21,13 +21,13 @@
 //
 // The journey beats mirror the SDK + ACP legs (repos captured by sibling
 // auto-discovery on the auto-create path - see the SDK leg's DRIFT NOTE):
-//   1. `/aidlc "build auth across both repos"` → auto-create A spanning both repos.
+//   1. `$aidlc --scope feature "build auth across both repos"` -> auto-create A spanning both repos.
 //   2. (cheaper variant) reverse-engineering writes per-repo codekb — no swarm.
-//   3. `/aidlc --scope poc "<desc>"` with A active -> the engine asks where it
+//   3. `$aidlc --scope poc "<desc>"` with A active -> the engine asks where it
 //      goes; the person replies in the same session that it is separate -> a 2nd
 //      isolated intent; A untouched.
-//   4. `/aidlc space-create teamB` -> `/aidlc space teamB` -> ask for one there; no leak.
-//   5. `/aidlc space default` → A still resumable.
+//   4. `$aidlc space-create teamB` -> `$aidlc space teamB` -> ask for one there; no leak.
+//   5. `$aidlc space default` -> A still resumable.
 //
 // LIVE GATE: requires AIDLC_CODEX_EXEC_LIVE=1 + a codex >= 0.145.0 binary
 // (AIDLC_CODEX_BIN or PATH). Bedrock uses the AWS default credential chain;
@@ -183,7 +183,7 @@ function execCodex(
  */
 function askForNewWork(root: string, home: string, words: string, space: string): CodexExecution & { stdout: string } {
   const before = readIntentRegistry(root, space);
-  let turn = execCodex(root, home, `Use the $aidlc skill to run: /aidlc --scope poc "${words}"`);
+  let turn = execCodex(root, home, `$aidlc --scope poc "${words}"`);
   expect(turn.rc, codexExecDiagnostic(turn)).toBe(0);
   const session = turnEvidence(turn.stdout).sessionId;
   if (lastEngineStep(codexToolResults(turn.stdout))?.ask_type === "new-work-routing") {
@@ -255,7 +255,7 @@ describe("t-exec-codex-journey-workspace (live codex-exec multi-repo·intent·sp
       const captureFailure = createCodexWorkspaceFailureCapture(root, home, process.env.AIDLC_TEST_LOG_DIR);
       await withCodexFixture(root, () => cleanupWorkspaceJourney(journey), () => {
         // --- Step 1: auto-create A spanning both siblings ---------------------
-        // Name the scope explicitly: a bare prose `/aidlc "<desc>"` emits an `ask`
+        // Name the scope explicitly: a bare prose `$aidlc "<desc>"` emits an `ask`
         // scope-confirm (orchestrate Branch 8) that the ONE-SHOT codex exec
         // spawn cannot answer (no stdin), so the run would end before creation.
         // `--scope feature` creates via Branch 9a with no gate; the repo span is
@@ -265,7 +265,7 @@ describe("t-exec-codex-journey-workspace (live codex-exec multi-repo·intent·sp
         const r1 = execCodex(
           root,
           home,
-          `Use the $aidlc skill to run: /aidlc --scope feature "build auth across both repos"`,
+          `$aidlc --scope feature "build auth across both repos"`,
         );
         const { dir: recordADir } = expectCliSuccess(r1, /\bengine\s+intent\s+create\b/, () =>
           expectCreatedIntent(root, defaultBefore, {
@@ -276,7 +276,7 @@ describe("t-exec-codex-journey-workspace (live codex-exec multi-repo·intent·sp
         const r2 = execCodex(
           root,
           home,
-          `Use the $aidlc skill to run: /aidlc --stage reverse-engineering --single`,
+          `$aidlc --stage reverse-engineering --single`,
           TEST_TIMEOUT_MS,
         );
         expect(r2.rc, codexExecDiagnostic(r2)).toBe(0);
@@ -311,7 +311,7 @@ describe("t-exec-codex-journey-workspace (live codex-exec multi-repo·intent·sp
         expect(workflowStartedCount(recordADir)).toBe(1);
 
         // --- Step 4: non-default space, no learnings leak --------------------
-        const r4 = execCodex(root, home, `Use the $aidlc skill to run: /aidlc space-create teamB`);
+        const r4 = execCodex(root, home, `$aidlc space-create teamB`);
         expectCliSuccess(r4, /\bengine\s+space(?:-create|\s+create)\b/, () => {
           expectSpaceInclude(root, "default");
           const teamBMemory = join(root, "aidlc", "spaces", TEAM_B_SLUG, "memory");
@@ -327,7 +327,7 @@ describe("t-exec-codex-journey-workspace (live codex-exec multi-repo·intent·sp
           expect(existsSync(join(root, "aidlc", "spaces", TEAM_B_SLUG, "codekb"))).toBe(true);
         });
 
-        const r4b = execCodex(root, home, `Use the $aidlc skill to run: /aidlc space teamB`);
+        const r4b = execCodex(root, home, `$aidlc space teamB`);
         expectCliSuccess(r4b, /\bengine\s+space\s+(?:switch\s+)?["']?(?:teamB|teamb)\b/, () =>
           expectSpaceInclude(root, TEAM_B_SLUG));
 
@@ -344,7 +344,7 @@ describe("t-exec-codex-journey-workspace (live codex-exec multi-repo·intent·sp
         expect(existsSync(join(root, "aidlc", "spaces", TEAM_B_SLUG, "knowledge"))).toBe(true);
 
         // --- Step 5: back to default; A still resumable ----------------------
-        const r5 = execCodex(root, home, `Use the $aidlc skill to run: /aidlc space default`);
+        const r5 = execCodex(root, home, `$aidlc space default`);
         expectCliSuccess(r5, /\bengine\s+space\s+(?:switch\s+)?["']?default\b/, () =>
           expectSpaceInclude(root, "default"));
         expect(readFileSync(join(teamBRecordDir, "aidlc-state.md"), "utf-8")).toBe(teamBState);

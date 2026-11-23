@@ -11,7 +11,7 @@
 // over the real hook, the real engine and the real creation step.
 import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import {
@@ -20,6 +20,7 @@ import {
   createOrchestrationTestProject,
   FIXTURES_DIR,
   removeWorkspaceRecord,
+  REPO_ROOT,
   resetAidlcEnv,
   runOrchestrateNext,
   seededStateFile,
@@ -1461,5 +1462,124 @@ describe("AI-DLC's first command carries none of the person's words", () => {
   test("a later bare next in the loop is as it was: with no typed line, it names the ways to start", () => {
     typed(REQUEST);
     expect(run([]).message).toStartWith("No workflow state found (no active intent).");
+  });
+});
+
+// On Codex, AI-DLC's first command is `next --entry` too: Codex's own prompt hook keeps the typed `$aidlc` line, and a
+// Codex command names its chat by CODEX_THREAD_ID, so the engine reads their line from its own record. Each case sets
+// up two projects alike with the Codex tree: `next --entry` in one, the same words as arguments after `next` in the
+// other, and the two steps are the same.
+describe("On Codex, AI-DLC's first command reads the person's line from its own record", () => {
+  const CHAT = "01995000-7a11-7000-8000-0000000000c1";
+  const OTHER_CHAT = "01995000-7a11-7000-8000-0000000000c2";
+  // Two ordinary requests.
+  const REQUESTS = ["fix the greeter so it doesn't greet nobody by name", "fix the greeter (it says hello instead of greeting the person by name)"];
+  const [REQUEST] = REQUESTS;
+  const FILE = "aidlc/.aidlc-request-text/request.txt";
+  const created: string[] = [];
+  beforeEach(() => resetAidlcEnv());
+  afterEach(() => {
+    while (created.length > 0) cleanupTestProject(created.pop());
+  });
+
+  function codexProject(): string {
+    const proj = createOrchestrationTestProject();
+    created.push(proj);
+    cpSync(join(REPO_ROOT, "dist", "codex", ".codex"), join(proj, ".codex"), { recursive: true });
+    return proj;
+  }
+  // The environment of a command in a Codex chat: the chat named by CODEX_THREAD_ID, no other chat's variables.
+  function codexEnv(chat: string): Record<string, string | undefined> {
+    const e: Record<string, string | undefined> = {
+      ...env(), AIDLC_SESSION_OVERRIDE: undefined, CODEX_THREAD_ID: chat, CLAUDECODE: undefined, CLAUDE_CODE_SESSION_ID: undefined,
+      CLAUDE_PID: undefined, CLAUDE_CODE_ENTRYPOINT: undefined, KIRO_SESSION_ID: undefined, OPENCODE: undefined,
+    };
+    for (const [key, value] of Object.entries(e)) if (value === undefined) delete e[key];
+    return e;
+  }
+  // The person types `prompt`: the prompt hook as Codex's hooks.json runs it.
+  function typed(proj: string, prompt: string, chat = CHAT): void {
+    const r = spawnSync(BUN, [join(proj, ".codex", "tools", "aidlc.ts"), "engine", "adapter", "codex", "record-human-turn"], {
+      cwd: proj,
+      input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: chat, turn_id: `t-${chat.slice(-2)}`, cwd: proj, prompt }),
+      env: codexEnv(chat),
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(r.status, r.stderr).toBe(0);
+  }
+  // `next` as the Codex agent runs it, the project's folder read as <proj>.
+  function next(proj: string, args: string[], chat = CHAT): string {
+    const r = runOrchestrateNext(join(proj, ".codex", "tools", "aidlc-orchestrate.ts"), proj, args, { cwd: proj, env: codexEnv(chat) });
+    expect(r.directive, r.out).not.toBeNull();
+    return JSON.stringify(r.directive).split(proj).join("<proj>");
+  }
+  const same = (step: string): string => step.replace(/--request [0-9a-f]{8}/g, "--request <id>")
+    .replace(/"receipt":"[^"]+"/g, '"receipt":"<r>"').replace(/continue [A-Za-z0-9_-]{8}\b/g, "continue <r>");
+  // Every command the step names for the agent: each span in backticks that runs AI-DLC's own tool.
+  const named = (step: string): string[] => [...String(JSON.parse(step).message ?? "").matchAll(/`([^`]+)`/g)]
+    .map((match) => match[1]).filter((span) => /^bun /.test(span));
+  // The same line typed in two projects set up alike: `next --entry` in one, the same words after `next` in the other.
+  function enteredAndPassed(line: string, passed: string[], setUp: (proj: string) => void = () => {}): [string, string] {
+    const [entered, onTheCommand] = [codexProject(), codexProject()];
+    for (const proj of [entered, onTheCommand]) {
+      setUp(proj);
+      typed(proj, line);
+    }
+    return [next(entered, ["--entry"]), next(onTheCommand, passed)];
+  }
+  const openWork = (proj: string): void => seedStateFile(proj, join(FIXTURES_DIR, "state-mid-ideation.md"));
+
+  test("a request: next --entry is the step the same words after next give, and no command it names holds a word of theirs", () => {
+    for (const request of REQUESTS) {
+      const [entered, passed] = enteredAndPassed(`$aidlc ${request}`, request.split(" "));
+      expect(String(JSON.parse(entered).message)).toContain(`The person asked for new work: "${request}"`);
+      expect(same(entered)).toBe(same(passed));
+      expect(named(entered).length, entered).toBeGreaterThan(0);
+      for (const command of named(entered)) expect(command, entered).not.toContain("greeter");
+    }
+  });
+
+  test("the entry word alone, with and without work in hand: next --entry is the bare next", () => {
+    for (const setUp of [() => {}, openWork]) {
+      const [entered, passed] = enteredAndPassed("$aidlc", [], setUp);
+      expect(same(entered)).toBe(same(passed));
+    }
+  });
+
+  test("a flag with words, and a utility alone: next --entry runs what they typed", () => {
+    const [scoped, scopedPassed] = enteredAndPassed(`$aidlc --scope bugfix ${REQUEST}`, ["--scope", "bugfix", ...REQUEST.split(" ")]);
+    expect(same(scoped)).toBe(same(scopedPassed));
+    const [status, statusPassed] = enteredAndPassed("$aidlc --status", ["--status"], openWork);
+    expect(status).toContain("engine status");
+    expect(same(status)).toBe(same(statusPassed));
+  });
+
+  // Both chats typed a line; the second typed last, so each chat reading its own line is more than reading the newest.
+  test("each chat's next --entry reads its own line, not the other chat's", () => {
+    const [entered, onTheCommand, first] = [codexProject(), codexProject(), codexProject()];
+    for (const proj of [entered, onTheCommand, first]) {
+      typed(proj, `$aidlc ${REQUESTS[1]}`);
+      typed(proj, `$aidlc ${REQUEST}`, OTHER_CHAT);
+    }
+    const step = next(entered, ["--entry"], OTHER_CHAT);
+    expect(String(JSON.parse(step).message)).toContain(`The person asked for new work: "${REQUEST}"`);
+    expect(same(step)).toBe(same(next(onTheCommand, REQUEST.split(" "), OTHER_CHAT)));
+    expect(String(JSON.parse(next(first, ["--entry"])).message)).toContain(`The person asked for new work: "${REQUESTS[1]}"`);
+  });
+
+  // With no `$aidlc` line of theirs on record (the entry word later in the line, or the prompt hook not run yet), only
+  // the agent has their words, and the step hands them over in the request file, never on a command line.
+  test("a line that does not start with the entry word, and no line of theirs on record: next --entry hands the agent the request-file step, and the step it leads to is the one the same words after next give", () => {
+    for (const line of [`Use the $aidlc skill to run: /aidlc ${REQUEST}`, null]) {
+      const [entered, onTheCommand] = [codexProject(), codexProject()];
+      if (line !== null) for (const proj of [entered, onTheCommand]) typed(proj, line);
+      const step = next(entered, ["--entry"]);
+      expect(String(JSON.parse(step).message)).toStartWith("AI-DLC has no copy of what the person typed in this chat. Write the words");
+      expect(step).toContain(`bun .codex/tools/aidlc-orchestrate.ts next --request-file ${FILE}`);
+      mkdirSync(join(entered, "aidlc", ".aidlc-request-text"), { recursive: true });
+      writeFileSync(join(entered, ...FILE.split("/")), REQUEST, "utf-8");
+      expect(same(next(entered, ["--request-file", FILE]))).toBe(same(next(onTheCommand, REQUEST.split(" "))));
+    }
   });
 });
