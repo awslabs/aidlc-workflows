@@ -164,11 +164,11 @@ describe("the request is recorded in the person's own words", () => {
   });
 
   // What else their line carries into creation rides the grouped call with the setting.
-  for (const [line, carried] of [
-    ["enterprise: add an endpoint --review none --skip market-research", "--review none --skip market-research"],
-    ["express: add an endpoint --review advisory --project-type brownfield", "--project-type brownfield --review advisory"],
-    ["enterprise: add an endpoint --skip market-research", "--skip market-research"],
-    ["express: add an endpoint --project-type brownfield", "--project-type brownfield"],
+  for (const [line, carried, landed] of [
+    ["enterprise: add an endpoint --review none --skip market-research", "--review none --skip market-research", /market-research[^\n]*SKIP/],
+    ["express: add an endpoint --review advisory --project-type brownfield", "--project-type brownfield --review advisory", /Project Type\*\*: Brownfield/],
+    ["enterprise: add an endpoint --skip market-research", "--skip market-research", /market-research[^\n]*SKIP/],
+    ["express: add an endpoint --project-type brownfield", "--project-type brownfield", /Project Type\*\*: Brownfield/],
   ] as const) {
     test(`the grouped call carries what their line carries into creation: ${carried}`, () => {
       says(proj, `/aidlc ${line}`);
@@ -176,6 +176,9 @@ describe("the request is recorded in the person's own words", () => {
       const step = next(proj, [plan, words.join(" ")]);
       expect(String(step.message)).toContain(`--label '<2-3 word kebab essence>' ${carried}\``);
       create(proj, step);
+      const intents = join(proj, "aidlc", "spaces", "default", "intents");
+      const dir = readdirSync(intents).find((name) => existsSync(join(intents, name, "aidlc-state.md"))) ?? "";
+      expect(readFileSync(join(intents, dir, "aidlc-state.md"), "utf-8")).toMatch(landed);
     });
   }
 
@@ -211,7 +214,8 @@ describe("the request is recorded in the person's own words", () => {
   test("over work in hand, a grouped call keeps a setting typed among their words for the routing question", () => {
     seedStateFile(proj, join(FIXTURES_DIR, "state-mid-ideation.md"));
     says(proj, "/aidlc classic: add an endpoint --review none");
-    const step = next(proj, ["classic:", "add an endpoint --review none"]);
+    const step = next(proj, ["classic:", "add an endpoint --review none"]) as { question?: string };
+    expect(step.question).toContain('You said: "add an endpoint"');
     expect(JSON.stringify(step)).toContain("--review none");
   });
 

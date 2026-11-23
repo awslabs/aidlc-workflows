@@ -11456,7 +11456,8 @@ function nextEngagesWorkflow(args: string[], flags: ParsedFlags = parseNextFlags
 // What a call that only quotes the person's words carries: the words and the plan.
 const QUOTED_LINE_KEYS = new Set(["intent", "scope", "positionalScope"]);
 // What the person's line may carry into creation beside its words, plan and
-// settings for such a call to be read as that line: no verb, jump or lookup.
+// settings for such a call to be read as that line, with no work selected: no
+// verb, jump or lookup.
 const QUOTED_LINE_CREATION_KEYS = new Set(["projectType", "planChanges"]);
 
 // The person's own line, when the agent's command carries none of it. On a
