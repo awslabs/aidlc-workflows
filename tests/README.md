@@ -180,7 +180,8 @@ for result/skip semantics, Windows usage and capacity tuning.
 Live SDK and TUI drivers default to the project's own Claude setting sources
 (the TUI driver adds the project's `.claude/settings.local.json`, where the
 status line choice lives). That keeps the copied test `.claude/` tree
-authoritative while excluding developer user-level hooks/settings; focused
+authoritative while excluding developer user-level hooks/settings (the SDK
+driver takes only their model names, when the run names no model); focused
 calibration can opt the TUI back into CLI
 defaults with `AIDLC_TUI_SETTING_SOURCES=default`.
 

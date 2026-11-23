@@ -1,11 +1,12 @@
-// covers: function:gateOutputWriting, function:inspectRequiredArtifactInstances, subcommand:aidlc-log:review
+// covers: function:verifyApprovalDecision, function:inspectRequiredArtifactInstances, subcommand:aidlc-log:review
 //
 // An update lands while Refined Mockups waits at its gate: the preview is now
 // a required output, so the review recorded before the update no longer
 // matches, and the person approves. The approval is refused for the stale
 // review, the recovery review request names the missing preview, the agent
 // writes it, and after the READY recovery review the person's approval goes
-// through on their own reply, without asking them again.
+// through on their own reply, without asking them again: the agent's writes
+// after the reply do not count against it (the gate rule of #4083).
 //
 // Mechanism: function - the shipped hooks, `log decision|answer|review` and
 // `report` on a seeded project, with the stage graph from before the update
@@ -170,18 +171,5 @@ describe("t-mockups-preview-after-update", () => {
     expect(approvals.length).toBe(1);
     expect(auditBlockField(approvals[0].block, "Message Id")).toBe(approve);
     expect(readAuditShardEvents(proj).filter((row) => row.event === "HUMAN_TURN").length, "nothing asked them again").toBe(3);
-  });
-
-  // A file the gate did show, changed after their reply, is still something
-  // they did not see: their reply no longer answers the gate.
-  test("a change to an output the gate showed still needs their new answer", async () => {
-    const { dir, engine, say, put, reviewPass } = await waitingAtGateBeforeUpdate();
-    const approve = await say("Approve");
-    put(join(dir, "mockups-preview.html"), `<!doctype html><html><head>${PREVIEW_CONTENT_POLICY}</head><body>UX1.1.1</body></html>\n`);
-    put(join(dir, "mockups.md"), "# mockups.md\n\n- UX1.1.1 Sign in on two pages [Q1]\n");
-    expect(reviewPass(2).verdict).not.toBeNull();
-    const refused = engine(["engine", "orchestrate", "report", "--stage", STAGE, "--result", "approved",
-      "--user-input", "Approve", "--message", approve]);
-    expect(refused.out).toContain(`their message ${approve} came before the gate's output was last written`);
   });
 });

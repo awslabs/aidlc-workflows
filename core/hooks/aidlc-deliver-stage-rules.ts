@@ -3,7 +3,10 @@
 // conductor-to-subagent boundary.
 //
 // Codex and Copilot consume the emitted updatedInput directly. OpenCode's
-// adapter consumes the same output and mutates output.args. Kiro CLI has no
+// adapter consumes the same output and mutates output.args. On opencode the
+// rules are left out of a helper's start where opencode's own `instructions`
+// list already loads every rule file of the stage (includeHoldsRules, the
+// proof the main chat's `rules_held` rests on). Kiro CLI has no
 // input-rewrite channel, so its adapter observes the proposed rewrite and
 // relies on native agent resource preload. Kiro IDE does not register this
 // hook because tool-argument delivery is not uniform across supported
@@ -17,6 +20,13 @@
 // when the session started, so a rule changed since reaches it only this way.
 // On Claude it also runs at PostToolUse, only to confirm a background launch
 // the PreToolUse input did not announce (see isBackgroundDispatch).
+//
+// A Code Generation developer starting a one-target build is also handed its
+// plan, which the conductor then leaves out (aidlc-testing-posture.ts, "The
+// brief handed over by a tool"): on Claude Code, as it starts, the two record
+// files that hold its plan and test instructions (briefPointer); on Copilot
+// and opencode, the whole brief at the head of its message (handedBrief). On
+// Codex, Kiro CLI, Kiro IDE and Cursor the conductor passes the brief.
 
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
@@ -44,7 +54,15 @@ import {
   type RuleContent,
   resolvedRuleBundle,
 } from "../tools/aidlc-steering.ts";
+import { includeHoldsRules } from "../tools/aidlc-rules-held.ts";
 import { runtimeHarnessName } from "../tools/aidlc-runtime-paths.ts";
+import {
+  BRIEF_NOT_HANDED,
+  BRIEF_REWRITE_HARNESSES,
+  briefPointer,
+  handedBrief,
+  handedBriefTarget,
+} from "../tools/aidlc-testing-posture.ts";
 import { recordSubagentDispatch } from "./aidlc-log-subagent.ts";
 
 type HookInput = {
@@ -65,6 +83,7 @@ export type DispatchRuleResult = {
 
 const DISPATCH_TOOLS = new Set(["task", "agent", "spawn_agent", "subagent"]);
 const EXEMPT_AGENTS = new Set(["aidlc-composer-agent"]);
+const DEVELOPER_AGENT = "aidlc-developer-agent";
 // Keep hook stdout comfortably below the smallest observed subprocess capture
 // ceiling. Oversized bundles fail before writing so callers receive complete
 // repair guidance instead of a truncated, invalid JSON response.
@@ -159,18 +178,31 @@ function hasExactBundle(
   return prompt.includes(bundleBlock(stage, content));
 }
 
+// opencode's own `instructions` list puts the memory files into every request,
+// a helper's included, and opencode keeps a helper's start in the main chat's
+// record of the call, so a copy there would only fill that chat. The rules go
+// in wherever that include does not cover the stage's files. Kiro CLI's
+// adapter only observes the rewrite, so its output stays as it is.
+function includeLoadsRules(projectDir: string, sessionId: unknown, space: string, content: RuleContent[]): boolean {
+  return typeof sessionId === "string" && runtimeHarnessName(projectDir) === "opencode" &&
+    includeHoldsRules(projectDir, sessionId, space, [...new Set(content.map((entry) => entry.path))]);
+}
+
 function augmentText(
   prompt: string,
   projectDir: string,
   fallbackStage: string | null,
+  sessionId?: unknown,
 ): { prompt: string; changed: boolean; error?: string } {
   const node = promptStage(prompt, fallbackStage);
   if (!node) return { prompt, changed: false };
-  const bundle = resolvedRuleBundle(node, projectDir);
+  const space = resolveWorkflowSelection(projectDir).space;
+  const bundle = resolvedRuleBundle(node, projectDir, space);
   if (bundle.error) return { prompt, changed: false, error: bundle.error };
   if (
     bundle.content.length === 0 ||
-    hasExactBundle(prompt, node.slug, bundle.content)
+    hasExactBundle(prompt, node.slug, bundle.content) ||
+    includeLoadsRules(projectDir, sessionId, space, bundle.content)
   ) {
     return { prompt, changed: false };
   }
@@ -199,24 +231,41 @@ function promptText(input: Record<string, unknown>): string {
   return "";
 }
 
+// `prompt` is `prefix` + `original` + what the rules add after it.
 function withPrompt(
   input: Record<string, unknown>,
   original: string,
   prompt: string,
+  prefix = "",
 ): Record<string, unknown> {
   for (const field of ["prompt", "message", "description", "task"]) {
     if (typeof input[field] === "string") return { ...input, [field]: prompt };
   }
   if (Array.isArray(input.items)) {
+    const after = prompt.slice(prefix.length + original.length);
     return {
       ...input,
       items: [
+        ...(prefix ? [{ type: "text", text: prefix }] : []),
         ...input.items,
-        { type: "text", text: prompt.slice(original.length) },
+        ...(after ? [{ type: "text", text: after }] : []),
       ],
     };
   }
   return input;
+}
+
+// The developer's brief for a one-target Code Generation build, for the head
+// of its start message on a harness that rewrites it; "" when this start gets
+// none: not a developer, a step that builds several targets or none, a message
+// naming another target, or a message that already carries it.
+function startBrief(projectDir: string, agent: unknown, message: string): string {
+  if (agent !== DEVELOPER_AGENT) return "";
+  const target = handedBriefTarget(projectDir, message);
+  if (target === null) return "";
+  const handed = handedBrief(projectDir, target);
+  if (handed === null) return BRIEF_NOT_HANDED;
+  return message.includes(handed.brief) ? "" : handed.text;
 }
 
 // The agent a single dispatch names, as each harness's dispatch input carries it.
@@ -252,17 +301,22 @@ function augmentSingleDispatch(
   input: Record<string, unknown>,
   projectDir: string,
   fallbackStage: string | null,
+  withBrief = true,
+  sessionId?: unknown,
 ): DispatchRuleResult {
   const agent = dispatchAgent(input);
   if (!isAidlcAgent(agent)) return { changed: false };
   const original = promptText(input);
   if (!original) return { changed: false };
-  const augmented = augmentText(original, projectDir, fallbackStage);
+  const brief = withBrief && BRIEF_REWRITE_HARNESSES.has(runtimeHarnessName(projectDir))
+    ? startBrief(projectDir, agent, original) : "";
+  const prefix = brief ? `${brief}\n\n` : "";
+  const augmented = augmentText(prefix + original, projectDir, fallbackStage, sessionId);
   if (augmented.error) return { changed: false, error: augmented.error };
-  if (!augmented.changed) return { changed: false };
+  if (!augmented.changed && !prefix) return { changed: false };
   return {
     changed: true,
-    updatedInput: withPrompt(input, original, augmented.prompt),
+    updatedInput: withPrompt(input, original, augmented.prompt, prefix),
   };
 }
 
@@ -270,11 +324,13 @@ export function augmentDispatchRules(
   toolName: string,
   input: Record<string, unknown>,
   projectDir: string,
+  withBrief = true,
+  sessionId?: unknown,
 ): DispatchRuleResult {
   if (!DISPATCH_TOOLS.has(toolName.toLowerCase())) return { changed: false };
   const fallbackStage = stageOnRecord(projectDir);
   if (toolName.toLowerCase() !== "subagent") {
-    return augmentSingleDispatch(input, projectDir, fallbackStage);
+    return augmentSingleDispatch(input, projectDir, fallbackStage, withBrief, sessionId);
   }
 
   const stages = Array.isArray(input.stages) ? input.stages : [];
@@ -316,6 +372,8 @@ export function dispatchHookOutput(
     parsed.tool_name ?? "",
     parsed.tool_input ?? {},
     projectDir,
+    true,
+    parsed.session_id,
   );
 }
 
@@ -418,23 +476,57 @@ function recordStageRulesBlocked(parsed: HookInput, projectDir: string, reason: 
 
 // Claude Code shows a hook's context inline up to 10,000 characters; over
 // that it shows the agent the first 2,000 and the file it saved the whole text
-// to, and does not ask the agent to read it. So the way to the rest comes first.
+// to, and does not ask the agent to read it. So the way to the rest comes first;
+// a developer's head (briefPointer) follows it, inside those 2,000 characters
+// but for the tail of its files rule.
 const START_LEAD =
   "If this text was saved to a file instead of shown here in full, read that whole file before you start: " +
   "it holds the required rules for this stage.";
 
 // Claude Code starting an agent: the bundle for the stage on record, read now,
-// as its context. Nothing is recorded (the dispatch was, at PreToolUse), and
-// nothing can be refused here: an unreadable rule already refused the dispatch.
+// as its context, and a developer's brief before it. Nothing is recorded (the
+// dispatch was, at PreToolUse), and nothing can be refused here: an unreadable
+// rule already refused the dispatch.
 function deliverAtStart(parsed: HookInput, projectDir: string): number {
   if (!isAidlcAgent(parsed.agent_type)) return 0;
-  const delivered = augmentText("", projectDir, stageOnRecord(projectDir));
-  if (!delivered.changed) return 0;
-  const output = `${JSON.stringify({
-    hookSpecificOutput: { hookEventName: "SubagentStart", additionalContext: START_LEAD + delivered.prompt },
-  })}\n`;
-  if (Buffer.byteLength(output, "utf-8") <= DISPATCH_HOOK_OUTPUT_MAX_BYTES) process.stdout.write(output);
+  // A one-target Code Generation developer: after the lead, where its plan is
+  // (briefPointer), then an interrupted build's progress, then the rules. The
+  // head is made first: the plan reaches the developer even when its stage's
+  // rules cannot be read here (the dispatch already passed the rules check).
+  const target = parsed.agent_type === DEVELOPER_AGENT ? handedBriefTarget(projectDir, null) : null;
+  const pointer = target === null ? null : briefPointer(projectDir, target);
+  const head = target === null ? "" : pointer === null ? `${BRIEF_NOT_HANDED}\n` : pointer.head;
+  let delivered: { prompt: string; changed: boolean };
+  try {
+    delivered = augmentText("", projectDir, stageOnRecord(projectDir));
+  } catch (error) {
+    if (!head) throw error;
+    delivered = { prompt: "", changed: false };
+  }
+  const context = (withBrief: boolean): string | null => {
+    if (withBrief && head) return `${START_LEAD}\n\n${head}${pointer?.progress ?? ""}${delivered.prompt}`;
+    return delivered.changed ? START_LEAD + delivered.prompt : null;
+  };
+  for (const withBrief of [true, false]) {
+    const text = context(withBrief);
+    if (text === null) return 0;
+    const output = `${JSON.stringify({
+      hookSpecificOutput: { hookEventName: "SubagentStart", additionalContext: text },
+    })}\n`;
+    if (Buffer.byteLength(output, "utf-8") <= DISPATCH_HOOK_OUTPUT_MAX_BYTES) {
+      process.stdout.write(output);
+      return 0;
+    }
+  }
   return 0;
+}
+
+function preToolUseOutput(updatedInput: Record<string, unknown>): string {
+  return `${JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", updatedInput } })}\n`;
+}
+
+function outputBytesOf(updatedInput: Record<string, unknown>): number {
+  return Buffer.byteLength(preToolUseOutput(updatedInput), "utf-8");
 }
 
 function deliver(parsed: HookInput, projectDir: string): number {
@@ -445,7 +537,12 @@ function deliver(parsed: HookInput, projectDir: string): number {
     recordAcceptedBackgroundDispatch(parsed, projectDir);
     return 0;
   }
-  const result = dispatchHookOutput(parsed, projectDir);
+  let result = dispatchHookOutput(parsed, projectDir);
+  // The rules' size limit is judged on the rules: a brief that would push the
+  // output over it is left out, and the message goes as the conductor wrote it.
+  if (result.changed && result.updatedInput && outputBytesOf(result.updatedInput) > DISPATCH_HOOK_OUTPUT_MAX_BYTES) {
+    result = augmentDispatchRules(parsed.tool_name ?? "", parsed.tool_input ?? {}, projectDir, false, parsed.session_id);
+  }
   if (result.error) {
     process.stderr.write(`${result.error}\n`);
     recordStageRulesBlocked(parsed, projectDir, "rules-unreadable");
@@ -456,12 +553,7 @@ function deliver(parsed: HookInput, projectDir: string): number {
     recordDispatch(parsed, projectDir);
     return 0;
   }
-  const output = `${JSON.stringify({
-      hookSpecificOutput: {
-        hookEventName: "PreToolUse",
-        updatedInput: result.updatedInput,
-      },
-    })}\n`;
+  const output = preToolUseOutput(result.updatedInput);
   const outputBytes = Buffer.byteLength(output, "utf-8");
   if (outputBytes > DISPATCH_HOOK_OUTPUT_MAX_BYTES) {
     if (process.env[PRELOAD_FALLBACK_ENV] === "1") {

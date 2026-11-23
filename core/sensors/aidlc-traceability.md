@@ -48,10 +48,26 @@ opens, on the tables as they are then:
    out of every Unit on purpose: a `Deferred` row with a non-empty target (the
    reason, and where it is handled, say Operation) settles it, with `none` in
    its story-map Units cell. An `N/A` row does not, since it is also how an ID
-   is handed to another Unit. A Functional Design Unit
+   is handed to another Unit. At Functional Design and Code Generation, an `N/A`
+   row for an acceptance criterion (or an FR when there are no stories) whose
+   target is another Unit of the plan, named on its own by directory or `U{n}`
+   ID, is a hand-off (a reason's words are never read); that Unit must be on
+   that story's (or FR's) row in `unit-of-work-story-map.md`, or it is reported
+   as an invalid target. With stories, a story whose row names only `library`,
+   `spec` or `packaging` Units says how it is reached (`existing: <where>` or
+   `interface`, in the `Reached through` column of its row or once as a
+   `Reached through:` line), or it is reported as an invalid target. A
+   Functional Design Unit
    whose kind writes no `rules.md` (a `ui` Unit) names one of its design files
    (`functional-spec.md`, `frontend-components.md`) on each row instead of a
-   business rule.
+   business rule. At Units Generation, with stories, once a Unit is finished
+   (its row in the Unit Progress table of `aidlc-state.md` has every stage cell
+   and the gate cell `[x]`, and its `merged` cell too where the table has one),
+   a story whose row names only finished Units must have every acceptance
+   criterion built or settled, as Build and Test's coverage below reads it. A
+   finished Unit is not worked again, so a criterion nobody built or settled
+   would never be built; each such story is reported as an invalid target. A
+   story with a Unit that is not finished on its row is not.
    Code Generation also owes every `UX{x}.{y}.{n}` experience decision that
    `interaction-spec.md` records for its stories, and every app-wide one
    (`UX0.0.{n}`), and marks one it does not build `N/A` with its reason;
@@ -83,7 +99,9 @@ traced it (User Stories, NFR Requirements, then Code Generation) marked it
 `N/A` with its reason in every table there that lists it; an `N/A` with no
 reason is not settled. A story Units Generation kept out of every Unit,
 `Deferred` with its reason, settles its criteria the same way (a requirement,
-in work without stories), unless a later stage's table lists them.
+in work without stories), unless a later stage's table lists them. A Code Generation `N/A` that hands the
+ID to another Unit settles nothing: if no Unit built it, it is uncovered and its
+row lists the hand-offs as `handed_off` (`<Unit>/code-generation: <target>`).
 
 ## Expected JSON schema
 

@@ -58,7 +58,8 @@
 //     question is asked and answered as inside work, PLAN_APPROVAL_RECORDED
 //     lands beside the run's start, and Approve Plan builds and the run
 //     finishes; Request Changes, editing the files and "review the plan" go as
-//     inside work.
+//     inside work; the build's developer is pointed at its plan as it starts,
+//     as the step's note tells the conductor.
 //   - the plan's Testing Contract is the engine's to write: `next` writes a
 //     block left out, broken or out of date into that section only, before the
 //     question and after it, and after an approval, under every Guard Policy,
@@ -3173,6 +3174,29 @@ describe("an isolated Code Generation run in a project with no work", () => {
     const review = answer(proj, "Review the plan");
     expect(review.code, review.message).toBe(0);
     asked(proj);
+  });
+
+  test("the build's developer is pointed at its plan as it starts, as the step's note says", () => {
+    const proj = noWork();
+    writeOwnPlan(proj);
+    asked(proj);
+    replyAndRecord(proj, "approve", "Approve Plan");
+    const build = next(proj, SINGLE);
+    expect(build.plan_note).toContain("The developer gets the plan and its test instructions from AI-DLC as it starts");
+    const start = spawnSync(BUN, [join(proj, ".claude", "hooks", "aidlc-deliver-stage-rules.ts")], {
+      cwd: proj,
+      input: JSON.stringify({
+        hook_event_name: "SubagentStart", agent_id: "agent-1", agent_type: "aidlc-developer-agent", cwd: proj, session_id: SESSION,
+      }),
+      env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0" },
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(start.status, start.stderr).toBe(0);
+    const context = String((JSON.parse(start.stdout || "{}") as { hookSpecificOutput?: { additionalContext?: string } })
+      .hookSpecificOutput?.additionalContext ?? "");
+    expect(context).toContain("Read your plan `code-generation-plan.md` and its test instructions `unit-test-instructions.md`, " +
+      `in \`${[...SPACE_RECORD, "construction", "code-generation"].join("/")}/\``);
   });
 
   test("with no run open the plan answer is refused as before and records nothing", () => {
