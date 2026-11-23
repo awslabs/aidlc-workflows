@@ -11455,6 +11455,9 @@ function nextEngagesWorkflow(args: string[], flags: ParsedFlags = parseNextFlags
 
 // What a call that only quotes the person's words carries: the words and the plan.
 const QUOTED_LINE_KEYS = new Set(["intent", "scope", "positionalScope"]);
+// What the person's line may carry into creation beside its words, plan and
+// settings for such a call to be read as that line: no verb, jump or lookup.
+const QUOTED_LINE_CREATION_KEYS = new Set(["projectType", "planChanges"]);
 
 // The person's own line, when the agent's command carries none of it. On a
 // workspace with no work yet, an agent that ran `next` bare, or `next --scope
@@ -11507,9 +11510,10 @@ const QUOTED_LINE_KEYS = new Set(["intent", "scope", "positionalScope"]);
 // parse joined their "Hello,  World!" with one space. Only the request's words
 // change: every other flag and the command's arguments stay the agent's. A call
 // that quotes their words whole for the plan their line names (or for none when
-// it names none) reads a setting their line typed among them as their line alone
-// does: the quotes make one argument of "add a --review advisory option", so the
-// agent's call carries none of it.
+// it names none) reads a setting their line typed among them, and with no work
+// selected `--skip`/`--add` or `--project-type` too, as their line alone does: the
+// quotes make one argument of "add a --review advisory option", so the agent's
+// call carries none of it.
 function takePersonsOwnLine(flags: ParsedFlags, pd: string): string[] | null {
   if (engineSessionId === undefined || isReadOnlyEngineProbe()) return null;
   if (flags.request !== undefined) return null;
@@ -11518,22 +11522,27 @@ function takePersonsOwnLine(flags: ParsedFlags, pd: string): string[] | null {
     if (message === null || message.source !== "prompt" || message.words === null || message.cut === true) return null;
     const typed = aidlcEntryWords(personsWordsText(message.text));
     if (typed === null || typed.length === 0 || lineHandedOut(pd, engineSessionId, message.id)) return null;
-    if (loadStateFileIfPresent(pd) !== null && !turnIsLatestRow(pd, message.id)) return null;
+    const workSelected = loadStateFileIfPresent(pd) !== null;
+    if (workSelected && !turnIsLatestRow(pd, message.id)) return null;
     flags.intent = withTypedSpacing(flags.intent, typed);
     const argv = splitKiroCommandArgs(typed);
     const own = parseNextFlags(argv);
     if (own.parseError || own.intent === undefined || own.untakenFlag !== undefined) return null;
     const plan = flags.scope ?? flags.positionalScope ?? null;
     // A call that only quotes their words, for the plan their line names (in the
-    // same form) or for none when it names none, on a line of words and settings
-    // alone, is read as a bare `next` reads that same line, setting and all;
-    // where that reading does not take it, the call stays.
-    const quotesTheirLine = typedSettingModifiers(own).length > 0 &&
+    // same form) or for none when it names none, on a line that also types a
+    // setting and nothing else, or with no work selected also `--skip`/`--add` or
+    // `--project-type` (which over work in hand reshape it), is read as a bare
+    // `next` reads that same line, all of it; where that reading does not take
+    // it, the call stays.
+    const carried = Object.entries(own).filter(([key, value]) =>
+      !QUOTED_LINE_KEYS.has(key) && value !== undefined && value !== false);
+    const quotesTheirLine = carried.length > 0 &&
+      carried.every(([key, value]) => (!workSelected && QUOTED_LINE_CREATION_KEYS.has(key)) ||
+        typedSettingModifiers({ [key]: value } as ParsedFlags).length > 0) &&
       flags.scope === own.scope && flags.positionalScope === own.positionalScope &&
       Object.entries(flags).every(([key, value]) =>
         QUOTED_LINE_KEYS.has(key) || value === undefined || value === false) &&
-      Object.entries(own).every(([key, value]) => QUOTED_LINE_KEYS.has(key) || value === undefined ||
-        value === false || typedSettingModifiers({ [key]: value } as ParsedFlags).length > 0) &&
       chatLatestMessage(pd, engineSessionId)?.id === message.id;
     if (quotesTheirLine) {
       const passed = { ...flags };
