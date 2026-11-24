@@ -8144,10 +8144,20 @@ function createPrintDirective(
   if (flags.testStrategy) cmd.push(`--test-strategy ${flags.testStrategy}`);
   if (flags.projectType) cmd.push(`--project-type ${flags.projectType}`);
   if (flags.review) cmd.push(`--review ${flags.review}`);
-  // A lowered Guard Policy typed with routed new work rides to creation when it
-  // is the person's (routedGuardPolicyRides); otherwise the routed note says
-  // where it stands.
-  if (flags.changeControl && !(routedGuardPolicyNote && guardPolicyLowered(flags) && !routedGuardPolicyRides(flags, projectDir))) {
+  // A team's locked strict Guard Policy outranks a lowered Guard Policy or plan
+  // approval off typed with the request, never the request: neither goes on
+  // the command (creation refuses both under the lock), the work starts at the
+  // team's strict, and the team's line is said once. A check typed off rides,
+  // and creation keeps it on with its own line.
+  const team = teamKeepsLowered(projectDir, {
+    guardPolicy: guardPolicyLowered(flags),
+    fence: undefined,
+    planApproval: flags.ceremony?.plan_approval === "off",
+  });
+  // With no lock, a lowered Guard Policy typed with routed new work rides to
+  // creation when it is the person's (routedGuardPolicyRides); otherwise the
+  // routed note says where it stands.
+  if (flags.changeControl && !(guardPolicyLowered(flags) && (team !== null || (routedGuardPolicyNote && !routedGuardPolicyRides(flags, projectDir))))) {
     cmd.push(`--guard-policy ${flags.changeControl}`);
   }
   // A check typed with the work: creation takes it under the person-turn rule.
@@ -8155,6 +8165,7 @@ function createPrintDirective(
     if (flags.fences?.[fence]) cmd.push(`--guard.${fence} ${flags.fences[fence]}`);
   }
   for (const key of CEREMONY_KEYS) {
+    if (key === "plan_approval" && team !== null && flags.ceremony?.[key] === "off") continue;
     if (flags.ceremony?.[key]) cmd.push(`${CEREMONY_FLAGS[key]} ${flags.ceremony[key]}`);
   }
   if (flags.planChanges?.skip.length) cmd.push(`--skip ${flags.planChanges.skip.join(",")}`);
@@ -8204,6 +8215,7 @@ function createPrintDirective(
   for (const name of discoverSiblingRepos(projectDir, true)) {
     directive.narration += ` The folder "${name}" is not part of this work: its name ${repoNameProblem(name)}.`;
   }
+  if (team !== null) directive.narration += ` ${team}`;
   if (routedGuardPolicyNote) directive.narration += ` ${routedGuardPolicyNote}`;
   // Beside other work the chat still holds that work's conversation: the
   // person can start this one in a clean chat instead, said once, never as a
@@ -8420,15 +8432,15 @@ function routedGuardPolicyRides(flags: ParsedFlags, projectDir: string): boolean
 // New work picked on a routing question with a lowered Guard Policy: what the
 // person hears. Theirs, it is said once with where it landed; a value the new
 // work's plan already has is nothing new and goes unsaid. Under a team's strict
-// Guard Policy, the team's line. With no message of theirs in this chat it is
+// Guard Policy, nothing: the creation print says the team's line
+// (createPrintDirective). With no message of theirs in this chat it is
 // not tried on the new work: the person hears where it stands and is asked,
 // about the work the question was about, read from its own state (not whatever
 // the answer selects).
 function routedGuardPolicyNote(flags: ParsedFlags, projectDir: string, question: StoredQuestion): string {
   if (!guardPolicyLowered(flags)) return "";
   const value = flags.changeControl as string;
-  const team = teamKeepsTyped(flags, projectDir);
-  if (team !== null) return team;
+  if (teamKeepsTyped(flags, projectDir) !== null) return "";
   if (personAskedInThisChat(projectDir)) {
     // What the setting does comes with its name, as it does on the check line beside it.
     return flags.scope !== undefined && scopeGuardPolicyDefault(flags.scope) === value
@@ -12382,13 +12394,10 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     const tool = `${aidlcToolInvocation("orchestrate")} next`;
     const open = openFront.question;
     // The commands named here carry the settings and the stage changes typed
-    // with the request, as the question's own do, from the request's stored copy.
-    // Under a team's locked strict (teamKeepsTyped), a lowered Guard Policy or
-    // plan approval off would be refused at creation and the question would
-    // wait for the same answer again, and a check typed off is kept on: then
-    // the commands carry none of the typed settings.
+    // with the request, as the question's own do, from the request's stored copy;
+    // what a team's locked strict keeps stays off at creation (createPrintDirective).
     const kept = openQuestionSettings(questionDir, open);
-    const settings = kept && teamKeepsTyped(kept, questionDir) === null ? carriedCreationFlags(kept) : "";
+    const settings = kept ? carriedCreationFlags(kept) : "";
     const stages = typedStageAnswers(open.proposedScope, kept?.planChanges, kept?.planName);
     const answer = !openFront.sole
       // More than one plan question is open on this work, so which one they are

@@ -239,7 +239,10 @@ Memory-held strict refuses with the memory file named, at the setter and at
 creation alike. A lowering typed on the person's line under it is never handed
 to the setter: `next` says the team's line itself, naming the file, and applies
 nothing; a check typed off with new work stays on at creation, which goes ahead
-and says the team's line on the next step.
+and says the team's line on the next step. A lowered Guard Policy or plan
+approval off typed with new work is left off the creation command `next` names
+(`createPrintDirective`), so the work starts at strict and the team's line is
+said once on the next step.
 
 There is one parser of a typed `/aidlc` line: `parseNextFlags` in
 aidlc-orchestrate.ts, the one `next` reads its own arguments with. The hook
