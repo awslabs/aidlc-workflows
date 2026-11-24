@@ -238,6 +238,9 @@ Every run command in this file MUST be scoped to this unit only, using exact
 test file paths or an exact unit filter. A bare project-wide command like
 `npm test` is not acceptable. Build and Test executes every unit's commands,
 so an unscoped command would rerun the whole suite once per unit.
+Write each command to run as written from the workspace root, with any
+folder it needs inside the command and never in a note beside it: the
+review and Build and Test run it exactly as recorded.
 Built side by side, this Unit has its own copy of the project with none of
 the other Units of its batch in it: plan code and tests that pass with this
 Unit's code, the Units it depends on, and the project as it stands.

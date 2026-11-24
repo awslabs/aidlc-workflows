@@ -29,7 +29,7 @@ import {
 import { fileURLToPath } from "node:url";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import { putBackBeforePick, sayWritesDuringWork } from "./aidlc-before-pick.ts";
-import { buildStartListing, unitSourceManifests } from "./aidlc-brought-files.ts";
+import { buildStartListing, remoteBranchCopies, unitSourceManifests } from "./aidlc-brought-files.ts";
 import {
   approvalDispositionField,
   findingNeverShown,
@@ -5287,14 +5287,15 @@ function noteVerdictNotFinished(
   }
 }
 
-// Of the changed source paths, sorted, the ones a Unit's manifest could claim
-// (`paths`): the stage's completion and `lookup source-changes` leave out the
-// same ones. `claimed` takes out the paths the caller's Unit claims already
+// Of the source paths changed since `start`, sorted, the ones a Unit's manifest
+// could claim (`paths`): the stage's completion and `lookup source-changes`
+// leave out the same ones. `claimed` takes out the paths the caller's Unit claims already
 // cover. `ignored` holds the ones left out as ignored by git, which the lookup
 // reads for the checkouts it cannot see into.
 function unitClaimableSourceChanges(
   pd: string,
   stageSlug: string,
+  start: ReadonlyMap<string, string>,
   changed: Iterable<string>,
   current: ReadonlyMap<string, string>,
   claimed: (pathKey: string) => boolean = () => false,
@@ -5319,6 +5320,11 @@ function unitClaimableSourceChanges(
     const otherWork = otherOpenWorkClaims(pd, stageSlug);
     outsideClaims = outsideClaims.filter((pathKey) => !otherWork.some((work) => sourceClaimCovers(pathKey, work.claims)));
   }
+  // Nor is a file the remote branch of its own repository holds as it is now: a teammate's commit pulled.
+  if (outsideClaims.length > 0) {
+    const remote = remoteBranchCopies(pd, start, current, outsideClaims);
+    outsideClaims = outsideClaims.filter((pathKey) => remote.get(pathKey)?.held !== true);
+  }
   const ignored = unclaimableIgnoredSourceKeys(pd, outsideClaims);
   const unclaimable = new Set(ignored);
   for (const key of registryExcludedSourceKeys(pd, outsideClaims)) unclaimable.add(key);
@@ -5336,7 +5342,8 @@ function unitClaimableSourceChanges(
 // `listed_by` names the other Units whose manifest lists a path, and
 // `not_listed` the places it leaves out because it cannot list them as a
 // manifest claims them: a checkout recorded with `intent add-checkout` (one
-// recorded after the build began reads as all created), a folder a link leads
+// recorded after the build began reads as all created, save the files its own
+// remote branch holds as they are), a folder a link leads
 // to outside the project, and a checkout of its own the project's git ignores.
 function sourceChangesSinceBuildStart(pd: string, unit: string | null): Record<string, unknown> {
   const named = unit === null ? {} : { unit };
@@ -5353,6 +5360,7 @@ function sourceChangesSinceBuildStart(pd: string, unit: string | null): Record<s
     const { paths, ignored } = unitClaimableSourceChanges(
       pd,
       "code-generation",
+      recorded,
       sourceListingChangedKeys(recorded, current.listing),
       current.listing,
     );
@@ -5579,6 +5587,7 @@ function verifyReviewerPrecondition(
     baselineUnclaimed = unitClaimableSourceChanges(
       pd,
       stage.slug,
+      baseline,
       baselineChanged,
       receipts.currentSourceListing,
       (pathKey) => claimModels.some((claims) => sourceClaimCovers(pathKey, claims)),

@@ -681,9 +681,9 @@ try {
   // Drift check failed, never block startup over an advisory.
 }
 
-// Claude Code's first command carries none of the person's words: the engine
-// reads their typed line from its own record, so this says nothing of it there.
-const firstCommandLine = runtimeHarnessName(projectDir) === "claude"
+// On Claude Code, Codex and Kiro IDE (Kiro CLI v3 too) the first command carries none of the
+// person's words: the engine reads their typed line from its own record, so this says nothing of it there.
+const firstCommandLine = ["claude", "codex", "kiro-ide"].includes(runtimeHarnessName(projectDir))
   ? ""
   : `- First: take everything the user typed after \`/aidlc\` and append it to the first \`next\` call UNCHANGED. The flags ARE the user's intent; dropping them sends the workflow to the wrong place. \`/aidlc --phase ideation\` -> you MUST run \`next --phase ideation\`, never bare \`next\`. \`/aidlc --stage X\` -> \`next --stage X\`. Before running that first \`next\`, verify: if the user's message contained \`--phase\`/\`--stage\`/\`--scope\`/\`--depth\`/freeform text, it MUST appear on your \`next\` command; a bare \`next\` when the user gave arguments is a bug.\n`;
 

@@ -61,7 +61,9 @@ import {
   isoTimestamp,
   recordHookDrop,
   readActiveDirectiveMarker,
+  readRecordedSourceCheckouts,
   readStateFile,
+  recordedCheckoutAt,
   readUnitScopeStamp,
   resolveProjectFlag,
   resolveProjectDirFromHook,
@@ -121,6 +123,10 @@ export interface ScopeVerdict {
 export interface ScopeContext {
   recordRoot?: string;
   cwd?: string;
+  /** The folders of the checkouts the work records for its review (`intent
+   *  add-checkout`). The reviewer read scope passes them; the claimed-checkout
+   *  write bound does not. */
+  checkouts?: readonly string[];
 }
 
 // Glob metacharacters. A sibling segment carrying any of these spans units
@@ -265,6 +271,10 @@ interface PreparedScope {
   constructionRoot?: string;
   unitRoot?: string;
   bases: string[];
+  checkoutRoots: string[];
+  // bases[0] is the folder the hook tracks for the tool (the payload's cwd), which
+  // judgeCommandText moves at a cd.
+  toolDirFirst: boolean;
 }
 
 function normalizeForCompare(p: string): string {
@@ -322,6 +332,8 @@ function prepareScope(
     constructionRoot: constructionRoot ? normalizeForCompare(constructionRoot) : undefined,
     unitRoot: unitRoot ? normalizeForCompare(unitRoot) : undefined,
     bases,
+    checkoutRoots: (context?.checkouts ?? []).map((root) => normalizeForCompare(resolve(root))),
+    toolDirFirst: cwd !== undefined,
   };
 }
 
@@ -348,6 +360,33 @@ function judgeLexicalPath(text: string, scope: PreparedScope): ScopeVerdict | nu
   return null;
 }
 
+// As typed, a folder from the first wildcard on that is, or that a shell may
+// expand to, ".." (a brace piece "..", or a dot-led pattern such as ".*"):
+// resolving the path would fold it away before the cut below could see it.
+function climbsAfterWildcard(text: string): boolean {
+  const comps = toPosix(text).split("/");
+  const wild = comps.findIndex((comp) => WILDCARD_RE.test(comp));
+  return wild !== -1 && comps.slice(wild).some((comp) =>
+    comp.split(/[{},]/).some((piece) => piece === ".." || (piece.startsWith(".") && WILDCARD_RE.test(piece))));
+}
+
+// Read from the folder the hook tracks for the tool, a path in a checkout the
+// work records for its review is that checkout's file, so its readings from the
+// record and the Unit's folder are not judged: from the Unit's folder
+// "../shop-web/app.js" would read as a Unit named shop-web. The path is cut at
+// its first wildcard folder, and opens only when that lies neither in nor above
+// the record's construction/ folder and nothing from the wildcard on climbs.
+function readsRecordedCheckout(text: string, scope: PreparedScope, bases: readonly string[]): boolean {
+  const construction = scope.constructionRoot;
+  if (!scope.toolDirFirst || construction === undefined || scope.checkoutRoots.length === 0) return false;
+  if (climbsAfterWildcard(text)) return false;
+  const comps = normalizeForCompare(resolvePathStrings(text, bases)[0]).split("/");
+  const wild = comps.findIndex((comp) => WILDCARD_RE.test(comp));
+  const path = (wild === -1 ? comps : comps.slice(0, wild)).join("/");
+  if (containsPath(construction, path) || containsPath(path, construction)) return false;
+  return scope.checkoutRoots.some((root) => containsPath(root, path));
+}
+
 function judgeResolvedPath(
   text: string,
   mode: "target" | "search-root",
@@ -355,6 +394,7 @@ function judgeResolvedPath(
   bases: readonly string[] = scope.bases,
 ): ScopeVerdict | null {
   if (scope.constructionRoot === undefined) return null;
+  if (readsRecordedCheckout(text, scope, bases)) return null;
 
   for (const path of normalizeResolved(text, bases)) {
     if (containsPath(scope.constructionRoot, path)) {
@@ -1115,12 +1155,26 @@ async function checkScope(input: string, projectDir: string, outside: boolean, b
     agentType.length > 0 ? agentType === dispatch.reviewer : scopedRegistration;
   if (!isDispatchedReviewer) return 0;
 
+  // Each recorded checkout's real folder, and its path as typed while that
+  // still leads to it (a checkout named through a link). Read outside the
+  // matcher's fail-open: a record that cannot be read opens no checkout.
+  let checkouts: string[] = [];
+  try {
+    checkouts = readRecordedSourceCheckouts(projectDir).flatMap((entry) => {
+      const typed = resolve(projectDir, entry.path);
+      return recordedCheckoutAt(typed, [entry]) === null ? [entry.real] : [entry.real, typed];
+    });
+  } catch {
+    // No checkout opened: the read scope as it is without one.
+  }
+
   let verdict: ScopeVerdict;
   try {
     const cwdField = (parsed as { cwd?: unknown }).cwd;
     verdict = evaluateReviewerScope(toolName, toolInput, dispatch, {
       recordRoot: dirname(dirname(recordPath)),
       cwd: typeof cwdField === "string" && cwdField.length > 0 ? cwdField : projectDir,
+      checkouts,
     });
   } catch (e) {
     recordHookDrop(projectDir, HOOK_NAME, errorMessage(e));

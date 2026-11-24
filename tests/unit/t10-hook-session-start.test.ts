@@ -195,16 +195,16 @@ describe("t10 session-start SessionStart hook (mechanism cli — spawned hook + 
     expect(context).toContain("If you just asked the person a question you have not recorded, record it with `log decision`");
   });
 
-  test("on Claude Code the first command carries none of the person's words; every other tool keeps its first-command line", () => {
-    // Claude Code's first command is `next --entry`, and the engine reads their
-    // typed line from its own record, so the context says nothing of what they typed.
+  test("on Claude Code, Codex and Kiro IDE the first command carries none of the person's words; every other tool keeps its first-command line", () => {
+    // The first command of Claude Code, Codex and Kiro IDE (Kiro CLI v3 too) is `next --entry`, and the engine reads
+    // their typed line from its own record, so the context says nothing of what they typed.
     seedStateFile(proj, MID_IDEATION);
     const first = "take everything the user typed after `/aidlc` and append it to the first `next` call UNCHANGED";
     for (const tool of ["claude", "codex", "copilot", "cursor", "kiro", "kiro-ide", "opencode"]) {
-      for (const payload of [undefined, '{"source":"compact"}']) {
+      for (const payload of [undefined, '{"source":"resume"}', '{"source":"compact"}']) {
         const context = String(JSON.parse(fire(proj, payload, { AIDLC_HARNESS_NAME: tool }).stdout.trim()).additionalContext);
         const where = `${tool}, ${payload ?? "startup"}`;
-        if (tool === "claude") {
+        if (tool === "claude" || tool === "codex" || tool === "kiro-ide") {
           expect(context, where).not.toContain(first);
           expect(context, where).toContain("You never re-derive routing yourself.\n- When the reply names a command to run");
         } else {

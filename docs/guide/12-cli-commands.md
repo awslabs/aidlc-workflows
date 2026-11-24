@@ -1659,7 +1659,9 @@ section says `Mode: strict`, an explicit `relaxed` or `off` refuses the whole
 command, including any other supplied settings, and names that file: edit the
 memory line there to relax it for everyone. An explicit strict setting is still
 allowed. At creation the flag can be given with the scope
-(`/aidlc --scope poc --guard-policy strict "..."`).
+(`/aidlc --scope poc --guard-policy strict "..."`); under a memory
+`Mode: strict`, a `relaxed` or `off` value given there is left off, and the
+work starts at strict with the sentence naming that file said once.
 
 The retired flag `--change-control` and the retired config key `change-control`
 still resolve for one release and print one deprecation line naming their removal
@@ -3144,6 +3146,10 @@ the workspace root (see
 ```bash
 aidlc system workspace-sync [--force]
 ```
+
+If your shell has no `aidlc` command (a copied project, or a teammate's clone
+of one), run `bun .claude/tools/aidlc-workspace-sync.ts` instead, with your
+harness folder in place of `.claude`.
 
 It serializes reconciles with a workspace lock whose live owner is never reaped
 for age, then runs a read-only preflight before staging clones and generated

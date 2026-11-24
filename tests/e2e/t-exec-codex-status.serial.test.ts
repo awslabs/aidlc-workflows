@@ -136,7 +136,7 @@ describe("t-exec-codex-status — $aidlc --status on the shipped dist/codex via 
       const deadlineMs = performance.now() + TEST_TIMEOUT_MS;
       const { proj, home, root } = setupCodexProject();
       await withCodexFixture(root, () => rmSync(root, { recursive: true, force: true }), () => {
-        const r = execCodex(proj, home, "Use the $aidlc skill to run: /aidlc --status");
+        const r = execCodex(proj, home, "$aidlc --status");
         expect(r.rc, codexExecDiagnostic(r)).toBe(0);
         expect(r.out.toLowerCase().includes("no active"), codexExecDiagnostic(r)).toBe(true);
         // Read-only: the status path must not scaffold a workflow. The hooks'

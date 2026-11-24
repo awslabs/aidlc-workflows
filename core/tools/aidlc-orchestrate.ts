@@ -144,6 +144,7 @@ import {
   aidlcEntryWords,
   APPROVAL_GATE_CHOICES,
   protectedChoices,
+  shortcutEntryWords,
   SUMMARY_CONFIRMATION_CHOICES,
   typedWordGap,
 } from "./aidlc-reply-reader.ts";
@@ -7533,7 +7534,7 @@ export function nextArgsAreOnlyWords(args: string[]): boolean {
 // The plan a line names when it says nothing else ("/aidlc bugfix"), by the
 // same one reading; null for any other line. Unlike a reply, a token typed
 // beside the plan, a flag `next` does not take included, is more than the plan.
-export function nextArgsNameOnlyAPlan(args: string[]): string | null {
+function nextArgsNameOnlyAPlan(args: string[]): string | null {
   const parsed = parseNextFlags(args);
   return Object.keys(parsed).length === 1 && typeof parsed.positionalScope === "string"
     ? parsed.positionalScope
@@ -7545,9 +7546,10 @@ export function nextArgsNameOnlyAPlan(args: string[]): string | null {
 // whole text beside it): `next` reads that line from AI-DLC's own copy
 // (takePersonsOwnLine), so the agent runs `next` with nothing after it and
 // does not type tens of thousands of characters again, often past what one
-// command line can carry. The sentence is the one Kiro IDE's adapter (Kiro
-// IDE and Kiro CLI on its V3 engine) says for every such line, firstStepLine,
-// which a test holds to these words. "" for any other line: words that
+// command line can carry. It opens with the words of Kiro IDE's adapter's
+// first-step line (firstStepLine, Kiro IDE and Kiro CLI on its V3 engine),
+// which names `next --entry` for every `/aidlc` line; a test holds the two to
+// those words. "" for any other line: words that
 // are not words alone (nextArgsAreOnlyWords), or that hold a flag-shaped
 // token `next` does not take, which a bare `next` hands back for the agent to
 // send again behind `--`; a record with no whole copy; no chat, whose `next`
@@ -8142,10 +8144,20 @@ function createPrintDirective(
   if (flags.testStrategy) cmd.push(`--test-strategy ${flags.testStrategy}`);
   if (flags.projectType) cmd.push(`--project-type ${flags.projectType}`);
   if (flags.review) cmd.push(`--review ${flags.review}`);
-  // A lowered Guard Policy typed with routed new work rides to creation when it
-  // is the person's (routedGuardPolicyRides); otherwise the routed note says
-  // where it stands.
-  if (flags.changeControl && !(routedGuardPolicyNote && guardPolicyLowered(flags) && !routedGuardPolicyRides(flags, projectDir))) {
+  // A team's locked strict Guard Policy outranks a lowered Guard Policy or plan
+  // approval off typed with the request, never the request: neither goes on
+  // the command (creation refuses both under the lock), the work starts at the
+  // team's strict, and the team's line is said once. A check typed off rides,
+  // and creation keeps it on with its own line.
+  const team = teamKeepsLowered(projectDir, {
+    guardPolicy: guardPolicyLowered(flags),
+    fence: undefined,
+    planApproval: flags.ceremony?.plan_approval === "off",
+  });
+  // With no lock, a lowered Guard Policy typed with routed new work rides to
+  // creation when it is the person's (routedGuardPolicyRides); otherwise the
+  // routed note says where it stands.
+  if (flags.changeControl && !(guardPolicyLowered(flags) && (team !== null || (routedGuardPolicyNote && !routedGuardPolicyRides(flags, projectDir))))) {
     cmd.push(`--guard-policy ${flags.changeControl}`);
   }
   // A check typed with the work: creation takes it under the person-turn rule.
@@ -8153,6 +8165,7 @@ function createPrintDirective(
     if (flags.fences?.[fence]) cmd.push(`--guard.${fence} ${flags.fences[fence]}`);
   }
   for (const key of CEREMONY_KEYS) {
+    if (key === "plan_approval" && team !== null && flags.ceremony?.[key] === "off") continue;
     if (flags.ceremony?.[key]) cmd.push(`${CEREMONY_FLAGS[key]} ${flags.ceremony[key]}`);
   }
   if (flags.planChanges?.skip.length) cmd.push(`--skip ${flags.planChanges.skip.join(",")}`);
@@ -8202,6 +8215,7 @@ function createPrintDirective(
   for (const name of discoverSiblingRepos(projectDir, true)) {
     directive.narration += ` The folder "${name}" is not part of this work: its name ${repoNameProblem(name)}.`;
   }
+  if (team !== null) directive.narration += ` ${team}`;
   if (routedGuardPolicyNote) directive.narration += ` ${routedGuardPolicyNote}`;
   // Beside other work the chat still holds that work's conversation: the
   // person can start this one in a clean chat instead, said once, never as a
@@ -8418,15 +8432,15 @@ function routedGuardPolicyRides(flags: ParsedFlags, projectDir: string): boolean
 // New work picked on a routing question with a lowered Guard Policy: what the
 // person hears. Theirs, it is said once with where it landed; a value the new
 // work's plan already has is nothing new and goes unsaid. Under a team's strict
-// Guard Policy, the team's line. With no message of theirs in this chat it is
+// Guard Policy, nothing: the creation print says the team's line
+// (createPrintDirective). With no message of theirs in this chat it is
 // not tried on the new work: the person hears where it stands and is asked,
 // about the work the question was about, read from its own state (not whatever
 // the answer selects).
 function routedGuardPolicyNote(flags: ParsedFlags, projectDir: string, question: StoredQuestion): string {
   if (!guardPolicyLowered(flags)) return "";
   const value = flags.changeControl as string;
-  const team = teamKeepsTyped(flags, projectDir);
-  if (team !== null) return team;
+  if (teamKeepsTyped(flags, projectDir) !== null) return "";
   if (personAskedInThisChat(projectDir)) {
     // What the setting does comes with its name, as it does on the check line beside it.
     return flags.scope !== undefined && scopeGuardPolicyDefault(flags.scope) === value
@@ -11526,7 +11540,9 @@ const QUOTED_LINE_CREATION_KEYS = new Set(["projectType", "planChanges"]);
 // two ways to start, or a creation with no words), and the agent picked the plan
 // for them. The human-turn hook already kept their message as it arrived
 // (aidlc-message-store.ts), so when this chat's latest message came through their
-// own prompt and is an `/aidlc` line with words, that line is the request, and
+// own prompt and is an `/aidlc` line with words (or a shortcut's line with
+// words, read as the `/aidlc` line it stands for: typedEntryWords; a shortcut's
+// line of tokens alone is never read here, see entryTokens), that line is the request, and
 // `next` reads it exactly as if the agent had passed it: the same reply reading
 // while a plan question is open, the same plan question for words alone, the same
 // creation for a plan they named, their own settings carried. A scope the agent
@@ -11632,6 +11648,9 @@ function takePersonsOwnLine(flags: ParsedFlags, pd: string): string[] | null {
   if (!carriesNothing) return null;
   const message = chatLatestMessage(pd, engineSessionId);
   if (message === null || message.source !== "prompt") return null;
+  // A shortcut's line of tokens alone is the first command's to run, each time
+  // it runs (entryTokens), never a bare `next`'s.
+  if (shortcutTokensAlone(personsWordsText(message.text)) !== null) return null;
   const stateContent = loadStateFileIfPresent(pd);
   if (message.words !== null) {
     // Their words name work; with work selected, only while nothing has run
@@ -11660,7 +11679,7 @@ function takePersonsOwnLine(flags: ParsedFlags, pd: string): string[] | null {
   // A typed prompt its record cut is read whole from the copy kept beside the
   // record; a plain reply is that text trimmed, as the record's words are.
   const whole = wholeMessageText(pd, message);
-  const typed = aidlcEntryWords(personsWordsText(whole ?? message.text));
+  const typed = typedEntryWords(personsWordsText(whole ?? message.text));
   let argv: string[];
   if (typed === null) {
     if (
@@ -11830,15 +11849,19 @@ function cutMessageStep(shape: ParsedFlags, message: StoredMessage, reply: boole
   );
 }
 
-// AI-DLC's first command (`next --entry`, the Claude Code skill's step 1)
+// AI-DLC's first command (`next --entry`, step 1 of the Claude Code, Codex and Kiro IDE skills)
 // carries none of the person's words: the bare `next` reads the words of their
 // typed line from the record (takePersonsOwnLine), and a line of tokens alone
-// runs as the command before this is asked (entryTokens). With no `/aidlc` line of
+// runs as the command before this is asked (entryTokens). A shortcut's line
+// (`/aidlc-bugfix ...`) is read as the `/aidlc` line it stands for
+// (typedEntryWords), and a Claude Code shortcut's first command carries the
+// shortcut's own arguments after `--entry`. With no `/aidlc` or shortcut line of
 // this chat's to read (the hooks off, which stop before the record is read; a
 // run nobody attends, whose prompts are not kept; a latest message that is no
-// `/aidlc` line; no chat), the agent hands their words over in the request
+// such line; no chat), the agent hands their words over in the request
 // file, never on a command line (noTypedLineStep), which cannot know what they
-// typed, so it always says where their flags go; what the agent put after
+// typed, so it always says where their flags go; a shortcut's own arguments stay
+// on that step's command, and anything else the agent put after
 // `--entry` is the command there instead (`main`). One plain message on record
 // goes on itself: a reply while a plan or routing question waits, or while work
 // here is in progress and none is selected, which routeNext reads only as
@@ -11851,7 +11874,7 @@ function entryLine(pd: string, selection: WorkflowSelection, unjoined: boolean):
   if (!unjoined && hooksOffStop(pd, selection, []) !== null) return "step";
   const message = chatLatestMessage(pd, selection.sessionId);
   if (message === null || message.source !== "prompt") return "step";
-  if (aidlcEntryWords(personsWordsText(message.text)) !== null) return "bare";
+  if (typedEntryWords(personsWordsText(message.text)) !== null) return "bare";
   const reply = message.words === null || message.cut === true ? null : personsWordsText(message.words);
   if (reply === null) return "step";
   // Presence alone: reading the record would bring an older one up to date.
@@ -11903,7 +11926,11 @@ function planQuestionChoice(pd: string, plan: string): { question: StoredQuestio
 // again; any other is taken once, on takePersonsOwnLine's bounds (not handed
 // out yet; with work selected, nothing run since they spoke), and marked, so a later
 // first command before their next message goes on from where the work now
-// stands. Null leaves the first command to entryLine.
+// stands. A shortcut's line of tokens alone (`/aidlc-bugfix --status`; its
+// record keeps the line as words) meets none of those bounds and no mark: it
+// runs as that shortcut's own command, each time the first command runs, and
+// planSentBesideWaitingRequest's mark decides beside a waiting plan question.
+// Null leaves the first command to entryLine.
 function entryTokens(pd: string): string[] | null {
   if (!humanTurnMintAllowed()) return null;
   let selection: WorkflowSelection;
@@ -11915,7 +11942,10 @@ function entryTokens(pd: string): string[] | null {
   const session = selection.sessionId;
   if (!session) return null;
   const message = chatLatestMessage(pd, session);
-  if (message === null || message.source !== "prompt" || message.cut === true || message.words !== null) return null;
+  if (message === null || message.source !== "prompt" || message.cut === true) return null;
+  const shortcut = shortcutTokensAlone(personsWordsText(message.text));
+  if (shortcut !== null) return shortcut;
+  if (message.words !== null) return null;
   const typed = aidlcEntryWords(personsWordsText(message.text));
   if (!typed) return null;
   const tokens = splitKiroCommandArgs(typed);
@@ -11935,13 +11965,36 @@ function chatOutsideWork(pd: string, selection: WorkflowSelection): boolean {
 function outsideSelection(selection: WorkflowSelection): WorkflowSelection {
   return { ...selection, intent: null, binding: null };
 }
-function noTypedLineStep(): PrintDirective {
-  const next = `${aidlcToolInvocation("orchestrate")} next`;
+// The line the person typed, as an `/aidlc` line: theirs, or the one their
+// shortcut's line stands for.
+function typedEntryWords(text: string): string | null {
+  return aidlcEntryWords(text) ?? shortcutEntryWords(text, (name) => validScopes().has(name));
+}
+// A shortcut's line that holds none of their words (the shortcut alone, a
+// status, a setting, a jump): the tokens it stands for. Null for any other line.
+function shortcutTokensAlone(text: string): string[] | null {
+  const typed = shortcutEntryWords(text, (name) => validScopes().has(name));
+  if (typed === null) return null;
+  const tokens = splitKiroCommandArgs(typed);
+  return parseNextFlags(tokens).intent === undefined ? tokens : null;
+}
+// The arguments a shortcut's first command carries after `--entry`, as its
+// generated file writes them: a plan, the compose verb, or new work.
+function isShortcutTail(tail: readonly string[]): boolean {
+  if (tail.length === 2) return tail[0] === "--scope" && validScopes().has(tail[1]);
+  return tail.length === 1 && (tail[0] === "compose" || tail[0] === "--new-intent");
+}
+// `tail` is a shortcut's own arguments, kept on the step's command.
+function noTypedLineStep(tail: readonly string[]): PrintDirective {
+  const next = [`${aidlcToolInvocation("orchestrate")} next`, ...tail].join(" ");
+  const kept = tail.length === 0
+    ? "the plan, command word and flags they typed stay on the command, before `--request-file`. When they typed " +
+      "nothing after the entry word,"
+    : "the flags they typed stay on the command, before `--request-file`. When they typed nothing after the command,";
   return printDirective(
     "AI-DLC has no copy of what the person typed in this chat. Write the words of their request, exactly as they " +
       `typed them, with your file tool to \`${CUT_MESSAGE_FILE}\`, then run \`${next} --request-file ` +
-      `${CUT_MESSAGE_FILE}\` and follow what it returns. Only their words go in the file: the plan, command word and ` +
-      "flags they typed stay on the command, before `--request-file`. When they typed nothing after the entry word, " +
+      `${CUT_MESSAGE_FILE}\` and follow what it returns. Only their words go in the file: ${kept} ` +
       `run \`${next}\` with nothing after it and follow what it returns.`,
   );
 }
@@ -12341,13 +12394,10 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     const tool = `${aidlcToolInvocation("orchestrate")} next`;
     const open = openFront.question;
     // The commands named here carry the settings and the stage changes typed
-    // with the request, as the question's own do, from the request's stored copy.
-    // Under a team's locked strict (teamKeepsTyped), a lowered Guard Policy or
-    // plan approval off would be refused at creation and the question would
-    // wait for the same answer again, and a check typed off is kept on: then
-    // the commands carry none of the typed settings.
+    // with the request, as the question's own do, from the request's stored copy;
+    // what a team's locked strict keeps stays off at creation (createPrintDirective).
     const kept = openQuestionSettings(questionDir, open);
-    const settings = kept && teamKeepsTyped(kept, questionDir) === null ? carriedCreationFlags(kept) : "";
+    const settings = kept ? carriedCreationFlags(kept) : "";
     const stages = typedStageAnswers(open.proposedScope, kept?.planChanges, kept?.planName);
     const answer = !openFront.sole
       // More than one plan question is open on this work, so which one they are
@@ -24519,7 +24569,8 @@ export function main(argv: string[]): void {
   // The skill's first command is `next --entry`; it comes off before anything
   // reads the command, and their typed line is read from the record (see
   // entryLine). What an agent puts after it is the command only where no line
-  // of theirs is on record.
+  // of theirs is on record, and a shortcut's own arguments not even there: they
+  // stay on the request-file step's command.
   const entry = subcommand === "next" && subArgs[0] === "--entry";
   const entryTail = entry ? subArgs.slice(1) : [];
   if (entry) subArgs = [];
@@ -24554,7 +24605,7 @@ export function main(argv: string[]): void {
     // reads it below, so where none is the tail is the command from the start.
     const outside = chatOutsideWork(resolvedProjectDir, selected);
     engineSelections.set(resolvedProjectDir, outside ? outsideSelection(selected) : selected);
-    if (entryLine(resolvedProjectDir, selected, outside) === "step") {
+    if (entryLine(resolvedProjectDir, selected, outside) === "step" && !isShortcutTail(entryTail)) {
       subArgs = entryTail;
       entryCommand = false;
     }
@@ -24635,7 +24686,7 @@ export function main(argv: string[]): void {
   if (line === "step") {
     // The command this step names carries the hook notice where one applies.
     activeHookHealthNotice = null;
-    emit(noTypedLineStep());
+    emit(noTypedLineStep(isShortcutTail(entryTail) ? entryTail : []));
     return;
   }
   if (line !== "bare") {

@@ -6,7 +6,7 @@
 // session id, same rollout file, full context), so a gate that ends turn 1 can
 // be answered by a scripted turn 2.
 //
-//   beat 1:  codex exec `/aidlc compose "<task>"` - the conductor dispatches
+//   beat 1:  codex exec `$aidlc compose "<task>"` - the conductor dispatches
 //            the composer, renders the proposal, and ends the turn AT the
 //            approve/edit/reject gate as numbered prose (`request_user_input`
 //            returns {} in exec mode, so the SKILL.md numbered-prose arm
@@ -237,7 +237,7 @@ describe("t-exec-codex-compose-front - interactive compose over exec + exec resu
         const b1 = codexTurn(
           proj,
           home,
-          `Use the $aidlc skill to run: /aidlc compose "${TASK}"`,
+          `$aidlc compose "${TASK}"`,
         );
         expect(b1.rc, codexExecDiagnostic(b1)).toBe(0);
         const b1Session = b1.sessionId;
