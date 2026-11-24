@@ -261,6 +261,48 @@ describe("intent add-repo / remove-repo", () => {
     expect(audit()).not.toContain("INTENT_REPOS_CHANGED");
   });
 
+  // A folder given for a repo the work already records: nothing changes, and
+  // the answer gives the agent the exact entry that keeps it there on this
+  // computer (the person's own aidlc/repos.local.json, which AI-DLC never
+  // writes), the path with forward slashes as a Windows path is typed.
+  const KEEP = (path: string): string => `app-a is already one of this piece of work's repos; nothing changed. To keep it at ${path} ` +
+    `on this computer, add {"name": "app-a", "path": "${path}"} to the "repos" list in aidlc/repos.local.json.`;
+  test("a repo already recorded, given a folder where a checkout of it is: nothing changed, and the entry that keeps it there", () => {
+    mkdirSync(join(proj, "vendor"), { recursive: true });
+    git(join(proj, "vendor"), ["init", "-q", "app-a"]);
+    for (const path of ["vendor/app-a", "vendor\\app-a"]) {
+      const r = utility(["intent", "add-repo", "app-a", "--path", path]);
+      expect(r.rc, r.out).toBe(0);
+      expect(r.out).toContain(KEEP("vendor/app-a"));
+      expect(r.out).not.toContain("Then add it again");
+    }
+    expect(repos()).toEqual(["app-a"]);
+    expect(existsSync(join(proj, "aidlc", "repos.local.json"))).toBe(false);
+    expect(audit()).not.toContain("INTENT_REPOS_CHANGED");
+  });
+
+  test("a repo already recorded, given a folder with no checkout yet: the entry, then the add again that clones it there", () => {
+    const r = utility(["intent", "add-repo", "app-a", "--path", "vendor/app-a"]);
+    expect(r.rc, r.out).toBe(0);
+    expect(r.out).toContain(`${KEEP("vendor/app-a")} Then add it again with no --path, and it is cloned there.`);
+    expect(existsSync(join(proj, "vendor"))).toBe(false);
+  });
+
+  test("a repo already recorded, given the folder it is already at: nothing changed, and nothing more", () => {
+    const r = utility(["intent", "add-repo", "app-a", "--path", "app-a"]);
+    expect(r.rc, r.out).toBe(0);
+    expect(r.out).toContain("app-a is already one of this piece of work's repos; nothing changed.");
+    expect(r.out).not.toContain("repos.local.json");
+  });
+
+  // On Windows a folder's name is the same folder in any letter case.
+  test.if(process.platform === "win32")("on Windows, the folder it is already at typed in another letter case: nothing more", () => {
+    const r = utility(["intent", "add-repo", "app-a", "--path", "APP-A"]);
+    expect(r.rc, r.out).toBe(0);
+    expect(r.out).toContain("app-a is already one of this piece of work's repos; nothing changed.");
+    expect(r.out).not.toContain("repos.local.json");
+  });
+
   test("refuses a name that is not a repo name", () => {
     const r = utility(["intent", "add-repo", "../outside"]);
     expect(r.rc).not.toBe(0);
@@ -451,6 +493,26 @@ describe("intent add-repo clones a repo that is not here yet", () => {
     expect(rows).toContain("**Reason**: the consent API lives in payments");
     expect(rows).toMatch(/\*\*Source Baseline Addition\*\*: sha256:[0-9a-f]{64}/);
     expect(stagingLeft()).toEqual([]);
+  });
+
+  // What the answer to a folder given for a recorded repo says, followed: the
+  // entry written by hand in their own list, then the add again with no
+  // --path, which clones it at that folder.
+  test("a recorded repo not here, given a folder: the entry the answer names, written by hand, then the add again clones it there", () => {
+    bareRepo("acme", "payments");
+    insteadOf("git@github.com:acme/", "acme");
+    writeFileSync(join(proj, "repos.json"), `${JSON.stringify({ repos: [{ name: "app-a" }, { name: "payments", url: "git@github.com:acme/payments.git" }] }, null, 2)}\n`);
+    recordRepos(["app-a", "payments"]);
+    const given = utility(["intent", "add-repo", "payments", "--path", "mine/payments"]);
+    expect(given.rc, given.out).toBe(0);
+    const entry = /add (\{.*\}) to the "repos" list in aidlc\/repos\.local\.json\. Then add it again with no --path, and it is cloned there\./.exec(given.out)?.[1];
+    expect(entry, given.out).toBeDefined();
+    expect(existsSync(join(proj, "mine"))).toBe(false);
+    writeFileSync(join(proj, "aidlc", "repos.local.json"), `{ "repos": [${entry}] }\n`);
+    const again = utility(["intent", "add-repo", "payments"]);
+    expect(again.rc, again.out).toBe(0);
+    expect(existsSync(join(proj, "mine", "payments", "src", "api.ts"))).toBe(true);
+    expect(repos()).toEqual(["app-a", "payments"]);
   });
 
   // The list's org makes no address: an entry with a name alone is asked for

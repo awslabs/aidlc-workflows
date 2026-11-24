@@ -547,6 +547,7 @@ import {
   installWithoutReplacing,
   pathContainedBy,
   replaceWithStaged,
+  sameDirectory,
 } from "./aidlc-lib.ts";
 import { CLAIM_REF_FOLDERS, claimHere } from "./aidlc-unit-holders.ts";
 import { chatTookStep, relativeRecordDirForSelection } from "./aidlc-record-core.ts";
@@ -10086,9 +10087,18 @@ function handleIntentRepos(
     if (!kept) lines.push(note);
   };
   switch (outcome.kind) {
-    case "already":
-      lines.push(`${name} is already one of this piece of work's repos; nothing changed.`);
+    case "already": {
+      // A folder given for it that is not where the lists put it: the exact
+      // entry of the person's own list that keeps it there on this computer
+      // (AI-DLC writes none of that list), and, with no checkout there yet,
+      // the add again that clones it there.
+      const elsewhere = flags.path !== undefined && !sameDirectory(target, repoDir(projectDir, name));
+      const path = flags.path === undefined ? "" : displayRepoPath(flags.path);
+      lines.push(`${name} is already one of this piece of work's repos; nothing changed.` + (!elsewhere ? ""
+        : ` To keep it at ${path} on this computer, add {"name": ${JSON.stringify(name)}, "path": ${JSON.stringify(path)}} to the ` +
+          `"repos" list in ${REPOS_LOCAL_PLACE}.${isGitRepoDir(target) ? "" : " Then add it again with no --path, and it is cloned there."}`));
       break;
+    }
     case "absent":
       lines.push(`${name} is not one of this piece of work's repos (${outcome.current.join(", ")}); nothing changed.`);
       break;
