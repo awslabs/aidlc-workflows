@@ -771,6 +771,7 @@ import {
   unitProgressStanding,
   type UnitProgressStanding,
   workToCommitWords,
+  signInWayOn,
 } from "./aidlc-unit.ts";
 import {
   type ApprovedComposerPlan,
@@ -9973,7 +9974,14 @@ function leadAddressStep(projectDir: string, address: string): Directive | null 
   }
   // The address said could not be read: git's own words, never that nothing is shared there.
   if (looked.unreadAtAddress !== undefined) {
-    return errorDirective(`${maskUserinfo(address)} could not be read: ${looked.unreadAtAddress ?? "it did not answer in time"}`);
+    const unread = `${maskUserinfo(address)} could not be read: ${looked.unreadAtAddress ?? "it did not answer in time"}`;
+    // A sign-in git cannot ask for here: the way on is the agent's to put to the
+    // person in its own words, so it rides the step, under git's words.
+    const wayOn = signInWayOn(looked.unreadAtAddress, address, "try the address again");
+    if (wayOn === "") return errorDirective(unread);
+    const step = turnEndingPrint(`Say the line above.${wayOn}`);
+    step.narration = unread;
+    return step;
   }
   if (looked.choices.length === 0 && looked.sentences.length === 0) {
     if ((looked.movedAtAddress ?? []).length > 0) return lineEndingTurn(looked.movedAtAddress!.join(" "));

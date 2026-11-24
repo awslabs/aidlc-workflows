@@ -3117,6 +3117,61 @@ describe("a team's own workspace that reads the lead's plan where it is shared",
     expect(existsSync(intents) ? readdirSync(intents).filter((name) => name !== "intents.json") : []).toEqual([]);
   });
 
+  // A repository that asks for a sign-in git cannot ask for here (no terminal),
+  // with git as it installs on Linux: no credential helper, and none from the
+  // machine's or the person's own git settings. The host is a stand-in that
+  // asks every request for a sign-in.
+  async function withSignInHost(check: (address: string, noHelper: NodeJS.ProcessEnv) => void): Promise<void> {
+    const server = join(tempDir("sign-in-host"), "host.ts");
+    writeFileSync(server, "const s = Bun.serve({ port: 0, fetch: () => new Response(\"sign in\", { status: 401, " +
+      "headers: { \"WWW-Authenticate\": 'Basic realm=\"host\"' } }) });\nconsole.log(s.port);\n");
+    const child = Bun.spawn([process.execPath, server], { stdout: "pipe", stderr: "ignore" });
+    try {
+      const first = await child.stdout.getReader().read();
+      const port = Number(new TextDecoder().decode(first.value ?? new Uint8Array()).trim());
+      expect(port).toBeGreaterThan(0);
+      const global = join(tempDir("no-helper"), "gitconfig");
+      writeFileSync(global, "");
+      // The runner lets git use a local transport only; this host is http.
+      check(`http://127.0.0.1:${port}/checkout-api.git`, {
+        ...ENV, GIT_CONFIG_GLOBAL: global, GIT_CONFIG_NOSYSTEM: "1", GIT_TERMINAL_PROMPT: "0", GIT_ALLOW_PROTOCOL: "file:http",
+      });
+    } finally {
+      child.kill();
+    }
+  }
+  const SIGN_IN = "checkout-api needs a sign-in, and git has none saved for it on this computer. Ask the person to save " +
+    "theirs with git's credential helper; when they say it is done, ";
+
+  test("a take whose repository asks for a sign-in git cannot give here: the refusal says the way on", async () => {
+    const home = makePlanHome();
+    const alice = ownWorkspace(home.hosts, "alice", ["billing"]);
+    inSpace(alice, "payments");
+    await withSignInHost((address, noHelper) => {
+      const took = run(UNIT, ["take", "refunds", "--plan", home.id8, "--from", address], alice, noHelper);
+      expect(took.status, took.out).not.toBe(0);
+      const said = String(took.json?.error ?? took.out);
+      expect(said).toContain(`${address} could not be read: `);
+      expect(said).toEndWith(` ${SIGN_IN}take refunds again.`);
+    });
+  });
+
+  // The person is shown git's words; the way on is the agent's, so it asks
+  // them in its own words: a step the agent reads, never an error the harness
+  // shows the person word for word.
+  test("the lead's address that asks for a sign-in git cannot give here: the person reads git's words, the agent the way on", async () => {
+    const home = makePlanHome();
+    const pay = ownWorkspace(home.hosts, "pay", ["billing"]);
+    await withSignInHost((address, noHelper) => {
+      const step = next(pay, noHelper, ["--lead-address", address]);
+      expect(step.kind, JSON.stringify(step)).toBe("print");
+      expect(String(step.narration)).toStartWith(`${address} could not be read: `);
+      expect(String(step.narration)).toContain("terminal prompts disabled");
+      expect(String(step.narration)).not.toContain("Ask the person");
+      expect(String(step.message)).toEndWith(` ${SIGN_IN}try the address again.`);
+    });
+  });
+
   // The address the person said can carry a sign-in: the build's record, which
   // the team commits, keeps the address without it.
   test("an address that carries a sign-in is recorded without it", () => {

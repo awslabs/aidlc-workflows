@@ -9552,6 +9552,17 @@ function planRepoEntry(pd: string, name: string): PlanJson["repos"][number] {
   };
 }
 
+// The way on after git's words for an address whose repository asks for a
+// sign-in git cannot ask for here (AI-DLC runs git with no terminal prompt):
+// the sign-in is the person's to save, never one typed into the address, which
+// the next read leaves out. Read from git's own words; empty for any other.
+export function signInWayOn(said: string | null, address: string, then: string): string {
+  return said !== null && /terminal prompts disabled/i.test(said)
+    ? ` ${repoNameOf(address)} needs a sign-in, and git has none saved for it on this computer. Ask the person to save ` +
+      `theirs with git's credential helper; when they say it is done, ${then}.`
+    : "";
+}
+
 // The name a plain git clone gives a repository, from its address.
 function repoNameOf(address: string): string {
   return folderRepoName(address.replace(/[\\/]+$/, "").replace(/\.git$/i, "").split(/[\\/:]/).at(-1) ?? "");
@@ -12145,7 +12156,9 @@ function planTakeSource(pd: string, id8: string, from: string, unit: string): Ta
   const ref = planRecordRef(id8);
   let place: PlanPlace = { address, repo: repoNameOf(address), id8, uuid: "", work: id8, ref, copy: copyOf(address, ref) };
   const looked = lookAtPlan(pd, place);
-  if (looked.unreached !== undefined) fail(`${maskUserinfo(address)} could not be read: ${looked.unreached ?? "it did not answer in time"}`);
+  if (looked.unreached !== undefined) {
+    fail(`${maskUserinfo(address)} could not be read: ${looked.unreached ?? "it did not answer in time"}${signInWayOn(looked.unreached, address, `take ${unit} again`)}`);
+  }
   if (looked.tip === null) {
     // The copy a look kept when the plan went from there names it.
     const kept = planAtCopy(pd, place.copy);
