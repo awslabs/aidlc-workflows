@@ -8,8 +8,9 @@
 // the release it needs and the person's step, for next, report, doctor and the
 // unit commands alike.
 // Which State Version a record carries is owned here too: the versions this
-// build reads (classifyStateVersion) and the one write that raises a record
-// to the team version (recordHomeLocation).
+// build reads (classifyStateVersion) and the two writes that raise a record to
+// 9: team work's Home Location (recordHomeLocation) and the approval of a Unit
+// plan with a `repos:` line under a Unit, an empty list too (unitPlanApproved).
 import { existsSync, renameSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { appendAuditEntryUnlocked } from "./aidlc-audit.ts";
@@ -20,6 +21,7 @@ import { packageManagerForExecutable } from "./aidlc-install-paths.ts";
 import { releaseHostLabel } from "./aidlc-release.ts";
 import { aidlcInvocation, compiledExecutable, entrySkillInvocation, runtimeHarnessName, typedHarnessName } from "./aidlc-runtime-paths.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
+import { parseBoltDag } from "./aidlc-unit-dag.ts";
 import { HOME_LOCATION_FIELD } from "./aidlc-unit-teams.ts";
 
 // -----------------------------------------------------------------------------
@@ -42,8 +44,11 @@ export const CURRENT_STATE_VERSION = "8";
 
 // Team work that records where its home is says 9, written with that record
 // (recordHomeLocation): 2.11 has no Home Location and would build its Units on
-// main's older team flow, so the version is what it stops at. Every other
-// record keeps CURRENT_STATE_VERSION, and this build reads both.
+// main's older team flow, so the version is what it stops at. So does work
+// whose approved Unit plan has a `repos:` line under a Unit, an empty list too
+// (unitPlanApproved): 2.11's Unit plan reader refuses the line whatever it
+// lists, and its step has the agent write the approved plan again without it.
+// Every other record keeps CURRENT_STATE_VERSION, and this build reads both.
 export const TEAM_STATE_VERSION = "9";
 
 export type StateVersionClassification =
@@ -110,7 +115,19 @@ export function classifyStateVersion(stateContent: string): StateVersionClassifi
 // AI-DLC stops at: 8 becomes 9 in the same write. A 7 is brought up by its own
 // step (bringStateUpToDate), and a version this build does not know is kept.
 export function recordHomeLocation(content: string, home: string): string {
-  const text = setOrInsertField(content, "## Runtime State", HOME_LOCATION_FIELD, home);
+  return raisedFromCurrent(setOrInsertField(content, "## Runtime State", HOME_LOCATION_FIELD, home));
+}
+
+// The approval of Units Generation, with the Unit plan as approved: one with a
+// `repos:` line under any Unit (an empty list too, which 2.11 refuses all the
+// same) raises 8 to 9 in the approval's own write, team or solo. A version is
+// never written down, so a later plan with none leaves a 9 as it is.
+export function unitPlanApproved(content: string, unitPlan: string): string {
+  const parsed = parseBoltDag(unitPlan);
+  return parsed.ok && parsed.units.some((unit) => unit.repos !== undefined) ? raisedFromCurrent(content) : content;
+}
+
+function raisedFromCurrent(text: string): string {
   const verdict = classifyStateVersion(text);
   return verdict.kind === "ok" && verdict.version === CURRENT_STATE_VERSION
     ? setField(text, "State Version", TEAM_STATE_VERSION)
@@ -269,7 +286,8 @@ export function stateUpgradeRecord(
 //
 // The first release that writes each State Version newer than this build
 // reads, so the person hears which AI-DLC their teammate's work needs. 2.12
-// writes 9 on team work (#2783). The schema names the first release that
+// writes 9 on team work and on work whose approved Unit plan has a `repos:`
+// line under a Unit (#2783). The schema names the first release that
 // writes it, never the one that did, so it is said "or newer".
 export const STATE_VERSION_RELEASES: Readonly<Record<string, string>> = Object.freeze({ "9": "2.12" });
 

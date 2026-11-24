@@ -57,6 +57,7 @@ import {
   UNIT,
   UTILITY,
 } from "../harness/team-build.ts";
+import { AT_THE_UNITS_GATE, soloAtTheUnitsGate } from "../harness/team-unit-replan.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 afterEach(cleanupTeamBuild);
@@ -117,9 +118,10 @@ describe("choosing teams records where the home is", () => {
   });
 
   // An older AI-DLC has no Home Location and would build such work on main's
-  // older team flow, so the work says State Version 9, which it stops at. Only
-  // the write of Home Location raises it: work without one keeps 8.
-  test("the record of its home says State Version 9, written with it; work with no home recorded keeps 8", () => {
+  // older team flow, so the work says State Version 9, which it stops at. The
+  // write of Home Location raises it, and so does the approval of a Unit plan
+  // with a `repos:` line under a Unit (below): work with neither keeps 8.
+  test("the record of its home says State Version 9, written with it; work with no home recorded and no repos line in an approved Unit plan keeps 8", () => {
     const one = makeHome({ repos: {} });
     expect(field(stateOf(one.dir), "State Version")).toBe("8");
     chooseTeams(one.dir);
@@ -148,6 +150,25 @@ describe("choosing teams records where the home is", () => {
     chooseTeams(local.dir);
     expect(field(stateOf(local.dir), "Home Location")).toBeUndefined();
     expect(field(stateOf(local.dir), "State Version")).toBe("8");
+  });
+
+  // An older AI-DLC's Unit plan reader refuses a `repos:` line under a Unit,
+  // whatever it lists, so the approval of a plan that has one writes 9 in the
+  // same write, work one person builds as much as a team's; a plan with none
+  // keeps 8 (t-earlier-release-unit-plan-repos reads what the older release
+  // then does).
+  test("the approval of a Unit plan with a repos line under a Unit says State Version 9, an empty list too; one with none keeps 8", () => {
+    const plan = (repos: string) => "# Unit dependencies\n\n```yaml\nunits:\n" +
+      `  - name: refunds\n    kind: service\n${repos}    depends_on: []\n` +
+      "  - name: reporting\n    kind: service\n    depends_on: [refunds]\n```\n";
+    for (const [repos, version] of [["    repos: [app]\n", "9"], ["    repos: []\n", "9"], ["", "8"]]) {
+      const dir = soloAtTheUnitsGate(plan(repos));
+      expect(field(stateOf(dir), "State Version"), repos).toBe("8");
+      const approved = run(ORCH, ["report", "--stage", "units-generation", "--result", "approved", "--user-input", "Approve"], dir, AT_THE_UNITS_GATE);
+      expect(approved.status, approved.out).toBe(0);
+      expect(stateOf(dir), approved.out).toMatch(/^- \[x\] units-generation /m);
+      expect(field(stateOf(dir), "State Version"), repos).toBe(version);
+    }
   });
 
   // The raise is from 8 only: a 7 is brought up by the engine's own step at its

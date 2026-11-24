@@ -252,6 +252,7 @@ import {
   renderChangedPaths,
   renderSourcePathKeys,
   unitCompletedReceipts,
+  unitDependencyPath,
   unitGateStatus,
   unitLifecycleReceiptsInUse,
   unitMajorConstructionStageSlugs,
@@ -312,7 +313,7 @@ import { swarmSourceChangedSince } from "./aidlc-swarm-source.ts";
 import { memoryDirFor, PATH_SET_SENSOR_IDS, STAGE_WIDE_SENSOR_IDS, templateEligibleArtifacts, withStageProgressRow } from "./aidlc-graph.ts";
 import { generateFireId, recordUnfinishedFire, sensorMatchesPath, unfinishedFire } from "./aidlc-sensor-record.ts";
 import { buildOutBlockedLine, buildOutHomeLocation, buildWaitsForPush, earlyStartBrought, HOME_LOCATION_FIELD, homeLocation, workspaceHomeLocation } from "./aidlc-unit-teams.js";
-import { recordHomeLocation } from "./aidlc-state-upgrade.ts";
+import { recordHomeLocation, unitPlanApproved } from "./aidlc-state-upgrade.ts";
 import { unitProgressSectionRange } from "./aidlc-unit-landing.ts";
 import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
 import { aidlcDispatcherInvocation, aidlcToolInvocation, compiledExecutable, entrySkillInvocation, syncFolderClause } from "./aidlc-runtime-paths.ts";
@@ -8715,6 +8716,7 @@ function handleApprove(args: string[]): void {
   const completedCount = countCheckboxes(content, "completed");
   content = setField(content, "Completed", String(completedCount));
   content = setField(content, "Last Completed Stage", slug);
+  if (slug === "units-generation") content = unitPlanApproved(content, approvedUnitPlan(pd));
 
   // Capture before the first audit append. The lifecycle-facing helper is
   // fail-open: failures produce a receipt-less completion plus a persistent
@@ -8783,6 +8785,15 @@ function handleApprove(args: string[]): void {
     handleCompleteWorkflow([slug], validationWarning, personCall);
   }
   });
+}
+
+// The Unit plan as the person approved it; none written yet reads as no plan.
+function approvedUnitPlan(pd: string): string {
+  try {
+    return readFileSync(unitDependencyPath(pd), "utf-8");
+  } catch {
+    return "";
+  }
 }
 
 // The person's files the agent changed while this work was before Code
