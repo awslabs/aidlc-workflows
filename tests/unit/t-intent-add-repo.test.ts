@@ -15,7 +15,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, relative } from "node:path";
+import { basename, dirname, join, relative } from "node:path";
 import {
   AIDLC_SRC,
   REPO_ROOT,
@@ -33,6 +33,7 @@ import {
   writeActiveDirectiveMarker,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import { reposCommitOffer } from "../../dist/claude/.claude/tools/aidlc-unit.ts";
 
 const UTIL = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
 const DISPATCHER = join(AIDLC_SRC, "tools", "aidlc.ts");
@@ -322,12 +323,15 @@ describe("intent add-repo / remove-repo", () => {
     expect(repos()).toEqual(["app-a"]);
   });
 
+  // A workspace that is no checkout of its own is not listed beside its first
+  // repo, so the work then reads that repo and the workspace's top-level files.
   test("work that records no repos takes its first one before Construction, said once", () => {
     recordRepos([]);
     const r = utility(["intent", "add-repo", "app-b"]);
     expect(r.rc, r.out).toBe(0);
     expect(repos()).toEqual(["app-b"]);
-    expect(r.out).toContain("Added app-b to this piece of work's repos; until now it worked on the workspace folder itself, which it still reads.");
+    expect(r.out).toContain("Added app-b to this piece of work's repos. ");
+    expect(r.out).not.toContain("until now it worked on the workspace folder itself");
     expect(audit()).toContain("**Added**: app-b");
   });
 
@@ -946,9 +950,149 @@ describe("work that records no repos", () => {
   }
 
   // A new list goes in aidlc/, which every test project has.
-  function manifest(): { repos: Array<{ name: string; path?: string }> } {
+  function manifest(): { repos: Array<{ name: string; path?: string; url?: string }> } {
     return JSON.parse(readFileSync(join(proj, "aidlc", "repos.json"), "utf-8"));
   }
+
+  // The workspace's name in the list: the one its code knowledge already has, its folder's.
+  function own(): string {
+    return basename(proj);
+  }
+
+  function reposRows(): string[] {
+    return audit().split("\n## ").filter((block) => block.includes("INTENT_REPOS_CHANGED"));
+  }
+
+  describe("its first repo lists the workspace folder beside it", () => {
+    test("by a path: repos.json lists both, the work records both, the two rows, one line, one offer to commit the list", () => {
+      git(proj, ["remote", "add", "origin", "https://tok@example.invalid/acme/shop.git"]);
+      const billing = besideRepo("billing");
+      const added = utility(["intent", "add-repo", "billing", "--path", billing]);
+      expect(added.rc, added.out).toBe(0);
+      expect(manifest()).toEqual({ repos: [{ name: "billing", path: billing }, { name: own(), path: ".", url: "https://example.invalid/acme/shop.git" }] });
+      expect(repos()).toEqual(["billing", own()].sort());
+      expect(added.out).toBe(
+        `Added billing (at ${billing}) to this piece of work's repos. The work still covers ${own()}, the workspace folder itself, ` +
+          "and repos.json lists both. Reverse Engineering will cover billing when it runs. You can remove it again any time.\n",
+      );
+      const rows = reposRows();
+      expect(rows).toHaveLength(2);
+      expect(rows[0]).toMatch(/\*\*Added\*\*: billing$/m);
+      expect(rows[0]).toMatch(/\*\*Repos\*\*: billing$/m);
+      expect(rows[1]).toMatch(new RegExp(`\\*\\*Added\\*\\*: ${own()}$`, "m"));
+      expect(rows[1]).toMatch(/\*\*Listed At\*\*: \.$/m);
+      expect(rows[1]).toMatch(new RegExp(`\\*\\*Repos\\*\\*: ${["billing", own()].sort().join(", ")}$`, "m"));
+      expect(reposCommitOffer(proj, false)?.question).toBe(
+        `repos.json now lists billing and ${own()}. Want me to commit AI-DLC's record in aidlc/, with the list, using this commit message?`,
+      );
+      // The workspace added again by its folder changes nothing, so no second offer is put.
+      const list = readFileSync(join(proj, "aidlc", "repos.json"), "utf-8");
+      const again = utility(["intent", "add-repo", own(), "--path", "."]);
+      expect(again.rc, again.out).toBe(0);
+      expect(again.out).toBe(`${own()} is already one of this piece of work's repos; nothing changed.\n`);
+      expect(readFileSync(join(proj, "aidlc", "repos.json"), "utf-8")).toBe(list);
+      expect(reposRows()).toHaveLength(2);
+      // A later add adds that repo alone.
+      const docs = besideRepo("docs");
+      const later = utility(["intent", "add-repo", "docs", "--path", docs]);
+      expect(later.rc, later.out).toBe(0);
+      expect(later.out).toContain(`Added docs to this piece of work's repos. repos.json now lists docs at ${docs}.`);
+      expect(repos()).toEqual(["billing", "docs", own()].sort());
+      expect(manifest().repos.map((repo) => repo.name)).toEqual(["billing", own(), "docs"]);
+    });
+
+    test("by a hosted address it clones: both listed, the clone's address without its credential, said in the clone's form", () => {
+      bareRepo("acme", "payments");
+      insteadOf("https://user:s3cret-tok@example.invalid/acme/", "acme");
+      const added = utility(["intent", "add-repo", "payments", "--url", "https://user:s3cret-tok@example.invalid/acme/payments.git"]);
+      expect(added.rc, added.out).toBe(0);
+      expect(manifest()).toEqual({ repos: [{ name: "payments", url: "https://example.invalid/acme/payments.git" }, { name: own(), path: "." }] });
+      expect(repos()).toEqual(["payments", own()].sort());
+      expect(added.out).toContain(
+        "Cloned payments from https://***@example.invalid/acme/payments.git and added it to this piece of work's repos. " +
+          `The work still covers ${own()}, the workspace folder itself, and repos.json lists both. ` +
+          "payments's address in repos.json leaves out the credential.",
+      );
+      expect(added.out).not.toContain("s3cret-tok");
+      expect(readFileSync(join(proj, ".gitignore"), "utf-8")).toContain("/payments/");
+    });
+
+    test("by an address that is not a hosted one: the list is written all the same, the credential never in it, and no line that there is none", () => {
+      bareRepo("flat", "lib");
+      insteadOf("https://user:s3cret-tok@example.invalid/", "flat");
+      const added = utility(["intent", "add-repo", "lib", "--url", "https://user:s3cret-tok@example.invalid/lib.git"]);
+      expect(added.rc, added.out).toBe(0);
+      expect(manifest()).toEqual({ repos: [{ name: "lib", url: "https://example.invalid/lib.git" }, { name: own(), path: "." }] });
+      expect(readFileSync(join(proj, "aidlc", "repos.json"), "utf-8")).not.toContain("s3cret-tok");
+      expect(repos()).toEqual(["lib", own()].sort());
+      expect(added.out).toContain(`The work still covers ${own()}, the workspace folder itself, and repos.json lists both.`);
+      expect(added.out).toContain("lib's address in repos.json leaves out the credential.");
+      expect(added.out).not.toContain("has no repos.json");
+      expect(existsSync(join(proj, "aidlc.code-workspace"))).toBe(true);
+    });
+
+    test("a repo cloned inside it, with no path: the same install as a path add, and no place said for it", () => {
+      const web = join(proj, "web");
+      mkdirSync(join(web, "src"), { recursive: true });
+      writeFileSync(join(web, "src", "page.ts"), "export const page = 1;\n");
+      git(web, ["init", "-q"]);
+      git(web, ["add", "-A"]);
+      git(web, ["commit", "-qm", "seed"]);
+      git(web, ["remote", "add", "origin", "git@example.invalid:acme/web.git"]);
+      const added = utility(["intent", "add-repo", "web"]);
+      expect(added.rc, added.out).toBe(0);
+      expect(manifest()).toEqual({ repos: [{ name: "web", url: "git@example.invalid:acme/web.git" }, { name: own(), path: "." }] });
+      expect(repos()).toEqual(["web", own()].sort());
+      expect(added.out).toContain(
+        `Added web to this piece of work's repos. The work still covers ${own()}, the workspace folder itself, and repos.json lists both.`,
+      );
+      expect(readFileSync(join(proj, ".gitignore"), "utf-8")).toContain("/web/");
+      const folders = (JSON.parse(readFileSync(join(proj, "aidlc.code-workspace"), "utf-8")) as { folders: Array<{ path: string }> }).folders;
+      expect(folders.map((folder) => folder.path).sort()).toEqual([".", "web"]);
+    });
+
+    test("a repos.json that already lists the workspace under a name of the person's: kept, and that name recorded", () => {
+      const api = besideRepo("checkout-api");
+      const list = `${JSON.stringify({ repos: [{ name: "workshop", path: "." }, { name: "checkout-api", path: api }] })}\n`;
+      writeFileSync(join(proj, "repos.json"), list);
+      const added = utility(["intent", "add-repo", "checkout-api"]);
+      expect(added.rc, added.out).toBe(0);
+      expect(readFileSync(join(proj, "repos.json"), "utf-8")).toBe(list);
+      expect(repos()).toEqual(["checkout-api", "workshop"]);
+      expect(added.out).toContain("The work still covers workshop, the workspace folder itself, and repos.json lists both.");
+    });
+
+    test("a repos.json with comments and other repos: kept, and the workspace listed once", () => {
+      const api = besideRepo("checkout-api");
+      writeFileSync(join(proj, "repos.json"), `{\n  // The team's repos.\n  "repos": [\n    { "name": "other", "path": "../other" }\n  ]\n}\n`);
+      const added = utility(["intent", "add-repo", "checkout-api", "--path", api]);
+      expect(added.rc, added.out).toBe(0);
+      const text = readFileSync(join(proj, "repos.json"), "utf-8");
+      expect(text).toContain("// The team's repos.");
+      expect(text.split('"path": "."').length).toBe(2);
+      expect(repos()).toEqual(["checkout-api", own()].sort());
+    });
+
+    test("a repos.json entry already named as the workspace but at another place: nothing listed under that name, the add as before", () => {
+      const api = besideRepo("checkout-api");
+      writeFileSync(join(proj, "repos.json"), `${JSON.stringify({ repos: [{ name: own(), path: "../elsewhere" }] })}\n`);
+      const added = utility(["intent", "add-repo", "checkout-api", "--path", api]);
+      expect(added.rc, added.out).toBe(0);
+      expect(repos()).toEqual(["checkout-api"]);
+      expect(added.out).toContain(`Added checkout-api (at ${api}) to this piece of work's repos. repos.json now lists checkout-api at ${api}.`);
+      expect(added.out).not.toContain("until now it worked on the workspace folder itself");
+      expect(JSON.parse(readFileSync(join(proj, "repos.json"), "utf-8")).repos.map((repo: { path?: string }) => repo.path)).toEqual(["../elsewhere", api]);
+    });
+
+    test("after Units Generation is approved, the Units line names the new repo only", () => {
+      unitsApproved("relaxed");
+      const billing = besideRepo("billing");
+      const added = utility(["intent", "add-repo", "billing", "--path", billing]);
+      expect(added.rc, added.out).toBe(0);
+      expect(added.out).toContain("Units Generation was approved before this change: carrying on with its Units and billing added.");
+      expect(added.out).not.toContain(`${own()} added`);
+    });
+  });
 
   test("repos beside the workspace and no repos.json: the refusal names --path, and the folders the person named are recorded", () => {
     const api = besideRepo("checkout-api");
@@ -960,22 +1104,21 @@ describe("work that records no repos", () => {
     expect(existsSync(join(proj, "repos.json"))).toBe(false);
     const added = utility(["intent", "add-repo", "checkout-api", "--path", api]);
     expect(added.rc, added.out).toBe(0);
-    expect(repos()).toEqual(["checkout-api"]);
+    expect(repos()).toEqual(["checkout-api", own()].sort());
     expect(added.out).toBe(
-      `Added checkout-api (at ${api}) to this piece of work's repos; until now it worked on the workspace folder itself, which it still reads. ` +
-        `repos.json is new: it lists checkout-api at ${api}. ` +
-        "Reverse Engineering will cover checkout-api when it runs. You can remove it again before Construction starts.\n",
+      `Added checkout-api (at ${api}) to this piece of work's repos. The work still covers ${own()}, the workspace folder itself, ` +
+        "and repos.json lists both. Reverse Engineering will cover checkout-api when it runs. You can remove it again any time.\n",
     );
-    expect(manifest()).toEqual({ repos: [{ name: "checkout-api", path: api }] });
+    expect(manifest()).toEqual({ repos: [{ name: "checkout-api", path: api }, { name: own(), path: "." }] });
     // workspace-sync's own install: the managed block and the editor's workspace follow repos.json.
     expect(readFileSync(join(proj, ".gitignore"), "utf-8")).toContain("aidlc workspace-sync managed");
     expect(existsSync(join(proj, "aidlc.code-workspace"))).toBe(true);
     // The second one in its Windows spelling reads the same on every platform.
     const second = utility(["intent", "add-repo", "billing", "--path", billing.replaceAll("/", "\\")]);
     expect(second.rc, second.out).toBe(0);
-    expect(repos()).toEqual(["billing", "checkout-api"]);
+    expect(repos()).toEqual(["billing", "checkout-api", own()].sort());
     expect(second.out).toContain(`Added billing to this piece of work's repos. repos.json now lists billing at ${billing}.`);
-    expect(manifest().repos).toEqual([{ name: "checkout-api", path: api }, { name: "billing", path: billing }]);
+    expect(manifest().repos).toEqual([{ name: "checkout-api", path: api }, { name: own(), path: "." }, { name: "billing", path: billing }]);
     // The way on was followed once: the same add says it is done, never the refusal again.
     const again = utility(["intent", "add-repo", "checkout-api"]);
     expect(again.rc, again.out).toBe(0);
@@ -987,9 +1130,10 @@ describe("work that records no repos", () => {
     writeFileSync(join(proj, "repos.json"), `${JSON.stringify({ repos: [{ name: "checkout-api", path: api }] })}\n`);
     const r = utility(["intent", "add-repo", "checkout-api"]);
     expect(r.rc, r.out).toBe(0);
-    expect(repos()).toEqual(["checkout-api"]);
-    expect(r.out).toContain(`Added checkout-api (at ${api}) to this piece of work's repos;`);
+    expect(repos()).toEqual(["checkout-api", own()].sort());
+    expect(r.out).toContain(`Added checkout-api (at ${api}) to this piece of work's repos. The work still covers ${own()}, the workspace folder itself,`);
     expect(r.out).not.toContain("repos.json now lists");
+    expect(JSON.parse(readFileSync(join(proj, "repos.json"), "utf-8"))).toEqual({ repos: [{ name: "checkout-api", path: api }, { name: own(), path: "." }] });
   });
 
   test("a repo repos.json maps to the workspace folder itself changes nothing", () => {
@@ -1001,16 +1145,16 @@ describe("work that records no repos", () => {
     expect(audit()).not.toContain("INTENT_REPOS_CHANGED");
   });
 
-  test("the add's undo before Construction: removing it goes back to the workspace folder", () => {
+  test("the add's undo before Construction: removing it leaves the work on the workspace folder, which it records", () => {
     const api = besideRepo("checkout-api");
     expect(utility(["intent", "add-repo", "checkout-api", "--path", api]).rc).toBe(0);
     const r = utility(["intent", "remove-repo", "checkout-api"]);
     expect(r.rc, r.out).toBe(0);
-    expect(repos()).toEqual([]);
-    expect(r.out).toContain("Removed checkout-api from this piece of work's repos; it now works on the workspace folder itself.");
+    expect(repos()).toEqual([own()]);
+    expect(r.out).toContain("Removed checkout-api from this piece of work's repos. Its folder stays, and so does its line in repos.json");
     const none = utility(["intent", "remove-repo", "checkout-api"]);
     expect(none.rc, none.out).toBe(0);
-    expect(none.out).toContain("This piece of work records no repos: it works on the workspace folder itself. Nothing changed.");
+    expect(none.out).toContain(`checkout-api is not one of this piece of work's repos (${own()}); nothing changed.`);
   });
 
   test("a --path that is not a checkout, or that repos.json maps elsewhere: nothing is written", () => {
@@ -1033,8 +1177,8 @@ describe("work that records no repos", () => {
     const absolute = join(beside, "checkout-api").replaceAll("\\", "/");
     const r = utility(["intent", "add-repo", "checkout-api", "--path", absolute]);
     expect(r.rc, r.out).toBe(0);
-    expect(repos()).toEqual(["checkout-api"]);
-    expect(r.out).toContain("It is a path on this machine; on a computer that has it elsewhere, its path there goes in aidlc/repos.local.json.");
+    expect(repos()).toEqual(["checkout-api", own()].sort());
+    expect(r.out).toContain(`${absolute} is a path on this machine; on a computer that has checkout-api elsewhere, its path there goes in aidlc/repos.local.json.`);
   });
 
   test("set-repos: the first set before Construction; --all keeps the workspace folder and changes nothing", () => {

@@ -28023,6 +28023,8 @@ export function unitsRepoChange(
   // A row in the same second on another shard counts as after the approval.
   for (const row of sortAttemptEvents(events.filter((candidate) =>
     candidate.event === "INTENT_REPOS_CHANGED" && !attemptEventDefinitelyBefore(candidate, approval))).reverse()) {
+    // The workspace's own row: the work covered that folder before, so the Units' repos did not change by it.
+    if (auditBlockField(row.block, "Listed At") === ".") continue;
     for (const name of parseRefsList(auditBlockField(row.block, "Added") ?? "")) approved.delete(name);
     for (const name of parseRefsList(auditBlockField(row.block, "Removed") ?? "")) approved.add(name);
   }

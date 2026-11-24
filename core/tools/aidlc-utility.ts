@@ -9934,6 +9934,7 @@ function handleIntentRepos(
     : verb === "add-repo" && flags.path === undefined && !pathEntryExists(target)
     ? plannedRepoClone(projectDir, name, flags.url)
     : null;
+  const first = verb === "add-repo" ? workspaceBesideFirstRepo(projectDir, { dirName, space, recorded }, name, target, mapping, clone) : null;
   let staged: StagedWorkspaceRepo | null = null;
   if (clone !== null) {
     try {
@@ -9950,9 +9951,8 @@ function handleIntentRepos(
   }
   // A repos.json the add makes is noted by what it wrote, so the offer to list
   // the repos found here still knows it for the add's, never the person's.
-  const madeManifest = mapping !== null && mapping.raw === null ? mapping.next
-    : clone !== null && clone.manifest.raw === null ? clone.manifest.next
-    : null;
+  const written = first?.listing ?? mapping ?? clone?.manifest ?? null;
+  const madeManifest = written !== null && written.raw === null ? written.next : null;
   // A clone staged before the lock is discarded when the lock cannot be taken
   // (workspace-sync holds it for its whole reconcile), so its staging folder
   // is not left behind unsaid; a refusal inside ends the run as before.
@@ -9971,7 +9971,7 @@ function handleIntentRepos(
       staged = null;
     } else if (staged !== null && clone !== null) {
       try {
-        installWorkspaceRepo(projectDir, staged, clone.manifest);
+        installWorkspaceRepo(projectDir, staged, first?.listing ?? clone.manifest);
       } catch (err) {
         const code = (err as NodeJS.ErrnoException).code ?? "";
         die(
@@ -9982,9 +9982,10 @@ function handleIntentRepos(
       }
     }
     // A clone's install writes repos.json with it; one cloned there meanwhile only needs the entry.
-    if (mapping !== null && mapping.next !== null && staged === null) {
+    const listing = first?.listing ?? mapping;
+    if (listing !== null && listing.next !== null && staged === null) {
       try {
-        installWorkspaceManifest(projectDir, { raw: mapping.raw, next: mapping.next });
+        installWorkspaceManifest(projectDir, { raw: listing.raw, next: listing.next });
       } catch (err) {
         die(`Could not write repos.json for ${name}: ${maskUserinfo(errorMessage(err))}. Nothing was changed.`);
       }
@@ -10063,7 +10064,25 @@ function handleIntentRepos(
         dirName,
         space,
       );
-      row.repos = next;
+      // The workspace beside the first repo, recorded as an add of it at "." would record it.
+      const own = verb === "add-repo" && current.length === 0 && first !== null ? first.own : null;
+      const covered = own === null ? next : [...next, own].sort();
+      if (own !== null) {
+        appendAuditEntryUnlocked(
+          "INTENT_REPOS_CHANGED",
+          {
+            Stage: stage,
+            Added: own,
+            Repos: covered.join(", "),
+            "Listed At": ".",
+            ...repoBaselineAdditionField(projectDir, [own], dirName, space),
+          },
+          projectDir,
+          dirName,
+          space,
+        );
+      }
+      row.repos = covered;
       writeIntentRegistry(projectDir, list, space);
       const reAction = parseStateStageSuffixes(state).get("reverse-engineering") ??
         loadScopeMapping()[getField(state, "Scope") ?? ""]?.stages["reverse-engineering"];
@@ -10074,7 +10093,8 @@ function handleIntentRepos(
         units: build === null ? unitsRepoChangeAtChange(projectDir, state, stage, dirName, space) : null,
         unit: build?.unit,
         first: current.length === 0,
-        none: next.length === 0,
+        own,
+        none: covered.length === 0,
       };
     }, dirName, space);
   }));
@@ -10120,25 +10140,37 @@ function handleIntentRepos(
       break;
     case "changed":
       if (verb === "add-repo") {
+        const covers = outcome.own === null ? "" : ` The work still covers ${outcome.own}, the workspace folder itself, and repos.json lists both.`;
+        // What the first add's list holds for the new repo, by its subject.
+        const notes = outcome.own === null ? [] : [
+          ...(mapping?.onThisMachine
+            ? [`${mapping.shown} is a path on this machine; on a computer that has ${name} elsewhere, its path there goes in ${REPOS_LOCAL_PLACE}.`]
+            : []),
+          ...(mapping?.credentialLeftOut || clone?.credentialLeftOut || first?.credentialLeftOut
+            ? [`${name}'s address in repos.json leaves out the credential.`]
+            : []),
+        ];
         if (staged !== null && clone !== null) {
-          lines.push(`Cloned ${name} from ${maskUserinfo(clone.address)} and added it to this piece of work's repos.`);
-          sayNote(clone.note, clone.manifest);
+          lines.push(`Cloned ${name} from ${maskUserinfo(clone.address)} and added it to this piece of work's repos.${covers}`, ...notes);
+          if (outcome.own === null) sayNote(clone.note, clone.manifest);
         } else if (outcome.unit !== undefined) {
           lines.push(`Added ${name} to ${outcome.unit}'s repos: the lead's plan did not list it, so ${outcome.unit}'s record carries its address when you push.`);
         } else if (outcome.first) {
+          // Not listed beside it (no checkout of its own, or its name given another place): the work reads the new
+          // repo and the workspace's top-level files only, so nothing is said of the workspace folder.
           const at = repoIsWorkspaceChild(projectDir, name) ? "" : ` (at ${displayRepoPath(readWorkspaceRepos(projectDir).entries.get(name)?.path ?? name)})`;
-          lines.push(`Added ${name}${at} to this piece of work's repos; until now it worked on the workspace folder itself, which it still reads.`);
+          lines.push(`Added ${name}${at} to this piece of work's repos.${covers}`, ...notes);
         } else {
           lines.push(`Added ${name} to this piece of work's repos.`);
         }
-        if (mapping !== null) sayNote(mapping.note, mapping);
+        if (mapping !== null && outcome.own === null) sayNote(mapping.note, mapping);
         if (outcome.reState === "completed") {
           lines.push(`Reverse Engineering has not documented ${name} yet, so it and the stages that read the code knowledge may show as behind until you revisit them.`);
         } else if (outcome.reAction === "EXECUTE") {
           lines.push(`Reverse Engineering will cover ${name} when it runs.`);
         }
         if (outcome.units !== null) lines.push(outcome.units);
-        lines.push(!outcome.first ? "You can remove it again any time."
+        lines.push(!outcome.first || outcome.own !== null ? "You can remove it again any time."
           : hasRealGitEntry(projectDir) ? "You can remove it again before Construction starts."
           : "You can change which repos it covers any time.");
       } else {
@@ -10154,6 +10186,59 @@ function handleIntentRepos(
       break;
   }
   process.stdout.write([lines.join(" "), ...stagingLeftToSay(projectDir)].map((line) => `${line}\n`).join(""));
+}
+
+// The first repo added to work that kept its code in the workspace folder
+// itself (a checkout of its own, not a Unit's build; the add is refused once
+// Construction has started) is listed with the workspace at ".", under the name
+// its code knowledge already has (codekbRepoName before the add), so the work
+// records both and still covers its own code. An entry the lists already have
+// for the workspace is kept with its name; that name given to another place
+// leaves the add as it was. The new repo's entry is the add's own (`mapping`,
+// `clone`), else, for a checkout inside the workspace no list names, a child
+// with its origin's address, and for a clone from an address no list is
+// written for, its entry as given less any credential.
+function workspaceBesideFirstRepo(
+  projectDir: string,
+  work: { dirName: string; space: string; recorded: readonly string[] },
+  name: string,
+  target: string,
+  mapping: { raw: string | null; next: string | null } | null,
+  clone: { address: string; manifest: { raw: string | null; next: string | null } } | null,
+): { own: string; listing: { raw: string | null; next: string | null }; credentialLeftOut: boolean } | null {
+  if (work.recorded.length > 0 || !hasRealGitEntry(projectDir) || sameDirectory(target, projectDir)) return null;
+  if (unitBuildOf(readStateFile(projectDir, work.dirName, work.space)) !== null) return null;
+  const repos = readWorkspaceRepos(projectDir);
+  if (repos.error !== undefined) return null;
+  const kept = [...repos.entries.keys()].find((listed) => repoIsWorkspace(projectDir, listed));
+  const own = kept ?? codekbRepoName(projectDir, work.space, work.dirName);
+  if (kept === undefined && (own === name || repos.entries.has(own))) return null;
+  const written = mapping ?? clone?.manifest ?? null;
+  const file = reposManifestPath(projectDir);
+  const raw = written?.raw ?? (existsSync(file) ? readFileSync(file, "utf-8") : null);
+  let next = written?.next ?? null;
+  let entry: WorkspaceRepoEntry | null = null;
+  let credentialLeftOut = false;
+  if (clone !== null && mapping === null && written!.raw === null && written!.next === null) {
+    entry = { name, url: withoutCredentials(clone.address) };
+    credentialLeftOut = entry.url !== clone.address;
+  } else if (written === null && !repos.entries.has(name)) {
+    if (!isGitRepoDir(target)) return null;
+    const origin = originUrl(target);
+    entry = origin === null ? { name } : { name, url: withoutCredentials(origin) };
+    credentialLeftOut = origin !== null && entry.url !== origin;
+  }
+  // A list with no repos list to add to is left to the add's own refusal.
+  if (entry !== null) {
+    next = workspaceManifestWith(next ?? raw, entry);
+    if (next === null) return null;
+  }
+  if (kept === undefined) {
+    const address = originUrl(projectDir);
+    next = workspaceManifestWith(next ?? raw, { name: own, path: ".", ...(address === null ? {} : { url: withoutCredentials(address) }) });
+    if (next === null) return null;
+  }
+  return { own, listing: { raw, next }, credentialLeftOut };
 }
 
 // The way on for work that keeps its code in the workspace folder itself once
@@ -10193,7 +10278,16 @@ function plannedRepoPath(
   next: string | null;
   note: string;
   shown: string;
-  clone: { repo: WorkspaceRepoEntry; address: string; manifest: { raw: string | null; next: string | null }; note: null } | null;
+  // The entry's path is one on this machine; its address lost a credential.
+  onThisMachine: boolean;
+  credentialLeftOut: boolean;
+  clone: {
+    repo: WorkspaceRepoEntry;
+    address: string;
+    manifest: { raw: string | null; next: string | null };
+    note: null;
+    credentialLeftOut: boolean;
+  } | null;
 } {
   const shown = displayRepoPath(typed);
   const dir = mappedRepoDir(projectDir, typed);
@@ -10201,7 +10295,9 @@ function plannedRepoPath(
   if (repos.error !== undefined) die(`${name} could not be added: ${repos.error} Nothing was changed.`);
   const listed = repos.entries.get(name);
   if (listed !== undefined) {
-    if (resolve(repoDir(projectDir, name)) === resolve(dir)) return { raw: null, next: null, note: "", shown, clone: null };
+    if (resolve(repoDir(projectDir, name)) === resolve(dir)) {
+      return { raw: null, next: null, note: "", shown, onThisMachine: false, credentialLeftOut: false, clone: null };
+    }
     const source = repos.pathSource.get(name) ?? "repos.json";
     die(
       `intent add-repo refused: ${source} puts ${name} at ${displayRepoPath(listed.path ?? name)}, not ${shown}. ` +
@@ -10225,21 +10321,24 @@ function plannedRepoPath(
   const next = workspaceManifestWith(raw, { name, path: shown, ...(kept === undefined ? {} : { url: kept }) });
   if (next === null) die(`${name} could not be added to repos.json, which has no repos list. Nothing was changed.`);
   // Its commit is offered at the next look (reposCommitOffer), never asked of the person here.
-  const share = isAbsolute(shown) || /^[A-Za-z]:\//.test(shown)
-    ? ` It is a path on this machine; on a computer that has it elsewhere, its path there goes in ${REPOS_LOCAL_PLACE}.`
-    : "";
-  const stripped = kept !== address ? " Its address there leaves out the credential." : "";
+  const onThisMachine = isAbsolute(shown) || /^[A-Za-z]:\//.test(shown);
+  const share = onThisMachine ? ` It is a path on this machine; on a computer that has it elsewhere, its path there goes in ${REPOS_LOCAL_PLACE}.` : "";
+  const credentialLeftOut = kept !== address;
+  const stripped = credentialLeftOut ? " Its address there leaves out the credential." : "";
   const where = resolve(dir) === resolve(projectDir) ? "as the workspace folder itself" : `at ${shown}`;
   return {
     raw,
     next,
     shown,
     note: `${raw === null ? "repos.json is new: it lists" : "repos.json now lists"} ${name} ${where}.${share}${stripped}`,
+    onThisMachine,
+    credentialLeftOut,
     clone: there ? null : {
       repo: { name, path: shown, url: url! },
       address: url!,
       manifest: { raw, next },
       note: null,
+      credentialLeftOut,
     },
   };
 }
@@ -10299,7 +10398,13 @@ function plannedRepoClone(
   projectDir: string,
   name: string,
   url: string | undefined,
-): { repo: WorkspaceRepoEntry; address: string; manifest: { raw: string | null; next: string | null }; note: string | null } {
+): {
+  repo: WorkspaceRepoEntry;
+  address: string;
+  manifest: { raw: string | null; next: string | null };
+  note: string | null;
+  credentialLeftOut: boolean;
+} {
   if (placeOfAnotherComputer(projectDir, name)) die(`${repoNotThereLine(projectDir, name)} Nothing was changed.`);
   const path = reposManifestPath(projectDir);
   const raw = existsSync(path) ? readFileSync(path, "utf-8") : null;
@@ -10321,7 +10426,7 @@ function plannedRepoClone(
           `add its "url" in repos.json, or in ${REPOS_LOCAL_PLACE} for your own copy, or give it with --url. Nothing was changed.`,
       );
     }
-    return { repo, address, manifest: { raw, next: null }, note: null };
+    return { repo, address, manifest: { raw, next: null }, note: null, credentialLeftOut: false };
   }
   if (url === undefined) {
     die(
@@ -10337,7 +10442,7 @@ function plannedRepoClone(
   if (manifest !== null) {
     const next = workspaceManifestWith(raw, written);
     if (next === null) die(`${name} could not be added to repos.json, which has no repos list. Nothing was changed.`);
-    return { repo, address: url, manifest: { raw, next }, note: `repos.json now lists it.${stripped}` };
+    return { repo, address: url, manifest: { raw, next }, note: `repos.json now lists it.${stripped}`, credentialLeftOut: kept !== url };
   }
   if (hostedAddressOwner(url) === null) {
     return {
@@ -10345,6 +10450,7 @@ function plannedRepoClone(
       address: url,
       manifest: { raw: null, next: null },
       note: "This workspace has no repos.json, so a teammate's workspace does not get it by itself.",
+      credentialLeftOut: false,
     };
   }
   return {
@@ -10352,6 +10458,7 @@ function plannedRepoClone(
     address: url,
     manifest: { raw: null, next: workspaceManifestWith(null, written) },
     note: `repos.json is new: it lists ${name}.${stripped}`,
+    credentialLeftOut: kept !== url,
   };
 }
 
