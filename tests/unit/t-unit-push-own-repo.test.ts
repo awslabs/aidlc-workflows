@@ -277,6 +277,65 @@ describe("a Unit on the workspace's own repository", () => {
     expect(step.kind === "run-stage" || step.ask_type === "plan-approval", JSON.stringify(step).slice(0, 800)).toBe(true);
   });
 
+  // The push question says, before the yes, what its commit carries: the
+  // Unit's files, then AI-DLC's record of it in a commit of its own, with the
+  // team's new space as it is when git has none of that space yet.
+  const choiceDetail = (alice: string, label: string): string => {
+    const ask = next(alice);
+    expect(ask.ask_type, JSON.stringify(ask).slice(0, 800)).toBe("unit-push");
+    const choice = (ask.choices as Array<{ label: string; detail?: string }>).find((entry) => entry.label === label);
+    expect(choice, JSON.stringify(ask.choices)).toBeDefined();
+    return String(choice?.detail);
+  };
+  const NEW_SPACE = "AI-DLC's record of refunds in a commit of its own, with your team's new space payments as it is now " +
+    "(its codekb, knowledge and memory folders)";
+  // A team's new space as a team keeps it: a document of its own beside its memory.
+  const teamsDocument = (alice: string): void => {
+    mkdirSync(join(alice, "aidlc", "spaces", "payments", "knowledge"), { recursive: true });
+    writeFileSync(join(alice, "aidlc", "spaces", "payments", "knowledge", "pricing.md"), "# Pricing\n\nOur rules.\n");
+  };
+
+  test("the push question in a space git already has: the Unit's files, then AI-DLC's record in a commit of its own", () => {
+    const home = oneRepoTeams();
+    const alice = cloneOf(home.remote, "alice");
+    const record = builtHere(alice, "refunds", "refunds.ts", "default");
+    finishBuild(record);
+    expect(choiceDetail(alice, "Push")).toBe(
+      "Only the files its Code Generation wrote, then AI-DLC's record of refunds in a commit of its own; nothing else of yours is committed.",
+    );
+  });
+
+  test("the push question in a team's new space: the record goes with the space as it is now, named by its folders", () => {
+    const home = oneRepoTeams();
+    const alice = cloneOf(home.remote, "alice");
+    const record = builtHere(alice, "refunds", "refunds.ts");
+    teamsDocument(alice);
+    finishBuild(record);
+    expect(choiceDetail(alice, "Push")).toBe(`Only the files its Code Generation wrote, then ${NEW_SPACE}; nothing else of yours is committed.`);
+  });
+
+  test("the push question with a merge to finish on the Unit's branch, in a team's new space: the merge, the files, and the record with the space", () => {
+    const home = oneRepoTeams();
+    const alice = cloneOf(home.remote, "alice");
+    const record = builtHere(alice, "refunds", "refunds.ts");
+    teamsDocument(alice);
+    finishBuild(record);
+    // A merge left resolved but not committed on the Unit's branch.
+    git(alice, ["switch", "-q", "-c", "refunds"]);
+    writeFileSync(join(alice, "NOTES.md"), "theirs\n");
+    git(alice, ["add", "NOTES.md"]);
+    git(alice, ["commit", "-q", "-m", "theirs"]);
+    git(alice, ["switch", "-q", "-c", "side", "main"]);
+    writeFileSync(join(alice, "SIDE.md"), "side\n");
+    git(alice, ["add", "SIDE.md"]);
+    git(alice, ["commit", "-q", "-m", "side"]);
+    git(alice, ["switch", "-q", "refunds"]);
+    git(alice, ["merge", "--no-commit", "--no-ff", "side"]);
+    expect(choiceDetail(alice, "Finish the merge and push")).toBe(
+      `The merge is finished first, with your git; then only the files its Code Generation wrote, and ${NEW_SPACE}; nothing else of yours.`,
+    );
+  });
+
   // A project that keeps aidlc/ out of git: AI-DLC's record of a Unit has no commit to go in, so the push question
   // promises none, and the push makes only the Unit's own commit.
   test("a project that keeps aidlc/ out of git: the push promises no record commit and makes none", () => {
@@ -1561,6 +1620,53 @@ describe("a Unit on the workspace's own repository", () => {
     expect(git(home.remote, ["log", "--format=%s", "main..refunds"]).split("\n")).toEqual(["refunds: AI-DLC's record", "refunds: fixture"]);
     expect(git(alice, ["rev-parse", "main"])).toBe(mainBefore);
     expect(git(alice, ["branch", "--show-current"])).toBe("refunds");
+  });
+
+  // Send it again commits AI-DLC's record once the result is taken, so its
+  // choice says so, never that nothing new is committed.
+  const sendAgain = (alice: string, chat: NodeJS.ProcessEnv, session: string): { detail: string; repo: string } => {
+    expect(hook(alice, chat, { hook_event_name: "UserPromptSubmit", session_id: session, prompt: "/aidlc" }).status).toBe(0);
+    const ask = next(alice, chat);
+    const choices = (ask.choices ?? []) as Array<{ label: string; detail?: string }>;
+    const again = choices.find((choice) => choice.label === "Send it again");
+    expect(again, JSON.stringify(ask).slice(0, 1200)).toBeDefined();
+    const repo = /^Its record in (.+) has no result until you send it\.$/.exec(String(choices.find((choice) => choice.label === "Not now")?.detail))?.[1];
+    expect(repo, JSON.stringify(choices)).toBeDefined();
+    return { detail: String(again?.detail), repo: repo! };
+  };
+
+  test("Send it again while the record waits for the result, in a team's new space: the record goes once it is taken, with the space", () => {
+    const home = oneRepoTeams();
+    const alice = cloneOf(home.remote, "alice");
+    const record = builtHere(alice, "refunds", "refunds.ts");
+    teamsDocument(alice);
+    approvedForItsPush(record);
+    hostTakesOnlyTheBranch(home.remote);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    const { detail, repo } = sendAgain(alice, { ...ENV, AIDLC_SESSION_OVERRIDE: "chat-waits" }, "chat-waits");
+    expect(detail).toBe(`The result is sent to ${repo} again; once ${repo} takes it, ${NEW_SPACE.replace("in a commit", "goes in a commit")}.`);
+  });
+
+  // Send it again after an earlier record commit: the first push made AI-DLC's
+  // record commit and its result was not taken; a send that is taken makes a
+  // record commit again, as the record changed since.
+  test("Send it again after an earlier record commit: its choice says the record goes again, and it does", () => {
+    const home = oneRepoTeams();
+    const theirs = hostRefusesTheirAidlcRefs(home.remote);
+    const alice = cloneOf(home.remote, "alice");
+    const record = builtHere(alice, "refunds", "refunds.ts");
+    approvedForItsPush(record);
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(String(pushed.json?.notice)).toContain(recordWent("refunds"));
+    rmSync(theirs);
+    const chat = { ...ENV, AIDLC_SESSION_OVERRIDE: "chat-again" };
+    const { detail, repo } = sendAgain(alice, chat, "chat-again");
+    expect(detail).toBe(`The result is sent to ${repo} again; once ${repo} takes it, AI-DLC's record of refunds goes in a commit of its own.`);
+    const sent = run(UNIT, ["push"], alice, chat);
+    expect(sent.status, sent.out).toBe(0);
+    expect(git(home.remote, ["log", "--format=%s", "main..refunds"]).split("\n").filter((line) => line === "refunds: AI-DLC's record").length)
+      .toBeGreaterThan(1);
   });
 
   // Their host refuses this teammate's pushes of AI-DLC's own refs while the rule's file is there; the hook runs in

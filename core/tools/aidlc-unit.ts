@@ -13634,7 +13634,7 @@ export function submoduleOverOwnCode(projectDir: string, unit: string): string |
 // reaches the repository with the lead's own request: never a team's new space,
 // whatever this checkout's HEAD has of it yet (a clone made before that request
 // merged).
-function buildRecordPaths(pd: string): string[] {
+export function buildRecordPaths(pd: string): string[] {
   const own = relative(pd, activeRecordDir(pd)).split(sep).join("/");
   const kept = (paths: string[]): string[] => {
     const ignored = untrackedIgnored(pd, paths);

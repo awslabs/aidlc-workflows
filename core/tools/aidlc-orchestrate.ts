@@ -720,6 +720,7 @@ import {
   takeAside,
   resendQuestion,
   buildRecordRepo,
+  buildRecordPaths,
   lastCodePush,
   unitDefaultMessage,
   commitMessageFile,
@@ -10986,6 +10987,16 @@ function unitPushAsk(projectDir: string, stateContent: string | null): AskDirect
   }
   if (!unitPushToOffer(projectDir, stateContent)) return null;
   const unitTool = aidlcToolInvocation("unit");
+  const manifest = readUnitSourceManifest(projectDir, "code-generation", unit);
+  // Code in the project's own repo under work that records only a submodule
+  // of it (submoduleOverOwnCode): the push goes from the project's repo once
+  // the person takes the submodule off, so the question names that repo.
+  const own = submoduleOverOwnCode(projectDir, unit) === null ? null
+    : readUnitSourceManifest(projectDir, "code-generation", unit, { recordedRepos: [] });
+  const targets = own?.ok ? new Map([[".", { dir: projectDir, paths: own.manifest.writes.map((write) => write.path) }]])
+    : manifest.ok ? unitWriteTargets(projectDir, manifest.manifest.writes)
+    : new Map<string, { dir: string; paths: string[] }>();
+  const record = recordCommitSaid(projectDir, targets.has("."));
   if (push === "unsent") {
     const repo = buildRecordRepo(projectDir, build);
     const held = resendHeld(projectDir, stateContent, unit, repo);
@@ -10997,20 +11008,16 @@ function unitPushAsk(projectDir: string, stateContent: string | null): AskDirect
       response_route: "command",
       question: resendQuestion(unit, repo),
       choices: [
-        { label: "Send it again", detail: `Nothing new is committed; the result goes to ${unit}'s record in ${repo}.`, command: `${unitTool} push` },
+        {
+          label: "Send it again",
+          detail: record === null ? `Nothing new is committed; the result goes to ${unit}'s record in ${repo}.`
+            : `The result is sent to ${repo} again; once ${repo} takes it, AI-DLC's record of ${unit} goes in a commit of its own${record.space}.`,
+          command: `${unitTool} push`,
+        },
         { label: "Not now", detail: `Its record in ${repo} has no result until you send it.`, command: `${unitTool} push --later` },
       ],
     };
   }
-  const manifest = readUnitSourceManifest(projectDir, "code-generation", unit);
-  // Code in the project's own repo under work that records only a submodule
-  // of it (submoduleOverOwnCode): the push goes from the project's repo once
-  // the person takes the submodule off, so the question names that repo.
-  const own = submoduleOverOwnCode(projectDir, unit) === null ? null
-    : readUnitSourceManifest(projectDir, "code-generation", unit, { recordedRepos: [] });
-  const targets = own?.ok ? new Map([[".", { dir: projectDir, paths: own.manifest.writes.map((write) => write.path) }]])
-    : manifest.ok ? unitWriteTargets(projectDir, manifest.manifest.writes)
-    : new Map<string, { dir: string; paths: string[] }>();
   const byRepo = new Map([...targets].map(([repo, target]) => [repo, target.paths]));
   const repos = [...byRepo.keys()];
   const dirOf = (repo: string): string => targets.get(repo)?.dir ?? (repo === "." ? projectDir : repoDir(projectDir, repo));
@@ -11051,8 +11058,10 @@ function unitPushAsk(projectDir: string, stateContent: string | null): AskDirect
   const pick = pushRemotesToPick(projectDir, branch, repos);
   const finishing = toFinish.length > 0;
   const detail = finishing
-    ? "The merge is finished first, with your git; then only the files its Code Generation wrote, nothing else of yours."
-    : "Only the files its Code Generation wrote; nothing else of yours is committed.";
+    ? "The merge is finished first, with your git; then only the files its Code Generation wrote" +
+      `${record === null ? "," : `, and AI-DLC's record of ${unit} in a commit of its own${record.space};`} nothing else of yours.`
+    : `Only the files its Code Generation wrote${record === null ? "" : `, then AI-DLC's record of ${unit} in a commit of its own${record.space}`}; ` +
+      "nothing else of yours is committed.";
   const verb = finishing ? "Finish the merge and push" : "Push";
   const finishFlag = `${finishing ? " --finish-merge" : ""}${ownBranch !== null ? ` --branch ${shellArg(ownBranch)}` : ""}`;
   const pushes = pick.length === 0
@@ -11079,6 +11088,22 @@ function unitPushAsk(projectDir: string, stateContent: string | null): AskDirect
       { label: "Not now", detail: "Nothing is pushed until you want it to be.", command: `${unitTool} push --later` },
     ],
     ...(message.file === undefined ? {} : { commit_message_file: message.file }),
+  };
+}
+
+// Whether a push's yes commits AI-DLC's record, as its choices say it: null
+// where the push holds no repo that is the workspace's own (`dot`) or git keeps
+// none of the record (buildRecordPaths, the record step's own list); else what
+// the record commit carries beyond the build's own folder: the team's new space
+// by its folders while git has none of it, said after the record.
+function recordCommitSaid(projectDir: string, dot: boolean): { space: string } | null {
+  const paths = dot ? buildRecordPaths(projectDir) : [];
+  if (paths.length === 0) return null;
+  // The space's own folders are aidlc/spaces/<space>/<folder>; the build's record is deeper.
+  const folders = paths.map((path) => path.split("/")).filter((parts) => parts.length === 4);
+  return {
+    space: folders.length === 0 ? ""
+      : `, with your team's new space ${folders[0][2]} as it is now (its ${joinRepoNames(folders.map((parts) => parts[3]).sort())} folders)`,
   };
 }
 
