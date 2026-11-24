@@ -7,19 +7,21 @@ import {
 } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, sep } from "node:path";
 import {
   artifactFilename,
   parseStageFrontmatter,
   producesArtifactFile,
+  writeRecordedSourceCheckouts,
 } from "../../core/tools/aidlc-lib.ts";
 import {
   cleanupTestProject,
   createTestProject,
   seededRecordDir,
   seededStateFile,
+  seedWorkspaceShell,
 } from "../harness/fixtures.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -2547,5 +2549,116 @@ describe("t281 the table the tool starts (--write-upstream)", () => {
     });
     expect(spawned.status).toBe(1);
     expect(spawned.stderr).toContain("--stage is required");
+  });
+});
+
+// A repository beside the project that the work records for its review
+// (`intent add-checkout ../shop-web`): a Code Generation target there is
+// followed to its file by its path from the project or by the listing name the
+// source listing gives it (`shop-web@checkout/<path>`). A target outside the
+// project and every recorded checkout, and every target in a clone with no such
+// record, keeps its finding.
+describe("t281 a checkout recorded for the work's review", () => {
+  // The shop project with its web repository beside it, recorded through the
+  // record's one writer, in the shape `intent add-checkout ../shop-web` writes.
+  function shop(recorded = true): { proj: string; web: string } {
+    const base = realpathSync(mkdtempSync(join(process.env.TMPDIR || tmpdir(), "t281-shop-")));
+    projects.push(base);
+    const proj = join(base, "shop");
+    mkdirSync(proj);
+    seedWorkspaceShell(proj);
+    mkdirSync(join(seededStateFile(proj), ".."), { recursive: true });
+    writeFileSync(seededStateFile(proj), "# State\n");
+    const web = join(base, "shop-web");
+    mkdirSync(join(web, "test"), { recursive: true });
+    writeFileSync(join(web, "app.js"), "export const app = 1;\n");
+    writeFileSync(join(web, "test", "app.test.js"), "// app\n");
+    // Beside both folders: a listing name that climbs out of its checkout must not reach it.
+    writeFileSync(join(base, "app.js"), "export const outside = 1;\n");
+    if (recorded) writeRecordedSourceCheckouts(proj, [{ label: "shop-web", path: "../shop-web", real: web }]);
+    return { proj, web };
+  }
+
+  function unitTable(proj: string, targets: string[]): string {
+    seedUserStories(proj);
+    seedUnits(proj);
+    const ids = targets.map((_, n) => `AC1.1.${n + 1}`);
+    return trace(proj, "construction/u1-auth/code-generation/traceability.json", {
+      upstream_ids: ids,
+      coverage: targets.map((target, n) => ({ id: ids[n], status: "OK", target })),
+    });
+  }
+
+  test("a file there is found by its path from the project and by its listing name", () => {
+    const { proj } = shop();
+    const out = run(proj, "code-generation", unitTable(proj, [
+      "../shop-web/app.js",
+      "shop-web@checkout/app.js",
+      "../shop-web/test/app.test.js",
+      "shop-web@checkout/test/app.test.js",
+    ]));
+    expect(out.result.invalid_targets).toEqual([]);
+  });
+
+  test("a missing file there is said not to exist, by either spelling", () => {
+    const { proj } = shop();
+    const out = run(proj, "code-generation", unitTable(proj, ["../shop-web/missing.js", "shop-web@checkout/missing.js"]));
+    expect(out.result.invalid_targets).toEqual([
+      "AC1.1.1: target file does not exist: ../shop-web/missing.js",
+      "AC1.1.2: target file does not exist: shop-web@checkout/missing.js",
+    ]);
+  });
+
+  test("a target that is no recorded checkout's file keeps its finding", () => {
+    const { proj, web } = shop();
+    const out = run(proj, "code-generation", unitTable(proj, [
+      "../elsewhere/app.js",
+      join(web, "app.js"),
+      "shop-api@checkout/app.js",
+      "shop-web@checkout/../app.js",
+      "shop-web@checkout//etc/app.js",
+    ]));
+    expect(out.result.invalid_targets).toEqual([
+      "AC1.1.1: target escapes the project directory",
+      "AC1.1.2: target must be a workspace-relative file path",
+      "AC1.1.3: target file does not exist: shop-api@checkout/app.js",
+      "AC1.1.4: target file does not exist: shop-web@checkout/../app.js",
+      "AC1.1.5: target file does not exist: shop-web@checkout//etc/app.js",
+    ]);
+  });
+
+  test("with no record, as in a teammate's clone, both spellings read as before", () => {
+    const { proj } = shop(false);
+    const out = run(proj, "code-generation", unitTable(proj, ["../shop-web/app.js", "shop-web@checkout/app.js"]));
+    expect(out.result.invalid_targets).toEqual([
+      "AC1.1.1: target escapes the project directory",
+      "AC1.1.2: target file does not exist: shop-web@checkout/app.js",
+    ]);
+  });
+
+  test("at Build and Test a requirement built there is built", () => {
+    const { proj } = shop();
+    writeRequirements(proj, "# Requirements\n\n## Functional\n- FR1 Wishlist\n- FR2 Wishlist count\n");
+    trace(proj, "construction/code-generation/traceability.json", {
+      stage: "code-generation",
+      upstream_ids: ["FR1", "FR2"],
+      coverage: [
+        { id: "FR1", status: "OK", target: "../shop-web/app.js" },
+        { id: "FR2", status: "OK", target: "shop-web@checkout/app.js" },
+      ],
+    });
+    const spawned = spawnSync("bun", [SCRIPT, "--stage", "build-and-test"], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      encoding: "utf-8",
+      cwd: proj,
+      env: { ...process.env, AIDLC_PROJECT_DIR: proj },
+    });
+    expect(spawned.status, spawned.stderr).toBe(0);
+    const out = JSON.parse(spawned.stdout) as { pass: boolean; reason?: string; coverage: Array<Record<string, unknown>> };
+    expect(out.reason).toBeUndefined();
+    expect(out.coverage).toEqual([
+      { id: "FR1", covered: true, built_in: ["code-generation: ../shop-web/app.js"] },
+      { id: "FR2", covered: true, built_in: ["code-generation: shop-web@checkout/app.js"] },
+    ]);
   });
 });

@@ -48,6 +48,7 @@ import {
 import { tmpdir } from "node:os";
 import { basename, delimiter, dirname, join, relative } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { resolveAction } from "../../core/tools/aidlc.ts";
 import { parseWorkspaceManifest } from "../../core/tools/aidlc-workspace-manifest.ts";
 import { maskUserinfo, renameRetryingOnWindows } from "../../core/tools/aidlc-workspace-sync.ts";
 
@@ -1979,5 +1980,164 @@ describe("t255 workspace-sync - another writer at the moment of install", () => 
     expect(result.status, result.out).toBe(1);
     expect(result.out).toContain("repos.json is not valid JSON");
     expect(readdirSync(ws).sort()).toEqual(["checkout-api", "checkout-web", "repos.json"]);
+  });
+});
+
+// An agent asks a tool for its usage out of habit: `--help`, a guessed
+// `--dry-run` or `status`, or a mistyped flag must never run the sync. Each
+// case uses a workspace whose repos.json lists a repo on a local bare remote, so a sync
+// would clone it and write .gitignore and aidlc.code-workspace: anything but a
+// sync leaves only repos.json.
+describe("t255 workspace-sync - its own flags", () => {
+  const USAGE_TAIL = " system workspace-sync [--force] [--project-dir <path>]";
+
+  function workspaceASyncWouldChange(): string {
+    const sourceWs = freshRealWorkspace('{ "org": "acme", "repos": [] }');
+    const remote = git(makeRepo(sourceWs, "source"), "remote", "get-url", "origin");
+    return freshRealWorkspace(
+      JSON.stringify({ org: "acme", repos: [{ name: "checkout-api", url: remote }] }),
+    );
+  }
+
+  function runTool(args: string[], cwd: string): { status: number; stdout: string; stderr: string } {
+    const r = spawnSync(BUN, [SCRIPT, ...args], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      cwd,
+      encoding: "utf-8",
+      env: GIT_ENV,
+    });
+    return { status: r.status ?? -1, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
+  }
+
+  for (const help of ["--help", "-h", "help"]) {
+    test(`${help} prints the usage and changes nothing`, () => {
+      const ws = workspaceASyncWouldChange();
+      const result = runTool(["--project-dir", ws, help], ws);
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      const lines = result.stdout.trimEnd().split("\n");
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toStartWith("usage: ");
+      expect(lines[0]).toEndWith(USAGE_TAIL);
+      expect(result.stderr).toBe("");
+      expect(readdirSync(ws)).toEqual(["repos.json"]);
+    });
+  }
+
+  // A word is refused as a flag is, quoted as typed; `/?` is the Windows help
+  // habit, and a folder typed without --project-dir keeps its backslashes.
+  for (const [token, named] of [
+    ["--dry-run", "--dry-run"],
+    ["--forse", "--forse"],
+    ["status", '"status"'],
+    ["/?", '"/?"'],
+    ["C:\\work\\shop", '"C:\\work\\shop"'],
+  ]) {
+    test(`${token}, which it does not take, is refused by name and changes nothing`, () => {
+      const ws = workspaceASyncWouldChange();
+      const result = runTool(["--project-dir", ws, token], ws);
+      expect(result.status, result.stdout + result.stderr).toBe(1);
+      const lines = result.stderr.trimEnd().split("\n");
+      expect(lines).toHaveLength(2);
+      expect(lines[0]).toBe(`✗ workspace-sync does not take ${named}; nothing was changed`);
+      expect(lines[1]).toStartWith("usage: ");
+      expect(lines[1]).toEndWith(USAGE_TAIL);
+      expect(result.stdout).toBe("");
+      expect(readdirSync(ws)).toEqual(["repos.json"]);
+    });
+  }
+
+  test("a made-up flag with a value is refused by its name alone, and the value is never printed", () => {
+    const ws = workspaceASyncWouldChange();
+    const result = runTool(["--project-dir", ws, "--api-token=sk-not-a-real-value"], ws);
+    expect(result.status, result.stdout + result.stderr).toBe(1);
+    expect(result.stderr.split("\n")[0]).toBe("✗ workspace-sync does not take --api-token=; nothing was changed");
+    expect(result.stdout + result.stderr).not.toContain("sk-not-a-real-value");
+    expect(readdirSync(ws)).toEqual(["repos.json"]);
+  });
+
+  // A token whose own text ends in `=`, as a padded one does, is hidden before
+  // the name is cut at its first `=`.
+  for (const token of ["sk-not-a-real-token", "not-a-real-token=="]) {
+    test(`an address typed as a word is refused with its userinfo (${token}) hidden, as everything the sync prints`, () => {
+      const ws = workspaceASyncWouldChange();
+      const result = runTool(["--project-dir", ws, `https://someone:${token}@example.com/org/repo.git`], ws);
+      expect(result.status, result.stdout + result.stderr).toBe(1);
+      expect(result.stderr.split("\n")[0]).toBe(
+        '✗ workspace-sync does not take "https://***@example.com/org/repo.git"; nothing was changed',
+      );
+      expect(result.stdout + result.stderr).not.toContain(token.replace(/=+$/, ""));
+      expect(readdirSync(ws)).toEqual(["repos.json"]);
+    });
+  }
+
+  test("--help beside a flag it does not take prints the usage", () => {
+    const ws = workspaceASyncWouldChange();
+    const result = runTool(["--forse", "--help", "--project-dir", ws], ws);
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout.trimEnd()).toEndWith(USAGE_TAIL);
+    expect(readdirSync(ws)).toEqual(["repos.json"]);
+  });
+
+  test("--help or -h after another flag and before -- prints the usage; after -- it is not read", () => {
+    for (const help of ["--help", "-h"]) {
+      const ws = workspaceASyncWouldChange();
+      const result = runTool(["--project-dir", ws, "--force", help, "--", "--dry-run"], ws);
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      expect(result.stdout.trimEnd()).toEndWith(USAGE_TAIL);
+      expect(readdirSync(ws)).toEqual(["repos.json"]);
+
+      const after = workspaceASyncWouldChange();
+      const synced = runSync(after, ["--force", "--", help]);
+      expect(synced.status, synced.out).toBe(0);
+      expect(existsSync(join(after, "checkout-api", ".git"))).toBe(true);
+    }
+  });
+
+  test("a plain sync through the dispatcher, with the dispatcher's own flags handed on, still runs", () => {
+    for (const line of [
+      ["system", "workspace-sync", "--quiet"],
+      ["--json", "system", "workspace-sync", "--force"],
+    ]) {
+      const ws = workspaceASyncWouldChange();
+      const action = resolveAction([...line, "--project-dir", ws]);
+      if (action.type !== "delegate") throw new Error(`${line.join(" ")}: ${JSON.stringify(action)}`);
+      expect(action.tool).toBe("aidlc-workspace-sync.ts");
+      const result = runTool(action.args, ws);
+      expect(result.status, `${action.args.join(" ")}\n${result.stdout}${result.stderr}`).toBe(0);
+      expect(existsSync(join(ws, "checkout-api", ".git"))).toBe(true);
+    }
+  });
+
+  test("every flag the launcher hands on is taken, and the sync runs", () => {
+    const ws = workspaceASyncWouldChange();
+    const result = runSync(ws, ["--quiet", "--json", "--no-color", "--yes", "--verbose"]);
+    expect(result.status, result.out).toBe(0);
+    expect(existsSync(join(ws, "checkout-api", ".git"))).toBe(true);
+  });
+
+  // The launcher refuses --offline for this command before it reaches the
+  // tool, so a direct run with it is refused as a flag the tool does not take.
+  test("the tool run directly with --offline is refused and clones nothing", () => {
+    const ws = workspaceASyncWouldChange();
+    const result = runTool(["--project-dir", ws, "--offline"], ws);
+    expect(result.status, result.stdout + result.stderr).toBe(1);
+    const lines = result.stderr.trimEnd().split("\n");
+    expect(lines[0]).toBe("✗ workspace-sync does not take --offline; nothing was changed");
+    expect(lines[1]).toEndWith(USAGE_TAIL);
+    expect(readdirSync(ws)).toEqual(["repos.json"]);
+  });
+
+  test("nothing after -- is read, so the sync runs", () => {
+    const ws = workspaceASyncWouldChange();
+    const result = runSync(ws, ["--", "--dry-run"]);
+    expect(result.status, result.out).toBe(0);
+    expect(existsSync(join(ws, "checkout-api", ".git"))).toBe(true);
+  });
+
+  test("an empty argument, as a script hands on an empty quoted variable, is passed over and the sync runs", () => {
+    const ws = workspaceASyncWouldChange();
+    const result = runSync(ws, ["", "--force"]);
+    expect(result.status, result.out).toBe(0);
+    expect(existsSync(join(ws, "checkout-api", ".git"))).toBe(true);
   });
 });

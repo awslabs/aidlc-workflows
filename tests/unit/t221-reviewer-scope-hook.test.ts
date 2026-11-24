@@ -24,9 +24,9 @@ import {
   NATIVE_STARTUP_TIMEOUT_MS,
   remainingOperationTimeoutMs,
 } from "../harness/test-budget.ts";
-import { describe, expect, test, setDefaultTimeout } from "bun:test";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -37,10 +37,28 @@ import {
   type ScopeContext,
   type ReviewerDispatch,
 } from "../../dist/claude/.claude/hooks/aidlc-reviewer-scope.ts";
-import { stateDigest, writeActiveDirectiveMarker } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  auditBlockField,
+  readAuditShardEvents,
+  reviewerDispatchPath,
+  stateDigest,
+  writeActiveDirectiveMarker,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { hookGroupMembers } from "../../core/tools/aidlc-command.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
 import kiroManifest from "../../harness/kiro/manifest.ts";
+import { seededRecordDir, seededStateFile, seedWorkspaceShell } from "../harness/fixtures.ts";
+import {
+  checkoutCommand,
+  cleanupLayouts,
+  commitRecords,
+  git,
+  setGuardPolicy,
+  startCodeGeneration,
+  tempDir,
+  UNIT,
+  workspace,
+} from "../harness/source-work-layouts.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
@@ -1083,6 +1101,241 @@ describe("t221 (b) dispatch-record lifecycle (shipped hook, subprocess)", () => 
     expect(shard).toContain("REVIEWER_SCOPE_BLOCKED");
     expect(shard).toContain("construction/*/*/*.md");
     expect(shard).toContain("U03-scoring");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A checkout the work records for its review (`intent add-checkout`): read from
+// the folder the tool runs in, its files are the work's own, never a Unit's
+// folder. Read from the Unit's folder, "../shop-web/app.js" would name a Unit
+// called shop-web; a sibling Unit's files, a sweep across Units and a wildcard
+// that reaches the record stay refused.
+// ---------------------------------------------------------------------------
+
+describe("t221 (a) a checkout recorded for the work", () => {
+  const BESIDE: ScopeContext = { ...SCOPE_CONTEXT, checkouts: [join(REPO_ROOT, "..", "shop-web")] };
+  const TWO: ScopeContext = { ...BESIDE, checkouts: [...(BESIDE.checkouts ?? []), join(REPO_ROOT, "..", "shop-api")] };
+  // A project that is a folder of a larger repository, with that repository recorded.
+  const PARENT: ScopeContext = { ...SCOPE_CONTEXT, checkouts: [join(REPO_ROOT, "..")] };
+  const judge = (tool: string, input: Record<string, unknown>, context: ScopeContext) =>
+    evaluateReviewerScope(tool, input, DISPATCH, context);
+
+  const opens: Array<[string, string, Record<string, unknown>, ScopeContext]> = [
+    ["Read by the path from the project", "Read", { file_path: "../shop-web/app.js" }, BESIDE],
+    ["Read with backslashes, which split folders on Windows", "Read", { file_path: "..\\shop-web\\app.js" }, BESIDE],
+    ["cat by the path from the project", "Bash", { command: "cat ../shop-web/app.js" }, BESIDE],
+    ["a search rooted in it", "Bash", { command: "rg -n wishlist ../shop-web" }, BESIDE],
+    ["its tests run from inside it", "Bash", { command: "cd ../shop-web && node --test && cat app.js" }, BESIDE],
+    ["a listing of it", "Bash", { command: "ls ../shop-web" }, BESIDE],
+    ["Grep rooted in it", "Grep", { pattern: "wishlist", path: "../shop-web" }, BESIDE],
+    ["Glob rooted in it", "Glob", { pattern: "**/*.js", path: "../shop-web" }, BESIDE],
+    ["a wildcard below it", "Bash", { command: "cat ../shop-web/test/*.test.js" }, BESIDE],
+    ["the reviewer's own Edit there", "Edit", { file_path: "../shop-web/app.js" }, BESIDE],
+    ["the second of two checkouts", "Read", { file_path: "../shop-api/routes.js" }, TWO],
+    ["a wildcard below a folder of a checkout that holds the project", "Bash", { command: "cat ../web/test/*.test.js" }, PARENT],
+    ["a bracketed folder in a checkout that holds the project", "Read", { file_path: "../web/app/[id]/page.tsx" }, PARENT],
+    ["a catch-all route folder", "Read", { file_path: "../shop-web/app/api/auth/[...nextauth]/route.ts" }, BESIDE],
+    ["an optional catch-all route folder", "Read", { file_path: "../shop-web/app/[[...slug]]/page.tsx" }, BESIDE],
+  ];
+  for (const [name, tool, input, context] of opens) {
+    test(`opens: ${name}`, () => {
+      expect(judge(tool, input, context)).toEqual({ block: false });
+    });
+  }
+
+  const refused: Array<[string, string, Record<string, unknown>, ScopeContext]> = [
+    ["the same read when no checkout is recorded", "Read", { file_path: "../shop-web/app.js" }, SCOPE_CONTEXT],
+    ["a sibling Unit's file", "Read", { file_path: "construction/U01-infra/functional-design/design2.md" }, BESIDE],
+    ["a sweep from the project's parent, recorded as a checkout", "Bash", { command: "rg x .." }, PARENT],
+    ["a listing of the project's parent", "Bash", { command: "tree .." }, PARENT],
+    ["a search in the project's parent", "Bash", { command: "git -C .. grep x" }, PARENT],
+    ["a wildcard over the project's parent", "Bash", { command: "rg -n x ../*" }, PARENT],
+    ["a brace group that climbs back to the project", "Bash", { command: "rg -n x ../shop-web/{src,../shop}" }, BESIDE],
+    ["a brace group that climbs two folders back to the project", "Bash", { command: "rg -n x ../shop-web/src/{lib,../../shop}" }, BESIDE],
+    ["a dot-led pattern a shell may expand to the folder above", "Bash", { command: "rg -n x ../shop-web/.*" }, BESIDE],
+    ["a folder whose name starts with the checkout's", "Read", { file_path: "../shop-web2/app.js" }, BESIDE],
+    ["a sibling Unit read from the Unit's folder", "Read", { file_path: "../U01-infra/functional-design/design2.md" }, { ...CURRENT_UNIT_CONTEXT, checkouts: PARENT.checkouts }],
+    ["a Unit named like the checkout, read from the Unit's folder", "Read", { file_path: "../shop-web/design.md" }, { ...CURRENT_UNIT_CONTEXT, checkouts: BESIDE.checkouts }],
+    ["a sibling Unit by the path from its Unit when no folder is known", "Read", { file_path: "../U01-infra/design.md" }, { recordRoot: RECORD_ROOT, checkouts: PARENT.checkouts }],
+    ["a sibling Unit's copy inside a checkout of the same repository", "Read", { file_path: "../shop-wt/aidlc/spaces/default/intents/x/construction/U01-infra/design.md" }, { ...SCOPE_CONTEXT, checkouts: [join(REPO_ROOT, "..", "shop-wt")] }],
+    ["a checkout folder named construction", "Read", { file_path: "../shop-web/construction/page.js" }, BESIDE],
+  ];
+  for (const [name, tool, input, context] of refused) {
+    test(`stays refused: ${name}`, () => {
+      expect(judge(tool, input, context).block).toBe(true);
+    });
+  }
+
+  // With no path the search starts in the project, a sweep across Units: refused,
+  // naming the root it falls back to, not the pattern.
+  for (const [name, tool, input] of [
+    ["a Glob with only a pattern", "Glob", { pattern: "../shop-web/**/*.js" }],
+    ["a Grep with only a glob", "Grep", { pattern: "x", glob: "../shop-web/**/*.js" }],
+    ["rg with only a glob", "Bash", { command: "rg -g '../shop-web/**' x" }],
+  ] as Array<[string, string, Record<string, unknown>]>) {
+    test(`a pathless search names its default root: ${name}`, () => {
+      expect(judge(tool, input, BESIDE)).toEqual({ block: true, target: ".", defaulted: true });
+    });
+  }
+
+  // The folder a command runs in is followed through `cd <dir>`, not undone at a
+  // closing parenthesis: the last search below is read as rooted where the cd
+  // went, for a checkout as for a folder inside the project.
+  test("a search after a subshell's cd is read in the folder the cd named", () => {
+    expect(judge("Bash", { command: "(cd src && npm test); rg x" }, BESIDE).block).toBe(false);
+    expect(judge("Bash", { command: "(cd ../shop-web && npm test); rg x" }, BESIDE).block).toBe(false);
+  });
+});
+
+describe("t221 (b) a checkout recorded for the work (shipped hook, subprocess)", () => {
+  afterEach(() => cleanupLayouts());
+
+  // A shop project at Code Generation with its web repository beside it,
+  // recorded with `intent add-checkout ../shop-web` after the stage started,
+  // and a review of the Unit in flight.
+  function shopWithWeb(): { proj: string; base: string } {
+    const base = tempDir("t221-shop-");
+    const proj = join(base, "shop");
+    mkdirSync(proj);
+    seedWorkspaceShell(proj);
+    workspace("", proj);
+    startCodeGeneration(proj, true);
+    commitRecords(proj);
+    for (const name of ["shop-web", "shop-api"]) webRepo(join(base, name));
+    const added = checkoutCommand(proj, "add-checkout", "../shop-web");
+    expect(added.rc, added.out).toBe(0);
+    mkdirSync(dirname(reviewerDispatchPath(proj)), { recursive: true });
+    writeFileSync(reviewerDispatchPath(proj), JSON.stringify({
+      reviewer: "aidlc-architecture-reviewer-agent",
+      stage: "code-generation",
+      unit: UNIT,
+      exempt: [],
+    }));
+    return { proj, base };
+  }
+
+  function webRepo(dir: string): void {
+    mkdirSync(join(dir, "test"), { recursive: true });
+    git(dir, ["init", "-q"]);
+    git(dir, ["config", "user.email", "t221@example.com"]);
+    git(dir, ["config", "user.name", "t221"]);
+    git(dir, ["config", "commit.gpgsign", "false"]);
+    writeFileSync(join(dir, "app.js"), "export const app = 1;\n");
+    writeFileSync(join(dir, "test", "app.test.js"), "// app\n");
+    git(dir, ["add", "-A"]);
+    git(dir, ["commit", "-q", "-m", "web"]);
+  }
+
+  function reviewer(proj: string, tool: string, input: Record<string, unknown>): { code: number; stderr: string } {
+    const r = spawnSync(BUN, [join(AIDLC_SRC, "hooks", "aidlc-reviewer-scope.ts")], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      input: JSON.stringify({
+        hook_event_name: "PreToolUse",
+        tool_name: tool,
+        tool_input: input,
+        agent_type: "aidlc-architecture-reviewer-agent",
+        cwd: proj,
+      }),
+      env: { ...process.env, CLAUDE_PROJECT_DIR: proj },
+      encoding: "utf-8",
+    });
+    return { code: r.status ?? -1, stderr: r.stderr ?? "" };
+  }
+
+  const rows = (proj: string, event: string) => readAuditShardEvents(proj).filter((row) => row.event === event);
+
+  const READS: Array<[string, Record<string, unknown>]> = [
+    ["Read", { file_path: "../shop-web/app.js" }],
+    ["Bash", { command: "cat ../shop-web/app.js ../shop-web/test/app.test.js" }],
+    ["Bash", { command: "cd ../shop-web && node --test" }],
+    ["Grep", { pattern: "app", path: "../shop-web" }],
+    ["Glob", { pattern: "**/*.js", path: "../shop-web" }],
+  ];
+
+  test("the reviewer reads and tests the recorded checkout by its path from the project, with nothing refused", () => {
+    const { proj } = shopWithWeb();
+    for (const [tool, input] of READS) {
+      const r = reviewer(proj, tool, input);
+      expect(r.code, `${tool} ${JSON.stringify(input)}: ${r.stderr}`).toBe(0);
+      expect(r.stderr).toBe("");
+    }
+    expect(rows(proj, "REVIEWER_SCOPE_BLOCKED")).toEqual([]);
+    const sibling = reviewer(proj, "Read", {
+      file_path: join(seededRecordDir(proj), "construction", "billing", "code-generation", "code-summary.md"),
+    });
+    expect(sibling.code).toBe(2);
+    expect(sibling.stderr).toContain("because it belongs to another unit; the current review covers");
+  });
+
+  test("under Guard Policy off a read of the checkout is no step past the check, and a sibling Unit's read still is", () => {
+    const { proj } = shopWithWeb();
+    setGuardPolicy(proj, "off", "set by you");
+    for (const [tool, input] of READS) expect(reviewer(proj, tool, input).code).toBe(0);
+    expect(rows(proj, "GUARD_STOOD_ASIDE")).toEqual([]);
+    const sibling = reviewer(proj, "Read", {
+      file_path: join(seededRecordDir(proj), "construction", "billing", "code-generation", "code-summary.md"),
+    });
+    expect(sibling.code).toBe(0);
+    expect(rows(proj, "GUARD_STOOD_ASIDE")).toHaveLength(1);
+  });
+
+  test("remove-checkout closes it again at the next call, with the words a folder nobody recorded gets", () => {
+    const { proj } = shopWithWeb();
+    expect(reviewer(proj, "Read", { file_path: "../shop-web/app.js" }).code).toBe(0);
+    expect(checkoutCommand(proj, "remove-checkout", "../shop-web").rc).toBe(0);
+    const closed = reviewer(proj, "Read", { file_path: "../shop-web/app.js" });
+    expect(closed.code).toBe(2);
+    expect(closed.stderr).toContain('This review cannot open "../shop-web/app.js" because it belongs to another unit');
+  });
+
+  test("two recorded checkouts are both open", () => {
+    const { proj } = shopWithWeb();
+    expect(checkoutCommand(proj, "add-checkout", "../shop-api").rc).toBe(0);
+    expect(reviewer(proj, "Read", { file_path: "../shop-web/app.js" }).code).toBe(0);
+    expect(reviewer(proj, "Read", { file_path: "../shop-api/app.js" }).code).toBe(0);
+  });
+
+  test("a checkout recorded through a link is open by the path typed", () => {
+    const { proj, base } = shopWithWeb();
+    symlinkSync(join(base, "shop-api"), join(base, "api-link"), process.platform === "win32" ? "junction" : "dir");
+    expect(checkoutCommand(proj, "add-checkout", "../api-link").rc).toBe(0);
+    expect(reviewer(proj, "Read", { file_path: "../api-link/app.js" }).code).toBe(0);
+    // The link now leads somewhere nobody recorded: that spelling opens nothing.
+    renameSync(join(base, "api-link"), join(base, "api-link-before"));
+    webRepo(join(base, "elsewhere"));
+    symlinkSync(join(base, "elsewhere"), join(base, "api-link"), process.platform === "win32" ? "junction" : "dir");
+    expect(reviewer(proj, "Read", { file_path: "../api-link/app.js" }).code).toBe(2);
+  });
+
+  test("a Unit taken into this checkout still writes only its own folder: the write bound reads as before", () => {
+    const { proj } = shopWithWeb();
+    writeFileSync(seededStateFile(proj), `${readFileSync(seededStateFile(proj), "utf-8").trimEnd()}\n- **Unit Ownership**: team\n`);
+    mkdirSync(join(proj, "aidlc", ".aidlc-engine", "units"), { recursive: true });
+    writeFileSync(join(proj, "aidlc", ".aidlc-engine", "units", "claimed.json"), `${JSON.stringify({
+      version: 1,
+      space: "default",
+      intent_uuid: "00000000-0000-4000-8000-000000000221",
+      intent_id8: "00000000",
+      unit: UNIT,
+      owner: "t221",
+      generation: 1,
+      nonce: "t221-nonce",
+      claim_ref: `refs/heads/claim/00000000/${UNIT}`,
+      claim_oid: "1".repeat(40),
+      claimed_from_oid: "2".repeat(40),
+      integration_ref: "refs/heads/main",
+      gate_rhythm: "per-stage",
+    })}\n`);
+    const r = spawnSync(BUN, [join(AIDLC_SRC, "hooks", "aidlc-reviewer-scope.ts")], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      input: JSON.stringify({ hook_event_name: "PreToolUse", tool_name: "Write", tool_input: { file_path: "../shop-web/app.js" }, cwd: proj }),
+      env: { ...process.env, CLAUDE_PROJECT_DIR: proj },
+      encoding: "utf-8",
+    });
+    expect(r.status).toBe(2);
+    expect(r.stderr).toContain(`refusing cross-unit write target "../shop-web/app.js"`);
+    const shard = rows(proj, "REVIEWER_SCOPE_BLOCKED");
+    expect(shard.map((row) => auditBlockField(row.block, "Stage"))).toEqual(["claimed-checkout"]);
   });
 });
 

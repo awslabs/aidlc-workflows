@@ -28,6 +28,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { ensureWorkspaceEngineFolder } from "../../core/tools/aidlc-runtime-paths.ts";
 import { workspaceManifestChecks } from "../../core/tools/aidlc-workspace-doctor.ts";
+import { workspaceManifestChecks as nativeManifestChecks } from "../../dist-release/claude/.claude/tools/aidlc-workspace-doctor.ts";
 import {
   REPO_ROOT,
   seedAuditFile,
@@ -831,5 +832,47 @@ describe("t256 workspace-doctor - the setup git does not track", () => {
     expect(setupRows(rows)).toEqual([]);
     expect(rows[0].label).toContain("commit & push them so teammates get them once the request folder steps below are done)");
     expect(rows.some((row) => row.label.startsWith("Request folder:"))).toBe(true);
+  });
+});
+
+// On a native install the sync is the system command; the release tree's own
+// module names it as a native install does (its install command is `aidlc`).
+// A Bun tree keeps naming the tool file, as the W2 and W3 cases above check.
+describe("t256 workspace-doctor - the sync command a native install names", () => {
+  test("every row that sends the person to the sync names aidlc system workspace-sync", () => {
+    const drift = freshGitWorkspace();
+    writeManifest(drift, MANIFEST);
+    makeSibling(drift, "checkout-api");
+    const none = freshGitWorkspace();
+    writeManifest(none, '{ "org": "acme", "repos": [] }');
+    const missing = freshGitWorkspace();
+    writeManifest(missing, MANIFEST);
+    makeSibling(missing, "checkout-api");
+    makeSibling(missing, "checkout-web");
+    const stale = freshGitWorkspace();
+    writeManifest(stale, MANIFEST);
+    makeSibling(stale, "checkout-api");
+    makeSibling(stale, "checkout-web");
+    writeFileSync(
+      join(stale, ".gitignore"),
+      "# >>> aidlc workspace-sync managed (do not edit inside; regenerated from repos.json) >>>\n" +
+        "/.aidlc-workspace-sync-recovery-*/\n" +
+        "/checkout-api/\n" +
+        "# <<< aidlc workspace-sync managed <<<\n",
+      "utf-8",
+    );
+    const rows: Array<[string, string, string]> = [
+      ["drift", "Workspace repos", "declared but not cloned"],
+      ["no block yet", "Workspace .gitignore", "no managed block yet"],
+      ["missing", "Workspace .gitignore", "managed block missing"],
+      ["stale", "Workspace .gitignore", "managed block stale"],
+    ];
+    const workspaces: Record<string, string> = { drift, "no block yet": none, missing, stale };
+    for (const [name, row, says] of rows) {
+      const label = nativeManifestChecks(workspaces[name]).find((r) => r.label.includes(row))?.label ?? "";
+      expect(label, name).toContain(says);
+      expect(label, name).toContain("run `aidlc system workspace-sync`");
+      expect(label, name).not.toContain("aidlc engine workspace-sync");
+    }
   });
 });

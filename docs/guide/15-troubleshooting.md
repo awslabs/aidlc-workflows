@@ -657,7 +657,11 @@ with no further review; remove the line to put the path back. A path the
 project's `.gitignore` already ignores is never counted, and neither is a file
 another open piece of work in this folder lists in its own Units' source
 manifests (a second chat building its own work here), or anything under a folder
-it lists: that is the other work's change, and its own checks cover it.
+it lists: that is the other work's change, and its own checks cover it. Nor is a
+file exactly as the remote branch your branch tracks holds it once you have
+pulled it (a teammate's commit, or a change already pushed there, the build's
+own included): it is nobody's change in this work. A change only on your
+machine is still counted.
 Archiving a piece of work you will not finish (`/aidlc intent archive <name>`)
 ends its claims. Under Guard Policy relaxed or off the change is kept and said
 once instead.

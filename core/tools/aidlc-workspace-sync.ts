@@ -37,17 +37,21 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { jsoncSettingValue } from "./aidlc-distribution.ts";
 import { gitCommonDirOf } from "./aidlc-git.ts";
-import { discoverProjectHarnesses } from "./aidlc-runtime-paths.ts";
+import { aidlcInvocation, discoverProjectHarnesses } from "./aidlc-runtime-paths.ts";
 import {
+  asksForHelp,
   discoverSiblingRepos,
   installWithoutReplacing,
   repoDir,
   repoIsWorkspace,
+  printUsageAndExit,
   resolveProjectDir,
   withAuditLock,
 } from "./aidlc-lib.ts";
 import { reposManifestListsOnlyAddedWorkspace } from "./aidlc-workspace-repos.ts";
 import { isProjectSubmodule } from "./aidlc-git.ts";
+import { LAUNCHER_GLOBAL_FLAGS } from "./aidlc-command.ts";
+import { routePolicyFor } from "./aidlc.ts";
 import {
   displayRepoPath,
   parseWorkspaceManifest,
@@ -802,14 +806,36 @@ function assertManifestUnchanged(path: string, raw: string | null): void {
   }
 }
 
-function parseFlags(argv: string[]): { force: boolean; writeManifest: boolean; projectDir?: string } {
+// Every token up to `--` is read, in order, before anything else is: a help
+// request prints the usage and any other token this command does not take, a
+// flag or a word, is refused, so `--help`, a guessed flag or a word such as
+// `status` never runs a sync. This command takes no words of the person's, so
+// asksForHelp may read each token, not only the first. The launcher's own
+// flags, which the dispatcher hands on after the command's, are taken and left
+// alone, all but --offline: the launcher refuses it for this command before
+// the tool runs, so a direct run with it is refused here too. An empty
+// argument, which a script hands on for an empty quoted variable, holds no
+// word and is left alone. A refused token is named up to its `=`, so a value
+// typed or pasted after it is never printed back, and with any address's
+// userinfo hidden; a word is quoted as typed.
+function parseFlags(argv: string[]): {
+  force: boolean;
+  writeManifest: boolean;
+  projectDir?: string;
+  help: boolean;
+  refused?: string;
+} {
   let force = false;
   let writeManifest = false;
+  let help = false;
   let projectDir: string | undefined;
+  let refused: string | undefined;
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--") break;
-    if (arg === "--force") {
+    if (asksForHelp([arg])) {
+      help = true;
+    } else if (arg === "--force") {
       force = true;
     } else if (arg === "--write-manifest") {
       writeManifest = true;
@@ -817,9 +843,14 @@ function parseFlags(argv: string[]): { force: boolean; writeManifest: boolean; p
       projectDir = argv[++i];
     } else if (arg.startsWith("--project-dir=")) {
       projectDir = arg.slice("--project-dir=".length);
+    } else if (arg !== "" && (arg === "--offline" || !LAUNCHER_GLOBAL_FLAGS.has(arg))) {
+      const masked = maskUserinfo(arg);
+      const equals = masked.indexOf("=");
+      const name = equals < 0 ? masked : masked.slice(0, equals + 1);
+      refused ??= arg.startsWith("-") ? name : `"${name}"`;
     }
   }
-  return { force, writeManifest, projectDir };
+  return { force, writeManifest, projectDir, help, refused };
 }
 
 function isEmptyDirectory(path: string): boolean {
@@ -828,6 +859,14 @@ function isEmptyDirectory(path: string): boolean {
   } catch {
     return false;
   }
+}
+
+// The form after the command is the route's first, the sync itself, as
+// `aidlc system --help` prints it; its second form is AI-DLC's own step
+// (--write-manifest).
+function syncUsage(): string {
+  const route = ["system", "workspace-sync"];
+  return `usage: ${[aidlcInvocation(), ...route, ...(routePolicyFor(route)?.all?.slice(0, 1) ?? [])].join(" ")}`;
 }
 
 function preflight(
@@ -1619,7 +1658,13 @@ function writeManifest(root: string): number {
 }
 
 export function main(argv: string[]): void {
-  const { force, writeManifest: writeOnly, projectDir } = parseFlags(argv);
+  const { force, writeManifest: writeOnly, projectDir, help, refused } = parseFlags(argv);
+  if (help) printUsageAndExit(syncUsage());
+  if (refused !== undefined) {
+    console.error(red(`✗ workspace-sync does not take ${refused}; nothing was changed`));
+    console.error(syncUsage());
+    process.exit(1);
+  }
   const root = resolveProjectDir(projectDir);
   let exitCode = 1;
   try {

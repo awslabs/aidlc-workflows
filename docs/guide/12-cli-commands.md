@@ -3739,6 +3739,10 @@ person's work on one repo is never offered it. A `repos.json` that
 `intent add-repo` made for the workspace folder itself does not stop the offer,
 which then asks to add the repos found here to it.
 
+If your shell has no `aidlc` command (a copied project, or a teammate's clone
+of one), run `bun .claude/tools/aidlc-workspace-sync.ts` instead, with your
+harness folder in place of `.claude`.
+
 It serializes reconciles with a workspace lock whose live owner is never reaped
 for age, then runs a read-only preflight before staging clones and generated
 files. Generated outputs are installed with no-replace links and reversible

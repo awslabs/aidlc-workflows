@@ -2290,7 +2290,7 @@ function notePromptCapability(sessionId: string): void {
 function noteDefaultAgent(sessionId: string): void {
   const noted = join(terminalSessionDir(sessionId), "default-agent-noted");
   if (aidlcEntryWords(ide.prompt ?? "") === null || existsSync(noted)) return;
-  const name = kiroDefaultAgentName(ide.sessionId?.trim(), `${aidlcInvocation()} engine orchestrate next`);
+  const name = kiroDefaultAgentName(ide.sessionId?.trim(), `${aidlcInvocation()} engine orchestrate next --entry`);
   if (name === "") return;
   try {
     writeFileSync(noted, "", { flag: "wx" });
@@ -2453,57 +2453,15 @@ function writeTerminalLatch(
 // the rest answer `/aidlc <words>` as a plain coding request. This member runs
 // on every typed line before the agent's first word and Kiro adds its stdout
 // to the agent's context, so when the line is AI-DLC's and no utility ran it
-// here, the agent hears the one first step: the engine's `next`, which reads
-// the recorded line (takePersonsOwnLine) and owns what follows. The entry word,
-// the words and the flags are the engine's own parse (nextArgsAreOnlyWords):
-// a line with a flag or verb stays the agent's, as today, and so does any
-// other line (`/aidlc-<runner>`, plain words). The engine reads the recorded
-// line only while no work is selected (a bare `next` with work under way is
-// the work's own continuation), so words typed while this chat's workflow
-// has a record are left to the agent as today: the aidlc agent's skill
-// passes them to `next` itself. A bare `/aidlc` is the resume gesture on
-// any path. A plan's name typed alone (`/aidlc bugfix`) is a line the bare
-// `next` does not read, so the step names the plan (nextArgsNameOnlyAPlan):
-// `next <plan>` asks what the work is for. On the aidlc agent the line
-// repeats what its skill already says.
-async function firstStepLine(prompt: string, pd: string, sessionId: string): Promise<string> {
-  const text = prompt.trim();
-  let step = "next";
-  const words = aidlcEntryWords(text);
-  if (words === null) return "";
-  if (words !== "") {
-    if (workflowRecordSelected(pd, sessionId)) return "";
-    try {
-      const { nextArgsAreOnlyWords, nextArgsNameOnlyAPlan } = await import("../tools/aidlc-orchestrate.ts");
-      const args = splitKiroCommandArgs(words);
-      if (!nextArgsAreOnlyWords(args)) {
-        const plan = nextArgsNameOnlyAPlan(args);
-        if (plan === null) return "";
-        step = `next ${plan}`;
-      }
-    } catch {
-      return "";
-    }
-  }
-  const run = `Run \`${aidlcInvocation()} engine orchestrate ${step}\` now and do only what it prints.`;
+// here, the agent hears the one first step: the skill's `next --entry`, which
+// carries none of the person's words and reads their recorded line itself
+// (entryLine), with or without work in hand. Any other line (`/aidlc-<runner>`,
+// plain words) stays the agent's. On the aidlc agent the line repeats what its
+// skill already says.
+function firstStepLine(prompt: string): string {
+  if (aidlcEntryWords(prompt.trim()) === null) return "";
+  const run = `Run \`${aidlcInvocation()} engine orchestrate next --entry\` now and do only what it prints.`;
   return `AI-DLC: this message is an AI-DLC request and AI-DLC has it on record. ${run}`;
-}
-
-// Whether the workflow this chat selects already has its record (the state
-// file the engine's bare `next` would read), judged the way the gate floor
-// judges it (enterHookWorkflow). Unreadable state counts as selected: the
-// line is then withheld rather than said where it may be wrong.
-function workflowRecordSelected(pd: string, sessionId: string): boolean {
-  try {
-    const workflow = enterHookWorkflow(pd, sessionId);
-    try {
-      return existsSync(stateFilePath(pd));
-    } finally {
-      workflow.restore();
-    }
-  } catch {
-    return true;
-  }
 }
 
 function terminalContext(result: TerminalResult): string {
@@ -2751,7 +2709,7 @@ if (target === "verb-intercept") {
   const command = classifyTerminalCommand(invocation.args, projectDir, ide.sessionId?.trim() || undefined);
   if (command === null) {
     noteDefaultAgent(sessionId);
-    const step = await firstStepLine(ide.prompt ?? "", projectDir, ide.sessionId?.trim() || sessionId);
+    const step = firstStepLine(ide.prompt ?? "");
     if (step !== "") process.stdout.write(`${step}\n`);
     return 0;
   }
