@@ -685,13 +685,12 @@ describe("the person's own words reach the record from every harness they drive"
   );
 });
 
-// The Kiro CLI latch binds the FIRST `next` of a turn to the argv the person
-// typed, so a dropped or rewritten argument is refused. A misspelt flag has the
-// agent run `next` twice: the verbatim first call, then the corrected one. The
-// latch must hold the first and leave the second alone, or the person is stuck
-// with no way to spend their own words.
-describe("the Kiro CLI forwarding latch lets the agent correct the line", () => {
-  test("the verbatim first next passes the latch, and the corrected second call is not refused", () => {
+// On Kiro CLI the skill's first command is `next --entry`, which reads the line
+// the hook recorded. A misspelt flag has the agent run `next` twice: that first
+// command, which names the flag `next` does not take, then the corrected call,
+// which nothing refuses, so the person can spend their own words.
+describe("Kiro CLI: after the first command names a misspelt flag, the agent can correct the line", () => {
+  test("next --entry names the flag it does not take, and the corrected second call is not refused", () => {
     const proj = createTestProject();
     created.push(proj);
     removeWorkspaceRecord(proj);
@@ -711,12 +710,10 @@ describe("the Kiro CLI forwarding latch lets the agent correct the line", () => 
     const records = listMessages(proj);
     expect(records.length, JSON.stringify(records)).toBe(1);
     expect(personsWordsText(records[0].text)).toBe(typed);
-    const first = next(proj, ["--plan-aprroval", "off", "add", "the", "export"]);
+    const first = next(proj, ["--entry"]);
     expect(first.d.kind, first.out).toBe("print");
     expect(String(first.d.message)).toContain("--plan-aprroval off");
-    expect(first.out).not.toContain("dropped or changed the user's arguments");
     const second = next(proj, ["--plan-approval", "off", "add the export"]);
-    expect(second.out).not.toContain("dropped or changed the user's arguments");
     expect(second.d.kind, second.out).toBe("ask");
     expect(String(second.d.compose_command)).toContain("--plan-approval off");
   });

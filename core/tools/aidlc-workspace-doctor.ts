@@ -45,10 +45,9 @@ export interface DoctorCheck {
 }
 
 // The name earlier releases of the Kiro CLI (V2) hook adapter
-// (harness/kiro/hooks/aidlc-kiro-adapter.ts, forwardingLatchPath) wrote its
-// forwarding latch under; it now writes inside the git-ignored sessions
-// folder, so a file here is one left behind, which a project may have
-// committed.
+// (harness/kiro/hooks/aidlc-kiro-adapter.ts) wrote its forwarding latch
+// under; it writes none here any more, so a file here is one left behind,
+// which a project may have committed.
 const FORWARDING_LATCH = "aidlc/.aidlc-forwarding-latch";
 
 /**
