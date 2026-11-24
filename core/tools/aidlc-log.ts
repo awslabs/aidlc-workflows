@@ -353,10 +353,12 @@ const DECISION_CHECKPOINTS: readonly string[] = [
 // recorded here.
 const ANSWER_CHECKPOINTS: readonly string[] = [...DECISION_CHECKPOINTS, "guard-recovery"];
 
-// A manifest that names a repo the piece of work does not record is not a
-// manifest to rewrite: the code was written where the person put it, so the
-// way on is to record that repo (`intent add-repo` says what that means for
-// the plan). Any other invalid manifest is the agent's to write properly.
+// Why a Unit's source manifest is refused, with the way on for each. A repo
+// the piece of work does not record keeps its files where the code was
+// written: the work records it (`intent add-repo` says what that means for the
+// plan), or, for a repository of its own in work that records no repos from
+// here, the manifest names its files as the review reads them. Any other
+// invalid manifest is the agent's to write properly.
 function unitManifestRefusal(
   pd: string,
   unit: string,

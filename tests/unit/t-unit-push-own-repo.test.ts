@@ -16,7 +16,7 @@ import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, relative } from "node:path";
-import { noteEngineAskMark, personRepliedAfter, readAuditShardEvents, engineAskMark } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { auditBlockField, noteEngineAskMark, personRepliedAfter, readAuditShardEvents, readUnitSourceSnapshot, sourcePathKey, engineAskMark } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { bringBranchLevel, unitBranchInTheWay, workToCommit } from "../../dist/claude/.claude/tools/aidlc-unit.ts";
 import { namesRepoOfItsOwn } from "../../dist/claude/.claude/tools/aidlc-unit-teams.ts";
@@ -327,6 +327,10 @@ describe("a Unit on the workspace's own repository", () => {
     expect(requested.status, requested.out).toBe(0);
     expect(rows("REVIEW_REQUESTED")).toBe(1);
     expect(rows("QUESTION_ASKED")).toBe(asked);
+    // The Unit's listing the review reads holds the checkout's file.
+    const requestRow = readAuditShardEvents(alice).find((row) => row.event === "REVIEW_REQUESTED")!;
+    const listed = readUnitSourceSnapshot(alice, "code-generation", "refunds", auditBlockField(requestRow.block, "Unit Source Fingerprint") ?? "");
+    expect([...(listed?.listing.keys() ?? [])]).toContain(sourcePathKey("", `${label}@checkout/lib/refund.ts`));
   });
 
   // The push question says, before the yes, what its commit carries: the
@@ -557,6 +561,11 @@ describe("a Unit on the workspace's own repository", () => {
     expect(said).toContain(besideLine("lib/refund.ts", label));
     expect(said).not.toContain("add-repo");
     expect(committed(home.remote, "refunds~1")).toEqual(["src/refunds.ts"]);
+    // The result on the Unit's record names the workspace's own repository only, nothing of the checkout.
+    const result = (claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds") as { result?: { repos: Array<{ repo: string }> } } | null)?.result;
+    expect(result?.repos.map((repo) => repo.repo)).toEqual(["."]);
+    expect(JSON.stringify(result)).not.toContain(label);
+    expect(JSON.stringify(result)).not.toContain("lib/refund.ts");
     expect(git(beside, ["status", "--porcelain"])).toBe("?? lib/");
     expect(spawnSync("git", ["rev-parse", "--verify", "--quiet", "refs/heads/refunds"], { cwd: beside }).status).not.toBe(0);
   });
