@@ -731,6 +731,7 @@ import {
   unitPushRefused,
   resultTakeHold,
   resultWaitsLine,
+  notPushedYetLine,
   sendLeadsApprovedChanges,
   namedCloneOffer,
   namedOnlyDone,
@@ -11054,8 +11055,7 @@ function unitPushAsk(projectDir: string, stateContent: string | null): AskDirect
     if (lastCodePush(projectDir, unit) === "pushed") return null;
     // The push question is not put again until a push, so this line shows the message it will carry.
     const held = heldCommitMessage(projectDir, commitMessageFile(projectDir));
-    sayWithStepOnce(projectDir, `${unit} is built and approved, and not pushed yet. Do you want me to push it now` +
-      (held === null ? "?" : `, with this commit message?\n\n${held.text}`));
+    sayWithStepOnce(projectDir, notPushedYetLine(unit, held));
     return null;
   }
   if (!unitPushToOffer(projectDir, stateContent)) return null;

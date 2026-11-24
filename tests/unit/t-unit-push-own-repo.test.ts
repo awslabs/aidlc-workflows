@@ -435,11 +435,22 @@ describe("a Unit on the workspace's own repository", () => {
   }
   const REDO = "Ask the person whether to take refunds back to Code Generation to write its change where it can be committed; " +
     "on their yes, run `";
-  const REDO_END = " report --result resumed --choice redo --target code-generation` and follow what it returns.";
   const nothingPushed = (home: ReturnType<typeof makeHome>, alice: string): void => {
     expect(spawnSync("git", ["rev-parse", "--verify", "--quiet", "refs/heads/refunds"], { cwd: alice }).status).not.toBe(0);
     expect(spawnSync("git", ["rev-parse", "--verify", "--quiet", "refs/heads/refunds"], { cwd: home.remote }).status).not.toBe(0);
     expect((claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds") as { result?: unknown } | null)?.result).toBeUndefined();
+  };
+  // Code of the Unit's that went into a repository of its own, with nothing
+  // else of it left for the workspace's own: the push asks nothing, ends as Not
+  // now ends it, and says once where the code stands and what the lead needs.
+  const nothingLeft = (reasons: string, repo: string): string =>
+    `Nothing of refunds's is left to push: ${reasons}. Nothing was switched or pushed. The plan still shows refunds as ` +
+    `yours, and AI-DLC sends no notice of this: tell the lead its pull request in ${repo}, and they can name it as refunds's build.`;
+  const endedAsNotNow = (home: ReturnType<typeof makeHome>, alice: string, record: string): void => {
+    nothingPushed(home, alice);
+    const state = readFileSync(join(record, "aidlc-state.md"), "utf-8");
+    expect(state).toMatch(/^- \*\*Unit Push\*\*: later$/m);
+    expect(state).toMatch(/^- \*\*Status\*\*: Completed$/m);
   };
 
   // Part of the project moved to a repository of its own beside it while a
@@ -494,6 +505,85 @@ describe("a Unit on the workspace's own repository", () => {
     expect(spawnSync("git", ["rev-parse", "--verify", "--quiet", "refs/heads/refunds"], { cwd: alice }).status).not.toBe(0);
   });
 
+  // The repository beside the project recorded as a checkout, each named write
+  // of the Unit's in it: said by its path there.
+  function besideCheckout(alice: string, record: string, writes: Array<{ path: string }>): string {
+    const beside = besideRepo(alice);
+    const added = run(UTILITY, ["intent", "add-checkout", `../${basename(beside)}`], alice);
+    expect(added.status, added.out).toBe(0);
+    const engine = join(record, ".aidlc-engine", "source-checkouts.json");
+    const label = (JSON.parse(readFileSync(engine, "utf-8")) as { checkouts: Array<{ label: string }> }).checkouts[0].label;
+    writeFileSync(join(record, "construction", "refunds", "code-generation", "source-manifest.json"), `${JSON.stringify({
+      stage: "code-generation", unit: "refunds", version: 1, writes: [...writes, { path: `${label}@checkout/lib/refund.ts` }],
+    })}\n`);
+    return label;
+  }
+
+  test("every file of the Unit's in a repository of its own beside the project, recorded as a checkout: the push asks nothing and ends as Not now does", () => {
+    const home = oneRepoTeams();
+    const alice = cloneOf(home.remote, "alice");
+    const record = builtHere(alice, "refunds", "refunds.ts");
+    const label = besideCheckout(alice, record, []);
+    approvedHere(record);
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(String(pushed.json?.notice)).toBe(nothingLeft(
+      `lib/refund.ts is in ${label}, a repository of its own, and yours to commit and push there`, label,
+    ));
+    endedAsNotNow(home, alice, record);
+  });
+
+  test("its files beside the project and one project file unchanged: the push ends with both reasons", () => {
+    const home = oneRepoTeams();
+    writeFileSync(join(home.dir, "package.json"), "{\"name\": \"shop\"}\n");
+    git(home.dir, ["add", "package.json"]);
+    git(home.dir, ["commit", "-q", "-m", "package"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const alice = cloneOf(home.remote, "alice");
+    const record = builtHere(alice, "refunds", "refunds.ts");
+    const label = besideCheckout(alice, record, [{ path: "package.json" }]);
+    approvedHere(record);
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(String(pushed.json?.notice)).toBe(nothingLeft(
+      `lib/refund.ts is in ${label}, a repository of its own, and yours to commit and push there; package.json is ` +
+        "unchanged in the repo", label,
+    ));
+    endedAsNotNow(home, alice, record);
+  });
+
+  // Some of the Unit's code in the workspace's own repository and some beside
+  // it: the way back stays, said once the push's other checks of the
+  // workspace have passed, so a merge of theirs under way is said first.
+  test("some of the Unit's code beside the project and a merge under way here: the merge is said first, the way back after it", () => {
+    const home = oneRepoTeams();
+    const alice = cloneOf(home.remote, "alice");
+    const record = builtHere(alice, "refunds", "refunds.ts");
+    const label = besideCheckout(alice, record, [{ path: "src/refunds.ts" }]);
+    writeFileSync(join(alice, ".git", "MERGE_HEAD"), `${git(alice, ["rev-parse", "HEAD"])}\n`);
+    const merging = run(UNIT, ["push"], alice);
+    expect(merging.status, merging.out).not.toBe(0);
+    expect(String(merging.json?.error ?? merging.out)).toStartWith("The repo is in the middle of a merge, so nothing was committed or pushed.");
+    rmSync(join(alice, ".git", "MERGE_HEAD"));
+    const refused = run(UNIT, ["push"], alice);
+    expect(refused.status, refused.out).not.toBe(0);
+    expect(String(refused.json?.error ?? refused.out)).toStartWith(BUILDS_HERE_ONLY(label));
+  });
+
+  // A Unit pushed before and redone with all its code beside the project:
+  // its push again asks for the way back, as before.
+  test("a Unit pushed before, its redo all beside the project: the push again asks for the way back", () => {
+    const home = oneRepoTeams();
+    const alice = cloneOf(home.remote, "alice");
+    const record = builtHere(alice, "refunds", "refunds.ts");
+    const first = run(UNIT, ["push"], alice);
+    expect(first.status, first.out).toBe(0);
+    const label = besideCheckout(alice, record, []);
+    const refused = run(UNIT, ["push"], alice);
+    expect(refused.status, refused.out).not.toBe(0);
+    expect(String(refused.json?.error ?? refused.out)).toStartWith(BUILDS_HERE_ONLY(label));
+  });
+
   test("a file of the Unit's inside a repository of its own in the project: the push says so and pushes the rest", () => {
     const home = oneRepoTeams();
     const alice = cloneOf(home.remote, "alice");
@@ -507,25 +597,47 @@ describe("a Unit on the workspace's own repository", () => {
     expect(git(join(alice, "web"), ["status", "--porcelain"])).toBe("?? app.js");
   });
 
-  test("every file of the Unit's inside a repository of its own: the push stops before anything is switched, with the way back", () => {
+  test("every file of the Unit's inside a repository of its own: the push asks nothing, ends as Not now does, and says where the code stands", () => {
     const home = oneRepoTeams();
     const alice = cloneOf(home.remote, "alice");
-    builtWriting(alice, { "web/app.js": "app();\n", "web/index.html": "<main></main>\n" }, () => webOfItsOwn(alice));
-    const refused = run(UNIT, ["push"], alice);
-    expect(refused.status, refused.out).not.toBe(0);
-    const said = String(refused.json?.error ?? refused.out);
-    expect(said).toStartWith(
-      "Nothing of refunds's is left to push: web/app.js and 1 more are inside web, a repository of its own, and yours to " +
-        `commit there. Nothing was switched or pushed. ${REDO}`,
-    );
-    expect(said).toEndWith(REDO_END);
-    nothingPushed(home, alice);
+    const record = builtWriting(alice, { "web/app.js": "app();\n", "web/index.html": "<main></main>\n" }, () => webOfItsOwn(alice));
+    approvedHere(record);
+    const session = "t-unit-own-repo-nothing-left";
+    const chat = personsChat(session);
+    expect(hook(alice, chat, { hook_event_name: "UserPromptSubmit", session_id: session, prompt: "push refunds" }).status).toBe(0);
+    const pushed = run(UNIT, ["push"], alice, chat);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(pushed.json?.pushed).toBe(false);
+    expect(String(pushed.json?.notice)).toBe(nothingLeft(
+      "web/app.js and 1 more are inside web, a repository of its own, and yours to commit and push there", "web",
+    ));
+    endedAsNotNow(home, alice, record);
+    // In that chat the push is not asked again, and nothing says it is not pushed yet.
+    const after = personsNext(alice, chat, session);
+    expect(after.ask_type ?? null, JSON.stringify(after).slice(0, 600)).not.toBe("unit-push");
+    expect(JSON.stringify(after)).not.toContain("not pushed yet");
+    // A new chat opens on the board, as after a Not now: it offers to carry on
+    // refunds and says nothing of its push; carrying it on is what says it once.
+    const other = "t-unit-own-repo-nothing-left-other";
+    const there = personsNext(alice, personsChat(other), other);
+    expect(there.ask_type, JSON.stringify(there).slice(0, 600)).toBe("unit-take");
+    expect((there.choices as Array<{ label: string }>).map((choice) => choice.label)).toContain("Carry on refunds");
+    expect(JSON.stringify(there)).not.toContain("not pushed yet");
+    // A redo they ask for in words still runs.
+    expect(hook(alice, chat, { hook_event_name: "UserPromptSubmit", session_id: session, prompt: "take refunds back to Code Generation" }).status).toBe(0);
+    const back = run(ORCH, ["report", "--result", "resumed", "--choice", "redo", "--target", "code-generation"], alice, chat);
+    const jump = /`(bun \S+aidlc-jump\.ts execute [^`]+)`/.exec(String(back.json?.message))?.[1];
+    expect(jump, back.out).toBeDefined();
+    cpSync(AIDLC_SRC, join(alice, ".claude"), { recursive: true });
+    const ran = spawnSync("bash", ["-c", bashLine(jump!)], { cwd: alice, encoding: "utf-8", env: chat });
+    expect(ran.status, `${ran.stdout}${ran.stderr}`).toBe(0);
+    expect(next(alice, chat).stage).toBe("code-generation");
   });
 
   // When part of the project is split out: the moved files both ignored by the
   // project and inside the new repository, and the one project file the Unit
   // changed back as it was. Said by where the moved files can be committed.
-  test("files left out and every kept file unchanged: the push stops with each reason, a file both ignored and inside a repository of its own said by the second", () => {
+  test("files left out and every kept file unchanged: the push ends with each reason, a file both ignored and inside a repository of its own said by the second", () => {
     const home = oneRepoTeams();
     writeFileSync(join(home.dir, "package.json"), "{\"name\": \"shop\"}\n");
     writeFileSync(join(home.dir, ".gitignore"), `${readFileSync(join(home.dir, ".gitignore"), "utf-8")}web/\n`);
@@ -535,15 +647,15 @@ describe("a Unit on the workspace's own repository", () => {
     const alice = cloneOf(home.remote, "alice");
     const files: Record<string, string> = { "package.json": "{\"name\": \"shop\"}\n" };
     for (const name of ["text.js", "app.js", "index.html"]) files[`web/${name}`] = `${name}\n`;
-    builtWriting(alice, files, () => webOfItsOwn(alice));
-    const refused = run(UNIT, ["push"], alice);
-    expect(refused.status, refused.out).not.toBe(0);
-    const said = String(refused.json?.error ?? refused.out);
-    expect(said).toStartWith(
-      "Nothing of refunds's is left to push: web/text.js and 2 more are inside web, a repository of its own, and yours to " +
-        `commit there; package.json is unchanged in the repo. Nothing was switched or pushed. ${REDO}`,
-    );
-    nothingPushed(home, alice);
+    const record = builtWriting(alice, files, () => webOfItsOwn(alice));
+    approvedHere(record);
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(String(pushed.json?.notice)).toBe(nothingLeft(
+      "web/text.js and 2 more are inside web, a repository of its own, and yours to commit and push there; package.json " +
+        "is unchanged in the repo", "web",
+    ));
+    endedAsNotNow(home, alice, record);
   });
 
   test("a file the project's .gitignore leaves out and every kept file unchanged: the push stops with both reasons", () => {

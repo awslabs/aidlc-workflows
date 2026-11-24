@@ -12864,6 +12864,28 @@ export function resultWaitsLine(unit: string, repo: string): string {
   return `${repo} has not taken the result of ${unit} yet; ask me to send it again once its owner lets your pushes through.`;
 }
 
+// The build's end after a Not now: said once per chat (unitPushAsk), never in
+// the chat whose push just said where the build stands. The push question is
+// not put again until a push, so it shows the message the push will carry.
+export function notPushedYetLine(unit: string, held: { text: string } | null): string {
+  return `${unit} is built and approved, and not pushed yet. Do you want me to push it now` +
+    (held === null ? "?" : `, with this commit message?\n\n${held.text}`);
+}
+
+// That line in both its forms as the project holds them now.
+function notPushedYetLines(pd: string, unit: string): string[] {
+  const held = heldCommitMessage(pd, commitMessageFile(pd));
+  return [notPushedYetLine(unit, null), ...(held === null ? [] : [notPushedYetLine(unit, held)])];
+}
+
+// The push step ended as Not now ends it: Unit Push `later`, the build's
+// record finished, and the line said in its place.
+function pushPutOff(pd: string, notice: string): void {
+  withAuditLock(pd, () => writeStateFile(pd, setOrInsertField(readStateFile(pd), "## Runtime State", UNIT_PUSH_FIELD, "later")));
+  finishBuildRecord(pd);
+  console.log(JSON.stringify({ pushed: false, notice }));
+}
+
 // The push's line when a rule of the record's repository's host refused the
 // result (refusedByHostRule): the host's words, and what to ask its owner for.
 function resultRefusedByRuleLine(unit: string, repo: string, refused: string, branchTried = false): string {
@@ -13806,12 +13828,7 @@ function pushUnit(args: string[], projectDir?: string,
     // Not now to the send again: the code is pushed, and only its result waits,
     // said in that choice's own words.
     const waits = getField(readStateFile(pd), UNIT_PUSH_FIELD)?.trim() === "unsent" ? buildRecordRepo(pd, build) : null;
-    withAuditLock(pd, () => writeStateFile(pd, setOrInsertField(readStateFile(pd), "## Runtime State", UNIT_PUSH_FIELD, "later")));
-    finishBuildRecord(pd);
-    console.log(JSON.stringify({
-      pushed: false,
-      notice: waits === null ? `Nothing is pushed. I'll push ${unit} when you ask.` : `${unit}'s record in ${waits} has no result until you send it.`,
-    }));
+    pushPutOff(pd, waits === null ? `Nothing is pushed. I'll push ${unit} when you ask.` : `${unit}'s record in ${waits} has no result until you send it.`);
     return;
   }
   // The commit message the person gave, from the file the agent wrote it to:
@@ -13896,20 +13913,33 @@ function pushUnit(args: string[], projectDir?: string,
   const gitIgnored: Array<{ path: string; name: string }> = [];
   // Files inside a repository of its own, by their path from the project and that repository's folder.
   const nestedOut: Array<{ path: string; nested: string }> = [];
+  // Files in a recorded checkout that is a repository of its own, in work that
+  // records no repos from here: by their path there and its name.
+  const besideOut: Array<{ path: string; repo: string }> = [];
   // Every repo first: there, and a remote to push to.
   const planned: Array<{ repo: string; dir: string; name: string; remote: string; paths: string[] }> = [];
-  for (const [repo, paths] of byRepo) {
+  for (const [repo, listed] of byRepo) {
     const dir = targets.get(repo)?.dir ?? (repo === "." ? pd : repoDir(pd, repo));
     if (!isGitRepoDir(dir)) fail(repoNotThereLine(pd, repo));
-    // Written in a folder recorded as a checkout that is no repo of this work's.
+    // Written in a folder recorded as a checkout: one that is a repository of
+    // its own is that repository's to commit, left out and said with the rest;
+    // any other is no repo of this work's.
+    const checkouts = repo === "." && listed.some((path) => namesSourceCheckout(path)) ? readRecordedSourceCheckouts(pd) : [];
+    const paths = listed.filter((path) => {
+      if (repo !== "." || !namesSourceCheckout(path)) return true;
+      const named = recordedCheckoutOfListingPath(path, checkouts);
+      if (named === null || !namesRepoOfItsOwn(pd, named.checkout.label, named.checkout.real)) return true;
+      besideOut.push({ path: named.rest, repo: named.checkout.label });
+      return false;
+    });
     const strayCheckout = repo === "." ? paths.find((path) => namesSourceCheckout(path)) : undefined;
     if (strayCheckout !== undefined) {
-      const named = recordedCheckoutOfListingPath(strayCheckout, readRecordedSourceCheckouts(pd));
-      if (named !== null && namesRepoOfItsOwn(pd, named.checkout.label, named.checkout.real)) fail(ownRepoWayBack(unit, named.checkout.label));
       fail(`${unit}'s Code Generation wrote ${strayCheckout} in a folder recorded as a checkout that is not a checkout of any repo ` +
         `this work records, so nothing was pushed. If it is one of the repos ${unit} changes, add that repo to the work ` +
         `(\`${aidlcToolInvocation("utility")} intent add-repo <its name>\`), then push again.`);
     }
+    // Nothing of the Unit's in the workspace's own repository: nothing there to push.
+    if (paths.length === 0) continue;
     const name = repo === "." ? "the repo" : repo;
     // A merge, rebase, cherry-pick or revert of theirs under way: a commit now
     // would be made over it, so nothing is committed until it is finished. A
@@ -14008,20 +14038,41 @@ function pushUnit(args: string[], projectDir?: string,
     const base = integrationOf(repo, dir, remote);
     return paths.every((path) => asAtBase(dir, base, path));
   });
-  if (sentBefore === undefined && gitIgnored.length + nestedOut.length > 0 && allAtBase()) {
+  if (sentBefore === undefined && gitIgnored.length + nestedOut.length + besideOut.length > 0 && allAtBase()) {
+    const yours = (files: string[], where: string): string =>
+      `${filesSaid(files)} ${files.length === 1 ? "is" : "are"} ${where}, a repository of its own, and yours to commit and push there`;
+    const nestedRepos = [...new Set(nestedOut.map((entry) => entry.nested))];
+    const besideRepos = [...new Set(besideOut.map((entry) => entry.repo))];
     const reasons = [
       ...[...new Set(gitIgnored.map((entry) => entry.name))].map((name) =>
         `${name}'s .gitignore leaves out ${filesSaid(gitIgnored.filter((entry) => entry.name === name).map((entry) => entry.path))}`),
-      ...[...new Set(nestedOut.map((entry) => entry.nested))].map((nested) => {
-        const files = nestedOut.filter((entry) => entry.nested === nested).map((entry) => entry.path);
-        return `${filesSaid(files)} ${files.length === 1 ? "is" : "are"} inside ${nested}, a repository of its own, and yours to commit there`;
-      }),
+      ...nestedRepos.map((nested) => yours(nestedOut.filter((entry) => entry.nested === nested).map((entry) => entry.path), `inside ${nested}`)),
+      ...besideRepos.map((own) => yours(besideOut.filter((entry) => entry.repo === own).map((entry) => entry.path), `in ${own}`)),
       ...planned.map(({ name, paths }) => `${filesSaid(paths)} ${paths.length === 1 ? "is" : "are"} unchanged in ${name}`),
     ];
-    fail(`Nothing of ${unit}'s is left to push: ${reasons.join("; ")}. Nothing was switched or pushed. Ask the person whether ` +
-      `to take ${unit} back to Code Generation to write its change where it can be committed; on their yes, run ` +
-      `\`${aidlcToolInvocation("orchestrate")} report --result resumed --choice redo --target code-generation\` and follow what it returns.`);
+    const nothingLeft = `Nothing of ${unit}'s is left to push: ${reasons.join("; ")}. Nothing was switched or pushed.`;
+    const own = [...nestedRepos, ...besideRepos][0];
+    if (own === undefined) {
+      fail(`${nothingLeft} Ask the person whether to take ${unit} back to Code Generation to write its change where it can be ` +
+        `committed; on their yes, run \`${aidlcToolInvocation("orchestrate")} report --result resumed --choice redo ` +
+        "--target code-generation` and follow what it returns.");
+    }
+    // Code in a repository of its own is theirs to commit and push there, and
+    // a take-back would bring the same plan to this same stop: the push step
+    // ends as Not now ends it, asking nothing, and the build's end does not ask
+    // again in this chat.
+    try {
+      const chat = resolveWorkflowSelection(pd).sessionId;
+      if (chat) markPersonLinesHeard(pd, chat, notPushedYetLines(pd, unit));
+    } catch {
+      // No chat known: the build's end says it once, as after a Not now.
+    }
+    pushPutOff(pd, `${nothingLeft} The plan still shows ${unit} as yours, and AI-DLC sends no notice of this: tell the lead ` +
+      `its pull request in ${own}, and they can name it as ${unit}'s build.`);
+    return;
   }
+  // Some of the Unit's code beside the project and the rest here: the way back.
+  if (besideOut.length > 0) fail(ownRepoWayBack(unit, besideOut[0].repo));
   // Then in each, onto the Unit's branch as their own hands would and its
   // commit made with their git (hooks, signing, identity), before anything is
   // pushed: a hook that stops one pushes nothing.

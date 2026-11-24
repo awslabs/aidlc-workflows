@@ -899,6 +899,11 @@ claim; `unsent` when the code went and the result did not, the claim refused
 it or was not there, and the ask is then **Send it again**): **Push** runs `unit push`, **Not now** runs
 `unit push --later` (then the end carries one line that it is not pushed yet, with the message the push will carry;
 **Not now** to **Send it again** says that the Unit's record has no result until it is sent, and nothing more is offered).
+A first push that finds the Unit's code in a repository of its own, inside the project or recorded as a checkout
+beside it, with nothing else of the Unit's left for the workspace's repository, ends the same way as **Not now** and
+asks nothing: its notice says the code is the person's to commit and push there, that the plan still shows the Unit
+as theirs, and that the lead can name its pull request as the Unit's build; the chat that heard it is not told again
+that it is not pushed yet.
 A repo with several remotes and none set for pushing (`pushRemotesToPick`)
 turns **Push** into one choice per remote, each running `unit push --remote
 <repo>=<name>`.
