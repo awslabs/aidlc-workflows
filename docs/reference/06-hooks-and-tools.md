@@ -2713,7 +2713,17 @@ for every file in one `git cat-file --batch` per repo, else for a named file one
 of the last 20 commits that touched it), the line gives the
 `git checkout <commit> -- <path>` that puts it back; a path no shell quoting
 passes to git as that one file is named as held by git, with no command;
-otherwise it says there is no committed copy. The listings are AI-DLC's ignored
+otherwise it says there is no committed copy. After a `git pull`, a file exactly
+as the remote branch the checked-out branch tracks holds it, as far as the
+checkout has merged that branch, is nobody's change and is not named, and one
+the build changed on top of a teammate's copy is put back as that branch has it,
+or as the work found it when that branch has no such file (`remoteBranchCopies`,
+read in each repository's and recorded checkout's own
+folder, never fetched; the code plan question's already-changed line and the
+close's check of changes outside the Units leave the same files out). That
+includes a change the build made once it is pushed to that branch and merged
+here; a change only on this machine (uncommitted, or committed and not pushed)
+is named and counted as before. The listings are AI-DLC's ignored
 files, so a teammate's clone does not hold them: there, the files the project
 held when its Code Generation first ran a step on this machine stand for what
 the person brought (taken then, beside the record's other engine files under
