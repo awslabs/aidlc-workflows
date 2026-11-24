@@ -7473,6 +7473,14 @@ const LANG_BY_EXT: Record<string, string> = {
   ".hpp": "C++",
   ".swift": "Swift",
   ".php": "PHP",
+  // Scripts are code: installers, ops tooling and admin modules are often
+  // nothing but shell or PowerShell.
+  ".sh": "Shell",
+  ".bash": "Shell",
+  ".zsh": "Shell",
+  ".ksh": "Shell",
+  ".ps1": "PowerShell",
+  ".psm1": "PowerShell",
   // Infrastructure code is code (Terraform, Terragrunt and Packer, Bicep).
   ".tf": "Terraform",
   ".hcl": "HCL",
