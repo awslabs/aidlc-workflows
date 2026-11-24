@@ -552,6 +552,44 @@ describe("a Unit on the workspace's own repository", () => {
     endedAsNotNow(home, alice, record);
   });
 
+  test("code in two repositories of its own, one inside the project and one beside it: the lead is told of the first", () => {
+    const home = oneRepoTeams();
+    const alice = cloneOf(home.remote, "alice");
+    const record = builtWriting(alice, { "web/app.js": "app();\n" }, () => webOfItsOwn(alice));
+    const label = besideCheckout(alice, record, [{ path: "web/app.js" }]);
+    approvedHere(record);
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(String(pushed.json?.notice)).toBe(nothingLeft(
+      "web/app.js is inside web, a repository of its own, and yours to commit and push there; lib/refund.ts is in " +
+        `${label}, a repository of its own, and yours to commit and push there`, "web",
+    ));
+    endedAsNotNow(home, alice, record);
+  });
+
+  // The build's end shows the message the push will carry, when one is held:
+  // the chat that heard the notice is not told that form of the line either.
+  test("with a commit message held for the push: the chat that heard the notice is not told the line in its message's form", () => {
+    const home = oneRepoTeams();
+    const alice = cloneOf(home.remote, "alice");
+    const record = builtWriting(alice, { "web/app.js": "app();\n" }, () => webOfItsOwn(alice));
+    approvedHere(record);
+    commitMessage(alice, record, "PAY-7 refund page\n");
+    const session = "t-unit-own-repo-held-message";
+    const chat = personsChat(session);
+    expect(hook(alice, chat, { hook_event_name: "UserPromptSubmit", session_id: session, prompt: "push refunds" }).status).toBe(0);
+    const pushed = run(UNIT, ["push"], alice, chat);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(personsNext(alice, chat, session).ask_type).toBe("unit-take");
+    const end = personsNext(alice, chat, session);
+    expect(end.kind, JSON.stringify(end).slice(0, 600)).toBe("done");
+    expect(JSON.stringify(end)).not.toContain("not pushed yet");
+    const other = "t-unit-own-repo-held-message-other";
+    expect(personsNext(alice, personsChat(other), other).ask_type).toBe("unit-take");
+    expect(JSON.stringify(personsNext(alice, personsChat(other), other)))
+      .toContain("refunds is built and approved, and not pushed yet. Do you want me to push it now, with this commit message?");
+  });
+
   // Some of the Unit's code in the workspace's own repository and some beside
   // it: the way back stays, said once the push's other checks of the
   // workspace have passed, so a merge of theirs under way is said first.

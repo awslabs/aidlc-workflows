@@ -50,9 +50,10 @@ const ASKED_CHANGE = "Approve, and add a line to the end of billing/README.md";
 // the payments space: refunds taken there and built to the push question. With
 // `reply`, the person answers its Code Generation gate in those words, a
 // moment before the agent records the approval with the word Approve, as a run
-// does (a decision in the message's own second is not one after it); each
-// return of that approval is kept in `approvals`.
-function builtToPush(tool: "claude" | HostName, manifestFromWorkspace: boolean, policy?: "strict" | "relaxed" | "off", reply?: string) {
+// does (a decision in the message's own second is not one after it), with
+// `before` said just ahead of it; each return of that approval is kept in
+// `approvals`.
+function builtToPush(tool: "claude" | HostName, manifestFromWorkspace: boolean, policy?: "strict" | "relaxed" | "off", reply?: string, before?: string) {
   const hosts = { billing: codeHost("billing") };
   const state = homeState(policy === undefined ? [] : [`- **Guard Policy**: ${policy} (set by you)`]).replace(/^- \[ \] (nfr-requirements|nfr-design|infrastructure-design) (\S+) EXECUTE$/gm, "- [ ] $1 $2 SKIP");
   const home = makeHome({ repos: hosts, dependencies: DEPENDENCIES, state });
@@ -80,6 +81,7 @@ function builtToPush(tool: "claude" | HostName, manifestFromWorkspace: boolean, 
     const typed = host.typed.bind(host);
     const picked = host.picked.bind(host);
     host.typed = (words: string) => {
+      if (words === reply && before !== undefined) person.say(before);
       const told = typed(words);
       if (words === reply) Bun.sleepSync(1100);
       return told;
@@ -303,6 +305,22 @@ describe("a reply that approves the Unit's code and asks for a change in it", ()
     const after = write();
     expect(after.status, after.stderr).toBe(2);
     expect(after.stderr.trim()).not.toContain(` ${id} (sent `);
+    // Named now, that message is refused as spent.
+    const spent = logChange(host, id);
+    expect(spent.status, spent.stdout + spent.stderr).not.toBe(0);
+    expect(spent.stdout + spent.stderr).toContain(`message ${id} arrived before the last approval or decision`);
+  });
+
+  test("two messages before the approval: its return names no change step, and the refusal names both", () => {
+    const { host, dir, approvals } = builtToPush("claude", false, undefined, ASKED_CHANGE, "The page reads well.");
+    const row = rowsOf(dir, "GATE_APPROVED").findLast((entry) => auditBlockField(entry.block, "Stage") === "code-generation");
+    const ids = (auditBlockField(row?.block ?? "", "Message Ids") ?? "").split(",").filter(Boolean);
+    expect(ids, row?.block).toHaveLength(2);
+    expect(approvals).toHaveLength(1);
+    expect(String(approvals[0].reason)).not.toContain("log change");
+    const refused = writeOf(host, dir)();
+    expect(refused.status, refused.stderr).toBe(2);
+    for (const id of ids) expect(refused.stderr).toContain(`${id} (sent `);
   });
 
   test("a plain Approve: nothing runs until the agent names that message, and the record then shows their word beside it", () => {
