@@ -45,6 +45,7 @@ import {
   planRefOf,
   planWordAt,
   recordAt,
+  recordHostOf,
   recordHost,
   refundsTakenInClone,
   run,
@@ -608,6 +609,59 @@ describe("at the home", () => {
     const building = next(laptop);
     expect(building.kind, JSON.stringify(building).slice(0, 600)).toBe("run-stage");
     expect(building.unit).toBe("reporting");
+  });
+
+  // A repository only a team's push names (one the plan did not list, added
+  // during the build): its result carries the address, and the board offers
+  // the clone by it, saying where the address comes from.
+  function ledgerPushed() {
+    const { hosts, home, alice, record } = refundsTakenInClone();
+    codeGenerated(alice, record);
+    const ledger = codeHost("ledger");
+    cloneCode(ledger, alice, "ledger", "alice");
+    expect(run(UTILITY, ["intent", "add-repo", "ledger"], alice).status).toBe(0);
+    writeFileSync(join(alice, "ledger", "entries.ts"), "export const entry = 1;\n");
+    const manifest = join(record, "construction", "refunds", "code-generation", "source-manifest.json");
+    const written = JSON.parse(readFileSync(manifest, "utf-8")) as { writes: Array<{ repo: string; path: string }> };
+    written.writes.push({ repo: "ledger", path: "entries.ts" });
+    writeFileSync(manifest, `${JSON.stringify(written, null, 2)}\n`);
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    return { hosts, home, ledger };
+  }
+  const boardOffers = (dir: string): Array<{ question: string; choices: Array<{ label: string; command?: string }> }> => {
+    const board = next(dir);
+    expect(String(board.narration), JSON.stringify(board).slice(0, 800)).toContain("not read here: ledger is not cloned in this workspace");
+    return (board.offers ?? []) as Array<{ question: string; choices: Array<{ label: string; command?: string }> }>;
+  };
+
+  test("a repository only a team's push names: the lead's board offers its clone by the address the push carries", () => {
+    const { home, ledger } = ledgerPushed();
+    const offer = boardOffers(home.dir).find((entry) => entry.question.startsWith("ledger is not here yet"));
+    expect(offer?.question, JSON.stringify(offer)).toBe(`ledger is not here yet; refunds's push names it at ${ledger}. Do you want me to clone it here?`);
+    expect(offer?.choices.map((choice) => choice.label)).toEqual(["Clone ledger", "Not now"]);
+    expect(offer?.choices[0].command).toEndWith(`intent add-repo ledger --url ${shellSingleQuote(ledger)}`);
+  });
+
+  // An address in a result that git would read as an option is no address to
+  // clone by: no offer, and nothing refused.
+  test("a result whose address for that repository starts with a dash: no clone is offered, and the board says nothing more", () => {
+    const { home } = ledgerPushed();
+    const host = recordHostOf(home, "refunds");
+    const ref = `refs/aidlc/claims/${home.id8}/refunds`;
+    const tip = git(host, ["rev-parse", ref]);
+    const json = JSON.parse(git(host, ["show", `${tip}:unit.json`])) as { result: { repos: Array<{ repo: string; address?: string }> } };
+    json.result.repos.find((repo) => repo.repo === "ledger")!.address = "-oProxyCommand=touch-it";
+    const blob = spawnSync("git", ["hash-object", "-w", "--stdin"], { cwd: host, input: `${JSON.stringify(json, null, 2)}\n`, encoding: "utf-8" }).stdout.trim();
+    const tree = spawnSync("git", ["mktree"], {
+      cwd: host, encoding: "utf-8",
+      input: `${git(host, ["ls-tree", tip]).split("\n").map((line) => line.endsWith("\tunit.json") ? line.replace(/blob [0-9a-f]+/, `blob ${blob}`) : line).join("\n")}\n`,
+    }).stdout.trim();
+    const commit = git(host, ["-c", "user.name=lead", "-c", "user.email=lead@example.test", "commit-tree", tree, "-p", tip, "-m", "an address that reads as an option"]);
+    git(host, ["update-ref", ref, commit]);
+    const said = JSON.stringify(boardOffers(home.dir));
+    expect(said).not.toContain("ledger is not here yet");
+    expect(said).not.toContain("-oProxyCommand");
   });
 
   // A new worktree of the lead's checkout has none of the clones git leaves out

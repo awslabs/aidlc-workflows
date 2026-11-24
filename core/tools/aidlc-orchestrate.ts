@@ -20070,8 +20070,10 @@ function unitBoardRows(
   results: ReturnType<typeof checkTeamResults>,
   mergedHere: ReadonlySet<string>,
   progress: string,
-): { rows: UnitBoardRow[]; notRead: string[] } {
+): { rows: UnitBoardRow[]; notRead: string[]; pushedAt: Array<{ repo: string; unit: string; address: string }> } {
   const notRead: string[] = [];
+  // A repository not here that only a team's push names, by the address its result carries.
+  const pushedAt: Array<{ repo: string; unit: string; address: string }> = [];
   const dependencies = unitDependencies(projectDir);
   const standing = unitProgressStanding(progress);
   // A checkout that did not make the plan and has not said it leads the work
@@ -20139,6 +20141,10 @@ function unitBoardRows(
         : `, not recorded yet: the next step here records it${named ? ` and opens ${named}` : ""}`;
       const unread = resultReposNotHere(projectDir, payload, verdicts);
       notRead.push(...unread);
+      for (const repo of unread) {
+        const address = payload.result.repos.find((entry) => entry.repo === repo)?.address;
+        if (address !== undefined) pushedAt.push({ repo, unit, address });
+      }
       return { unit, team, status: `${builtBy}${mergedOrNotHere(verdicts, unread)}${waiting}${unrecorded}` };
     }
     const early = (payload.early_on ?? []).map((dep) => dep.unit);
@@ -20156,7 +20162,7 @@ function unitBoardRows(
     const entry = leadsHere && claim?.status === "claimed" ? claim.payload.proposals?.find((proposal) => proposal.answer === undefined) : undefined;
     return entry === undefined ? "" : `; the change ${builderOf(claim!)} proposed to the ${inputName(entry.input)} waits for your answer`;
   };
-  return { rows: rows.map((row) => ({ ...row, status: `${row.status}${waitingChange(row.unit)}` })), notRead };
+  return { rows: rows.map((row) => ({ ...row, status: `${row.status}${waitingChange(row.unit)}` })), notRead, pushedAt };
 }
 
 // `team-board` at a team home: the home's own board, from the same builders as
@@ -20514,7 +20520,7 @@ function emitTeamUnitMajorRunStage(
     }
   }
   if ([...heldElsewhere].some((unit) => !mergedHere.has(unit))) {
-    const { rows, notRead } = unitBoardRows(projectDir, stateContent, resolution.batches.flat(), overview, results, mergedHere, refreshedState);
+    const { rows, notRead, pushedAt } = unitBoardRows(projectDir, stateContent, resolution.batches.flat(), overview, results, mergedHere, refreshedState);
     const unitTool = aidlcToolInvocation("unit");
     // A sign-off or a proposal the lead was asked about once stays theirs to answer, from the board.
     const answers = [...(overview?.claims.values() ?? [])].filter((claim) => claim.status === "claimed").flatMap((claim) => [
@@ -20569,7 +20575,7 @@ function emitTeamUnitMajorRunStage(
         });
       }
     }
-    const clone = namedCloneOffer(projectDir, notRead);
+    const clone = namedCloneOffer(projectDir, notRead, pushedAt);
     if (clone !== null) namedOffers.push(clone);
     // Each offer is put once in a chat; its command stays in the board's note.
     const allOffers = offersOnce(projectDir, [...answers, ...namedOffers, ...rhythm]);

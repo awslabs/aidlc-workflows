@@ -17434,13 +17434,21 @@ export function namedOnlyDone(projectDir: string): Array<{ unit: string; pulls: 
 // a team's pushed build the board could not read (`unread`), that this
 // workspace has no checkout of: a build's own clone offer (likelyReposNotHere),
 // with the address this workspace's list or the plan gives. Null with none.
-export function namedCloneOffer(projectDir: string, unread: readonly string[] = []): { question: string; choices: Array<{ label: string; command?: string }> } | null {
+export function namedCloneOffer(
+  projectDir: string,
+  unread: readonly string[] = [],
+  // A repository only a team's push names, by the address its result carries.
+  pushedAt: ReadonlyArray<{ repo: string; unit: string; address: string }> = [],
+): { question: string; choices: Array<{ label: string; command?: string }> } | null {
   const pd = resolveProjectDir(projectDir);
   const repos = [...new Set([...[...namedPullRequests(pd).values()].flat().map((pr) => pr.repo), ...unread])].filter((repo) => repo !== ".");
   if (repos.length === 0) return null;
   const plan = keptPlan(pd, activeIdentity(pd).intentId8)?.plan ?? null;
   const addresses = new Map((plan?.repos ?? []).flatMap((repo) => (repo.address === null ? [] : [[repo.name, repo.address] as [string, string]])));
-  const notThere = likelyReposNotHere(pd, repos, repos, addresses);
+  // An address that starts with "-" would be read as an option: no clone by it, and nothing said of it.
+  const pushed = new Map(pushedAt.filter((entry) => !addresses.has(entry.repo) && !entry.address.startsWith("-"))
+    .map((entry) => [entry.repo, entry] as const));
+  const notThere = likelyReposNotHere(pd, repos, repos, addresses, pushed);
   return notThere.offer.offer === undefined ? null : { question: notThere.question.trim(), choices: notThere.offer.offer.choices };
 }
 
@@ -17573,6 +17581,8 @@ function likelyReposNotHere(
   recorded: string[],
   // The lead's repo list at the commit the Unit was taken from.
   leadAddresses: Map<string, string> = new Map(),
+  // Where neither list has one: the address a team's push carries, and its Unit.
+  pushedAt: ReadonlyMap<string, { unit: string; address: string }> = new Map(),
 ): { lines: string; question: string; offer: { offer?: { choices: Array<{ label: string; command?: string }> } } } {
   const missing = [...new Set(likely.map((repo) => repo.split("/")[0]))]
     .filter((repo) => recorded.includes(repo) && !isGitRepoDir(repoDir(pd, repo)));
@@ -17585,17 +17595,25 @@ function likelyReposNotHere(
   const fromLead = missing.filter((repo) => !cloneable.includes(repo) && leadAddresses.has(repo));
   const leadLine = fromLead.length === 0 ? "" : ` ${joinNames(fromLead.map((repo) => `${repo} is not here yet; the lead's list has it at ` +
     `${maskUserinfo(leadAddresses.get(repo)!)}`))}. Do you want me to clone ${fromLead.length === 1 ? "it" : "them"} here?`;
+  const fromPush = missing.filter((repo) => !cloneable.includes(repo) && !fromLead.includes(repo) && pushedAt.has(repo));
+  const pushLine = fromPush.map((repo) => ` ${repo} is not here yet; ${pushedAt.get(repo)!.unit}'s push names it at ` +
+    `${maskUserinfo(pushedAt.get(repo)!.address)}. Do you want me to clone it here?`).join("");
   return {
-    lines: missing.filter((repo) => !cloneable.includes(repo) && !fromLead.includes(repo)).map((repo) => ` ${repoNotThereLine(pd, repo)}`).join("") +
+    lines: missing.filter((repo) => !cloneable.includes(repo) && !fromLead.includes(repo) && !fromPush.includes(repo))
+      .map((repo) => ` ${repoNotThereLine(pd, repo)}`).join("") +
       writableLines(pd, likely.length > 0 ? [...new Set(likely.map((repo) => repo.split("/")[0]))].filter((repo) => recorded.includes(repo)) : recorded),
-    question: (cloneable.length > 0 ? ` ${repoCloneOfferLine(pd, cloneable)}` : "") + leadLine,
-    offer: cloneable.length === 0 && fromLead.length === 0 ? {} : {
+    question: (cloneable.length > 0 ? ` ${repoCloneOfferLine(pd, cloneable)}` : "") + leadLine + pushLine,
+    offer: cloneable.length === 0 && fromLead.length === 0 && fromPush.length === 0 ? {} : {
       offer: {
         choices: [
           ...cloneable.map((repo) => ({ label: `Clone ${repo}`, command: `${aidlcToolInvocation("utility")} intent add-repo ${shellArg(repo)}` })),
           ...fromLead.map((repo) => ({
             label: `Clone ${repo}`,
             command: `${aidlcToolInvocation("utility")} intent add-repo ${shellArg(repo)} --url ${shellSingleQuote(leadAddresses.get(repo)!)}`,
+          })),
+          ...fromPush.map((repo) => ({
+            label: `Clone ${repo}`,
+            command: `${aidlcToolInvocation("utility")} intent add-repo ${shellArg(repo)} --url ${shellSingleQuote(pushedAt.get(repo)!.address)}`,
           })),
           { label: "Not now" },
         ],
