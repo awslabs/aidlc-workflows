@@ -1678,9 +1678,10 @@ function readUnitRecord(
 
 // A record read at a step the person typed: a repository that does not answer
 // stops the step with git's own words, before anything is written; at a take
-// (`taking`, the Unit taken), in the take's own words.
+// (`taking`, the Unit taken) and a push (`pushing`, its way on: "" or
+// planMovedWayOn), in that step's own words.
 function typedRecordRead(
-  projectDir: string, place: RecordPlace, work: { uuid: string; space: string }, unit: string, taking?: string,
+  projectDir: string, place: RecordPlace, work: { uuid: string; space: string }, unit: string, taking?: string, pushing?: string,
 ): UnitClaimView | null {
   try {
     return readUnitRecord(projectDir, place, work, unit, { typed: true });
@@ -1688,8 +1689,16 @@ function typedRecordRead(
     if (!(error instanceof RecordUnread)) throw error;
     const why = error.said ?? "it did not answer in time";
     if (taking !== undefined) fail(`${taking} was not taken: ${error.repo} could not be read (${why}). Nothing was written; say when to try again.`);
+    if (pushing !== undefined) {
+      fail(`${unit} was not pushed: ${error.repo} could not be read (${why}). Nothing was switched or pushed; say when to try again.${pushing}`);
+    }
     fail(`Unit claim registry read failed: ${why}`);
   }
+}
+
+// The way on when the plan's own repository did not answer: the new address the builder can give.
+function planMovedWayOn(label: string, repo: string): string {
+  return ` If the plan of ${label} has moved from ${repo}, tell me its new address and this build will read it there.`;
 }
 
 // Whether this workspace's copy of a Unit's record is one a newer AI-DLC
@@ -13837,10 +13846,12 @@ function pushUnit(args: string[], projectDir?: string,
     .filter((pair): pair is [string, string] => pair.length === 2 && pair[0] !== "" && pair[1] !== ""));
   // A plan the lead moved is followed before the push reads it, so the take
   // and the result go where the plan is now.
+  let planUnanswered = false;
   if (takenFromPlan(pd, build)) {
-    lookAt(pd, build.homeLocation, [planRecordRef(idSuffix(build.homeWork))]);
+    const looked = lookAt(pd, build.homeLocation, [planRecordRef(idSuffix(build.homeWork))]);
     const met = followMoved(pd, idSuffix(build.homeWork), build.homeLocation, false);
     if (met?.follow.kind === "followed") build.homeLocation = met.follow.address;
+    else planUnanswered = !looked.ok && !("refused" in looked);
   }
   const home = buildsHome(pd, build);
   const ref = claimRef(home.id8, unit);
@@ -13848,8 +13859,10 @@ function pushUnit(args: string[], projectDir?: string,
   // A take its record's repository did not take then is recorded first, so
   // the result goes onto this build's own take, never onto anyone else's: read
   // against the record as its repository has it now, and the lead's word on it
-  // as the plan has it now (an open-again since the take).
-  typedRecordRead(pd, place, recordWork(home), unit);
+  // as the plan has it now (an open-again since the take). When the plan's own
+  // repository did not answer either, its stop says the way on for a plan that moved.
+  const planRepo = planUnanswered ? (home.plan ?? planOfWork(pd, home.id8, home.location))?.plan_repo.name ?? repoNameOf(home.location) : null;
+  typedRecordRead(pd, place, recordWork(home), unit, undefined, planRepo === null ? "" : planMovedWayOn(homeLabelOf(state, build), planRepo));
   if (!home.solo && isGitAddress(home.location)) lookAt(pd, home.location, [planRecordRef(home.id8)]);
   let standing = takeStanding(pd, build);
   const recorded = standing.state === "pending" ? recordTakeHere(pd, build, home, standing, true) : null;
@@ -15978,8 +15991,7 @@ export function buildClaimNotes(projectDir: string, stateContent: string, sessio
       // The plan's own repository among them: the way on for a plan that moved, the new address the builder can give.
       const plan = refreshed.unreached.find((unread) => sameGitAddress(unread.address, build.homeLocation));
       lines.push(`${joinNames(names)} could not be read just now (${refreshed.unreached[0].said}), so news from ` +
-        `${names.length === 1 ? "it" : "them"} may be behind.` + (plan === undefined ? ""
-          : ` If the plan of ${homeLabelOf(stateContent, build)} has moved from ${plan.repo}, tell me its new address and this build will read it there.`));
+        `${names.length === 1 ? "it" : "them"} may be behind.` + (plan === undefined ? "" : planMovedWayOn(homeLabelOf(stateContent, build), plan.repo)));
     }
     const over = planSharedOverLine(projectDir, stateContent);
     if (over !== null) lines.push(over);

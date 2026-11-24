@@ -153,6 +153,59 @@ describe("a take writes the Unit's record where its code goes", () => {
   });
 });
 
+// checkout-ui's Code Generation, as codeGenerated leaves refunds': one file in checkout-web.
+function checkoutUiGenerated(web: string): void {
+  mkdirSync(join(web, "checkout-web", "src"), { recursive: true });
+  writeFileSync(join(web, "checkout-web", "src", "ui.ts"), "export const ui = 1;\n");
+  const stage = join(buildOf(web, "checkout-ui")!, "construction", "checkout-ui", "code-generation");
+  mkdirSync(stage, { recursive: true });
+  writeFileSync(join(stage, "source-manifest.json"), `${JSON.stringify({
+    stage: "code-generation",
+    unit: "checkout-ui",
+    version: 1,
+    writes: [{ repo: "checkout-web", path: "src/ui.ts" }],
+  }, null, 2)}\n`);
+  writeFileSync(join(stage, "code-summary.md"), "# Code summary\n\nThe page.\n");
+}
+
+// The push reads the Unit's record before anything is switched: checkout-ui's
+// push with the named repositories' hosts moved away.
+function pushWithAway(repos: string[]) {
+  const { home, web, took } = takeCheckoutUi();
+  expect(took.status, took.out).toBe(0);
+  checkoutUiGenerated(web);
+  const clone = join(web, "checkout-web");
+  const branch = git(clone, ["branch", "--show-current"]);
+  const away = repos.map((repo) => home.hosts[repo]);
+  for (const host of away) renameSync(host, `${host}-away`);
+  try {
+    const pushed = run(UNIT, ["push"], web);
+    expect(git(clone, ["branch", "--show-current"])).toBe(branch);
+    return pushed;
+  } finally {
+    for (const host of away) renameSync(`${host}-away`, host);
+    expect(git(home.hosts["checkout-web"], ["for-each-ref", "--format=%(refname)", "refs/heads/checkout-ui"])).toBe("");
+  }
+}
+
+describe("the record's repository cannot be read at the push", () => {
+  test("nor the plan's: the push says so as the take does, with the way on for a plan that moved, and nothing is switched or pushed", () => {
+    const pushed = pushWithAway(["checkout-web", "checkout-api"]);
+    expect(pushed.status).not.toBe(0);
+    expect(pushed.out).toContain("checkout-ui was not pushed: checkout-web could not be read (");
+    expect(pushed.out).toContain("). Nothing was switched or pushed; say when to try again. If the plan of fixture has " +
+      "moved from checkout-api, tell me its new address and this build will read it there.");
+  });
+
+  test("the plan's repository answers: the push says only to try again", () => {
+    const pushed = pushWithAway(["checkout-web"]);
+    expect(pushed.status).not.toBe(0);
+    expect(pushed.out).toContain("checkout-ui was not pushed: checkout-web could not be read (");
+    expect(pushed.out).toContain("). Nothing was switched or pushed; say when to try again.");
+    expect(pushed.out).not.toContain("has moved from");
+  });
+});
+
 // A record is written by anyone who can push to its repository: its
 // integration_ref is read only in the shapes AI-DLC writes.
 describe("a record's integration_ref is read only as AI-DLC writes it", () => {
