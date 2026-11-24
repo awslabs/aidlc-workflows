@@ -28134,8 +28134,9 @@ export function recoveryRepoCandidates(
       const key = `${space}\0${intent}`;
       if (!checkedIntents.has(key)) {
         checkedIntents.add(key);
+        // The workspace listed at "." under a name is the root (null), never a second candidate.
         for (const repo of intentRepos(projectDir, intent, space)) {
-          if (isValidRepoName(repo) && isWorkspaceRepoDir(projectDir, repo)) candidates.set(repo, null);
+          if (isValidRepoName(repo) && isWorkspaceRepoDir(projectDir, repo) && !repoIsWorkspace(projectDir, repo)) candidates.set(repo, null);
         }
       }
     }
@@ -28143,7 +28144,7 @@ export function recoveryRepoCandidates(
     const repo = auditBlockField(row.block, "Repo");
     const slug = auditBlockField(row.block, "Bolt slug");
     if (repo === null || slug === null || validateBoltSlug(slug) !== null ||
-      candidates.get(repo) === null || !isRecordedRepo(repo)) continue;
+      candidates.get(repo) === null || !isRecordedRepo(repo) || repoIsWorkspace(projectDir, repo)) continue;
     const slugs = candidates.get(repo) ?? new Set<string>();
     slugs.add(slug);
     candidates.set(repo, slugs);
