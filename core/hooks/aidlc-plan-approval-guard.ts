@@ -3130,7 +3130,8 @@ async function evaluate(
         return 0;
       }
       rulesArriving = null;
-      if (!mutation.engineRefused) {
+      // Nothing stands behind a change on an unattended run, so no step is named there.
+      if (!mutation.engineRefused && process.env.AIDLC_UNATTENDED !== "1") {
         const step = requestMessageStep(projectDir, UNIT_CHANGE_OTHERWISE, "any",
           `\`${aidlcDispatcherInvocation("log change")}\``, "make the change");
         unitBuiltSaid = step === UNIT_CHANGE_OTHERWISE

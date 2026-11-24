@@ -273,10 +273,12 @@ describe("a reply that approves the Unit's code and asks for a change in it", ()
       expect(auditBlockField(allowed?.block ?? "", "Unit")).toBe("refunds");
       expect(auditBlockField(allowed?.block ?? "", "Message Id")).toBe(id);
       expect(auditBlockField(allowed?.block ?? "", "Person Reply")).toBe(ASKED_CHANGE);
-      // Never on an unattended run.
+      // Never on an unattended run, and there the refusal names no step that cannot lift it.
       host.env.AIDLC_UNATTENDED = "1";
       try {
-        expect(write().status).toBe(2);
+        const unattended = write();
+        expect(unattended.status, unattended.stderr).toBe(2);
+        expect(unattended.stderr.trim()).toBe("Your Unit is built and approved: its code changes only when you ask for a change.");
       } finally {
         delete host.env.AIDLC_UNATTENDED;
       }
