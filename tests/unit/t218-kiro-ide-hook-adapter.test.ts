@@ -1195,9 +1195,14 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
     }
   });
 
+  // The first-step line the card writes for an /aidlc line it hands to the conductor.
+  const FIRST_STEP_LINE = "AI-DLC: this message is an AI-DLC request and AI-DLC has it on record. " +
+    "Run `bun .kiro/tools/aidlc.ts engine orchestrate next --entry` now and do only what it prints.\n";
+
   // A bare name that is no record, or words after a name, are the conductor's
   // to read (the engine hands them over): the prompt seam runs nothing for them
-  // and writes no terminal context. A record's own name is still run here.
+  // and writes no terminal context, only the first step, `next --entry`, which
+  // reads the line itself. A record's own name is still run here.
   test("8c2: the prompt seam leaves an unknown workspace word and words after a name to the conductor", () => {
     const dir = scratchProject(true);
     const slug = DEFAULT_RECORD_DIR.replace(/-[0-9a-f]+$/, "");
@@ -1207,7 +1212,7 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
           session_id: "sess_unknown_word", hook_event_name: "UserPromptSubmit", cwd: dir, prompt,
         }));
         expect(r.code, prompt).toBe(0);
-        expect(r.stdout, prompt).toBe("");
+        expect(r.stdout, prompt).toBe(FIRST_STEP_LINE);
       }
       const switched = runIdeStdin(dir, "verb-intercept", JSON.stringify({
         session_id: "sess_unknown_word", hook_event_name: "UserPromptSubmit", cwd: dir, prompt: `/aidlc intent ${slug}`,
@@ -1222,7 +1227,8 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
 
   // The chat's own selection decides which space a bare name is looked up in:
   // a chat bound to another space switches to that space's intent off-band,
-  // while a chat bound to the default space is handed the word.
+  // while a chat bound to the default space is handed the word: the card then
+  // names only the first step, `next --entry`, which reads the line itself.
   test("8c3: the prompt seam judges a bare name against the chat's own space", () => {
     const dir = scratchProject(true);
     try {
@@ -1243,7 +1249,7 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
       expect(bound.stdout).toContain("Now working on `auth` in space `teamb`.");
       const elsewhere = prompt("sess_default_chat");
       expect(elsewhere.code, elsewhere.stderr).toBe(0);
-      expect(elsewhere.stdout).toBe("");
+      expect(elsewhere.stdout).toBe(FIRST_STEP_LINE);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
