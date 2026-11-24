@@ -390,6 +390,11 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     const missing = skills.flatMap((rel) => {
       const body = readConductorSurface(rel);
       if (ENTRY_SKILLS.includes(rel)) return body.includes(FIRST_COMMAND_CARRIES_NONE) ? [] : [`${rel}: no first-command rule`];
+      if (rel.includes("/hermes/")) {
+        const hermesPassOn = passOn.replace("`$ARGUMENTS`", "the person's request");
+        const hermesNamed = named.replace("`/aidlc classic Build a notes app` or `/aidlc express: add a version flag`", "a request that opens with a plan name (`classic: Build a notes app`, `express: add a version flag`)").replace("`/aidlc classic car rental website`", "a request that opens with `classic car rental website`");
+        return body.includes(hermesPassOn) && body.includes(hermesNamed) ? [] : [rel];
+      }
       if (!body.includes(passOn)) return [`${rel}: no pass-on rule`];
       return body.includes(named) ? [] : [rel];
     });
@@ -1277,7 +1282,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     expectDefers(docs("docs/reference/15-stage-definition.md"), section(docs("docs/reference/15-stage-definition.md"), "- `subagent` — hub-and-spoke.", "\n- `pipeline`"));
     expectDefers(docs("docs/reference/17-skill-system.md"), section(docs("docs/reference/17-skill-system.md"), "| `run-stage` |", "\n"));
 
-    const ensembleBindings = ["Claude Code", "Kiro CLI", "Kiro IDE", "Codex CLI", "Cursor", "opencode", "GitHub Copilot"];
+    const ensembleBindings = ["Claude Code", "Kiro CLI", "Kiro IDE", "Codex CLI", "Cursor", "opencode", "GitHub Copilot", "Hermes Agent"];
     const trees = [
       { label: "core", protocols: docs("core/aidlc-common/protocols"), stages: docs("core/aidlc-common/stages"), skills: [] as string[] },
       ...HARNESS_MATRIX.map((harness) => ({
@@ -1682,11 +1687,12 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     for (const rel of skills) {
       const body = readConductorSurface(rel);
       // Each names the doctor the way that harness's entry is typed.
-      const entry = rel.includes("/codex/") ? "$aidlc" : "/aidlc";
+      const entry = rel.includes("/codex/") ? "$aidlc" : rel.includes("/hermes/") ? "`{{INVOKE}}" : "/aidlc";
+      const doctor = rel.includes("/hermes/") ? `${entry} --doctor\`` : `${entry} --doctor`;
       for (const token of [
-        `and that ${entry} --doctor shows what to fix, after which they can ask you to carry on) and stop`,
-        `names no step for the person, add one line: ${entry} --doctor shows what to fix.`,
-        `(or ${entry} --doctor when it offers none)`,
+        `and that ${doctor} shows what to fix, after which they can ask you to carry on) and stop`,
+        `names no step for the person, add one line: ${doctor} shows what to fix.`,
+        `(or ${doctor} when it offers none)`,
       ]) {
         if (!body.includes(token)) missing.push(`${rel}  missing: ${token}`);
       }
