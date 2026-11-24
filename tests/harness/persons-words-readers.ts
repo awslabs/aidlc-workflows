@@ -1178,6 +1178,7 @@ export const ALLOWED: Record<string, Allowed> = {
   [`${ORCH}#projectTypeIsWholeRequest`]: { use: "keeps", why: "the presence shape: the line is only the project type" },
   [`${ORCH}#parkedDirective`]: { use: "keeps", why: "a step's narration, which may carry their words", from: [`${ORCH}#parkAfterApproval`] },
   [`${ORCH}#lineEndingTurn`]: { use: "keeps", why: "a team step's narration (the home's board, a take's line), which may carry the lead's word on a repo's merge" },
+  [`${ORCH}#leadAddressStep`]: { use: "keeps", why: "the lead's address the person gave, said back as the print step's narration when a sign-in stops its read; nothing decides on it" },
   [`${ORCH}#parkAfterApproval`]: { use: "keeps", why: "as above" },
   [`${ORCH}#nextArgsAreOnlyWords`]: { use: "decides", why: "the presence shape: next carries only words; handed the person's own /aidlc line (firstStepNote), it reads which keys the engine's parse of it holds, never what the words say", from: [`${ORCH}#firstStepNote`] },
   [`${ORCH}#firstStepNote`]: { use: "decides", why: "the /aidlc parse: whether a line the human-turn hook just kept whole is words alone with no flag-shaped token next does not take, so the agent hears that next reads it from the copy; never what the words say", from: [`${HOOK}#respond`] },
