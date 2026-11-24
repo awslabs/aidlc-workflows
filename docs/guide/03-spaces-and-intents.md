@@ -538,6 +538,19 @@ to confirm the folder (in a script, pass `--project-dir`). What that means for
 | Several teams share the same repos | One workspace, with a space per team (see Spaces, above) |
 | Unrelated projects | A separate folder and `aidlc/` for each. They share no records, rules, or knowledge; only machine-wide settings and the active release reach both ([what carries over](#what-carries-over-and-what-doesnt)) |
 
+**Splitting a repo partway through.** When part of a repo becomes a repo of its
+own (moved out beside it, or cloned inside it), tell the agent where the new
+repo is. Before a piece of work's Construction starts, the agent adds it to the
+work with `/aidlc intent add-repo`, and from then on every step names both repos
+and each change lands in the repo it belongs to. Once Construction has started,
+work that one person builds carries on with
+`/aidlc intent add-checkout <folder>`, which the agent runs so that the review
+and its checks cover the new repo as well. Work that a team builds stays with
+the repo it started in: a Unit's push does not carry what the Unit changed in
+the new repo, and says so, and that code is the builder's to commit and push
+there. A team that can choose when to split does it between pieces of work, or
+before Construction starts.
+
 What to commit in each layout is in [What's committed and what's not](#whats-committed-and-whats-not).
 
 ---
