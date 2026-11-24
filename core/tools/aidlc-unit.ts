@@ -175,6 +175,7 @@ import {
   repoDir,
   repoIsWorkspace,
   resolveWorkflowSelection,
+  sameDirectory,
   selectIntentForSession,
   sessionsDir,
   setActiveSpaceCursor,
@@ -12198,12 +12199,18 @@ function planTakeSource(pd: string, id8: string, from: string, unit: string): Ta
   const plan = snapshot.plan;
   // The work's repositories are the plan's with an address (a Unit may name a
   // folder, or a repository the lead has no copy of); the workspace's own
-  // repository is "." to a build made in it, never a repo of its own.
+  // repository is "." to a build made in it, never a repo of its own, unless
+  // this workspace lists it by the plan's name at "." beside another of the
+  // plan's repositories (the lead's first add kept it in the work so): then it
+  // is kept by that name, as the lead's work records it.
   const own = workspaceHomeLocation(pd);
+  const isOwn = (address: string): boolean => own !== null && own !== "local" && sameGitAddress(address, own);
+  const others = plan.repos.filter((repo) => repo.address !== null && !isOwn(repo.address));
   const home: HomeWork = {
     space: plan.work.space, dirName: "", uuid: plan.work.id, id8, label: plan.work.label || id8, location: place.address,
     target: homeTarget(pd, place.address), recordPrefix: "",
-    repos: plan.repos.filter((repo) => repo.address !== null && !(own !== null && own !== "local" && sameGitAddress(repo.address, own)))
+    repos: plan.repos.filter((repo) => repo.address !== null &&
+      (!isOwn(repo.address) || (others.length > 0 && repoIsWorkspace(pd, repo.name))))
       .map((repo) => repo.name),
     solo: false, leadCopy: true, plan,
   };
@@ -13359,7 +13366,7 @@ function filesSaid(files: readonly string[]): string {
 }
 
 // Whether a repo holds an uncommitted change of the person's, beyond the
-// Unit's. On the workspace's own repository (".") a file of AI-DLC's own is
+// Unit's. In the workspace's own folder ("." or the name it is listed by) a file of AI-DLC's own is
 // none (aidlcOwnedSourceKey): its record in aidlc/ (the build's, which the
 // push commits next and an early take has just written, and an earlier Unit's,
 // whose audit file is written to after its push), the install config leaves
@@ -13370,7 +13377,7 @@ function filesSaid(files: readonly string[]): string {
 function ownChanges(pd: string, planned: ReadonlyArray<{ repo: string; dir: string }>): boolean {
   const aidlcOwn = aidlcOwnedSourceKey(pd);
   return planned.some(({ repo, dir }) => {
-    if (repo !== ".") return git(dir, ["status", "--porcelain"]).stdout.trim() !== "";
+    if (repo !== "." && !sameDirectory(dir, pd)) return git(dir, ["status", "--porcelain"]).stdout.trim() !== "";
     return git(dir, ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames"]).stdout.split("\0")
       .some((entry) => entry.length > 3 && !aidlcOwn(sourcePathKey("", entry.slice(3))));
   });

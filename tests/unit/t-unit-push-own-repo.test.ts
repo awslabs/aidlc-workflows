@@ -20,11 +20,12 @@ import { noteEngineAskMark, personRepliedAfter, readAuditShardEvents, engineAskM
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { bringBranchLevel, unitBranchInTheWay, workToCommit } from "../../dist/claude/.claude/tools/aidlc-unit.ts";
 import { namesRepoOfItsOwn } from "../../dist/claude/.claude/tools/aidlc-unit-teams.ts";
-import { AIDLC_SRC, fixtureIntentId8, REPO_ROOT, seededStateFile, writeLearningsSelections } from "../harness/fixtures.ts";
+import { AIDLC_SRC, fixtureIntentId8, REPO_ROOT, seededRecordDir, seededStateFile, writeLearningsSelections } from "../harness/fixtures.ts";
 import { typedHarnessName } from "../../core/tools/aidlc-runtime-paths.ts";
 import {
   claimPayload,
   cleanupTeamBuild,
+  cloneCode,
   cloneOf,
   codeHost,
   commitOnHost,
@@ -32,11 +33,14 @@ import {
   finishBuild,
   git,
   hook,
+  inSpace,
   makeHome,
   mergeOnHost,
   next,
   personsChat,
+  recordAt,
   run,
+  sharePlan,
   STATE,
   tempDir,
   UNIT,
@@ -3163,4 +3167,84 @@ describe("a Unit on the workspace's own repository", () => {
       else expect(said).toContain("NOTES.md in the repo is not in the commit: it already had a change of yours when refunds was taken");
     });
   }
+});
+
+// The lead's work kept its code in the workspace folder itself, then took
+// billing as its first repo: repos.json lists the workspace at "." under the
+// name its code knowledge has (its folder's) beside billing, and the work
+// records both, as that add leaves it. A teammate clones the workspace, clones
+// billing beside it, takes refunds from the plan and builds in both.
+describe("a teammate's build of work that lists the workspace beside its first repo", () => {
+  const UNITS = "# Unit dependencies\n\n```yaml\nunits:\n" +
+    "  - name: refunds\n    kind: service\n    repos: [billing, WORKSPACE]\n    depends_on: []\n" +
+    "  - name: reporting\n    kind: service\n    repos: [billing]\n    depends_on: [refunds]\n```\n";
+
+  // `pushFrom`: the folder the push is run from, as the person's shell names it.
+  function teammateBuilds(writes: (own: string) => Array<Record<string, string>>, pushFrom = (dir: string): string => dir) {
+    const billing = codeHost("billing");
+    const home = makeHome({ repos: { billing } });
+    const own = basename(home.dir);
+    writeFileSync(join(seededRecordDir(home.dir), "inception", "units-generation", "unit-of-work-dependency.md"), UNITS.replace("WORKSPACE", own));
+    const shop = join(tempDir("shop-host"), "shop.git");
+    git(dirname(shop), ["init", "-q", "--bare", "-b", "main", shop]);
+    git(home.dir, ["remote", "set-url", "origin", shop]);
+    const registryPath = join(home.dir, "aidlc", "spaces", "default", "intents", "intents.json");
+    const registry = JSON.parse(readFileSync(registryPath, "utf-8")) as Array<Record<string, unknown>>;
+    registry[0].repos = ["billing", own].sort();
+    writeFileSync(registryPath, `${JSON.stringify(registry, null, 2)}\n`);
+    writeFileSync(join(home.dir, "repos.json"), `${JSON.stringify({ repos: [{ name: "billing", url: billing }, { name: own, path: ".", url: shop }] }, null, 2)}\n`);
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    git(home.dir, ["add", "-A"]);
+    git(home.dir, ["commit", "-q", "-m", "teams, billing beside the workspace"]);
+    git(home.dir, ["push", "-q", "-u", "origin", "main"]);
+    const planned = sharePlan({ dir: home.dir, remote: shop });
+    const alice = cloneOf(shop, "alice");
+    cloneCode(billing, alice, "billing", "alice");
+    inSpace(alice, "payments");
+    const took = run(UNIT, ["take", "refunds", "--plan", planned.id8, "--from", Object.values(planned.hosts)[0]], alice);
+    expect(took.status, took.out).toBe(0);
+    const intents = join(alice, "aidlc", "spaces", "payments", "intents");
+    const record = join(intents, readdirSync(intents).find((name) => name.endsWith("-refunds"))!);
+    // The build's registry row, kept in its own record folder.
+    const built = (JSON.parse(readFileSync(join(record, "aidlc-intent.json"), "utf-8")) as { repos?: string[] }).repos;
+    mkdirSync(join(alice, "billing", "lib"), { recursive: true });
+    writeFileSync(join(alice, "billing", "lib", "refund.ts"), "export const refund = 1;\n");
+    mkdirSync(join(alice, "src"), { recursive: true });
+    writeFileSync(join(alice, "src", "refunds.ts"), "export const refunds = 1;\n");
+    const stage = join(record, "construction", "refunds", "code-generation");
+    mkdirSync(stage, { recursive: true });
+    writeFileSync(join(stage, "source-manifest.json"), `${JSON.stringify({ stage: "code-generation", unit: "refunds", version: 1, writes: writes(own) }, null, 2)}\n`);
+    writeFileSync(join(stage, "code-summary.md"), "# Code summary\n\nRefunds.\n");
+    finishBuild(record);
+    return { own, built, pushed: run(UNIT, ["push"], pushFrom(alice)), planned, shop };
+  }
+
+  test("a Unit writing in billing and in the workspace by its name: the build records both, and the push says only what it did", () => {
+    const { own, built, pushed, planned, shop } = teammateBuilds((own) => [{ repo: "billing", path: "lib/refund.ts" }, { repo: own, path: "src/refunds.ts" }]);
+    expect(built).toEqual(["billing", own].sort());
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(String(pushed.json?.notice)).toContain(`Pushed branch refunds in billing and ${own}.`);
+    expect(String(pushed.json?.notice)).not.toContain("was not in the lead's plan");
+    expect(String(pushed.json?.notice)).not.toContain("your other changes are still yours");
+    expect(git(shop, ["log", "--format=%s", "--name-only", "main..refunds"])).toContain("src/refunds.ts");
+    const result = recordAt(planned, "refunds")?.json.result as { repos: Array<{ repo: string; address?: string }> };
+    expect(result.repos.map((repo) => repo.repo).sort()).toEqual(["billing", own].sort());
+    expect(result.repos.find((repo) => repo.repo === own)).not.toHaveProperty("address");
+  });
+
+  // On Windows a folder is the same folder in any letter case: the push run
+  // from the workspace typed with its drive letter in lower case.
+  test.if(process.platform === "win32")("on Windows, the workspace typed with its drive letter in lower case is still its own folder at the push", () => {
+    const { own, pushed } = teammateBuilds((own) => [{ repo: "billing", path: "lib/refund.ts" }, { repo: own, path: "src/refunds.ts" }],
+      (dir) => `${dir[0].toLowerCase()}${dir.slice(1)}`);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(String(pushed.json?.notice)).toContain(`Pushed branch refunds in billing and ${own}.`);
+    expect(String(pushed.json?.notice)).not.toContain("your other changes are still yours");
+  });
+
+  test("a Unit writing in the workspace with no repo named: refused as any Unit across two repos is, with the way back", () => {
+    const { pushed } = teammateBuilds((): Array<Record<string, string>> => [{ repo: "billing", path: "lib/refund.ts" }, { path: "src/refunds.ts" }]);
+    expect(pushed.status).not.toBe(0);
+    expect(pushed.out).toContain("refunds's Code Generation record names what it wrote in a way its repos do not have, so nothing was pushed.");
+  });
 });
