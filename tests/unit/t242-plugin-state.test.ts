@@ -124,6 +124,7 @@ function installed(
     sourceHash,
     base: null,
     baseProblem: null,
+    coreRanges: [],
   };
 }
 

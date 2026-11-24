@@ -319,6 +319,22 @@ describe("t314 standalone plugin validator", () => {
     expect(withDependencies(["core", "zeta@^1.2.0"])).toEqual([]);
     expect(withDependencies(["zeta@1.x || >=2.1.0 <3"])).toEqual([]);
     expect(withDependencies(["core", "zeta"])).toEqual([]);
+    // A range on core is an engine requirement sync checks against the
+    // installed AI-DLC; offline validate accepts any range npm can read.
+    expect(withDependencies(["core@>=2.11.4"])).toEqual([]);
+    expect(withDependencies(["core@>=2.11.0 <2.12.0", "zeta@^1.2.0"])).toEqual([]);
+    expect(withDependencies(["core@banana"])).toEqual([
+      'manifest dependencies: "core@banana" has a version range npm cannot read, such as "^1.2.0" or ">=1.2.0 <2.0.0"',
+    ]);
+    // Sync counts a preview engine as the release it previews, so a preview
+    // version on core could never be met; a base's range may name one.
+    for (const range of ["2.6.0-preview.20260101.1", ">=2.6.0-preview.1 <3", "1.0.0 - 2.6.0-rc.1"]) {
+      expect(withDependencies([`core@${range}`]), range).toEqual([
+        `manifest dependencies: "core@${range}" names a preview build: a range on core takes release versions, such as ">=2.11.4", and a preview counts as the release it previews`,
+      ]);
+    }
+    expect(withDependencies(["core@1.0.0 - 2.6.0"])).toEqual([]);
+    expect(withDependencies(["core", "zeta@^1.2.0-beta.1"])).toEqual([]);
     expect(withDependencies(["core", "zeta", "mid@^1.0.0"])).toEqual([
       "manifest dependencies name more than one base plugin (zeta, mid)",
     ]);

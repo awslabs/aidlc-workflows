@@ -426,17 +426,19 @@ function validDependencyRange(range: string): boolean {
 }
 
 // What a plugin builds on: core and at most one base plugin, which builds on
-// core alone. The one owner of that rule: validate reports what this returns,
-// and plugin sync holds a plugin on it.
+// core alone, plus any version ranges on `core`, each an engine compatibility
+// requirement. The one owner of those rules: validate reports what this
+// returns, and plugin sync holds a plugin on it.
 export function readPluginBase(
   entries: unknown,
   self?: string,
-): { base: PluginDependency | null } | { problem: PluginBaseProblem } {
-  if (entries === undefined) return { base: null };
+): { base: PluginDependency | null; coreRanges: string[] } | { problem: PluginBaseProblem } {
+  if (entries === undefined) return { base: null, coreRanges: [] };
   if (!Array.isArray(entries) || entries.some((entry) => typeof entry !== "string" || entry.trim() === "")) {
     return { problem: { kind: "shape" } };
   }
   const bases: PluginDependency[] = [];
+  const coreRanges: string[] = [];
   for (const entry of entries as string[]) {
     const text = entry.trim();
     const at = text.indexOf("@");
@@ -448,11 +450,22 @@ export function readPluginBase(
     if (range !== null && !validDependencyRange(range)) {
       return { problem: { kind: "entry", reason: `"${entry}" has a version range npm cannot read, such as "^1.2.0" or ">=1.2.0 <2.0.0"` } };
     }
+    // Sync compares a preview engine as the release it previews, so a preview
+    // version in a core range could never be met by that preview itself.
+    if (name === "core" && range !== null && /[\dxX*]-[0-9A-Za-z]/.test(range)) {
+      return {
+        problem: {
+          kind: "entry",
+          reason: `"${entry}" names a preview build: a range on core takes release versions, such as ">=2.11.4", and a preview counts as the release it previews`,
+        },
+      };
+    }
     if (name === self) return { problem: { kind: "entry", reason: `"${entry}" names this plugin itself` } };
     if (name !== "core") bases.push({ name, range });
+    else if (range !== null) coreRanges.push(range);
   }
   if (bases.length > 1) return { problem: { kind: "bases", names: bases.map((base) => base.name) } };
-  return { base: bases[0] ?? null };
+  return { base: bases[0] ?? null, coreRanges };
 }
 
 export function validatePluginName(

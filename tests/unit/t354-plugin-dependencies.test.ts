@@ -5,11 +5,12 @@
 // plugin, and a base builds on core alone (#2693). Plugin sync composes the
 // bases first, then the plugins built on them, whatever their names and
 // whatever order the hosts run their session-start hooks in. A plugin whose
-// base is missing, outside its range, built on another plugin or lacks a stage
-// the plugin's scopes include, or that names two bases, is held with one line:
+// base is missing, held, outside its range, built on another plugin or lacks a
+// stage the plugin's scopes include, that names two bases, or that needs
+// AI-DLC in a core range the engine is outside (#4128), is held with one line:
 // said once by sync, kept by plugin list and doctor, while every other plugin
 // still composes. A held plugin composed before stays as it was, and its line
-// says so.
+// says so. A plugin whose base is turned off is paused before any of that.
 //
 // Mechanism: cli. Tiny plugins are built with the shipped builder into temp
 // roots; each case copies dist/claude into a fresh project with a fixture
@@ -423,6 +424,293 @@ describe("t354 a plugin that cannot build on its base is held, and the rest comp
   });
 });
 
+// The engine release the fixture project's tools read, rewritten to simulate
+// installs older or newer than what a plugin's core range asks for.
+function setEngineVersion(target: Project, version: string): void {
+  const file = join(target.dir, ".claude", "tools", "aidlc-version.ts");
+  writeFileSync(
+    file,
+    readFileSync(file, "utf-8").replace(/AIDLC_VERSION = "[^"]+"/, `AIDLC_VERSION = "${version}"`),
+  );
+}
+
+// The project's own aidlc entry, for plugin select and doctor.
+function engine(target: Project, args: string[]): Ran {
+  const result = spawnSync(process.execPath, [join(target.dir, ".claude", "tools", "aidlc.ts"), ...args], {
+    cwd: target.dir,
+    encoding: "utf-8",
+    timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS),
+    env: cleanEnv({
+      AIDLC_CLAUDE_PLUGIN_REGISTRY: target.registry,
+      AIDLC_CLAUDE_SETTINGS: target.settings,
+      CLAUDE_PROJECT_DIR: target.dir,
+      AIDLC_HARNESS_DIR: ".claude",
+      AIDLC_HARNESS_NAME: "claude",
+    }),
+  });
+  return { status: result.status, stdout: String(result.stdout ?? ""), stderr: String(result.stderr ?? "") };
+}
+
+function doctorChecks(target: Project): Array<{ label: string; fix?: string; pass: boolean }> {
+  const ran = engine(target, ["doctor", "--json"]);
+  return (JSON.parse(ran.stdout) as { data: { checks: Array<{ label: string; fix?: string; pass: boolean }> } })
+    .data.checks;
+}
+
+const heldRecord = (target: Project, key: string): string =>
+  join(target.dir, ".claude", "tools", "data", `plugin-held-${key}.json`);
+
+describe("t354 a core range is an engine requirement", () => {
+  test("engine outside the range: one line, a held record, exit 0, the other plugin composes, list and doctor carry the row", () => {
+    const target = project({
+      alpha: { root: plugin({ name: "alpha", dependencies: ["core@>=2.6.0"] }) },
+      mid: { root: plugin({ name: "mid" }) },
+    });
+    setEngineVersion(target, "2.5.0");
+    const ran = sync(target);
+    const line = "alpha is not composed: it needs AI-DLC >=2.6.0, and this install is AI-DLC 2.5.0. Install an AI-DLC release in that range, or a version of alpha made for AI-DLC 2.5.0.";
+    expect(ran.status, ran.stdout + ran.stderr).toBe(0);
+    expect(ran.stdout).toContain(line);
+    expect(statusOf(target, "mid")?.state).toBe("current");
+    expect(statusOf(target, "alpha")).toEqual(expect.objectContaining({
+      state: "dependency-unmet",
+      action: "attention",
+      message: line,
+    }));
+    expect(JSON.parse(readFileSync(join(target.dir, ".claude", "tools", "data", "plugin-held-alpha.json"), "utf-8")))
+      .toEqual({ schemaVersion: 1, name: "alpha", version: "0.1.0", reason: line });
+    expect(stamp(target, "alpha")).toBeNull();
+    expect(doctorChecks(target).find((check) => check.label.startsWith("Plugins:"))).toEqual(
+      expect.objectContaining({ pass: false, label: "Plugins: 1 need attention", fix: line }),
+    );
+  });
+
+  test("engine in the range composes, a bare core stays unchanged, and a ceiling holds the release it names", () => {
+    const inRange = project({
+      alpha: { root: plugin({ name: "alpha", dependencies: ["core@>=2.0.0 <3"] }) },
+      mid: { root: plugin({ name: "mid", dependencies: ["core"] }) },
+    });
+    setEngineVersion(inRange, "2.5.0");
+    const ran = sync(inRange);
+    expect(ran.status, ran.stdout + ran.stderr).toBe(0);
+    expect(ran.stdout.trim()).toBe("plugin sync complete: 2 plugin(s)");
+    expect(statusOf(inRange, "alpha")?.state).toBe("current");
+    expect(statusOf(inRange, "mid")?.state).toBe("current");
+
+    const atCeiling = project({
+      alpha: { root: plugin({ name: "alpha", dependencies: ["core@>=2.0.0 <2.5.0"] }) },
+    });
+    setEngineVersion(atCeiling, "2.5.0");
+    const held = sync(atCeiling);
+    expect(held.status, held.stdout + held.stderr).toBe(0);
+    expect(held.stdout).toContain(
+      "alpha is not composed: it needs AI-DLC >=2.0.0 <2.5.0, and this install is AI-DLC 2.5.0.",
+    );
+  });
+
+  test("a re-sync composes the plugin once the engine satisfies the range, and removes the record", () => {
+    const target = project({
+      alpha: { root: plugin({ name: "alpha", dependencies: ["core@>=2.6.0"] }) },
+    });
+    setEngineVersion(target, "2.5.0");
+    expect(sync(target).stdout).toContain("alpha is not composed");
+    setEngineVersion(target, "2.6.0");
+    const ran = sync(target);
+    expect(ran.status, ran.stdout + ran.stderr).toBe(0);
+    expect(ran.stdout).not.toContain("alpha is not composed");
+    expect(statusOf(target, "alpha")?.state).toBe("current");
+    expect(stamp(target, "alpha")?.version).toBe("0.1.0");
+    expect(existsSync(join(target.dir, ".claude", "tools", "data", "plugin-held-alpha.json"))).toBe(false);
+  });
+
+  test("a core range beside a base range: the engine line comes first, then the base line once the engine fits", () => {
+    const target = project({
+      alpha: { root: alpha({ dependencies: ["core@>=2.6.0", "zeta@^0.1.0"] }) },
+      zeta: { root: plugin({ name: "zeta", version: "0.2.0" }), version: "0.2.0" },
+    });
+    setEngineVersion(target, "2.5.0");
+    const first = sync(target);
+    expect(first.status, first.stdout + first.stderr).toBe(0);
+    expect(first.stdout).toContain("alpha is not composed: it needs AI-DLC >=2.6.0, and this install is AI-DLC 2.5.0.");
+    expect(first.stdout).not.toContain("zeta 0.2.0 is installed");
+    expect(statusOf(target, "zeta")?.state).toBe("current");
+    setEngineVersion(target, "2.6.0");
+    const second = sync(target);
+    expect(second.status, second.stdout + second.stderr).toBe(0);
+    expect(second.stdout).toContain(
+      "alpha is not composed: it needs zeta ^0.1.0, and zeta 0.2.0 is installed.",
+    );
+
+    const bothFit = project({
+      alpha: { root: alpha({ dependencies: ["core@>=2.6.0", "zeta@^0.1.0"] }) },
+      zeta: { root: ZETA() },
+    });
+    setEngineVersion(bothFit, "2.6.0");
+    const ran = sync(bothFit);
+    expect(ran.status, ran.stdout + ran.stderr).toBe(0);
+    expect(statusOf(bothFit, "alpha")?.state).toBe("current");
+  });
+
+  test("composed before an engine change that leaves the range: the plugin stays, and its line says so once", () => {
+    const target = project({
+      alpha: { root: plugin({ name: "alpha", dependencies: ["core@>=2.6.0"] }) },
+    });
+    setEngineVersion(target, "2.6.0");
+    expect(sync(target).status).toBe(0);
+    setEngineVersion(target, "2.5.0");
+    const ran = sync(target);
+    const line = "alpha stays as composed before, but it needs AI-DLC >=2.6.0, and this install is AI-DLC 2.5.0. Install an AI-DLC release in that range, or a version of alpha made for AI-DLC 2.5.0.";
+    expect(ran.status, ran.stdout + ran.stderr).toBe(0);
+    expect(ran.stdout).toContain(line);
+    expect(stamp(target, "alpha")?.version).toBe("0.1.0");
+    const again = sync(target);
+    expect(again.status, again.stdout + again.stderr).toBe(0);
+    expect(again.stdout).not.toContain("alpha");
+    expect(statusOf(target, "alpha")?.message).toBe(line);
+  });
+
+  test("disabling the held plugin removes the record, and enabling it says the line again", () => {
+    const target = project({
+      alpha: { root: plugin({ name: "alpha", dependencies: ["core@>=2.6.0"] }) },
+      mid: { root: plugin({ name: "mid" }) },
+    });
+    setEngineVersion(target, "2.5.0");
+    expect(sync(target).stdout).toContain("alpha is not composed");
+    writeFileSync(target.settings, `${JSON.stringify({ enabledPlugins: { "alpha@alpha": false } }, null, 2)}\n`);
+    const disabled = sync(target);
+    expect(disabled.status, disabled.stdout + disabled.stderr).toBe(0);
+    expect(disabled.stdout).not.toContain("alpha is not composed");
+    expect(existsSync(join(target.dir, ".claude", "tools", "data", "plugin-held-alpha.json"))).toBe(false);
+    expect(statusOf(target, "mid")?.state).toBe("current");
+    writeFileSync(target.settings, "{}\n");
+    const enabled = sync(target);
+    expect(enabled.status, enabled.stdout + enabled.stderr).toBe(0);
+    expect(enabled.stdout).toContain("alpha is not composed: it needs AI-DLC >=2.6.0, and this install is AI-DLC 2.5.0.");
+  });
+
+  test("a preview build counts as the release it previews: inside a floor, outside a ceiling", () => {
+    const floor = project({
+      alpha: { root: plugin({ name: "alpha", dependencies: ["core@>=2.6.0"] }) },
+    });
+    setEngineVersion(floor, "2.6.0-preview.20260101.1");
+    const ran = sync(floor);
+    expect(ran.status, ran.stdout + ran.stderr).toBe(0);
+    expect(statusOf(floor, "alpha")?.state).toBe("current");
+
+    const ceiling = project({
+      alpha: { root: plugin({ name: "alpha", dependencies: ["core@>=2.0.0 <2.6.0"] }) },
+    });
+    setEngineVersion(ceiling, "2.6.0-preview.20260101.1");
+    const held = sync(ceiling);
+    expect(held.status, held.stdout + held.stderr).toBe(0);
+    expect(held.stdout).toContain(
+      "alpha is not composed: it needs AI-DLC >=2.0.0 <2.6.0, and this install is AI-DLC 2.6.0-preview.20260101.1.",
+    );
+  });
+
+  test("every core entry's range must hold, and the line names the one the engine is outside", () => {
+    const target = project({
+      alpha: { root: plugin({ name: "alpha", dependencies: ["core@>=2.0.0", "core@<2.5.0"] }) },
+    });
+    setEngineVersion(target, "2.5.0");
+    const ran = sync(target);
+    expect(ran.status, ran.stdout + ran.stderr).toBe(0);
+    expect(ran.stdout).toContain("alpha is not composed: it needs AI-DLC <2.5.0, and this install is AI-DLC 2.5.0.");
+  });
+
+  test("a base held for the engine holds the plugin built on it, and both compose once the engine fits", () => {
+    const target = project({
+      alpha: { root: alpha() },
+      zeta: { root: plugin({ name: "zeta", dependencies: ["core@>=2.6.0"] }) },
+      mid: { root: plugin({ name: "mid" }) },
+    });
+    setEngineVersion(target, "2.5.0");
+    const ran = sync(target);
+    const zetaLine = "zeta is not composed: it needs AI-DLC >=2.6.0, and this install is AI-DLC 2.5.0. Install an AI-DLC release in that range, or a version of zeta made for AI-DLC 2.5.0.";
+    const alphaLine = "alpha is not composed: it needs zeta ^0.1.0, and zeta is not composed. Once zeta composes, alpha composes at the next session start.";
+    expect(ran.status, ran.stdout + ran.stderr).toBe(0);
+    expect(ran.stdout).toContain(zetaLine);
+    expect(ran.stdout).toContain(alphaLine);
+    expect(stamp(target, "zeta")).toBeNull();
+    expect(stamp(target, "alpha")).toBeNull();
+    expect(pluginStageNumbers(target)["alpha-example-stage"]).toBeUndefined();
+    expect(statusOf(target, "mid")?.state).toBe("current");
+    expect(statusOf(target, "alpha")).toEqual(expect.objectContaining({ state: "dependency-unmet", message: alphaLine }));
+    expect(statusOf(target, "zeta")).toEqual(expect.objectContaining({ state: "dependency-unmet", message: zetaLine }));
+
+    setEngineVersion(target, "2.6.0");
+    const fits = sync(target);
+    expect(fits.status, fits.stdout + fits.stderr).toBe(0);
+    expect(fits.stdout).not.toContain("is not composed");
+    expect(statusOf(target, "zeta")?.state).toBe("current");
+    expect(statusOf(target, "alpha")?.state).toBe("current");
+    expect(before(pluginStageNumbers(target), "zeta-example-stage", "alpha-example-stage")).toBe(true);
+    expect(existsSync(heldRecord(target, "zeta"))).toBe(false);
+    expect(existsSync(heldRecord(target, "alpha"))).toBe(false);
+  });
+
+  test("a base held for the engine but composed before still carries the plugin built on it", () => {
+    const target = project({
+      alpha: { root: alpha() },
+      zeta: { root: plugin({ name: "zeta", dependencies: ["core@>=2.6.0"] }) },
+    });
+    setEngineVersion(target, "2.6.0");
+    expect(sync(target).status).toBe(0);
+    setEngineVersion(target, "2.5.0");
+    const ran = sync(target);
+    expect(ran.status, ran.stdout + ran.stderr).toBe(0);
+    expect(ran.stdout).toContain(
+      "zeta stays as composed before, but it needs AI-DLC >=2.6.0, and this install is AI-DLC 2.5.0.",
+    );
+    expect(ran.stdout).not.toContain("alpha");
+    expect(statusOf(target, "alpha")?.state).toBe("current");
+    expect(stamp(target, "zeta")?.version).toBe("0.1.0");
+  });
+
+  test("an installed manifest naming a preview version on core is held for its author to fix, even on that preview", () => {
+    const pinned = plugin({ name: "alpha" });
+    const manifestPath = join(pinned, ".aidlc-plugin", "plugin.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf-8")) as Record<string, unknown>;
+    manifest.dependencies = ["core@2.6.0-preview.20260101.1"];
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+    const target = project({ alpha: { root: pinned }, mid: { root: plugin({ name: "mid" }) } });
+    setEngineVersion(target, "2.6.0-preview.20260101.1");
+    const ran = sync(target);
+    expect(ran.status, ran.stdout + ran.stderr).toBe(0);
+    expect(ran.stdout).toContain(
+      'alpha is not composed: it has a .aidlc-plugin/plugin.json that cannot be read ("core@2.6.0-preview.20260101.1" names a preview build: a range on core takes release versions, such as ">=2.11.4", and a preview counts as the release it previews). Its author needs to fix that file.',
+    );
+    expect(statusOf(target, "mid")?.state).toBe("current");
+  });
+
+  test("a plugin whose base is off is paused, not held, whatever its core range says", () => {
+    const target = project({
+      alpha: { root: alpha({ dependencies: ["core@>=2.6.0", "zeta@^0.1.0"] }) },
+      zeta: { root: ZETA() },
+    });
+    setEngineVersion(target, "2.6.0");
+    expect(sync(target).status).toBe(0);
+    const off = engine(target, ["engine", "plugin", "select", "aidlc,alpha"]);
+    expect(off.status, off.stdout + off.stderr).toBe(0);
+    setEngineVersion(target, "2.5.0");
+    const ran = sync(target);
+    expect(ran.status, ran.stdout + ran.stderr).toBe(0);
+    expect(ran.stdout).not.toContain("alpha");
+    expect(existsSync(heldRecord(target, "alpha"))).toBe(false);
+    expect(statusOf(target, "alpha")).toEqual(expect.objectContaining({
+      state: "paused",
+      message: "paused: needs zeta, which is off",
+    }));
+
+    const on = engine(target, ["engine", "plugin", "select", "aidlc,alpha,zeta"]);
+    expect(on.status, on.stdout + on.stderr).toBe(0);
+    const back = sync(target);
+    expect(back.status, back.stdout + back.stderr).toBe(0);
+    expect(back.stdout).toContain("it needs AI-DLC >=2.6.0, and this install is AI-DLC 2.5.0.");
+    expect(statusOf(target, "alpha")?.state).toBe("dependency-unmet");
+  });
+});
+
 describe("t354 session-start hooks need no order", () => {
   test("with a host plugin list, the team plugin's own hook composes its installed base first", () => {
     const team = alpha();
@@ -644,22 +932,6 @@ describe("t354 turning a base off pauses the plugin built on it", () => {
     mkdirSync(join(out, "contributions", "construction"), { recursive: true });
     writeFileSync(join(out, "contributions", "construction", "build-and-test.md"), CONTRIBUTION);
     return out;
-  }
-
-  function engine(target: Project, args: string[]): Ran {
-    const result = spawnSync(process.execPath, [join(target.dir, ".claude", "tools", "aidlc.ts"), ...args], {
-      cwd: target.dir,
-      encoding: "utf-8",
-      timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS),
-      env: cleanEnv({
-        AIDLC_CLAUDE_PLUGIN_REGISTRY: target.registry,
-        AIDLC_CLAUDE_SETTINGS: target.settings,
-        CLAUDE_PROJECT_DIR: target.dir,
-        AIDLC_HARNESS_DIR: ".claude",
-        AIDLC_HARNESS_NAME: "claude",
-      }),
-    });
-    return { status: result.status, stdout: String(result.stdout ?? ""), stderr: String(result.stderr ?? "") };
   }
 
   const select = (target: Project, names: string): Ran => engine(target, ["engine", "plugin", "select", names]);

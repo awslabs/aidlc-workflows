@@ -16,6 +16,7 @@ import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
+import { AIDLC_VERSION } from "./aidlc-version.ts";
 import { projectInvocationTokens } from "./aidlc-command.ts";
 import {
   acquireAuditLock,
@@ -109,6 +110,9 @@ export type InstalledPlugin = {
   // manifest cannot say.
   base: PluginDependency | null;
   baseProblem: PluginBaseProblem | { kind: "unreadable"; reason: string } | null;
+  // The manifest's version ranges on "core": the engine releases this plugin
+  // is made for. Empty when it declares none.
+  coreRanges: string[];
   // The commands its own manifest names (aidlc.commands), well-formed ones only.
   commands?: Record<string, PluginCommandEntry>;
   // The host's own id for it (name@marketplace), where the host lists plugins.
@@ -405,17 +409,19 @@ export function skippedCommandLine(skip: PluginCommandSkip): string {
 
 // A projection built before the plugin's own manifest travelled with it
 // builds on core alone, as every plugin did then.
-function installedBase(root: string, key: string): Pick<InstalledPlugin, "base" | "baseProblem"> {
+function installedBase(root: string, key: string): Pick<InstalledPlugin, "base" | "baseProblem" | "coreRanges"> {
   const manifestPath = join(root, ".aidlc-plugin", "plugin.json");
-  if (!existsSync(manifestPath)) return { base: null, baseProblem: null };
+  if (!existsSync(manifestPath)) return { base: null, baseProblem: null, coreRanges: [] };
   let manifest: unknown;
   try {
     manifest = readJson(manifestPath);
   } catch {
-    return { base: null, baseProblem: { kind: "unreadable", reason: "not valid JSON" } };
+    return { base: null, baseProblem: { kind: "unreadable", reason: "not valid JSON" }, coreRanges: [] };
   }
   const read = readPluginBase((manifest as { dependencies?: unknown } | null)?.dependencies, key);
-  return "problem" in read ? { base: null, baseProblem: read.problem } : { base: read.base, baseProblem: null };
+  return "problem" in read
+    ? { base: null, baseProblem: read.problem, coreRanges: [] }
+    : { base: read.base, baseProblem: null, coreRanges: read.coreRanges };
 }
 
 function currentRoots(): string[] {
@@ -2616,18 +2622,29 @@ export function announcePrune(
 
 // A base not composed in this run: here at a version (installed, or composed
 // in this project), with the base it builds on itself, if any, and its stage
-// slugs when known; missing and why; or turned off for this project, which
-// pauses the plugin built on it.
+// slugs when known; missing and why (not installed, disabled in the host, not
+// in this project yet, or held in this run for its own reason); or turned off
+// for this project, which pauses the plugin built on it.
 export type BaseView =
   | { kind: "here"; version: string; where: string; base: string | null; stages: ReadonlySet<string> | null }
-  | { kind: "missing"; why: "not-installed" | "host-disabled" | "not-in-project" }
+  | { kind: "missing"; why: "not-installed" | "host-disabled" | "not-in-project" | "held" }
   | { kind: "off" };
 
 export type HeldPlugin = { plugin: InstalledPlugin; reason: string };
 
-// What a held line needs to know about the host: its name, and which harness
-// this is, for when a waiting plugin composes.
-export type HeldWords = { hostName: string; harnessName: string };
+// What a held line needs to know about the host: its name, which harness this
+// is, for when a waiting plugin composes, and the engine version installed
+// here, for a plugin that needs AI-DLC in a range.
+export type HeldWords = { hostName: string; harnessName: string; engineVersion: string };
+
+// A preview build carries every feature of the release it previews, so a
+// plugin's core range reads the engine's release id, never the -preview tag
+// (npm range grammar would put every prerelease outside a plain range). For
+// the same reason readPluginBase refuses a preview version in a core range.
+export function engineReleaseId(version: string): string {
+  const at = version.indexOf("-");
+  return at < 0 ? version : version.slice(0, at);
+}
 
 // Claude Code and Codex list the plugins installed in them; no other host does.
 export function hostListsPlugins(harnessName: string): boolean {
@@ -2682,9 +2699,10 @@ export function nextCompose(
 }
 
 type HeldProblem =
-  | { kind: "missing"; base: PluginDependency; why: "not-installed" | "host-disabled" | "not-in-project" }
+  | { kind: "missing"; base: PluginDependency; why: "not-installed" | "host-disabled" | "not-in-project" | "held" }
   | { kind: "deep"; base: string; baseOfBase: string }
   | { kind: "range"; base: PluginDependency; version: string; where: string }
+  | { kind: "engine"; range: string; version: string }
   | { kind: "include"; base: string; version: string; missing: Array<{ scope: string; stages: string[] }> }
   | Exclude<InstalledPlugin["baseProblem"], null>;
 
@@ -2710,10 +2728,20 @@ function heldLine(
       ? [`needs ${needs(problem.base)}, which is not installed`, `Install ${problem.base.name} and ${key} composes at the next session start.`]
       : problem.why === "host-disabled"
         ? [`needs ${problem.base.name}, which is disabled in ${words.hostName}`, `Enable ${problem.base.name} there, or disable ${key}.`]
+        : problem.why === "held"
+        ? [
+          `needs ${needs(problem.base)}, and ${problem.base.name} is not composed`,
+          `Once ${problem.base.name} composes, ${key} composes ${nextCompose(words.harnessName, key, plugin.root)}.`,
+        ]
         : [
           `needs ${needs(problem.base)}, which this project does not have yet`,
           `If ${problem.base.name} is installed, ${key} composes ${nextCompose(words.harnessName, key, plugin.root, problem.base.name)}; if not, install ${problem.base.name}.`,
         ]
+    : problem.kind === "engine"
+      ? [
+        `needs AI-DLC ${problem.range}, and this install is AI-DLC ${problem.version}`,
+        `Install an AI-DLC release in that range, or a version of ${key} made for AI-DLC ${problem.version}.`,
+      ]
     : problem.kind === "deep"
       ? [`builds on ${problem.base}, which builds on ${problem.baseOfBase}`, "A plugin can build only on a base that builds on core alone."]
       : problem.kind === "range"
@@ -2766,11 +2794,12 @@ function ownedStageSlugs(ownership: OwnershipRecord | undefined): ReadonlySet<st
 
 // Layering is shallow on purpose: a plugin builds on core and at most one base
 // plugin, and a base builds on core alone. So the order is the bases, then the
-// plugins built on them, alphabetical within each, as sync always ran. A
-// plugin whose base is missing, outside its range, built on another plugin or
-// without a stage the plugin's scopes include, or whose manifest cannot say,
-// is held with its line and never resolved; one whose base is turned off for
-// this project is paused, and nothing is said.
+// plugins built on them, alphabetical within each, as sync always ran. One
+// whose base is turned off for this project is paused, and nothing is said. A
+// plugin that needs AI-DLC in a range this engine is outside, or whose base is
+// missing, held, outside its range, built on another plugin or without a stage
+// the plugin's scopes include, or whose manifest cannot say, is held with its
+// line and never resolved.
 export function layerOrder(
   plugins: InstalledPlugin[],
   baseView: (name: string) => BaseView,
@@ -2778,21 +2807,27 @@ export function layerOrder(
   words: HeldWords,
 ): { ordered: InstalledPlugin[]; held: HeldPlugin[]; paused: InstalledPlugin[] } {
   const sorted = [...plugins].sort((left, right) => left.key.localeCompare(right.key));
-  const inRun = new Map(sorted.map((plugin) => [plugin.key, plugin]));
+  const engineRelease = engineReleaseId(words.engineVersion);
+  const outsideRange = new Map(sorted.map((plugin) => [
+    plugin.key,
+    plugin.coreRanges.find((range) => !Bun.semver.satisfies(engineRelease, range)),
+  ]));
+  // A base held for its own reason composes nothing in this run, so a plugin
+  // built on it reads it as the project has it, never as installed.
+  const heldBases = new Set(sorted.filter((plugin) =>
+    plugin.base === null && (plugin.baseProblem !== null || outsideRange.get(plugin.key) !== undefined)
+  ).map((plugin) => plugin.key));
+  const inRun = new Map(sorted.filter((plugin) => !heldBases.has(plugin.key)).map((plugin) => [plugin.key, plugin]));
   const bases: InstalledPlugin[] = [];
   const layered: InstalledPlugin[] = [];
   const held: HeldPlugin[] = [];
   const paused: InstalledPlugin[] = [];
   for (const plugin of sorted) {
     const base = plugin.base;
-    if (plugin.baseProblem === null && base === null) {
-      bases.push(plugin);
-      continue;
-    }
-    let problem: HeldProblem | null = plugin.baseProblem;
-    if (problem === null && base !== null) {
+    let view: BaseView | null = null;
+    if (plugin.baseProblem === null && base !== null) {
       const own = inRun.get(base.name);
-      const view: BaseView = own
+      view = own
         ? {
           kind: "here",
           version: own.version,
@@ -2805,6 +2840,13 @@ export function layerOrder(
         paused.push(plugin);
         continue;
       }
+      if (view.kind === "missing" && heldBases.has(base.name)) view = { kind: "missing", why: "held" };
+    }
+    const outside = outsideRange.get(plugin.key);
+    let problem: HeldProblem | null = outside !== undefined
+      ? { kind: "engine", range: outside, version: words.engineVersion }
+      : plugin.baseProblem;
+    if (problem === null && base !== null && view !== null) {
       problem = view.kind === "missing"
         ? { kind: "missing", base, why: view.why }
         : view.base !== null
@@ -2817,8 +2859,9 @@ export function layerOrder(
         if (missing.length > 0) problem = { kind: "include", base: base.name, version: view.version, missing };
       }
     }
-    if (problem === null) layered.push(plugin);
-    else held.push({ plugin, reason: heldLine(plugin, problem, composedVersion(plugin.key), words) });
+    if (problem !== null) held.push({ plugin, reason: heldLine(plugin, problem, composedVersion(plugin.key), words) });
+    else if (base === null) bases.push(plugin);
+    else layered.push(plugin);
   }
   return { ordered: [...bases, ...layered], held, paused };
 }
@@ -2987,6 +3030,7 @@ async function syncPluginsLocked(
     {
       hostName: harness === "codex" ? "Codex" : "Claude Code",
       harnessName,
+      engineVersion: AIDLC_VERSION,
     },
   );
   plugins = order.ordered;

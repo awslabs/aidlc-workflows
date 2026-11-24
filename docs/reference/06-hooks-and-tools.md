@@ -2583,7 +2583,8 @@ for values, precedence, and isolated-run semantics.
 inventories (or one injected current root), validates host manifests, hashes
 compose inputs, compares project stamps, and renders the three-action status
 surface. Sync composes base plugins before the plugins built on them, holds a
-plugin that cannot build on its base (with a `plugin-held-<key>.json` record
+plugin that cannot build on its base or that needs AI-DLC in a version range
+this engine is outside (with a `plugin-held-<key>.json` record
 that list and doctor read), composes in staging and applies one
 `aidlc-transaction.ts` plan;
 `--prune-missing` additionally requires full inventory, `--yes` when
