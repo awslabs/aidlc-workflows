@@ -336,6 +336,7 @@ import {
 import { aidlcDispatcherInvocation, aidlcEngineCommand, aidlcToolInvocation, compiledExecutable, entrySkillInvocation, quoteCommandArgument, swarmUnitTestCommand } from "./aidlc-runtime-paths.ts";
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { chatTookStepHere } from "./aidlc-record-core.ts";
+import { namesRepoOfItsOwn, ownRepoWayBack } from "./aidlc-unit-teams.ts";
 import { personGitNameField } from "./aidlc-git-name.ts";
 import {
   APPROVAL_GATE_CHOICES,
@@ -357,6 +358,7 @@ const ANSWER_CHECKPOINTS: readonly string[] = [...DECISION_CHECKPOINTS, "guard-r
 // way on is to record that repo (`intent add-repo` says what that means for
 // the plan). Any other invalid manifest is the agent's to write properly.
 function unitManifestRefusal(
+  pd: string,
   unit: string,
   manifestPath: string,
   manifest: { reason: string; unrecordedRepo?: string; projectSubmodule?: string },
@@ -368,6 +370,8 @@ function unitManifestRefusal(
   }
   if (manifest.unrecordedRepo !== undefined) {
     const repo = manifest.unrecordedRepo;
+    // Work that records no repo from here: the way back, never the add it refuses.
+    if (namesRepoOfItsOwn(pd, repo)) return ownRepoWayBack(unit, repo, "review");
     return `unit "${unit}"'s source manifest at ${manifestPath} names repo ${JSON.stringify(repo)}, which this piece of work does not record. ` +
       `Run \`${aidlcDispatcherInvocation(`intent add-repo ${quoteCommandArgument(repo)} --reason '<why this work changes it>'`)}\` and say the line it prints once, ` +
       "then request the review again. Do not rewrite the manifest to drop a repo the code was written in.";
@@ -4255,6 +4259,7 @@ function handleReview(args: string[]): void {
       const manifestPath = `${relativeRecordDir(pd, intent, space) ?? "aidlc"}/construction/${flags.unit}/${flags.stage}/source-manifest.json`;
       refuseReview(
         `Cannot record REVIEW_REQUESTED for "${flags.stage}": ${unitManifestRefusal(
+          pd,
           flags.unit as string,
           manifestPath,
           manifest,
@@ -5201,6 +5206,7 @@ function handleReview(args: string[]): void {
         const manifestPath = `${relativeRecordDir(pd, intent, space) ?? "aidlc"}/construction/${flags.unit}/${flags.stage}/source-manifest.json`;
         refuseReview(
           `Cannot record review for "${flags.stage}": ${unitManifestRefusal(
+            pd,
             flags.unit as string,
             manifestPath,
             manifest,

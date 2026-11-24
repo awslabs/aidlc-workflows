@@ -244,14 +244,15 @@ export function namesRepoOfItsOwn(projectDir: string, repo: string, folder = rep
 }
 
 // The way back, to the agent, for a Unit whose Code Generation changed such a
-// repository: nothing of it was pushed, and its Code Generation is done again
-// in the workspace's own repository only.
-export function ownRepoWayBack(unit: string, repo: string): string {
+// repository: its Code Generation done again in the workspace's own repository
+// only. At the push nothing of it was pushed; at its review request the
+// review was not asked for, which the refusal already says.
+export function ownRepoWayBack(unit: string, repo: string, at: "push" | "review" = "push"): string {
   return `${unit}'s Code Generation changed ${repo}, a repository of its own, and this piece of work builds its Units in ` +
-    "the workspace's own repository only, so nothing was pushed. Ask the person whether to take " +
-    `${unit} back to Code Generation so it changes only the workspace's own repository, with the change in ${repo} made as a ` +
-    `piece of work of its own; on their yes, run \`${aidlcToolInvocation("orchestrate")} report --result resumed --choice redo ` +
-    "--target code-generation` and follow what it returns.";
+    `the workspace's own repository only${at === "push" ? ", so nothing was pushed" : ""}. Ask the person whether to ` +
+    `${at === "push" ? `take ${unit} back to Code Generation` : `do ${unit}'s Code Generation again`} so it changes only the ` +
+    `workspace's own repository, with the change in ${repo} made as a piece of work of its own; on their yes, run ` +
+    `\`${aidlcToolInvocation("orchestrate")} report --result resumed --choice redo --target code-generation\` and follow what it returns.`;
 }
 
 // The rows since the person last chose teams, in time order.

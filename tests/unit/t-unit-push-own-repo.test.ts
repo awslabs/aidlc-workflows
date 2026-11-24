@@ -253,8 +253,15 @@ describe("a Unit on the workspace's own repository", () => {
     const checked = request();
     const refused = checked.status === 0 ? request() : checked;
     expect(refused.status, refused.out).not.toBe(0);
-    // Today's refusal names add-repo, which such work refuses; N4r takes its place with its words.
-    expect(String(refused.json?.error)).toContain('names repo "web", which this piece of work does not record');
+    // The way back, never the add of a repo such work refuses.
+    const said = String(refused.json?.error);
+    expect(said).toContain(
+      "refunds's Code Generation changed web, a repository of its own, and this piece of work builds its Units in the " +
+        "workspace's own repository only. Ask the person whether to do refunds's Code Generation again so it changes only " +
+        "the workspace's own repository, with the change in web made as a piece of work of its own; on their yes, run `",
+    );
+    expect(said).toEndWith(" report --result resumed --choice redo --target code-generation` and follow what it returns.");
+    expect(said).not.toContain("add-repo");
     expect(namesRepoOfItsOwn(alice, "web")).toBe(true);
     expect(hook(alice, chat, { hook_event_name: "UserPromptSubmit", session_id: session, prompt: "yes, take it back" }).status).toBe(0);
     const back = run(ORCH, ["report", "--result", "resumed", "--choice", "redo", "--target", "code-generation"], alice, chat);
