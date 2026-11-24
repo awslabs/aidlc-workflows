@@ -13327,6 +13327,13 @@ function nestedRepoOf(dir: string, path: string): string | null {
   return null;
 }
 
+// Whether a file is on disk as `base` has it (absent from both counts).
+function asAtBase(dir: string, base: string, path: string): boolean {
+  const there = git(dir, ["rev-parse", "--verify", "--quiet", `${base}:./${path}`]).stdout.trim();
+  const here = existsSync(join(dir, path)) ? git(dir, ["hash-object", "--", path]).stdout.trim() : "";
+  return there === here;
+}
+
 // A list of files as the push's lines say it: the first, and how many more.
 function filesSaid(files: readonly string[]): string {
   return `${files[0]}${files.length > 1 ? ` and ${files.length - 1} more` : ""}`;
@@ -13957,9 +13964,28 @@ function pushUnit(args: string[], projectDir?: string,
     const kept = outer.filter((path) => !ignored.includes(path));
     if (kept.length > 0) planned.push({ repo, dir, name, remote, paths: kept });
   }
-  if (planned.length === 0 && gitIgnored.length > 0) {
-    fail(`Nothing of ${unit}'s is left to push: every file its Code Generation wrote is one the repos' .gitignore leaves out ` +
-      `(${joinNames(gitIgnored.map((entry) => `${entry.path} in ${entry.name}`))}). Nothing was switched or pushed.`);
+  // Nothing of the Unit's left to push, at its first push: files were left
+  // out and every file kept is as the branch it starts from has it, so the
+  // branch would carry none of its change. A Unit that left nothing out is
+  // never stopped here, nor one sent before (pushed again after its merge,
+  // its kept files are as main has them).
+  const allAtBase = (): boolean => planned.every(({ repo, dir, remote, paths }) => {
+    const base = integrationOf(repo, dir, remote);
+    return paths.every((path) => asAtBase(dir, base, path));
+  });
+  if (sentBefore === undefined && gitIgnored.length + nestedOut.length > 0 && allAtBase()) {
+    const reasons = [
+      ...[...new Set(gitIgnored.map((entry) => entry.name))].map((name) =>
+        `${name}'s .gitignore leaves out ${filesSaid(gitIgnored.filter((entry) => entry.name === name).map((entry) => entry.path))}`),
+      ...[...new Set(nestedOut.map((entry) => entry.nested))].map((nested) => {
+        const files = nestedOut.filter((entry) => entry.nested === nested).map((entry) => entry.path);
+        return `${filesSaid(files)} ${files.length === 1 ? "is" : "are"} inside ${nested}, a repository of its own, and yours to commit there`;
+      }),
+      ...planned.map(({ name, paths }) => `${filesSaid(paths)} ${paths.length === 1 ? "is" : "are"} unchanged in ${name}`),
+    ];
+    fail(`Nothing of ${unit}'s is left to push: ${reasons.join("; ")}. Nothing was switched or pushed. Ask the person whether ` +
+      `to take ${unit} back to Code Generation to write its change where it can be committed; on their yes, run ` +
+      `\`${aidlcToolInvocation("orchestrate")} report --result resumed --choice redo --target code-generation\` and follow what it returns.`);
   }
   // Then in each, onto the Unit's branch as their own hands would and its
   // commit made with their git (hooks, signing, identity), before anything is

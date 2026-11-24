@@ -342,6 +342,15 @@ describe("a Unit on the workspace's own repository", () => {
     git(web, ["add", "README.md"]);
     git(web, ["commit", "-q", "-m", "web"]);
   }
+  const REDO = "Ask the person whether to take refunds back to Code Generation to write its change where it can be committed; " +
+    "on their yes, run `";
+  const REDO_END = " report --result resumed --choice redo --target code-generation` and follow what it returns.";
+  const nothingPushed = (home: ReturnType<typeof makeHome>, alice: string): void => {
+    expect(spawnSync("git", ["rev-parse", "--verify", "--quiet", "refs/heads/refunds"], { cwd: alice }).status).not.toBe(0);
+    expect(spawnSync("git", ["rev-parse", "--verify", "--quiet", "refs/heads/refunds"], { cwd: home.remote }).status).not.toBe(0);
+    expect((claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds") as { result?: unknown } | null)?.result).toBeUndefined();
+  };
+
   test("a file of the Unit's inside a repository of its own in the project: the push says so and pushes the rest", () => {
     const home = oneRepoTeams();
     const alice = cloneOf(home.remote, "alice");
@@ -353,6 +362,98 @@ describe("a Unit on the workspace's own repository", () => {
     );
     expect(committed(home.remote, "refunds~1")).toEqual(["src/refunds.ts"]);
     expect(git(join(alice, "web"), ["status", "--porcelain"])).toBe("?? app.js");
+  });
+
+  test("every file of the Unit's inside a repository of its own: the push stops before anything is switched, with the way back", () => {
+    const home = oneRepoTeams();
+    const alice = cloneOf(home.remote, "alice");
+    builtWriting(alice, { "web/app.js": "app();\n", "web/index.html": "<main></main>\n" }, () => webOfItsOwn(alice));
+    const refused = run(UNIT, ["push"], alice);
+    expect(refused.status, refused.out).not.toBe(0);
+    const said = String(refused.json?.error ?? refused.out);
+    expect(said).toStartWith(
+      "Nothing of refunds's is left to push: web/app.js and 1 more are inside web, a repository of its own, and yours to " +
+        `commit there. Nothing was switched or pushed. ${REDO}`,
+    );
+    expect(said).toEndWith(REDO_END);
+    nothingPushed(home, alice);
+  });
+
+  // When part of the project is split out: the moved files both ignored by the
+  // project and inside the new repository, and the one project file the Unit
+  // changed back as it was. Said by where the moved files can be committed.
+  test("files left out and every kept file unchanged: the push stops with each reason, a file both ignored and inside a repository of its own said by the second", () => {
+    const home = oneRepoTeams();
+    writeFileSync(join(home.dir, "package.json"), "{\"name\": \"shop\"}\n");
+    writeFileSync(join(home.dir, ".gitignore"), `${readFileSync(join(home.dir, ".gitignore"), "utf-8")}web/\n`);
+    git(home.dir, ["add", "package.json", ".gitignore"]);
+    git(home.dir, ["commit", "-q", "-m", "package and web out"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const alice = cloneOf(home.remote, "alice");
+    const files: Record<string, string> = { "package.json": "{\"name\": \"shop\"}\n" };
+    for (const name of ["text.js", "app.js", "index.html"]) files[`web/${name}`] = `${name}\n`;
+    builtWriting(alice, files, () => webOfItsOwn(alice));
+    const refused = run(UNIT, ["push"], alice);
+    expect(refused.status, refused.out).not.toBe(0);
+    const said = String(refused.json?.error ?? refused.out);
+    expect(said).toStartWith(
+      "Nothing of refunds's is left to push: web/text.js and 2 more are inside web, a repository of its own, and yours to " +
+        `commit there; package.json is unchanged in the repo. Nothing was switched or pushed. ${REDO}`,
+    );
+    nothingPushed(home, alice);
+  });
+
+  test("a file the project's .gitignore leaves out and every kept file unchanged: the push stops with both reasons", () => {
+    const home = oneRepoTeams();
+    writeFileSync(join(home.dir, "package.json"), "{\"name\": \"shop\"}\n");
+    writeFileSync(join(home.dir, ".gitignore"), `${readFileSync(join(home.dir, ".gitignore"), "utf-8")}dist/\n`);
+    // The bundle registered as source for the review, as the build's own step does.
+    writeFileSync(join(home.dir, ".aidlc-source-paths.json"), `${JSON.stringify({ version: 1, paths: ["dist/app.js"] })}\n`);
+    git(home.dir, ["add", "package.json", ".gitignore", ".aidlc-source-paths.json"]);
+    git(home.dir, ["commit", "-q", "-m", "package and dist out"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const alice = cloneOf(home.remote, "alice");
+    builtWriting(alice, { "dist/app.js": "bundle();\n", "package.json": "{\"name\": \"shop\"}\n" });
+    const refused = run(UNIT, ["push"], alice);
+    expect(refused.status, refused.out).not.toBe(0);
+    expect(String(refused.json?.error ?? refused.out)).toStartWith(
+      "Nothing of refunds's is left to push: the repo's .gitignore leaves out dist/app.js; package.json is unchanged in the " +
+        `repo. Nothing was switched or pushed. ${REDO}`,
+    );
+    nothingPushed(home, alice);
+  });
+
+  // Nothing left out: a Unit whose kept files are all as main has them is
+  // pushed as before, whatever they hold.
+  test("nothing left out and its one file unchanged: the push is not stopped", () => {
+    const home = oneRepoTeams();
+    writeFileSync(join(home.dir, "package.json"), "{\"name\": \"shop\"}\n");
+    git(home.dir, ["add", "package.json"]);
+    git(home.dir, ["commit", "-q", "-m", "package"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const alice = cloneOf(home.remote, "alice");
+    builtWriting(alice, { "package.json": "{\"name\": \"shop\"}\n" });
+    const pushed = run(UNIT, ["push"], alice);
+    expect(String(pushed.json?.error ?? pushed.json?.notice ?? pushed.out)).not.toContain("is left to push");
+  });
+
+  // A Unit sent before is not stopped: a push again after its merge (the push
+  // keeps what was sent across pushes) has its kept files as the branch it
+  // starts from has them, and its bundle still left out.
+  test("a Unit pushed with a file the .gitignore leaves out, merged, then pushed again: the push is not stopped as if nothing of it was ever sent", () => {
+    const home = oneRepoTeams();
+    writeFileSync(join(home.dir, ".gitignore"), `${readFileSync(join(home.dir, ".gitignore"), "utf-8")}dist/\n`);
+    writeFileSync(join(home.dir, ".aidlc-source-paths.json"), `${JSON.stringify({ version: 1, paths: ["dist/app.js"] })}\n`);
+    git(home.dir, ["add", ".gitignore", ".aidlc-source-paths.json"]);
+    git(home.dir, ["commit", "-q", "-m", "dist out"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const alice = cloneOf(home.remote, "alice");
+    builtWriting(alice, { "src/refunds.ts": "export const refunds = 1;\n", "dist/app.js": "bundle();\n" });
+    const first = run(UNIT, ["push"], alice);
+    expect(first.status, first.out).toBe(0);
+    mergeOnHost(home.remote, "refunds", "merge");
+    const again = run(UNIT, ["push"], alice);
+    expect(String(again.json?.error ?? again.json?.notice ?? again.out)).not.toContain("is left to push");
   });
 
   // A split that makes part of the project a git submodule while the Unit is
