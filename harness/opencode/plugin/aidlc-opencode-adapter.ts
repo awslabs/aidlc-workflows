@@ -56,12 +56,15 @@
 //     but never scopes the main session.
 
 import { spawn } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 // emit.ts points this at the projected .aidlc/tools/ copy.
 import { windowsScriptLaunch } from "../../../core/tools/aidlc-executable-path.ts";
 import { patchTargets } from "../../../core/hooks/review-freeze-command.ts";
+// The plugin sync's own reading of its record and of a file's fingerprint.
+import { PLUGIN_OWNERSHIP_FILE, parseOwnership } from "../../../core/tools/aidlc-plugin-rules.ts";
+import { recordedDigestMatches } from "../../../core/tools/aidlc-review-manifest.ts";
 
 const PROJECTED_INVOKE = "{{INVOKE}}";
 const TRUSTED_NAMESPACE = "{{TRUSTED_NAMESPACE}}";
@@ -211,11 +214,14 @@ const PROJECTED_BUN_TOOLS = DEFAULT_AIDLC_COMMAND[0] === "bun"
   : null;
 
 const PROJECTED_HARNESS_DIR = PROJECTED_BUN_TOOLS?.split("/")[0] ?? null;
-const PLUGIN_OWNERSHIP_FILE = /^plugin-owned-([a-z][a-z0-9-]*)\.json$/;
-const RECORDED_DIGEST = /^sha256:[0-9a-f]{64}$/;
 
-type PluginSyncEntry = "written" | "unrecorded" | "changed";
+// "changed" carries the plugin whose record lists the file.
+type PluginSyncEntry = "written" | "unrecorded" | { changed: string };
 
+// Whether an entrypoint is a file a plugin sync installed and nobody changed
+// since, decided as the sync decides it: any record that lists the path with a
+// digest naming the file admits it; a listed file that cannot be read is not
+// installed.
 function pluginSyncEntry(
   projectDir: string,
   entrypoint: string,
@@ -223,34 +229,21 @@ function pluginSyncEntry(
   if (PROJECTED_HARNESS_DIR === null) return "unrecorded";
   const recordedPath = `${PROJECTED_HARNESS_DIR}/${entrypoint}`;
   const dataDir = join(projectDir, PROJECTED_HARNESS_DIR, "tools", "data");
-  const digests: string[] = [];
+  const listed: Array<{ plugin: string; sha256: string }> = [];
   try {
     for (const name of readdirSync(dataDir)) {
-      const key = name.match(PLUGIN_OWNERSHIP_FILE);
-      if (key === null) continue;
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(readFileSync(join(dataDir, name), "utf-8"));
-      } catch {
-        continue;
-      }
-      if (typeof parsed !== "object" || parsed === null) continue;
-      const record = parsed as { schemaVersion?: unknown; name?: unknown; files?: unknown };
-      if (record.schemaVersion !== 1 || record.name !== key[1] || !Array.isArray(record.files)) continue;
-      for (const file of record.files as Array<{ path?: unknown; sha256?: unknown }>) {
-        if (file?.path !== recordedPath) continue;
-        if (typeof file.sha256 === "string" && RECORDED_DIGEST.test(file.sha256)) digests.push(file.sha256);
+      const key = name.match(PLUGIN_OWNERSHIP_FILE)?.[1];
+      const record = key === undefined ? null : parseOwnership(join(dataDir, name));
+      if (record === null || record.name !== key) continue;
+      for (const file of record.files) {
+        if (file.path === recordedPath) listed.push({ plugin: record.name, sha256: file.sha256 });
       }
     }
-    if (digests.length === 0) return "unrecorded";
-    const written = readFileSync(join(projectDir, PROJECTED_HARNESS_DIR, entrypoint));
-    if (digests.includes(`sha256:${createHash("sha256").update(written).digest("hex")}`)) return "written";
-    const text = written.includes(13) ? Buffer.from(written.toString("utf-8").replace(/\r\n/g, "\n")) : null;
-    if (
-      text !== null &&
-      digests.includes(`sha256:${createHash("sha256").update(text).digest("hex")}`)
-    ) return "written";
-    return "changed";
+    if (listed.length === 0) return "unrecorded";
+    const target = join(projectDir, PROJECTED_HARNESS_DIR, entrypoint);
+    return listed.some((entry) => recordedDigestMatches(target, entry.sha256))
+      ? "written"
+      : { changed: listed[0].plugin };
   } catch {
     return "unrecorded";
   }
@@ -520,21 +513,23 @@ function aidlcBashBoundaryViolation(
     if (projectDir !== null) {
       const synced = pluginSyncEntry(projectDir, entrypoint);
       if (synced === "written") return null;
-      return (
-        "AIDLC bash permission allows one direct invocation of a shipped tool or hook only. " +
-        `.aidlc/${entrypoint} is neither: ` +
-        (synced === "changed"
-          ? "`engine plugin sync` wrote it, but its bytes are no longer the ones the sync recorded, so the file on disk is not the one it installed."
-          : "no `engine plugin sync` record lists it, so the sync did not write that file.") +
-        " Run a shipped .aidlc entrypoint, or a plugin tool `engine plugin sync` installed."
-      );
+      // opencode keeps no list of plugins, so the sync is told the plugin's
+      // folder, in the placeholder syncCommand prints when it has none.
+      const sync = (plugin: string) =>
+        `\`${DEFAULT_AIDLC_COMMAND.join(" ")} plugin sync --plugin-root <${plugin}'s folder>\``;
+      return synced === "unrecorded"
+        ? `.aidlc/${entrypoint} is not an installed AI-DLC or plugin file, so it was not run. ` +
+            `Run a shipped tool, or run ${sync("plugin")} to install the plugin's tools.`
+        : `.aidlc/${entrypoint} has changed since the plugin sync installed it, so it was not run. ` +
+            `To keep the change, move the file somewhere else, then run ${sync(synced.changed)} again; ` +
+            "it puts the plugin's own version back.";
     }
   }
   if (words === null && dialect === "cmd" && NEXT_COMMAND.test(command) && cmdCannotCarry(command)) {
     return CMD_REQUEST_REFUSAL;
   }
   return (
-    "AIDLC bash permission allows one direct invocation of a shipped tool or hook only. " +
+    "AIDLC bash permission allows one direct invocation of an .aidlc tool or hook only. " +
     "Use an unchanged .aidlc entrypoint without chaining, redirection, expansion, or command substitution."
   );
 }
@@ -888,7 +883,8 @@ async function createV1Adapter({
               };
             };
             if (parsed.hookSpecificOutput?.updatedInput) {
-              output.args = parsed.hookSpecificOutput.updatedInput;
+              // opencode runs the tool with the object it handed over, not a new one put in output.args.
+              Object.assign(args, parsed.hookSpecificOutput.updatedInput);
             }
           } catch {
             throw new Error(
