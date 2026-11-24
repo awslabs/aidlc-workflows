@@ -1,4 +1,5 @@
-// covers: subcommand:aidlc-unit:push, subcommand:aidlc-state:approve, function:buildWaitsForPush, function:unitBuildPastCodeGeneration
+// covers: subcommand:aidlc-unit:push, subcommand:aidlc-state:approve, function:buildWaitsForPush, function:unitBuildPastCodeGeneration,
+// subcommand:aidlc-log:change, audit:UNIT_CHANGE_REQUESTED, audit:ASKED_CHANGE_ALLOWED
 //
 // A Unit's build ends with its push, and its record stays open until the push
 // or the person's Not now, so whatever the push asks of the person is still
@@ -14,6 +15,7 @@
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { appendFileSync, cpSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
+import { auditBlockField, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import { type HostName, hostFor } from "../harness/scope-hosts.ts";
 import { AgentStandIn, type Directive, PersonScript } from "../harness/scope-run.ts";
@@ -38,10 +40,19 @@ afterAll(cleanupTeamBuild);
 
 const UNIT_ASKS = new Set(["unit-take", "unit-push"]);
 const DEPENDENCIES = "# Unit dependencies\n\n```yaml\nunits:\n  - name: refunds\n    kind: service\n    repos: [billing]\n    depends_on: []\n```\n";
+// What a Unit built and approved says to a change of the agent's own, with the step for a change the person asked for.
+const UNIT_BUILT_ASKED = "The Unit is built and approved, and its code changes only at the person's word.";
+const CHANGE_STEP_END = "engine log change` with --message <id>, then make the change. Otherwise: tell the person what you " +
+  "would change. It is made once they say so.";
+const ASKED_CHANGE = "Approve, and add a line to the end of billing/README.md";
 
 // The home with every Unit open, and a teammate's clone on `tool`, working in
-// the payments space: refunds taken there and built to the push question.
-function builtToPush(tool: "claude" | HostName, manifestFromWorkspace: boolean, policy?: "strict" | "relaxed" | "off") {
+// the payments space: refunds taken there and built to the push question. With
+// `reply`, the person answers its Code Generation gate in those words, a
+// moment before the agent records the approval with the word Approve, as a run
+// does (a decision in the message's own second is not one after it); each
+// return of that approval is kept in `approvals`.
+function builtToPush(tool: "claude" | HostName, manifestFromWorkspace: boolean, policy?: "strict" | "relaxed" | "off", reply?: string) {
   const hosts = { billing: codeHost("billing") };
   const state = homeState(policy === undefined ? [] : [`- **Guard Policy**: ${policy} (set by you)`]).replace(/^- \[ \] (nfr-requirements|nfr-design|infrastructure-design) (\S+) EXECUTE$/gm, "- [ ] $1 $2 SKIP");
   const home = makeHome({ repos: hosts, dependencies: DEPENDENCIES, state });
@@ -62,7 +73,28 @@ function builtToPush(tool: "claude" | HostName, manifestFromWorkspace: boolean, 
     codeRepo: () => [{ repo: "billing" }],
     manifestFromWorkspace,
     until: (d: Directive) => d.kind === "ask" && UNIT_ASKS.has(String(d.ask_type)),
+    ...(reply === undefined ? {} : { answers: { approve: (stage: string) => (stage === "code-generation" ? reply : "Approve") } }),
   });
+  const approvals: Array<Record<string, unknown>> = [];
+  if (reply !== undefined) {
+    const typed = host.typed.bind(host);
+    const picked = host.picked.bind(host);
+    host.typed = (words: string) => {
+      const told = typed(words);
+      if (words === reply) Bun.sleepSync(1100);
+      return told;
+    };
+    host.picked = (question: string, options: string[], label: string) => {
+      picked(question, options, label);
+      if (label === reply) Bun.sleepSync(1100);
+    };
+    const report = agent.report.bind(agent);
+    agent.report = (stage: string, ...args: string[]) => {
+      const out = report(stage, ...args);
+      if (stage === "code-generation" && args.includes("approved")) approvals.push(out);
+      return out;
+    };
+  }
   host.sessionStart("startup");
   person.say("/aidlc");
   const offer = agent.next();
@@ -72,7 +104,7 @@ function builtToPush(tool: "claude" | HostName, manifestFromWorkspace: boolean, 
   expect(push.ask_type, JSON.stringify(push)).toBe("unit-push");
   const intents = join(dir, "aidlc", "spaces", "payments", "intents");
   const record = join(intents, readdirSync(intents).find((name) => name.endsWith("-refunds"))!);
-  return { hosts, home, dir, host, person, agent, push, record };
+  return { hosts, home, dir, host, person, agent, push, record, approvals };
 }
 
 function choose(agent: AgentStandIn, person: PersonScript, d: Directive, label: string): { status: number; out: string } {
@@ -166,7 +198,9 @@ describe("at the push question the person's own ask goes through", () => {
       });
       const own = write();
       expect(own.status, own.stderr).toBe(2);
-      expect(own.stderr.trim()).toBe("Your Unit is built and approved: its code changes only when you ask for a change.");
+      // The picked Approve is a message of theirs the step can name: if it asked for a change, the agent names it.
+      expect(own.stderr.trim()).toStartWith(`${UNIT_BUILT_ASKED} If their message `);
+      expect(own.stderr.trim()).toEndWith(CHANGE_STEP_END);
       person.say("add a line to the end of billing/README.md, then commit it with PAY-42");
       const theirs = write();
       expect(theirs.status, theirs.stderr).toBe(0);
@@ -184,6 +218,105 @@ describe("at the push question the person's own ask goes through", () => {
       expect(after.ask_type === "unit-push", JSON.stringify(after)).toBe(false);
     });
   }
+});
+
+// The rows of one kind the build's record holds, newest last.
+function rowsOf(dir: string, event: string): Array<{ block: string }> {
+  return readAuditShardEvents(dir).filter((row) => row.event === event);
+}
+
+// The message the Unit's Code Generation approval names.
+function approvalMessage(dir: string): string {
+  const row = rowsOf(dir, "GATE_APPROVED").findLast((entry) => auditBlockField(entry.block, "Stage") === "code-generation");
+  const id = auditBlockField(row?.block ?? "", "Message Id");
+  expect(id, row?.block).toMatch(/^[0-9a-f]{8}$/);
+  return id!;
+}
+
+// A live run: the teammate answered the Unit's approval in one message, "Approve,
+// and yes please move the five page files into shop-web"; the approval spent
+// that turn, so the move was refused with a sentence that named no step, and
+// they were told to say it again. The refusal names the step with their
+// message, the agent names it in one call, and the change runs on it, recorded
+// with their words, until their next decision.
+describe("a reply that approves the Unit's code and asks for a change in it", () => {
+  const readme = (dir: string) => join(dir, "billing", "README.md");
+  const writeOf = (host: ReturnType<typeof hostFor>, dir: string) => () => host.hook("plan-approval-guard", {
+    hook_event_name: "PreToolUse", tool_name: "Write",
+    tool_input: { file_path: readme(dir), content: "# billing\n\nRefunds live here.\n" },
+  });
+  const logChange = (host: ReturnType<typeof hostFor>, id: string) => host.bash(`bun ${host.dir}/tools/aidlc.ts engine log change --message ${id}`);
+
+  for (const policy of ["strict", "relaxed", "off"] as const) {
+    test(`Guard Policy ${policy}: refused once with the step naming their message; once the agent names it, the change runs, with their words`, () => {
+      const { host, dir, approvals } = builtToPush("claude", false, policy, ASKED_CHANGE);
+      const id = approvalMessage(dir);
+      // The approval's own return says the step first.
+      expect(approvals).toHaveLength(1);
+      expect(String(approvals[0].reason)).toContain(" When their reply also asked for a change to this Unit's code, run `");
+      expect(String(approvals[0].reason)).toContain(`engine log change --message ${id}\` first, then make the change, then run next.`);
+      const write = writeOf(host, dir);
+      const refused = write();
+      expect(refused.status, refused.stderr).toBe(2);
+      expect(refused.stderr.trim()).toStartWith(`${UNIT_BUILT_ASKED} If their message ${id} (sent `);
+      expect(refused.stderr.trim()).toEndWith(CHANGE_STEP_END);
+      const named = logChange(host, id);
+      expect(named.status, named.stdout + named.stderr).toBe(0);
+      expect(JSON.parse(named.stdout.trim().split("\n").at(-1) ?? "null")).toEqual({ requested: "refunds" });
+      const [requested] = rowsOf(dir, "UNIT_CHANGE_REQUESTED");
+      expect(auditBlockField(requested?.block ?? "", "Unit")).toBe("refunds");
+      expect(auditBlockField(requested?.block ?? "", "Message Id")).toBe(id);
+      expect(auditBlockField(requested?.block ?? "", "Person Reply")).toBe(ASKED_CHANGE);
+      const ran = write();
+      expect(ran.status, ran.stderr).toBe(0);
+      const allowed = rowsOf(dir, "ASKED_CHANGE_ALLOWED").at(-1);
+      expect(auditBlockField(allowed?.block ?? "", "Unit")).toBe("refunds");
+      expect(auditBlockField(allowed?.block ?? "", "Message Id")).toBe(id);
+      expect(auditBlockField(allowed?.block ?? "", "Person Reply")).toBe(ASKED_CHANGE);
+      // Never on an unattended run.
+      host.env.AIDLC_UNATTENDED = "1";
+      try {
+        expect(write().status).toBe(2);
+      } finally {
+        delete host.env.AIDLC_UNATTENDED;
+      }
+    });
+  }
+
+  test("their next decision ends it: after a redo they ask for and its approval, the agent's own change waits again", () => {
+    const { host, person, agent, dir, approvals } = builtToPush("claude", false, undefined, ASKED_CHANGE);
+    const id = approvalMessage(dir);
+    expect(logChange(host, id).status).toBe(0);
+    const write = writeOf(host, dir);
+    expect(write().status).toBe(0);
+    person.say("Take refunds back to Code Generation.");
+    const accepted = host.bash(`bun ${host.dir}/tools/aidlc-orchestrate.ts report --result resumed --choice redo --target code-generation`);
+    expect(accepted.status, accepted.stdout + accepted.stderr).toBe(0);
+    const jump = /`([^`]*aidlc-jump\.ts execute --target code-generation --direction redo[^`]*)`/.exec(accepted.stdout)?.[1];
+    expect(jump, accepted.stdout).toBeString();
+    expect(host.bash(jump!).status).toBe(0);
+    const again = agent.drive(agent.next());
+    expect(again.ask_type, JSON.stringify(again).slice(0, 400)).toBe("unit-push");
+    expect(approvals).toHaveLength(2);
+    const after = write();
+    expect(after.status, after.stderr).toBe(2);
+    expect(after.stderr.trim()).not.toContain(` ${id} (sent `);
+  });
+
+  test("a plain Approve: nothing runs until the agent names that message, and the record then shows their word beside it", () => {
+    const { host, dir } = builtToPush("claude", false, undefined, "Approve");
+    const id = approvalMessage(dir);
+    const write = writeOf(host, dir);
+    const refused = write();
+    expect(refused.status, refused.stderr).toBe(2);
+    expect(refused.stderr.trim()).toStartWith(`${UNIT_BUILT_ASKED} If their message ${id} (sent `);
+    expect(rowsOf(dir, "UNIT_CHANGE_REQUESTED")).toHaveLength(0);
+    expect(rowsOf(dir, "ASKED_CHANGE_ALLOWED")).toHaveLength(0);
+    expect(logChange(host, id).status).toBe(0);
+    expect(write().status).toBe(0);
+    expect(auditBlockField(rowsOf(dir, "UNIT_CHANGE_REQUESTED").at(-1)?.block ?? "", "Person Reply")).toBe("Approve");
+    expect(auditBlockField(rowsOf(dir, "ASKED_CHANGE_ALLOWED").at(-1)?.block ?? "", "Person Reply")).toBe("Approve");
+  });
 });
 
 // A live run on Codex: after the Unit was pushed, the person asked for a fix

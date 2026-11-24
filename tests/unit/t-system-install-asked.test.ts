@@ -519,6 +519,25 @@ test("log install records nothing for a message that is not the person's on this
   heldForThePerson(proj);
 });
 
+// Its twin for a Unit built and approved (t-unit-push-way-back): where no Unit
+// waits for its push here, it records nothing and says what it is for.
+test("log change where no Unit is built and approved records nothing, and says what it is for", () => {
+  const { proj, id } = approvedWith("strict", APPROVE_AND_INSTALL, false);
+  const logChange = (args: string) =>
+    runNamed(proj, `bun .claude/tools/aidlc.ts engine log change ${args}`, { AIDLC_SESSION_OVERRIDE: SESSION });
+  const none = logChange(`--message ${id}`);
+  expect(none.status).not.toBe(0);
+  expect(none.stdout + none.stderr).toContain(
+    "Nothing holds a change here: log change is for a Unit that is built and approved and not pushed yet.",
+  );
+  for (const args of ["", `refunds --message ${id}`]) {
+    const usage = logChange(args);
+    expect(usage.status).not.toBe(0);
+    expect(usage.stdout + usage.stderr).toContain("log change --message <id>");
+  }
+  expect(rows(proj, "UNIT_CHANGE_REQUESTED")).toHaveLength(0);
+});
+
 test("the next decision of theirs ends it: after a later approval the same install waits again", () => {
   const { proj, id } = approvedWith("strict", APPROVE_AND_INSTALL, false);
   expect(logInstall(proj, `python3-pytest --message ${id}`).status).toBe(0);

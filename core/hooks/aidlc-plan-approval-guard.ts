@@ -137,6 +137,7 @@ import {
   plansNamePath,
   readActiveDirectiveMarker,
   readApplicableTeamUnitScopeStamp,
+  readAuditShardEvents,
   readIssuedDirectiveMarker,
   spacesRoot,
   unitMajorConstructionStageSlugs,
@@ -176,12 +177,14 @@ import {
 import {
   mainCheckoutChangeStep,
   personTurnStands,
+  proveMessage,
   recordStandingTurnRow,
+  requestMessageStep,
   standingPersonTurn,
 } from "../tools/aidlc-message-store.ts";
 import { insideProject, mappedRepoTarget } from "../tools/aidlc-workspace-repos.ts";
 import type { planApprovalAskState } from "../tools/aidlc-plan-approval-ask.ts";
-import { aidlcToolInvocation, quoteCommandArgument, runtimeHarnessName } from "../tools/aidlc-runtime-paths.ts";
+import { aidlcDispatcherInvocation, aidlcToolInvocation, quoteCommandArgument, runtimeHarnessName } from "../tools/aidlc-runtime-paths.ts";
 import { claimedCheckoutReopens } from "../tools/aidlc-unit-landing.ts";
 import { RECORDABLE_PROJECT_BYPASSES } from "../tools/aidlc-settings.ts";
 import {
@@ -352,9 +355,13 @@ const FINISHED_WORK_WAITS_FOR_THE_PERSON =
 // until its push or Not now, so its stage still reads Code Generation, with
 // nothing left to approve (unitBuildPastCodeGeneration).
 const UNIT_BUILT_ASKED = "the Unit is built and approved, and its code changes only at the person's word";
-// Some hosts show the refusal to the person as written: only their sentence,
-// and no step to run, since the step is theirs.
+// Some hosts show the refusal to the person as written: where no message of
+// theirs can be named, only their sentence, since the step is theirs.
 const UNIT_BUILT_SENTENCE = "Your Unit is built and approved: its code changes only when you ask for a change.";
+// Where a message of theirs can stand behind a change, the step that names it
+// (`log change`), set where the build is read.
+let unitBuiltSaid: string | null = null;
+const UNIT_CHANGE_OTHERWISE = "tell the person what you would change. It is made once they say so.";
 // An AI-DLC command whose spelling the shell reading refused, in such a build.
 const UNIT_BUILT_ENGINE_SPELLING = "Run AI-DLC's command exactly as the step gives it, as a command of its own (no " +
   "`cd` before it, no pipe or second command after it).";
@@ -364,14 +371,30 @@ const TEAMS_WAIT_ASKED = "the lead's project waits on its Units, and its files c
 // The wait in the person's own words for the refusal (leadWaitSentence), set where the wait is read.
 let teamsWaitSaid: string | null = null;
 
-// A Unit's build whose last stage, Code Generation, is approved ([x] in its
-// Stage Progress): it is past Code Generation until a redo starts it again.
-// The build's Unit, or null.
+// A Unit's build past its approved Code Generation (unitPastCodeGeneration,
+// which `log change` reads too): the build's Unit, or null.
 async function unitBuildPastCodeGeneration(state: string | null): Promise<string | null> {
-  if (state === null || !/^- \[x\] code-generation\s/m.test(state)) return null;
   try {
-    const { unitBuildOf } = await import("../tools/aidlc-unit-teams.ts");
-    return unitBuildOf(state)?.unit ?? null;
+    const { unitPastCodeGeneration } = await import("../tools/aidlc-unit-teams.ts");
+    return unitPastCodeGeneration(state);
+  } catch {
+    return null;
+  }
+}
+
+// The change the agent named the person's message for (`log change --message
+// <id>`): the newest UNIT_CHANGE_REQUESTED row for this Unit while its message
+// still stands as a request's does (proveMessage), so the next decision of
+// theirs ends it, as for a system install. Ids only; never on an unattended
+// run; a row that cannot be read names nothing.
+function requestedUnitChange(projectDir: string, unit: string): AuditShardEvent | null {
+  if (process.env.AIDLC_UNATTENDED === "1") return null;
+  try {
+    return readAuditShardEvents(projectDir).findLast((row) => {
+      if (row.event !== "UNIT_CHANGE_REQUESTED" || auditBlockField(row.block, "Unit") !== unit) return false;
+      const id = auditBlockField(row.block, "Message Id");
+      return id !== null && "message" in proveMessage(projectDir, id, "request", { request: true });
+    }) ?? null;
   } catch {
     return null;
   }
@@ -823,7 +846,7 @@ function authorityRemedy(
   wayOn: EngineInvocation | null = null,
 ): string {
   if (reason === ENGINE_QUESTION_OPEN) return engineQuestionOpenReason();
-  if (reason === UNIT_BUILT_ASKED) return UNIT_BUILT_SENTENCE;
+  if (reason === UNIT_BUILT_ASKED) return unitBuiltSaid ?? UNIT_BUILT_SENTENCE;
   if (reason === UNIT_BUILT_ENGINE_SPELLING) return UNIT_BUILT_ENGINE_SPELLING;
   if (reason === TEAMS_WAIT_ASKED) return teamsWaitSaid ?? reason;
   if (reason === PLAN_APPROVAL_ASK_OPEN) {
@@ -2645,6 +2668,7 @@ async function evaluate(
   judgedStep = null;
   judgedNext = null;
   teamsWaitSaid = null;
+  unitBuiltSaid = null;
   // Runtime integrity is not a fence and cannot be disabled with this hook.
   if (refuseRuntimeIntegrityViolation(parsed)) return 2;
   // Kept whatever this guard then decides, in a chat that joined no work too:
@@ -3095,15 +3119,24 @@ async function evaluate(
       // it is past it: open only for its push, or finished (finished work's
       // own rule above, walkEnded, holds it then). Open, what the person asks
       // for runs (a change, a commit, their redo), their turn standing behind
-      // it with no decision since (the turn that approved the code is spent by
-      // that approval); the agent's own change waits for their word, and the
-      // refusal names no step to run: the step is theirs.
-      const turn = mutation.engineRefused ? null : personsAskStands(projectDir);
+      // it with no decision since, or the message the agent named as asking
+      // for a change (the reply that approved the code, which that approval
+      // spends: the system install's rule). The agent's own change waits for
+      // their word; the refusal names that step with the messages that can
+      // stand behind it, or none.
+      const turn = mutation.engineRefused ? null : personsAskStands(projectDir) ?? requestedUnitChange(projectDir, builtUnit);
       if (turn !== null) {
         askedChange(turn, { Unit: builtUnit });
         return 0;
       }
       rulesArriving = null;
+      if (!mutation.engineRefused) {
+        const step = requestMessageStep(projectDir, UNIT_CHANGE_OTHERWISE, "any",
+          `\`${aidlcDispatcherInvocation("log change")}\``, "make the change");
+        unitBuiltSaid = step === UNIT_CHANGE_OTHERWISE
+          ? null
+          : `${UNIT_BUILT_ASKED[0].toUpperCase()}${UNIT_BUILT_ASKED.slice(1)}. ${step}`;
+      }
       authorityFailure = mutation.engineRefused ? UNIT_BUILT_ENGINE_SPELLING : UNIT_BUILT_ASKED;
       verdict = { block: true, mentioned: [] };
     } else if (

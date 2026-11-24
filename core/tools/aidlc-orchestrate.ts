@@ -899,6 +899,7 @@ import {
   sameGitAddress,
   textAt,
   copyOf,
+  unitPastCodeGeneration,
 } from "./aidlc-unit-teams.ts";
 import { terminalDispatcherArgv } from "./aidlc.ts";
 import {
@@ -27240,6 +27241,22 @@ function handleReport(args: string[], projectDir: string | undefined): void {
   }
   const approvedState = flags.result === "approved" ? loadStateFileIfPresent(pd) : null;
   const progress = approvedState === null ? null : approvalProgressLine(approvedState, slug, scope, { projectDir: pd });
+  // An approval that leaves a Unit's build past Code Generation: a change the
+  // same reply asked for goes through once the agent names the message the
+  // approval names (`log change`). Whether the reply asked for one is the
+  // agent's reading; a row naming several messages names none here.
+  const approvalRow = approvedState !== null && unitPastCodeGeneration(approvedState) !== null
+    ? readAuditShardEvents(pd)
+      .filter((row) => row.event === "GATE_APPROVED" && auditBlockField(row.block, "Stage") === lastApproved)
+      .sort((x, y) => (x.timestamp !== y.timestamp ? (x.timestamp < y.timestamp ? -1 : 1) : x.shardIndex - y.shardIndex || x.pos - y.pos))
+      .at(-1)
+    : undefined;
+  const changeId = approvalRow === undefined || auditBlockField(approvalRow.block, "Message Ids") !== null
+    ? null
+    : auditBlockField(approvalRow.block, "Message Id");
+  const changeNote = changeId === null ? ""
+    : " When their reply also asked for a change to this Unit's code, run " +
+      `\`${aidlcDispatcherInvocation(`log change --message ${changeId}`)}\` first, then make the change, then run next.`;
   const approvedLines = [unbuilt, progress].filter(Boolean).join("\n");
   const narration = approvedLines;
   const continues = workflowContinues(pd);
@@ -27254,7 +27271,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         kind: "done",
         reason:
           `Committed ${committed.join(" + ")} for "${approvedTogether.join('", "')}" (scope: ${scope}). ` +
-          `State advanced; run next to continue.${keepNote}`,
+          `State advanced; run next to continue.${keepNote}${changeNote}`,
         ...(narration ? { narration } : {}),
         ...continues,
       },

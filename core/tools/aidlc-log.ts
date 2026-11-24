@@ -336,7 +336,7 @@ import {
 import { aidlcDispatcherInvocation, aidlcEngineCommand, aidlcToolInvocation, compiledExecutable, entrySkillInvocation, quoteCommandArgument, swarmUnitTestCommand } from "./aidlc-runtime-paths.ts";
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { chatTookStepHere } from "./aidlc-record-core.ts";
-import { namesRepoOfItsOwn, ownRepoWayBack } from "./aidlc-unit-teams.ts";
+import { namesRepoOfItsOwn, ownRepoWayBack, unitPastCodeGeneration } from "./aidlc-unit-teams.ts";
 import { personGitNameField } from "./aidlc-git-name.ts";
 import {
   APPROVAL_GATE_CHOICES,
@@ -3222,6 +3222,27 @@ function handleInstall(args: string[]): void {
   console.log(JSON.stringify({ requested: positional }));
 }
 
+// Its twin for a Unit built and approved here: the person asked for a change
+// to its code in the message that approved it, which that approval spends. The
+// agent names the message, the tool proves it as any request's and records it
+// with the Unit, and the plan-approval guard reads the record. It reads no words.
+function handleChange(args: string[]): void {
+  const { positional, flags } = parseFlags(args);
+  if (positional.length > 0 || flags.message === undefined) error(`Usage: ${logUsage("change").split("\n")[0]}`);
+  const pd = resolveProjectDir(projectDir);
+  const unit = unitPastCodeGeneration(existsSync(stateFilePath(pd)) ? readFileSync(stateFilePath(pd), "utf-8") : null);
+  if (unit === null) error("Nothing holds a change here: log change is for a Unit that is built and approved and not pushed yet.");
+  const proof = proveMessage(pd, flags.message, "request", { request: true });
+  if ("refusal" in proof) error(proof.refusal);
+  const words = personsWordsText(proof.message.words ?? proof.message.text);
+  emitAudit(pd, "UNIT_CHANGE_REQUESTED", {
+    Unit: unit,
+    "Message Id": proof.message.id,
+    ...(words ? { "Person Reply": words } : {}),
+  });
+  console.log(JSON.stringify({ requested: unit }));
+}
+
 function handleLink(args: string[]): void {
   const { flags } = parseFlags(args);
   if (!flags.stage) error("Missing --stage <slug>");
@@ -5863,6 +5884,11 @@ function logUsage(subcommand: string | undefined): string {
       "  Records that the person's message asked to install these system packages, so the install check runs that " +
         "install. Required: a package and --message.",
     ],
+    change: [
+      `${invoke("change")} --message <id>`,
+      "  Records that the person's message asked for a change to the Unit built and approved here, so that change goes " +
+        "through before its push. Required: --message.",
+    ],
     link: [
       `${invoke("link")} --stage <slug> --link <agent> [--repo <repo>] [--artifact <path>] [--single]`,
       "  Records that a declared pipeline link returned. Runs in the active workspace (no --intent or --space).",
@@ -5927,6 +5953,9 @@ export function main(argv: string[]): void {
       case "install":
         handleInstall(filteredArgs.slice(1));
         break;
+      case "change":
+        handleChange(filteredArgs.slice(1));
+        break;
       case "review":
         // One review command runs the review accounting per unit, each pass
         // recomputing the whole-tree source identity. Share one computation
@@ -5936,7 +5965,7 @@ export function main(argv: string[]): void {
         );
         break;
       default:
-        error(`Unknown subcommand: ${subcommand}. Valid: decision, answer, answers, link, review, install`);
+        error(`Unknown subcommand: ${subcommand}. Valid: decision, answer, answers, link, review, install, change`);
     }
     spendRequestFile();
     // The stage's work went on through the record, not through `next`: on the

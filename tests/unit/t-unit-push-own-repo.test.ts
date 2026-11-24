@@ -293,6 +293,27 @@ describe("a Unit on the workspace's own repository", () => {
   };
   const NEW_SPACE = "AI-DLC's record of refunds in a commit of its own, with your team's new space payments as it is now " +
     "(its codekb, knowledge and memory folders)";
+  // A Unit built here and approved, waiting for its push: every stage of its
+  // walk done, Code Generation the last.
+  function approvedHere(record: string): void {
+    const statePath = join(record, "aidlc-state.md");
+    writeFileSync(statePath, readFileSync(statePath, "utf-8")
+      .replace(/^- \[[-? ]\] (functional-design|nfr-requirements|nfr-design|infrastructure-design|code-generation) /gm, "- [x] $1 ")
+      .replace(/^- \*\*Current Stage\*\*: .*$/m, "- **Current Stage**: code-generation"));
+  }
+
+  // The change a person asked for in the reply that approved the Unit is
+  // recorded only on a message of theirs on this work (t-unit-push-way-back).
+  test("log change in a Unit built and approved records nothing for a message that is not the person's", () => {
+    const home = oneRepoTeams();
+    const alice = cloneOf(home.remote, "alice");
+    approvedHere(builtHere(alice, "refunds", "refunds.ts"));
+    const madeUp = run(join(AIDLC_SRC, "tools", "aidlc-log.ts"), ["change", "--message", "0badf00d"], alice);
+    expect(madeUp.status, madeUp.out).not.toBe(0);
+    expect(madeUp.out).toContain("no message record 0badf00d exists in this project");
+    expect(readAuditShardEvents(alice).filter((row) => row.event === "UNIT_CHANGE_REQUESTED")).toHaveLength(0);
+  });
+
   // A team's new space as a team keeps it: a document of its own beside its memory.
   const teamsDocument = (alice: string): void => {
     mkdirSync(join(alice, "aidlc", "spaces", "payments", "knowledge"), { recursive: true });

@@ -811,6 +811,15 @@ export function buildWaitsForPush(stateContent: string): boolean {
   return unitBuildOf(stateContent) !== null && getField(stateContent, UNIT_PUSH_FIELD)?.trim() !== "later";
 }
 
+// A Unit's build whose last stage, Code Generation, is approved ([x] in its
+// Stage Progress): it is past Code Generation until a redo starts it again.
+// The build's Unit, or null. The one test the plan-approval guard and
+// `log change` read.
+export function unitPastCodeGeneration(stateContent: string | null): string | null {
+  if (stateContent === null || !/^- \[x\] code-generation\s/m.test(stateContent)) return null;
+  return unitBuildOf(stateContent)?.unit ?? null;
+}
+
 // The build of a home's Unit in this workspace, in any space: what taking that
 // Unit again here carries on. A build given back (archived) is not carried on.
 export function findUnitBuild(projectDir: string, homeWork: string, unit: string): { space: string; dirName: string } | null {

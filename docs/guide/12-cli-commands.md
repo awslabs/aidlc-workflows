@@ -2777,6 +2777,22 @@ reads none of its words, and records the packages as `SYSTEM_INSTALL_REQUESTED`.
 The install of those packages then runs, its `SYSTEM_INSTALL_ALLOWED` row naming
 that message and their words, until the next decision of theirs.
 
+### `aidlc engine log change` - a change to a built Unit the person asked for
+
+```bash
+aidlc engine log change --message <id>
+```
+
+Once a Unit's Code Generation is approved, its code changes only when the person
+asks. When they asked in the same message that approved it ("Approve, and move
+the page files into shop-web"), the approval has already used that message: the
+approval's return and the refusal of the change name this command with their
+messages. The agent names the one that asked; the engine proves it as it proves
+any request, reads none of its words, and records it as `UNIT_CHANGE_REQUESTED`
+with the Unit. The change then runs, its `ASKED_CHANGE_ALLOWED` row naming that
+message and their words, until the next decision of theirs. Where no Unit is
+built and approved here, it records nothing and says so.
+
 ### `aidlc engine bolt set-autonomy` - change Construction approvals
 
 During Construction, explicitly ask to continue automatically or review each
