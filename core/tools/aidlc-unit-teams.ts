@@ -66,7 +66,7 @@ import { gitAddressKey } from "./aidlc-workspace-repos.ts";
 import type { UnitClaimPayload, UnitClaimView } from "./aidlc-unit.ts";
 import { homeCopyName, planRecordRef } from "./aidlc-unit-holders.ts";
 import { UPDATE_COMMIT_MESSAGE, withoutCredentials } from "./aidlc-workspace-manifest.ts";
-import { aidlcInvocation } from "./aidlc-runtime-paths.ts";
+import { aidlcInvocation, aidlcToolInvocation } from "./aidlc-runtime-paths.ts";
 
 // Where the home of team-built work is: the address of the code repository its
 // plan is shared in (with any user and token left out), or "local" while there
@@ -234,12 +234,24 @@ export function recordsNoReposFromHere(projectDir: string, work: { dirName: stri
 // workspace's own. The one check a Unit's push and its review request read
 // before they say the Unit changed a repository of its own; a name with nothing
 // on disk (a record spelt wrongly), a plain folder, or the workspace's own
-// folder keeps their own lines.
-export function namesRepoOfItsOwn(projectDir: string, repo: string): boolean {
+// folder keeps their own lines. `folder` is where the name is, a recorded
+// checkout's own for one.
+export function namesRepoOfItsOwn(projectDir: string, repo: string, folder = repoDir(projectDir, repo)): boolean {
   const { intent, space } = resolveWorkflowSelection(projectDir);
   if (!intent || !recordsNoReposFromHere(projectDir, { dirName: intent, space, repos: intentRepos(projectDir, intent, space) })) return false;
-  const dir = resolve(repoDir(projectDir, repo));
+  const dir = resolve(folder);
   return dir !== resolve(projectDir) && isGitRepoDir(dir);
+}
+
+// The way back, to the agent, for a Unit whose Code Generation changed such a
+// repository: nothing of it was pushed, and its Code Generation is done again
+// in the workspace's own repository only.
+export function ownRepoWayBack(unit: string, repo: string): string {
+  return `${unit}'s Code Generation changed ${repo}, a repository of its own, and this piece of work builds its Units in ` +
+    "the workspace's own repository only, so nothing was pushed. Ask the person whether to take " +
+    `${unit} back to Code Generation so it changes only the workspace's own repository, with the change in ${repo} made as a ` +
+    `piece of work of its own; on their yes, run \`${aidlcToolInvocation("orchestrate")} report --result resumed --choice redo ` +
+    "--target code-generation` and follow what it returns.";
 }
 
 // The rows since the person last chose teams, in time order.

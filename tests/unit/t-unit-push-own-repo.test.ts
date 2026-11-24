@@ -351,6 +351,58 @@ describe("a Unit on the workspace's own repository", () => {
     expect((claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds") as { result?: unknown } | null)?.result).toBeUndefined();
   };
 
+  // Part of the project moved to a repository of its own beside it while a
+  // Unit was being built, in work that keeps its code in the workspace folder
+  // itself: the push names no step this work refuses, only the way back.
+  const BUILDS_HERE_ONLY = (repo: string): string => `refunds's Code Generation changed ${repo}, a repository of its own, ` +
+    "and this piece of work builds its Units in the workspace's own repository only, so nothing was pushed. Ask the person " +
+    "whether to take refunds back to Code Generation so it changes only the workspace's own repository, with the change in " +
+    `${repo} made as a piece of work of its own; on their yes, run \``;
+  function besideRepo(alice: string): string {
+    const beside = `${alice}-billing`;
+    mkdirSync(join(beside, "lib"), { recursive: true });
+    git(beside, ["init", "-q", "-b", "main"]);
+    writeFileSync(join(beside, "lib", "refund.ts"), "export const refund = 1;\n");
+    return beside;
+  }
+  test("a Unit that changed a repository of its own beside the project: the push asks for the way back, and names no add-repo", () => {
+    const home = oneRepoTeams();
+    const alice = cloneOf(home.remote, "alice");
+    const record = builtHere(alice, "refunds", "refunds.ts");
+    const beside = besideRepo(alice);
+    writeFileSync(join(alice, "aidlc", "repos.json"), `${JSON.stringify({ repos: [{ name: "billing", path: `../${basename(beside)}` }] }, null, 2)}\n`);
+    writeFileSync(join(record, "construction", "refunds", "code-generation", "source-manifest.json"), `${JSON.stringify({
+      stage: "code-generation", unit: "refunds", version: 1, writes: [{ path: "src/refunds.ts" }, { repo: "billing", path: "lib/refund.ts" }],
+    })}\n`);
+    const refused = run(UNIT, ["push"], alice);
+    expect(refused.status, refused.out).not.toBe(0);
+    const said = String(refused.json?.error ?? refused.out);
+    expect(said).toStartWith(BUILDS_HERE_ONLY("billing"));
+    expect(said).toEndWith(" report --result resumed --choice redo --target code-generation` and follow what it returns.");
+    expect(said).not.toContain("add-repo");
+    expect(spawnSync("git", ["rev-parse", "--verify", "--quiet", "refs/heads/refunds"], { cwd: alice }).status).not.toBe(0);
+  });
+
+  test("the same Unit after the repository beside the project was recorded as a checkout: the push asks for the way back, and names no add-repo", () => {
+    const home = oneRepoTeams();
+    const alice = cloneOf(home.remote, "alice");
+    const record = builtHere(alice, "refunds", "refunds.ts");
+    const beside = besideRepo(alice);
+    const added = run(UTILITY, ["intent", "add-checkout", `../${basename(beside)}`], alice);
+    expect(added.status, added.out).toBe(0);
+    const engine = join(record, ".aidlc-engine", "source-checkouts.json");
+    const label = (JSON.parse(readFileSync(engine, "utf-8")) as { checkouts: Array<{ label: string }> }).checkouts[0].label;
+    writeFileSync(join(record, "construction", "refunds", "code-generation", "source-manifest.json"), `${JSON.stringify({
+      stage: "code-generation", unit: "refunds", version: 1, writes: [{ path: "src/refunds.ts" }, { path: `${label}@checkout/lib/refund.ts` }],
+    })}\n`);
+    const refused = run(UNIT, ["push"], alice);
+    expect(refused.status, refused.out).not.toBe(0);
+    const said = String(refused.json?.error ?? refused.out);
+    expect(said).toStartWith(BUILDS_HERE_ONLY(label));
+    expect(said).not.toContain("add-repo");
+    expect(spawnSync("git", ["rev-parse", "--verify", "--quiet", "refs/heads/refunds"], { cwd: alice }).status).not.toBe(0);
+  });
+
   test("a file of the Unit's inside a repository of its own in the project: the push says so and pushes the rest", () => {
     const home = oneRepoTeams();
     const alice = cloneOf(home.remote, "alice");

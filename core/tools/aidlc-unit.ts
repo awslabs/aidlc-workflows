@@ -84,6 +84,8 @@ import {
   readActiveDirectiveMarker,
   parseArgs,
   namesSourceCheckout,
+  readRecordedSourceCheckouts,
+  recordedCheckoutOfListingPath,
   printUsageAndExit,
   recordDir,
   removeRecordFileNoFollow,
@@ -277,6 +279,8 @@ import {
   PLAN_SETTINGS,
   planJsonOf,
   soleRemote,
+  namesRepoOfItsOwn,
+  ownRepoWayBack,
 } from "./aidlc-unit-teams.js";
 import { gitOperationUnderWay, rebaseUnderWay, recordChanged, recordCommitBlock, recordPaths, submoduleLeavesProjectRepo } from "./aidlc-git.ts";
 import { ownFilesToCommit } from "./aidlc-brought-files.ts";
@@ -13799,6 +13803,9 @@ function pushUnit(args: string[], projectDir?: string,
   const addedRepos: string[] = [];
   while (!manifest.ok && manifest.unrecordedRepo !== undefined && !addedRepos.includes(manifest.unrecordedRepo)) {
     const repo = manifest.unrecordedRepo;
+    // Work that keeps its code in the workspace folder itself records no repo
+    // once Construction has started: the way back, never the add it refuses.
+    if (namesRepoOfItsOwn(pd, repo)) fail(ownRepoWayBack(unit, repo));
     const added = runEngineUtility(pd, ["intent", "add-repo", repo]);
     if (!added.ok) fail(`${unit} changed ${repo}, which the lead's plan did not list, and it could not be added: ${(added.stderr || added.stdout).trim()}`);
     addedRepos.push(repo);
@@ -13871,6 +13878,8 @@ function pushUnit(args: string[], projectDir?: string,
     // Written in a folder recorded as a checkout that is no repo of this work's.
     const strayCheckout = repo === "." ? paths.find((path) => namesSourceCheckout(path)) : undefined;
     if (strayCheckout !== undefined) {
+      const named = recordedCheckoutOfListingPath(strayCheckout, readRecordedSourceCheckouts(pd));
+      if (named !== null && namesRepoOfItsOwn(pd, named.checkout.label, named.checkout.real)) fail(ownRepoWayBack(unit, named.checkout.label));
       fail(`${unit}'s Code Generation wrote ${strayCheckout} in a folder recorded as a checkout that is not a checkout of any repo ` +
         `this work records, so nothing was pushed. If it is one of the repos ${unit} changes, add that repo to the work ` +
         `(\`${aidlcToolInvocation("utility")} intent add-repo <its name>\`), then push again.`);
