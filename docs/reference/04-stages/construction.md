@@ -1018,7 +1018,8 @@ This stage has a **two-part structure**: planning followed by generation.
 
    The plan opens with a short `## Summary` (Builds, Touches and Tests lines,
    an Adds line when the plan adds an element no requirement asks for, and an
-   Experience line saying in words the `UX` decisions a Unit implements) that
+   Experience line giving the count of `UX` decisions a Unit implements and, in
+   words, the few that shape the screens most) that
    the engine shows the person when it asks for approval.
 
 3. **Plan Approval** -- the engine asks. When both files are written, the
@@ -1579,8 +1580,7 @@ with the aidlc-devsecops-agent providing security testing expertise.
 12. **Completion** -- Present completion message and approval gate. When
     Refined Mockups ran, it names in one line the `UX` decisions and measurable
     accessibility checks no test exercised, only when there are any, and, when
-    `mockups-preview.html` exists, the built screens or API responses to
-    compare with it; whether the build matches the approved experience, brand
+    `mockups-preview.html` exists, the built screens to compare with it; whether the build matches the approved experience, brand
     and feel included,
     is the person's judgement at this gate.
 

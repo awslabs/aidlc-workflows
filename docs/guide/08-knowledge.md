@@ -257,8 +257,9 @@ where it is read:
 
 Refined Mockups shows what your documents already answer as one question for
 you to confirm, asks you only what the sources leave open, such as which layout
-fits what you meant, and writes `mockups-preview.html` so you can click
-through each screen in its states before you approve.
+fits what you meant, and, when there are screens to show, writes
+`mockups-preview.html` so you can click through each screen in its states
+before you approve.
 
 ### Where the directories come from
 

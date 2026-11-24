@@ -1176,8 +1176,10 @@
         "interaction-spec",
         "design-system-mapping",
         "accessibility-checklist",
-        "mockups-preview",
         "refined-mockups-questions"
+      ],
+      "optional_produces": [
+        "mockups-preview"
       ],
       "consumes": [
         {
@@ -1227,7 +1229,7 @@
       "review_class": "advisory",
       "summary_confirmation": "required",
       "inputs": "Rough mockups from rough-mockups stage, user stories from user-stories stage, requirements from requirements-analysis stage, RE component-inventory.md (if brownfield), the team's documents (the documents card)",
-      "outputs": "mockups.md, interaction-spec.md, design-system-mapping.md, accessibility-checklist.md, mockups-preview.html, refined-mockups-questions.md (under this stage's record dir, engine-resolved)",
+      "outputs": "mockups.md, interaction-spec.md, design-system-mapping.md, accessibility-checklist.md, refined-mockups-questions.md, and mockups-preview.html when the work has screens to show (under this stage's record dir, engine-resolved)",
       "rules_in_context": [
         {
           "path": "aidlc/spaces/default/memory/org.md",

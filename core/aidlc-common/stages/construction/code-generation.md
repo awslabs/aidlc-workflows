@@ -277,10 +277,12 @@ more line, the count first:
 ```
 
 When the Unit implements `UX` experience decisions, the Summary gets one more
-line that says in words what the person will meet, each with its ID:
+line, the count first, then in words the few decisions that shape the screens
+most, each with its ID. The question cuts a Summary line at 200 characters, so
+keep it under that:
 
 ```
-- Experience: <one-page sign-in (UX1.1.1); a failed save keeps what you typed (UX1.1.2)>
+- Experience: <7 decisions, among them one-page sign-in (UX1.1.1) and a failed save keeps what you typed (UX1.1.2)>
 ```
 
 ### Step 3: Plan Approval

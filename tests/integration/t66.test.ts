@@ -375,10 +375,10 @@ describe("t66 graph traversal — full graph (in-process)", () => {
     }
   });
 
-  test("Refined Mockups reads the brownfield UI inventory and writes its preview", () => {
+  test("Refined Mockups reads the brownfield UI inventory and may write its preview", () => {
     const stage = loadGraph().find((candidate) => candidate.slug === "refined-mockups");
     expect(stage?.consumes).toContainEqual({ artifact: "component-inventory", required: false, conditional_on: "brownfield" });
-    expect(stage?.produces).toContain("mockups-preview");
+    expect(stage?.optional_produces).toContain("mockups-preview");
   });
 
   // reverse-engineering is independent of ideation (brownfield fan-out root)

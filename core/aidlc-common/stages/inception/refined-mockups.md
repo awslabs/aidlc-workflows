@@ -17,8 +17,9 @@ produces:
   - interaction-spec
   - design-system-mapping
   - accessibility-checklist
-  - mockups-preview
   - refined-mockups-questions
+optional_produces:
+  - mockups-preview
 consumes:
   - artifact: wireframes
     required: true
@@ -46,7 +47,7 @@ scopes:
   - classic
   - workshop
 inputs: Rough mockups from rough-mockups stage, user stories from user-stories stage, requirements from requirements-analysis stage, RE component-inventory.md (if brownfield), the team's documents (the documents card)
-outputs: mockups.md, interaction-spec.md, design-system-mapping.md, accessibility-checklist.md, mockups-preview.html, refined-mockups-questions.md (under this stage's record dir, engine-resolved)
+outputs: mockups.md, interaction-spec.md, design-system-mapping.md, accessibility-checklist.md, refined-mockups-questions.md, and mockups-preview.html when the work has screens to show (under this stage's record dir, engine-resolved)
 ---
 
 # Refined Mockups & UX Design
@@ -87,13 +88,13 @@ In `interaction-spec.md`, give every experience decision its own story-keyed ID,
 
 In `design-system-mapping.md`, use the template's Design System Mapping table: each component and token row gives where it is observed (a file in the existing code, or `none`) apart from the standard it follows (a company document, a memory rule, the person's answer, or `[assumption]`).
 
-Also write `<record>/inception/refined-mockups/mockups-preview.html` with your file-writing tool: one self-contained HTML file, with inline CSS and SVG, no scripts and nothing loaded from elsewhere, labelled with the `UX` IDs it shows. Its `<head>` opens with exactly this line (after an optional `<meta charset="utf-8">`), so the browser enforces that; the review request and the gate refuse a preview without it:
+When the work has screens to show, also write `<record>/inception/refined-mockups/mockups-preview.html` with your file-writing tool: one self-contained HTML file, with inline CSS and SVG, no scripts and nothing loaded from elsewhere, labelled with the `UX` IDs it shows. Its `<head>` opens with this tag (after an optional `<meta charset="utf-8">`; a formatter may break its attributes onto lines or close it with `/>`), so the browser enforces that; the review request refuses a preview without it:
 
 ```html
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:">
 ```
 
-For user-facing UI it shows each decided screen in each state its decisions cover, drawn with the components and tokens of `design-system-mapping.md`, and lets the person click through them without a script: each screen and state is a `<section id="sign-in-error">`, each control that leads somewhere is an `<a href="#sign-in-error">` to its target, and CSS `:target` shows the selected section, with the first screen shown when none is selected; for an API it shows example requests and responses in each state its decisions cover, success and each error shape. The person judges the experience by looking at it; it is approved with the other outputs, and Build and Test's final gate compares the build with it.
+It shows each decided screen in each state its decisions cover, drawn with the components and tokens of `design-system-mapping.md`, and lets the person click through them without a script: each screen and state is a `<section id="sign-in-error">`, each control that leads somewhere is an `<a href="#sign-in-error">` to its target, and CSS `:target` shows the selected section, with the first screen shown when none is selected. The person judges the experience by looking at it; it is approved with the other outputs, and Build and Test's final gate compares the build with it. API-only work has no preview: the example requests and responses in the Markdown outputs, success and each error shape, are what the person reads.
 
 For non-UI: create API developer experience specification.
 
@@ -107,12 +108,12 @@ That `report` call owns every lifecycle transition and advancement; never perfor
 
 Completion emoji: :art:
 Review path: `<record>/inception/refined-mockups/`
-Tell the person to open `mockups-preview.html` in a browser and click through the experience in its states before they decide.
+When `mockups-preview.html` was written, tell the person to open it in a browser and click through the experience in its states before they decide.
 Standard approval gate (Approve / Request Changes).
 
 ## Sensors
 
-This stage's outputs are markdown artefacts under `<record>/inception/refined-mockups/`, plus the HTML preview.
+This stage's outputs are markdown artefacts under `<record>/inception/refined-mockups/`, plus the HTML preview when it is written.
 
 Imports: `required-sections`, `upstream-coverage`, `traceability` (fired on `interaction-spec.md`: every `UX` ID names a story `stories.md` has, or is app-wide).
 

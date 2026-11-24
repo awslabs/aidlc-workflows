@@ -829,21 +829,24 @@ designs the refined mockups from the stories and requirements.
    rule, or `[assumption]`. The `traceability` sensor checks at this stage's
    gate that each ID names a story `stories.md` has. Design-system rows
    separate where a component is observed in the code from the standard it
-   follows. Also write `mockups-preview.html`: one self-contained HTML file
+   follows. When the work has screens to show, also write
+   `mockups-preview.html` (an optional output): one self-contained HTML file
    (inline CSS and SVG) showing each decided screen in each state, linked so
    the person can click through them with in-page anchors and CSS `:target`
-   (no script), or for an API example requests and responses in each state,
-   labelled with its `UX` IDs. Its head opens with a fixed Content-Security-Policy line
-   (`default-src 'none'; style-src 'unsafe-inline'; img-src data:`), so the
-   browser runs no script and loads nothing from elsewhere; the review
-   request and the gate refuse a preview without it.
+   (no script), labelled with its `UX` IDs. Its head opens with a fixed
+   Content-Security-Policy tag (`default-src 'none'; style-src
+   'unsafe-inline'; img-src data:`), however a formatter lays the tag out, so
+   the browser runs no script and loads nothing from elsewhere; the review
+   request refuses a preview without it. API-only work has no preview: its
+   example requests and responses are in the Markdown outputs.
    For non-UI initiatives, create API developer experience specification.
 
 5. **Prepare Completion** -- Verify the refined-mockup artifacts. Do not edit
    state; report the gate outcome through `aidlc-orchestrate.ts`.
 
 6. **Present Completion & Request Approval** -- Display completion message
-   with :art: emoji, pointing the person at `mockups-preview.html`. Standard
+   with :art: emoji, pointing the person at `mockups-preview.html` when it
+   was written. Standard
    approval gate (Approve / Request Changes).
 
 ### Outputs
@@ -856,7 +859,7 @@ All artifacts written to `<record>/inception/refined-mockups/`:
 | `interaction-spec.md`           | Interaction patterns, state management, transitions; one story-keyed `UX{x}.{y}.{n}` ID and source per experience decision, traced by Code Generation |
 | `design-system-mapping.md`      | Component mapping to design system / component library       |
 | `accessibility-checklist.md`    | WCAG compliance checklist and requirements                   |
-| `mockups-preview.html`          | Self-contained preview of each decided screen in its states (for an API, example requests and responses); approved and fingerprinted with the other outputs |
+| `mockups-preview.html`          | Optional: a self-contained, clickable preview of each decided screen in its states, when the work has screens; approved and fingerprinted with the other outputs when written |
 | `refined-mockups-questions.md`  | Clarifying questions with `[Answer]:` tags (input artifact)  |
 
 ### Approval Gate

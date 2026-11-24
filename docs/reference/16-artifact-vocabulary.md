@@ -200,8 +200,8 @@ directives, per-Unit coverage, completion guards, and review fingerprints.
 Every artifact except `traceability` and `mockups-preview` resolves to
 `<canonical-name>.md`; `traceability` resolves to `traceability.json` and
 `mockups-preview` to `mockups-preview.html`, a single self-contained file, so
-review fingerprints and the approval's validation basis cover it like any
-other output.
+when it is written (it is an optional output) review fingerprints and the
+approval's validation basis cover it like any other output.
 
 **Review records are not artifacts.** A reviewer-bearing stage's review result
 (verdict, findings, reviewer, request id, the fingerprints it binds, and the
@@ -264,7 +264,7 @@ aidlc engine graph artifacts
 Prints one canonical name per line, alphabetically sorted.
 
 It reads the compiled graph, so it lists what the last compile saw. On a
-native install of this release it prints 122 names (output trimmed):
+native install of this release it prints 123 names (output trimmed):
 
 ```text
 $ aidlc engine graph artifacts
@@ -275,7 +275,7 @@ api-documentation
 approval-handoff-questions
 ...
 $ aidlc engine graph artifacts | wc -l
-122
+123
 ```
 
 Pipe through `wc -l` for a count, `grep` for a filter, or `diff` against

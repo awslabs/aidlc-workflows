@@ -352,8 +352,8 @@ When Refined Mockups ran, say in one line the `UX` decisions and the
 measurable checks of `accessibility-checklist.md` (keyboard, contrast, screen
 reader) no test exercised, only when there are any. When
 `<record>/inception/refined-mockups/mockups-preview.html` exists, say in one
-line which built screens or API responses to compare with it; a Refined
-Mockups approved before the preview existed has none, so name no file. Whether
+line which built screens to compare with it; when Refined Mockups wrote none
+(API-only work, or one approved before the preview existed), name no file. Whether
 the build matches the experience they approved, brand and feel included, is the
 person's judgement at this gate; the tests cannot settle it.
 
