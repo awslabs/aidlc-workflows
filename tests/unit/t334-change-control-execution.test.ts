@@ -113,7 +113,16 @@ describe("t334 F22 initial execution requirements survive a lowered fence", () =
       } else if (fault === "invalid-directive") clearActiveDirectiveMarker(project);
       else if (fault === "invalid-target") {
         prompt = prompt.replace("AIDLC-STAGE: code-generation", "AIDLC-UNIT: foreign-unit");
-      } else if (fault === "missing-target") prompt = "Generate the implementation now.";
+      } else if (fault === "missing-target") {
+        prompt = "Generate the implementation now.";
+        // Where the start hands the developer its plan (the stage-rules hook on
+        // SubagentStart), a start naming no target is for the step's one target
+        // (t-code-generation-resume); this install has no such entry.
+        const settingsPath = join(project, ".claude", "settings.json");
+        const settings = JSON.parse(readFileSync(settingsPath, "utf-8")) as { hooks: Record<string, unknown> };
+        const { SubagentStart: _start, ...hooks } = settings.hooks;
+        writeFileSync(settingsPath, `${JSON.stringify({ ...settings, hooks }, null, 2)}\n`);
+      }
       const statePath = join(seededRecordDir(project), "aidlc-state.md");
       const state = readFileSync(statePath, "utf-8");
       const receipts = receiptFiles(project);

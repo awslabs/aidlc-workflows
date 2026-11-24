@@ -225,6 +225,33 @@ describe("t349 audit trail guard: file-write tools", () => {
 });
 
 describe("t349 audit trail guard: shell commands", () => {
+  // Codex's shell apply_patch writes the files its patch names, so a patch
+  // naming a shard is refused as a redirect to it is; one naming the record's
+  // own files, or a source file, is not this guard's.
+  test("a shell apply_patch whose patch names a shard is refused; the record's own files are not", () => {
+    const patch = (path: string) => `*** Begin Patch\n*** Update File: ${path}\n@@\n+x\n*** End Patch`;
+    for (const command of [
+      `apply_patch <<'PATCH'\n${patch(SHARD)}\nPATCH`,
+      `applypatch <<"PATCH"\n${patch(LOCAL_RECORD)}\nPATCH\n`,
+      `apply_patch <<-'PATCH'\n${patch(SHARD).replace(/^/gm, "\t")}\n\tPATCH`,
+      `apply_patch '${patch(SHARD)}'`,
+    ]) {
+      expect(bash(command), command).toBe("audit");
+    }
+    for (const path of [`${RECORD}/construction/code-generation/code-generation-plan.md`, `${RECORD}/inception/requirements-analysis/requirements.md`, "src/app.ts"]) {
+      expect(bash(`apply_patch <<'PATCH'\n${patch(path)}\nPATCH`), path).toBeNull();
+    }
+  });
+
+  test("a shell apply_patch heredoc's body is data: a stage document's Markdown is not read as a redirect", () => {
+    const doc = `${RECORD}/inception/architecture-design/doc.md`;
+    const patch = (lines: string[]) => `apply_patch <<'PATCH'\n*** Begin Patch\n*** Add File: ${doc}\n${lines.map((l) => `+${l}`).join("\n")}\n*** End Patch\nPATCH`;
+    for (const line of ["Scale out when traffic > $5 a day.", "Alarm when retries > 3?", "> **Note** the region.", "> `x` is the key.", "A -->|$5| B"]) {
+      expect(bash(patch([line, "more"])), line).toBeNull();
+    }
+    expect(bash(patch(["<!-- Text fallback: a caller sends a body. -->"]))).toBeNull();
+  });
+
   test("shell appends, overwrites, copies, moves, removals, and directory creation aimed at a shard are refused", () => {
     for (const command of [
       `cat >> ${SHARD} <<'EOF'\n## Questions: Feasibility\n**Timestamp**: 2026-09-25T00:00:00Z\nEOF`,

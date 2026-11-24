@@ -22,4 +22,6 @@ aidlc/spaces/*/knowledge/.sources.local.json
 aidlc/spaces/*/intents/*/runtime-graph.json
 aidlc/spaces/*/intents/*/.aidlc-*
 aidlc/diagnostics/
+.aidlc/worktree-meta.json
+.aidlc/base-source-listing.tsv
 .claude/settings.local.json

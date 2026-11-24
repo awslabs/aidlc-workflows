@@ -15,9 +15,12 @@ import {
   runtimeProjectDir,
 } from "../tools/aidlc-runtime-paths.ts";
 import {
+  heredocAt,
+  heredocPipeline,
   shellCommandInvocationDetails,
   shellDirectoryChanges,
   shellHomes,
+  shellPatchPaths,
   shellWriteTargets,
   writeTargets,
 } from "./review-freeze-command.ts";
@@ -805,56 +808,18 @@ function interpreterReadsCode(name: string, args: string[]): boolean {
   return true;
 }
 
-// Limit stdin consumers to this command and its downstream pipeline, excluding
-// earlier/later independent commands. Redirection filenames are not script argv.
-function heredocPipeline(header: string, herePosition: number): { raw: string; execution: string } {
-  let quote = "";
-  let start = 0;
-  let end = header.length;
-  const redirects: Array<[number, number]> = [];
-  for (let index = 0; index < header.length; index++) {
-    const ch = header[index];
-    if (ch === "\\" && quote !== "'") { index++; continue; }
-    if (quote) { if (ch === quote) quote = ""; continue; }
-    if (ch === "'" || ch === '"') { quote = ch; continue; }
-    const redirect = /^(?:\d*)?(?:>>?|<|&>)(?:&)?[ \t]*/.exec(header.slice(index));
-    if (redirect && (ch === "<" || ch === ">" || ch === "&" ||
-      index === 0 || /\s|[;|&]/.test(header[index - 1]))) {
-      const begin = index;
-      index += redirect[0].length;
-      let targetQuote = "";
-      while (index < header.length) {
-        const current = header[index];
-        if (current === "\\" && targetQuote !== "'") { index += 2; continue; }
-        if (targetQuote) {
-          if (current === targetQuote) targetQuote = "";
-        } else if (current === "'" || current === '"') targetQuote = current;
-        else if (/\s|[;|&<>]/.test(current)) break;
-        index++;
-      }
-      redirects.push([begin, index]);
-      index--;
-      continue;
-    }
-    if (!";|&\n".includes(ch)) continue;
-    const pair = header.slice(index, index + 2);
-    const width = ["&&", "||", "|&"].includes(pair) ? 2 : 1;
-    if (index < herePosition) start = index + width;
-    else if (ch !== "|" || pair === "||") { end = index; break; }
-    index += width - 1;
-  }
-  const execution = header.split("");
-  for (const [begin, after] of redirects) {
-    for (let index = begin; index < after; index++) execution[index] = " ";
-  }
-  return { raw: header.slice(start, end), execution: execution.slice(start, end).join("") };
-}
-
 function protectedHeredoc(body: string, header: string, herePosition: number, stdin: boolean, cwd: string, depth: number): boolean {
   const pipeline = heredocPipeline(header, herePosition);
   const kinds = new Set<"shell" | "python" | "javascript">();
   if (stdin) {
-    for (const call of shellCommandInvocationDetails(pipeline.execution)) {
+    const calls = shellCommandInvocationDetails(pipeline.execution);
+    // apply_patch with no operand writes the files its patch names, as printf
+    // to each would.
+    if (
+      calls.length === 1 && (calls[0].name === "apply_patch" || calls[0].name === "applypatch") && calls[0].args.length === 0 &&
+      shellPatchPaths(body, cwd).some((path) => protectedWriteTarget(path, cwd))
+    ) return true;
+    for (const call of calls) {
       const kind = interpreter(call.name);
       if (kind && interpreterReadsCode(call.name, call.args)) kinds.add(kind);
     }
@@ -883,6 +848,7 @@ function protectedShell(command: string, cwd: string, depth = 0, expansionsOnly 
   let visible = "";
   // Open `${` parameter expansions: their braces are part of a word, not a group.
   let parameter = 0;
+  const heredocBodies: Array<[number, number]> = [];
   for (let index = 0; index < command.length; index++) {
     const ch = command[index];
     if (ch === "\\" && quote !== "'") {
@@ -920,34 +886,19 @@ function protectedShell(command: string, cwd: string, depth = 0, expansionsOnly 
       index = end;
       continue;
     }
-    if (!quote && !expansionsOnly && command.startsWith("<<", index) && command[index + 2] !== "<") {
-      const here = /^<<(-)?[ \t]*(?:'([^']+)'|"([^"]+)"|([A-Za-z_]\w*))/.exec(command.slice(index));
-      if (here) {
-        const delimiter = here[2] ?? here[3] ?? here[4];
-        const newline = command.indexOf("\n", index + here[0].length);
-        if (newline >= 0) {
-          let end = newline + 1;
-          const bodyStart = end;
-          while (end < command.length) {
-            const nextLine = command.indexOf("\n", end);
-            const lineEnd = nextLine < 0 ? command.length : nextLine;
-            const line = command.slice(end, lineEnd).replace(/\r$/, "");
-            if ((here[1] ? line.replace(/^\t+/, "") : line) === delimiter) break;
-            end = nextLine < 0 ? command.length : nextLine + 1;
-          }
-          const body = command.slice(bodyStart, end);
-          const descriptor = /(?:^|[ \t])(\d+)$/.exec(visible);
-          const prefix = descriptor ? visible.slice(0, -descriptor[1].length) : visible;
-          const header = prefix + command.slice(index + here[0].length, newline);
-          if (protectedHeredoc(body, header, prefix.length, !descriptor || descriptor[1] === "0", cwd, depth) ||
-            protectedShell(header, cwd, depth + 1) ||
-            here[4] !== undefined && protectedShell(body, cwd, depth + 1, true)) return true;
-          const after = command.indexOf("\n", end);
-          visible = `${header}\n`;
-          index = after < 0 ? command.length : after;
-          continue;
-        }
-      }
+    const heredoc = !quote && !expansionsOnly && ch === "<" ? heredocAt(command, index) : null;
+    if (heredoc) {
+      const descriptor = /(?:^|[ \t])(\d+)$/.exec(visible);
+      const prefix = descriptor ? visible.slice(0, -descriptor[1].length) : visible;
+      const header = prefix + command.slice(heredoc.operatorEnd, heredoc.newline);
+      if (protectedHeredoc(heredoc.body, header, prefix.length, !descriptor || descriptor[1] === "0", cwd, depth) ||
+        protectedShell(header, cwd, depth + 1) ||
+        !heredoc.quoted && protectedShell(heredoc.body, cwd, depth + 1, true)) return true;
+      const after = command.indexOf("\n", heredoc.bodyEnd);
+      heredocBodies.push([heredoc.newline, after < 0 ? command.length : after]);
+      visible = `${header}\n`;
+      index = after < 0 ? command.length : after;
+      continue;
     }
     // `${ cmd; }` and `${| cmd; }` (bash 5.3) run a command, as `$(...)` does,
     // so their braces stay separators.
@@ -966,7 +917,10 @@ function protectedShell(command: string, cwd: string, depth = 0, expansionsOnly 
   if (expansionsOnly) return false;
   if (HARNESS_CONTROL_ASSIGNMENTS.some((pattern) => pattern.test(visible)) ||
     shellWriteTargets(visible, cwd).some((path) => protectedWriteTarget(path, cwd))) return true;
-  if (unresolvedAuditTrailWrite(visible, command, cwd)) {
+  // A heredoc body is data; its text is not read as the command as written.
+  let withoutBodies = command;
+  for (const [from, to] of [...heredocBodies].reverse()) withoutBodies = withoutBodies.slice(0, from) + withoutBodies.slice(to);
+  if (unresolvedAuditTrailWrite(visible, withoutBodies, cwd)) {
     auditTrailMatched = true;
     return true;
   }
@@ -1130,7 +1084,8 @@ function unresolvedAuditTrailWrite(visible: string, command: string, cwd: string
   // The walk's `visible` text has rewritten what it evaluated (a substitution
   // as its literal output or a placeholder, a heredoc as its header, unquoted
   // parentheses and braces as separators), so words, assignments and directory
-  // changes are also read from the command as written.
+  // changes are also read from the command as written, minus its heredoc
+  // bodies (`command` is the caller's `withoutBodies`).
   const words: string[] = [];
   shellWriteTargets(visible, cwd, words);
   shellWriteTargets(command, cwd, words);

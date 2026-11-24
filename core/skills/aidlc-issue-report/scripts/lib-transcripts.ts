@@ -5,7 +5,7 @@
 import { createHash } from "node:crypto";
 import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, realpathSync, statSync } from "node:fs";
 import { homedir, platform } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 
 // The one annotation the readers add after a model or effort an agent set for itself.
 export const OWN = " (agent's own)";
@@ -37,7 +37,7 @@ export type Summary = {
   models: Record<string, number>; // main agent's model (subagents are under `subagents`)
   efforts: Record<string, number>;
   agents: Record<string, number>; // Kiro agent the session ran (v3 `agentMode`, v2 `agent_name`)
-  approvalModes: Record<string, number>; // Claude `permissionMode`, Codex `approval_policy`, Kiro `autopilot`
+  approvalModes: Record<string, number>; // Claude `permissionMode`, Codex `approval_policy`, Kiro IDE `autopilot` and `approveForMe`
   // Engine checks the agent ran by hand (`engine sensor-<name> [--stage <stage>]`, native or copied): they write no audit row, so this
   // is the only place a later pass (or fail) shows. `pass` is read from the JSON the check printed; null when not found.
   handRunChecks: { ts: string; check: string; pass: boolean | null }[];
@@ -162,7 +162,7 @@ type KiroPayload = {
 };
 type KiroLine = { timestamp?: string; payload?: KiroPayload };
 type KiroLogLine = { timestamp?: string; conversationId?: string; message?: unknown };
-type KiroSession = { workspacePaths?: string[]; modelId?: unknown; effortLevel?: unknown; agentMode?: unknown; autopilot?: unknown };
+type KiroSession = { workspacePaths?: string[]; modelId?: unknown; effortLevel?: unknown; agentMode?: unknown; autopilot?: unknown; approveForMe?: unknown };
 type KiroV2Meta = {
   cwd?: string;
   updated_at?: string;
@@ -962,7 +962,22 @@ function kiroFailure(t: Tally, tool: string, local: Local, ts: string, text: str
   noteError(t, tool, local, ts, text, kiroErrorFacts(text));
 }
 
-export function kiroV3(project: string, since: number, until: number, local: Local): Summary | null {
+// Kiro IDE's approval mode as the chat's session.json holds it when the report is made: `autopilot` (off = Supervised,
+// on = Autopilot, called Accept file changes in IDE 1.4.154's menu) and `approveForMe` (true only in Approve for me,
+// IDE 1.4.154). Kiro CLI writes `autopilot: true` whatever its policy (CLI 3.2.0, in ask for approval too), so a Kiro
+// CLI session is not read here.
+function kiroIdeApprovalMode(j: KiroSession): string | undefined {
+  if (j.approveForMe === true) return "approve for me";
+  return typeof j.autopilot === "boolean" ? `autopilot ${j.autopilot ? "on" : "off"}` : undefined;
+}
+
+// Whether Kiro CLI's permission files in these folders list the `approve-for-me` preset under `policies:` now: true,
+// false, null when a file there cannot be read and none lists it, or undefined when the reader gave no such answer.
+// AI-DLC's own reader (kiroPoliciesApproveForMe in its aidlc-kiro-chat-record.ts), taken from the install
+// (lib-project.ts importKiroPolicyReader); only this answer leaves it: nothing of the files' contents goes into the report.
+export type KiroPolicyReader = (dirs: string[]) => boolean | null | undefined;
+
+export function kiroV3(project: string, since: number, until: number, local: Local, kiroPolicies?: KiroPolicyReader): Summary | null {
   const root = join(kiroHome(), "sessions");
   if (!existsSync(root)) return null;
   const ws16 = createHash("sha256").update(resolve(project)).digest("hex").slice(0, 16);
@@ -970,6 +985,12 @@ export function kiroV3(project: string, since: number, until: number, local: Loc
   s.engine = "v3";
   const calls: Calls = new Map();
   const sessionIds = new Set<string>();
+  // The Kiro CLI sessions among them: Kiro CLI v3 keeps the session's input history in ~/.kiro/sessions/cli/<id>.history;
+  // Kiro IDE does not (measured on CLI 2.32.0 and IDE 1.3.11). The store itself is shared, and the AI-DLC row `kiro-ide`
+  // serves both, so neither tells the surface.
+  const cliIds = new Set<string>();
+  // The workspace folders of the Kiro CLI sessions read, for the approval policy their permission files list now.
+  const cliWorkspaces = new Set<string>();
   // Where each session's run ends (the report's part starts), for the engine log's dispatch lines below.
   const runUntil = new Map<string, string>();
   // Kiro names a workspace's folder after a hash of its path. The project's own hash is one; a folder under the
@@ -1099,17 +1120,19 @@ export function kiroV3(project: string, since: number, until: number, local: Loc
         s.sessions++;
         sessionIds.add(sess);
         const facts = newFacts();
+        const cli = existsSync(join(root, "cli", `${sess}.history`));
+        if (cli) cliIds.add(sess);
         try {
           const j = readJson<KiroSession>(join(ws, sess, "session.json"));
           note(facts.models, j.modelId);
           note(facts.efforts, j.effortLevel);
           if (typeof j.agentMode === "string") note(facts.agents, agentName(j.agentMode));
-          note(facts.approvalModes, typeof j.autopilot === "boolean" ? `autopilot ${j.autopilot ? "on" : "off"}` : undefined);
+          if (!cli) note(facts.approvalModes, kiroIdeApprovalMode(j));
         } catch {
           // session.json missing or mid-write
         }
         // A session that holds the run and then the report: session.json (now the report's) goes to the report counts,
-        // and the run gets what its own messages named. Effort and autopilot are not in the messages: left out for the run.
+        // and the run gets what its own messages named. Effort and approval mode are not in the messages: left out for the run.
         // The report part begins at the person's message that asked for it, or earlier, where the agent last switched to
         // the one the report ran in (the person can switch to `vibe` and talk before asking for the report) — but
         // never before the run's last engine call: a switch the run itself went on in is the run's.
@@ -1142,6 +1165,7 @@ export function kiroV3(project: string, since: number, until: number, local: Loc
         const reportModel = modelNotes.at(-1)?.v;
         const differs =
           runBefore && (modes.some((m) => m.ts < cut && m.v !== reportMode) || modelNotes.some((m) => m.ts < cut && m.v !== reportModel));
+        if (cli && (!isReport || runBefore)) cliWorkspaces.add(basename(ws));
         if (isReport && runBefore) s.mixedSessions++;
         if (isReport && runBefore && !differs) addFacts(s, facts);
         const mixed = isReport && differs;
@@ -1151,19 +1175,32 @@ export function kiroV3(project: string, since: number, until: number, local: Loc
           for (const m of modelNotes) if (m.ts < cut) note(run.models, m.v);
           for (const m of modes) if (m.ts < cut) note(run.agents, agentName(m.v));
           addFacts(s, run);
-          s.notes.push(`One Kiro session held the run and then this report (from ${new Date(Date.parse(cut)).toISOString()}): the run's model and agent are read from its messages before that time; its effort and autopilot setting are not known.`);
+          s.notes.push(`One Kiro session held the run and then this report (from ${new Date(Date.parse(cut)).toISOString()}): the run's model and agent are read from its messages before that time; its effort and approval mode are not known.`);
         } else addSession(s, facts, isReport);
       }
     }
   }
   if (s.sessions === 0) return null;
-  // Which surface: Kiro CLI v3 keeps the session's input history in ~/.kiro/sessions/cli/<id>.history; Kiro IDE does
-  // not (measured 2026-10-18 on CLI 2.32.0 and IDE 1.3.11). The store itself is shared, and the AI-DLC row `kiro-ide`
-  // serves both, so neither tells the surface.
-  const cliIds = [...sessionIds].filter((id) => existsSync(join(root, "cli", `${id}.history`)));
-  const ideCount = sessionIds.size - cliIds.length;
-  s.tool = cliIds.length && ideCount ? "kiro (v3: Kiro CLI + Kiro IDE)" : cliIds.length ? "kiro (v3: Kiro CLI)" : "kiro (v3: Kiro IDE)";
-  s.notes.push(`Kiro surface per session: ${cliIds.length} Kiro CLI, ${ideCount} Kiro IDE (told apart by the input history Kiro CLI keeps per session in the cli folder of its sessions folder).`);
+  // Which surface, per session (cliIds).
+  const ideCount = sessionIds.size - cliIds.size;
+  s.tool = cliIds.size && ideCount ? "kiro (v3: Kiro CLI + Kiro IDE)" : cliIds.size ? "kiro (v3: Kiro CLI)" : "kiro (v3: Kiro IDE)";
+  s.notes.push(`Kiro surface per session: ${cliIds.size} Kiro CLI, ${ideCount} Kiro IDE (told apart by the input history Kiro CLI keeps per session in the cli folder of its sessions folder).`);
+  if (cliWorkspaces.size) {
+    s.notes.push("Kiro CLI's session record does not say which approval policy the session ran with (ask for approval or approve for me), so the run's approval mode on Kiro CLI is not known.");
+    // The workspace's folder (~/.kiro/workspace-roots/<the sessions folder's name>/, where Kiro CLI's /permissions
+    // writes it) and the person's own (~/.kiro/settings/).
+    const dirs = [...[...cliWorkspaces].map((w) => join(kiroHome(), "workspace-roots", w)), join(kiroHome(), "settings")];
+    const listed = kiroPolicies?.(dirs);
+    s.notes.push(
+      listed === undefined
+        ? "When this report was made, the AI-DLC installed here gave no answer on whether Kiro CLI's permission files for this project list the approve-for-me policy, so its approval policy now is not known either."
+        : listed === null
+        ? "When this report was made, Kiro CLI's permission files for this project could not be read, so its approval policy now is not known either."
+        : listed
+          ? "When this report was made, Kiro CLI's permission files for this project listed the approve-for-me policy: a setting now, which the run may not have had."
+          : "When this report was made, no Kiro CLI permission file for this project listed the approve-for-me policy: a setting now, which the run may not have had.",
+    );
+  }
   // Model and effort per dispatched agent from the engine log.
   let untimedDispatches = 0;
   const logs = join(kiroHome(), "logs");

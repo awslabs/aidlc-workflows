@@ -78,7 +78,7 @@ import {
 	DEFAULT_SUBPROCESS_TIMEOUT_MS,
 	LONG_SUBPROCESS_TIMEOUT_MS,
 } from "./aidlc-runtime-budget.ts";
-import { compiledExecutable, projectPackage } from "./aidlc-runtime-paths.ts";
+import { compiledExecutable, projectPackage, writeSensorResult } from "./aidlc-runtime-paths.ts";
 
 interface ParsedError {
 	file: string;
@@ -211,7 +211,7 @@ function runTsc(opts: {
 		"--tsBuildInfoFile",
 		opts.tsBuildInfoFile,
 	]);
-	const result = spawnSync(command, args, { encoding: "utf-8", timeout: LONG_SUBPROCESS_TIMEOUT_MS, cwd: opts.cwd });
+	const result = spawnSync(command, args, { encoding: "utf-8", maxBuffer: 64 * 1024 * 1024, timeout: LONG_SUBPROCESS_TIMEOUT_MS, cwd: opts.cwd });
 	// Partial diagnostics (or none) after a kill do not prove a clean compile.
 	// Preserve the dispatcher's script-error path instead of emitting pass:true.
 	if (result.error || result.signal || result.status === null) {
@@ -346,8 +346,7 @@ export function main(argv: string[]): void {
 		// findings_count emitted by the script (sensor-id-agnostic dispatcher).
 		findings_count: errors.length,
 	};
-	process.stdout.write(`${JSON.stringify(out)}\n`);
-	process.exit(0);
+	writeSensorResult(out);
 }
 
 if (import.meta.main) main(process.argv.slice(2));

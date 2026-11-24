@@ -20,6 +20,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as lib from "../../dist/codex/.codex/tools/aidlc-lib.ts";
+import { codexRefusal } from "../harness/codex-hook-answer.ts";
 import { DEFAULT_RECORD_DIR, DEFAULT_SPACE, REPO_ROOT, intentsDirOf, seedAidlcMemory, seededRecordDir } from "../harness/fixtures.ts";
 import { NATIVE_RUNTIME_CASE_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 
@@ -86,7 +87,8 @@ function adapter(dir: string, target: string, payload: Record<string, unknown>) 
     env: { ...process.env, AIDLC_PROJECT_DIR: dir, CLAUDE_PROJECT_DIR: undefined, CODEX_THREAD_ID: undefined, AIDLC_SESSION_OVERRIDE: undefined, AIDLC_SESSION_OVERRIDE_SOURCE: undefined } as NodeJS.ProcessEnv,
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
   });
-  return { code: r.status ?? -1, out: r.stdout ?? "", err: r.stderr ?? "" };
+  const answer = { code: r.status ?? -1, out: r.stdout ?? "", err: r.stderr ?? "" };
+  return { ...answer, refused: codexRefusal({ code: answer.code, stdout: answer.out, stderr: answer.err }) };
 }
 
 // What a helper's shell command sees: the engine's own intent listing, run with
@@ -147,13 +149,13 @@ describe("a Codex helper's engine command stays on the chat that spawned it", ()
       hook_event_name: "PreToolUse", session_id: ROOT, tool_name: "Bash", tool_input: { command: "ls" },
       turn_id: "01a12051-0000-7000-8000-000000000011", tool_use_id: "call_root",
     });
-    expect(own.code, own.err).toBe(0);
+    expect({ code: own.code, refused: own.refused }, own.err).toEqual({ code: 0, refused: null });
     expect(helperRecords(dir)).toEqual([]);
     const call = adapter(dir, "guard-tool-call", {
       hook_event_name: "PreToolUse", session_id: ROOT, agent_id: HELPER, agent_type: "aidlc-pipeline-deploy-agent",
       tool_name: "Bash", tool_input: { command: "ls" }, turn_id: "01a12051-0000-7000-8000-000000000012", tool_use_id: "call_helper",
     });
-    expect(call.code, call.err).toBe(0);
+    expect({ code: call.code, refused: call.refused }, call.err).toEqual({ code: 0, refused: null });
     expect(helperRecords(dir)).toEqual([`${HELPER}.helper-of`]);
     expect(activeIntentSeenBy(dir, HELPER)).toBe(BOUND_RECORD);
   });
@@ -181,7 +183,7 @@ describe("a Codex helper's engine command stays on the chat that spawned it", ()
         hook_event_name: "UserPromptSubmit", session_id: ROOT, turn_id: "01a12051-0000-7000-8000-000000000021",
         transcript_path: `${sessions}/${name}`, prompt: "Carry on.",
       });
-      expect(own.code, own.err).toBe(0);
+      expect({ code: own.code, refused: own.refused }, own.err).toEqual({ code: 0, refused: null });
     }
     expect(helperRecords(dir)).toEqual([`${REVIEW}.helper-of`]);
   });
@@ -193,7 +195,7 @@ describe("a Codex helper's engine command stays on the chat that spawned it", ()
       transcript_path: `C:\\Users\\person\\.codex\\sessions\\2026\\10\\10\\rollout-2026-10-10T14-00-21-${REVIEW}.jsonl`,
       turn_id: "01a12051-0000-7000-8000-000000000022", tool_use_id: "call_review",
     });
-    expect(call.code, call.err).toBe(0);
+    expect({ code: call.code, refused: call.refused }, call.err).toEqual({ code: 0, refused: null });
     expect(helperRecords(dir)).toEqual([`${REVIEW}.helper-of`]);
     expect(activeIntentSeenBy(dir, REVIEW)).toBe(BOUND_RECORD);
   });

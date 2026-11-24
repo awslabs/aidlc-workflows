@@ -13,6 +13,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { AS_ITS_OWN_COMMAND, FILE_TOOLS_RULE } from "../../core/tools/aidlc-testing-posture.ts";
+import { readConductorSurface } from "../harness/conductor-skill.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 
 const PROSE = [
@@ -76,7 +77,7 @@ describe("t-agent-conduct", () => {
   // in every skill's "run the engine" paragraph too.
   test("every skill tells the lead that its files stay inside the project", () => {
     for (const harness of ["claude", "codex", "copilot", "cursor", "kiro-ide", "kiro", "opencode"]) {
-      const skill = readFileSync(join(REPO_ROOT, "harness", harness, "skills", "aidlc", "SKILL.md"), "utf-8");
+      const skill = readConductorSurface(join(REPO_ROOT, "harness", harness, "skills", "aidlc", "SKILL.md"));
       expect(skill, harness).toMatch(
         /Run the engine binary directly via [^.]*\. Every file you make on your own, a scratch file, a helper script, a command's output, stays inside the project \(nothing in \/tmp or any folder outside it\), and a command's output is read from the tool result, never sent to a file; a file the person asks for, or one the plan names, goes where they say\./,
       );
@@ -86,7 +87,7 @@ describe("t-agent-conduct", () => {
   test("the Copilot and Kiro IDE skills carry their own conduct sentence", () => {
     const copilot = readFileSync(join(REPO_ROOT, "harness", "copilot", "skills", "aidlc", "SKILL.md"), "utf-8");
     expect(copilot).toContain("never into Copilot's memory tool");
-    const kiroIde = readFileSync(join(REPO_ROOT, "harness", "kiro-ide", "skills", "aidlc", "SKILL.md"), "utf-8");
+    const kiroIde = readConductorSurface(join(REPO_ROOT, "harness", "kiro-ide", "skills", "aidlc", "SKILL.md"));
     expect(kiroIde).toContain("**Every AI-DLC command on its own.**");
     expect(kiroIde).toContain("no pipe, no `;`, no `echo`, no `Select-String`");
   });
@@ -114,7 +115,7 @@ describe("t-agent-conduct", () => {
         expect(prompt, `${tree} ${row}`).toContain(READ_AND_RUN);
         expect(prompt, `${tree} ${row}`).toContain(PERSON_AND_PLAN_RUN);
       }
-      const skill = readFileSync(join(REPO_ROOT, tree, "kiro-ide", ".kiro", "skills", "aidlc", "SKILL.md"), "utf-8");
+      const skill = readConductorSurface(join(REPO_ROOT, tree, "kiro-ide", ".kiro", "skills", "aidlc", "SKILL.md"));
       expect(skill, `${tree} kiro-ide skill`).toContain("Kiro IDE and Kiro CLI run most plain AI-DLC commands quietly");
       expect(skill, `${tree} kiro-ide skill`).toContain(
         "Read, list and search the project's files with your file tools (read a file, list a folder, search names or text), not with `ls`, `cat`,",

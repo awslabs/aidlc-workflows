@@ -139,6 +139,7 @@ import {
   validSessionId,
 } from "../tools/aidlc-lib.ts";
 import { appendCoordinationStoodAside, appendSubagentPromptUnmatched } from "../tools/aidlc-audit.ts";
+import { patchTargets } from "./review-freeze-command.ts";
 import { keptRestartRun } from "../tools/aidlc-question-store.ts";
 import { ROUTES, routePolicyFor, withoutProjectDirFlag } from "../tools/aidlc.ts";
 import { aidlcInvocation, quoteCommandArgument } from "../tools/aidlc-runtime-paths.ts";
@@ -257,6 +258,16 @@ function toolInputOf(value: unknown): Record<string, unknown> | undefined {
     // Not JSON: the patch text itself.
   }
   return { input: value };
+}
+
+function renderedContext(stdout: string): string {
+  if (stdout.trim().length === 0) return "";
+  try {
+    const parsed = JSON.parse(stdout) as { additionalContext?: unknown };
+    return typeof parsed.additionalContext === "string" ? parsed.additionalContext : "";
+  } catch {
+    return "";
+  }
 }
 
 export async function run(
@@ -383,7 +394,11 @@ export async function run(
   ]);
   const rawToolName = copilot.tool_name ?? copilot.toolName ?? "";
   const toolName = TOOL_ALIAS[rawToolName] ?? rawToolName;
-  const isApplyPatch = rawToolName === "apply_patch" || rawToolName === "applyPatch";
+  // Copilot CLI hands its apply_patch to the PascalCase hooks as Edit, with the
+  // patch text itself as tool_input (live-captured on 1.0.109), so the envelope
+  // says it is a patch as well as the name.
+  const isApplyPatch = rawToolName === "apply_patch" || rawToolName === "applyPatch" ||
+    (typeof nativeToolInput?.input === "string" && /^\*\*\* Begin Patch$/m.test(nativeToolInput.input));
 
   // Re-serialize the payload with the canonical tool_name so verbatim pipes
   // (Bash → guards, rebuild-stage-graph) carry the name the core hooks match on.
@@ -1504,17 +1519,9 @@ export async function run(
   ): Array<{ path: string; toolName: "Write" | "Edit" }> {
     const patch = [toolInput.input, toolInput.patchText, toolInput.patch, toolInput.command]
       .find((value): value is string => typeof value === "string" && value.length > 0) ?? "";
-    const targets: Array<{ path: string; toolName: "Write" | "Edit" }> = [];
-    for (const match of patch.matchAll(/^\*\*\* (Add|Update|Delete) File: (.+)$/gm)) {
-      targets.push({
-        path: match[2].trim(),
-        toolName: match[1] === "Add" ? "Write" : "Edit",
-      });
-    }
-    for (const match of patch.matchAll(/^\*\*\* Move to: (.+)$/gm)) {
-      targets.push({ path: match[1].trim(), toolName: "Write" });
-    }
-    return targets.filter((target) => target.path.length > 0);
+    return patchTargets(patch)
+      .filter((target) => target.path.length > 0)
+      .map(({ kind, path }) => ({ path, toolName: kind === "Add" || kind === "Move" ? "Write" : "Edit" }));
   }
 
   function filePathsOf(toolInput: Record<string, unknown> | undefined): string[] {
@@ -2095,6 +2102,27 @@ export async function run(
     return valid ? join(sessionsDir(projectDir), `${valid}.copilot-stop-note`) : "";
   }
 
+  function compactionStampPath(): string {
+    return join(sessionsDir(projectDir), "copilot-compacted");
+  }
+
+  function spendCompactionStamp(): boolean {
+    const path = compactionStampPath();
+    if (!existsSync(path)) return false;
+    try {
+      rmSync(path, { force: true });
+    } catch {}
+    return true;
+  }
+
+  function inSubagentSession(): boolean {
+    if (explicitSubagentId) return true;
+    if (!sessionId) return false;
+    return readLedger().some((entry) =>
+      entry.childSessionId === sessionId || (entry.selfNamed && entry.subagentId === sessionId)
+    );
+  }
+
   // Without a record the note, when it comes back, counts as the person's.
   function armStopNote(chat: string, reason: string): void {
     const path = stopNotePath(chat);
@@ -2163,6 +2191,7 @@ export async function run(
         ...(coreSessionId ? { session_id: coreSessionId } : {}),
       });
       const r = runCore("aidlc-session-start.ts", fwd);
+      spendCompactionStamp();
       // The heartbeat doctor's "have not run in this project yet" warning
       // waits for (the manifest's notRunYet).
       recordPreWorkflowHeartbeat(projectDir, "session-start");
@@ -2608,6 +2637,16 @@ export async function run(
     case "post-tool": {
       // Matcher-free registration: self-filter on tool_name (the IDE ignores
       // matchers — difference in the wiring header). Advisory targets only.
+      if (!inSubagentSession() && spendCompactionStamp()) {
+        const context = renderedContext(
+          runCore("aidlc-session-start.ts", JSON.stringify({
+            hook_event_name: "SessionStart",
+            source: "compact",
+            ...(coreSessionId ? { session_id: coreSessionId } : {}),
+          })).stdout,
+        );
+        if (context) process.stdout.write(`${JSON.stringify({ additionalContext: context })}\n`);
+      }
       if (toolName === "Write" || toolName === "Edit") {
         for (
           const target of mutationTargetsOf(
@@ -2622,7 +2661,8 @@ export async function run(
             tool_input: { file_path: target.filePath },
           });
           runCore("aidlc-write-audit-log.ts", fwd);
-          runCore("aidlc-run-sensors.ts", fwd);
+          // A target that is gone (a patch deleted or moved it) leaves a sensor nothing to read.
+          if (existsSync(target.filePath)) runCore("aidlc-run-sensors.ts", fwd);
         }
         return 0;
       }
@@ -2648,6 +2688,10 @@ export async function run(
     case "validate-state": {
       // PreCompact: the core hook reads no stdin fields — self-contained.
       runCore("aidlc-validate-state.ts", input);
+      try {
+        mkdirSync(dirname(compactionStampPath()), { recursive: true });
+        writeFileSync(compactionStampPath(), `${Date.now()}\n`, "utf-8");
+      } catch {}
       return 0;
     }
 

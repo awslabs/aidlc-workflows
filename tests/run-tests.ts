@@ -484,9 +484,13 @@ mkdirSync(resultsDir, { recursive: true });
 // one of those chats would hand every fixture project that live chat's identity
 // and the cases that mean "no chat the engine can name" would stop meaning it.
 // Production keeps reading them; every test that needs one sets it on its own
-// spawn. CLAUDECODE and the rest of the host's variables are left alone: they
-// say which host is running, not which chat.
-for (const hostChat of ["CLAUDE_CODE_SESSION_ID", "CLAUDE_PID", "KIRO_SESSION_ID", "CODEX_THREAD_ID"]) {
+// spawn. CLAUDE_CODE_ENTRYPOINT goes too: it says whether the chat draws
+// Claude Code's question box (gateNoticesInBox), which changes what a gate
+// step carries. SANDBOX_RUNTIME goes too: in Claude Code's Linux sandbox it
+// lets a pid that cannot be found still name the chat. CLAUDECODE and the rest
+// of the host's variables are left alone: they say which host is running, not
+// which chat.
+for (const hostChat of ["CLAUDE_CODE_SESSION_ID", "CLAUDE_PID", "KIRO_SESSION_ID", "CODEX_THREAD_ID", "CLAUDE_CODE_ENTRYPOINT", "SANDBOX_RUNTIME"]) {
   delete process.env[hostChat];
 }
 
@@ -1128,6 +1132,11 @@ async function runBunTestFile(
     copyFileSync(isolatedGitConfig, env.GIT_CONFIG_GLOBAL);
   } else env.GIT_CONFIG_GLOBAL = isolatedGitConfig;
   env.GIT_CONFIG_SYSTEM = NULL_DEVICE;
+  // A test's git reaches only local repositories: git refuses every other transport before it looks a name up, and
+  // allows the local one everywhere, submodule clones included. A case that needs another transport (a stand-in ssh,
+  // the refusing port 127.0.0.1:9, a loopback git server) names it in that call's own env, for example
+  // GIT_ALLOW_PROTOCOL: "file:https"; one that checks git's own local-transport rule runs without the setting.
+  env.GIT_ALLOW_PROTOCOL = "file";
   process.stdout.write(`\n=== START ${base} ===\n`);
 
   const junitXml = context

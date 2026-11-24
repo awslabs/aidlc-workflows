@@ -360,18 +360,26 @@ describe("t240 dist/opencode packaging parity + shell shape", () => {
     ).rejects.toThrow(/AIDLC runtime records and hooks belong to the harness/);
   }, ADAPTER_ENTRYPOINT_TIMEOUT_MS);
 
-  // The adapter imports one leaf tool (how a Windows .cmd starts) from the
-  // engine tree beside .opencode/, in the copy and the native tree alike;
-  // opencode loads it at every start, so it imports only node built-ins.
-  test("9c: the adapter's tool import resolves in both opencode trees to a leaf with node imports only", () => {
+  // The adapter imports its leaf modules (how a Windows .cmd starts, the shell
+  // reader, the plugin sync's record and fingerprint reading) from the engine
+  // tree beside .opencode/, in the copy and the native tree alike; opencode
+  // loads them at every start, so each imports only node built-ins.
+  test("9c: the adapter's core imports resolve in both opencode trees to leaves with node imports only", () => {
     for (const tree of [OPENCODE_ROOT, join(REPO_ROOT, "dist-release", "opencode")]) {
       const plugin = join(tree, ".opencode", "plugin", "aidlc-opencode-adapter.ts");
       const relativeImports = [...readFileSync(plugin, "utf-8").matchAll(/^import [^;]*? from "(\.[^"]+)";$/gm)].map((m) => m[1]);
-      expect(relativeImports, tree).toEqual(["../../.aidlc/tools/aidlc-executable-path.ts"]);
-      const leaf = join(dirname(plugin), relativeImports[0]);
-      expect(existsSync(leaf), leaf).toBe(true);
-      const leafImports = [...readFileSync(leaf, "utf-8").matchAll(/^import [^;]*? from "([^"]+)";$/gm)].map((m) => m[1]);
-      expect(leafImports, leaf).toEqual(["node:fs", "node:path"]);
+      expect(relativeImports, tree).toEqual([
+        "../../.aidlc/tools/aidlc-executable-path.ts",
+        "../../.aidlc/hooks/review-freeze-command.ts",
+        "../../.aidlc/tools/aidlc-plugin-rules.ts",
+        "../../.aidlc/tools/aidlc-review-manifest.ts",
+      ]);
+      for (const relativeImport of relativeImports) {
+        const leaf = join(dirname(plugin), relativeImport);
+        expect(existsSync(leaf), leaf).toBe(true);
+        const leafImports = [...readFileSync(leaf, "utf-8").matchAll(/^import [^;]*? from "([^"]+)";$/gm)].map((m) => m[1]);
+        expect(leafImports.every((name) => name.startsWith("node:")), `${leaf}: ${leafImports.join(", ")}`).toBe(true);
+      }
     }
   });
 

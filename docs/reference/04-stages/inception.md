@@ -230,10 +230,7 @@ by `aidlc engine workspace codekb --repo <repo>`:
 
 ### Approval Gate
 
-Standard 2-option gate: **Approve** / **Request Changes**. The stage file
-labels Approve "continue to Requirements Analysis"; the engine routes to the
-next stage the plan runs, which is Practices Discovery in the scopes that
-include it.
+Standard 2-option gate: **Approve** / **Request Changes**.
 
 ### Notes
 
@@ -327,6 +324,10 @@ On affirmation, content is promoted to:
   overwrite section content rather than accumulate).
 - `aidlc/spaces/<active-space>/memory/project.md` -- append-under-heading
   via `appendUnderHeading` (rules accumulate; date stamps distinguish them).
+
+A heading either file lacks is added at its end first (`ensureHeading`), so the
+save also works in a space made by `space create`, whose `team.md` and
+`project.md` start as one line, and in a file a team trimmed by hand.
 
 ### Steps
 
@@ -459,10 +460,7 @@ large scope with significant unknowns.
    - **Scope**: Single component, multi-component, system-wide
    - **Complexity**: Simple, standard, complex
 
-3. **Determine Depth** -- Based on complexity assessment:
-   - **Minimal**: Clear request, narrow scope, well-understood domain
-   - **Standard**: Moderate scope, some unknowns, multiple stakeholders
-   - **Comprehensive**: Large scope, significant unknowns, complex domain
+3. **Determine Depth**
 
 4. **Assess Current Requirements** -- Extract and organize what is already
    known from the user's input: explicit functional requirements, implied
@@ -495,23 +493,21 @@ large scope with significant unknowns.
    all six dimensions. Create
    `<record>/inception/requirements-analysis/requirements-analysis-questions.md`
    using the `[Answer]:` tag format. Include context-appropriate questions with
-   A-E options (A-D on Claude Code). Every ordinary clarifying question must end with `X. Other (please specify)` as
+   A-E options (A-D on Claude Code, A-C on Codex). Every ordinary clarifying question must end with `X. Other (please specify)` as
    the final option. All `[Answer]:` tags left blank.
-
-   Offer the tri-mode question flow: Guide Me / Edit File / Chat.
 
 7. **Collect and Analyze Answers** -- Read the questions file, confirm all
    `[Answer]:` tags are filled. If any are blank, present unanswered questions
    via AskUserQuestion and write answers back. Do NOT proceed with partial
    answers. Run:
    - MANDATORY ambiguity detection: scan all responses for vague language
-     ("mix of", "not sure", "depends", "probably", "maybe")
+     ("mix of", "not sure", "depends")
    - Contradiction check between answers
    - Missing detail identification
 
 8. **Follow-Up Questions** -- If ANY ambiguity, vagueness, or contradictions
    found, create follow-up questions targeting the specific issues. Resolve
-   all ambiguities before proceeding. "When in doubt, ask."
+   all ambiguities before proceeding.
 
 9. **Generate Requirements** -- Create
     `<record>/inception/requirements-analysis/requirements.md` containing:
@@ -658,11 +654,11 @@ not in the upstream reference.
      personas and story granularity
 
 5. **Collect Answers** -- Collect answers following stage-protocol.md section 3
-   question flow (offer interaction mode choice, collect answers, write back to
+   question flow (collect answers, write back to
    file).
 
 6. **Analyze Answers** -- MANDATORY ambiguity analysis: scan all responses for
-   vague language ("mix of", "not sure", "depends", "probably"). Check for
+   vague language ("mix of", "not sure", "depends"). Check for
    contradictions. Identify missing details. Create follow-up questions if ANY
    ambiguity found.
 
@@ -758,7 +754,7 @@ Changes**.
 |------------------|------------------------------------------------------------------------|
 | Phase            | Inception                                                              |
 | Stage #          | 2.5                                                                    |
-| Condition        | CONDITIONAL -- execute when user-facing UI exists and rough mockups were produced in Ideation; for APIs, refine interaction diagrams |
+| Condition        | CONDITIONAL -- execute when user-facing UI exists; for APIs, refine interaction diagrams |
 | Lead Agent       | aidlc-design-agent                                                           |
 | Support Agents   | aidlc-product-agent (validates against stories)                              |
 | Mode             | inline                                                                 |
@@ -1011,6 +1007,9 @@ actual unit artifacts.
   (`<record>/inception/domain-design/components.md`)
 - `<record>/inception/requirements-analysis/requirements.md`
 - `<record>/inception/user-stories/stories.md` (if produced)
+- `<record>/inception/refined-mockups/mockups.md` and `interaction-spec.md`
+  (if produced): the screens, controls and commands each need a Unit that
+  builds them
 
 ### Steps
 
@@ -1104,6 +1103,15 @@ names) / **Request Changes**.
 - The story map provides traceability: every user story (or every functional
   requirement, when no stories are produced) must be assigned to at least one
   Unit, and every Unit must have at least one row.
+- With stories, a story whose row names only `library`, `spec` or `packaging`
+  Units says how it is reached: `existing: <where>` when the product already
+  has the place, `interface` when its caller is a developer or another system,
+  in the `Reached through` column of its row or once as a `Reached through:`
+  line. Otherwise the traceability check names it.
+- When the stage runs again after Construction began, in team-owned
+  Construction, a story whose row names only finished Units must have every
+  acceptance criterion built or settled, as Build and Test's coverage reads it,
+  or the traceability check names it.
 - The aidlc-delivery-agent provides feasibility validation and prioritization input,
   ensuring the decomposition is practical from a delivery perspective.
 
@@ -1444,8 +1452,7 @@ See `docs/guide/04-phases-and-stages.md` for the current Construction walk.
   definition
 - **Stage Protocol**: `core/aidlc-common/protocols/stage-protocol.md`
   -- Approval gates, question format, completion messages, and the §13 Learnings
-  Ritual. Phase boundary verification lives in
-  `stage-protocol-governance.md` §13.
+  Ritual.
 - **Ideation Phase**: `docs/reference/04-stages/ideation.md` -- Previous phase
   documentation
 - **Construction Phase**: `docs/reference/04-stages/construction.md` — conditional

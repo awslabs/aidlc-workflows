@@ -44,7 +44,7 @@ Replace with: "The dashboard page loads in < 3 seconds at p95 under 500 concurre
 
 ### Scalability Requirement Format
 ```
-NFR-SCALE-NNN: [Scalability Requirement]
+[Scalability Requirement]
 Current baseline: [measured current capacity]
 Target capacity: [required capacity at specific timeline]
 Growth model: [linear, exponential, seasonal, step-function]

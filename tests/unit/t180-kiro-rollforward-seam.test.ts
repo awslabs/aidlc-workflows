@@ -9,7 +9,7 @@
 //     {turn,flag,source,ts} + writes the dispatch relay to stdout.
 //     Unambiguous compose/routing invocations are pre-dispatched with the exact
 //     argv and their directive is injected; ambiguous freeform invocations
-//     stamp the exact argv in aidlc/.aidlc-forwarding-latch.
+//     stamp the exact argv in aidlc/.aidlc-sessions/.kiro-cli-forwarding-latch.json.
 //   pretool-block (preToolUse) — the hard floor: a TRULY BARE advancing
 //     `aidlc engine orchestrate next` while the latch is fresh-for-this-turn
 //     (latch.turn === counter) → exit 2 (Kiro BLOCK). Any deliberate move
@@ -36,7 +36,7 @@ import {
 } from "../harness/test-budget.ts";
 import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { chmodSync, cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -115,7 +115,7 @@ function promptWithNext(args: string): string {
 const counterPath = (dir: string) => join(dir, "aidlc", ".aidlc-turn-counter");
 const latchPath = (dir: string) => join(dir, "aidlc", ".aidlc-readonly-latch");
 const forwardingPath = (dir: string) =>
-  join(dir, "aidlc", ".aidlc-forwarding-latch");
+  join(dir, "aidlc", ".aidlc-sessions", ".kiro-cli-forwarding-latch.json");
 
 describe("t180 verb-intercept turn-clock + read-only/nav latch", () => {
   test("native state-transition guard routes through the compiled hook ABI", () => {
@@ -290,8 +290,9 @@ describe("t180 verb-intercept turn-clock + read-only/nav latch", () => {
       expect(latch.turn).toBe(1);
       expect(latch.source).toBe("knowledge-verb");
       expect(latch.flag).toBe("knowledge onboard --json");
-      // The NON-COMPILED path must spawn aidlc-knowledge.ts, not aidlc-utility.ts. A
-      // knowledge verb sent to the utility tool gets "unknown subcommand". Assert on
+      // The NON-COMPILED path must reach the knowledge tool, not
+      // aidlc-utility.ts. A knowledge verb sent to the utility tool gets
+      // "unknown subcommand". Assert on
       // the relayed output because that is the only observable -- and without this
       // the tool-selection line is unpinned.
       //
@@ -657,6 +658,7 @@ describe("t180 pretool-block roll-forward backstop (exit-code contract)", () => 
     args: string[],
   ): void {
     writeFileSync(counterPath(dir), `${counter}\n`, "utf-8");
+    mkdirSync(dirname(forwardingPath(dir)), { recursive: true });
     writeFileSync(
       forwardingPath(dir),
       `${JSON.stringify({ turn: counter, raw, args })}\n`,
@@ -795,6 +797,220 @@ describe("t180 pretool-block roll-forward backstop (exit-code contract)", () => 
         cwd: dir,
       });
       expect(bare.code).toBe(2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// The relay is the reply the agent stops on, so a line AI-DLC keeps for this
+// chat (the key warning after a message that held a key) rides it, once, ahead
+// of the output, with the order to say it before the person replies.
+describe("t180 verb-intercept relay says the lines waiting for this chat", () => {
+  const SID = "01995000-7a11-7000-8000-00000000c0de";
+  const KEY_LINE = "Your message looked like it held a key or password. AI-DLC keeps it out of its committed record, " +
+    "but this chat still received it, so if it is real, change it where it was issued.";
+  const ORDER = "Say this to the person once, as written";
+  const NO_WHY = "before they reply (when you end your turn with a question, the text you write just before it), and add nothing about why:";
+  // A made-up key, put together at run time: no line of this file is shaped like one.
+  const TOKEN = `ghp_${"aB3dE5gH7jK9mN1pQ3sT5vW7yZ9bC2eF4hJ6kL8".slice(0, 36)}`;
+  const chat = { AIDLC_UNATTENDED: "0" };
+  const turn = (dir: string, args: string) =>
+    runAdapter(dir, "verb-intercept", { session_id: SID, prompt: promptWithNext(args), cwd: dir }, chat);
+  const personLinesPath = (dir: string) => join(dir, "aidlc", ".aidlc-sessions", `${SID}.person-lines`);
+  const waiting = (dir: string): string[] => existsSync(personLinesPath(dir))
+    ? (JSON.parse(readFileSync(personLinesPath(dir), "utf-8")) as { lines: Array<{ line: string }> }).lines.map((l) => l.line)
+    : [];
+  const count = (text: string, part: string) => text.split(part).length - 1;
+
+  // This chat's work, created as the agent creates it.
+  function withWork(dir: string): void {
+    const env = {
+      ...process.env, CLAUDE_PROJECT_DIR: dir, AIDLC_PROJECT_DIR: dir, ...chat,
+      AIDLC_SESSION_OVERRIDE: SID, AIDLC_SESSION_OVERRIDE_SOURCE: "payload",
+    };
+    const options = { cwd: dir, env, encoding: "utf-8" as const, timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) };
+    const print = spawnSync("bun", [join(dir, ".kiro", "tools", "aidlc-orchestrate.ts"), "next", "--scope", "bugfix", "fix the login page"], options);
+    const request = /--request ([0-9a-f]{8})/.exec(print.stdout ?? "")?.[1];
+    expect(request, `${print.stdout}${print.stderr}`).toBeDefined();
+    const made = spawnSync("bun", [
+      join(dir, ".kiro", "tools", "aidlc.ts"), "engine", "intent", "create", "--scope", "bugfix",
+      "--request", request ?? "", "--label", "the-work", "--project-dir", dir,
+    ], options);
+    expect(made.status, `${made.stdout}${made.stderr}`).toBe(0);
+  }
+
+  test("a typed --status after a message with a key says the key line once, ahead of the output; the next --status does not", () => {
+    const dir = scratchProject();
+    try {
+      withWork(dir);
+      expect(turn(dir, `where are we? the build printed ${TOKEN}`).code).toBe(0);
+      expect(waiting(dir)).toContain(KEY_LINE);
+      const shown = turn(dir, "--status");
+      expect(shown.code).toBe(0);
+      expect(count(shown.stdout, KEY_LINE), shown.stdout).toBe(1);
+      expect(shown.stdout.indexOf(ORDER)).toBeGreaterThanOrEqual(0);
+      expect(shown.stdout.indexOf(ORDER)).toBeLessThan(shown.stdout.indexOf(KEY_LINE));
+      expect(shown.stdout).toContain(`${NO_WHY}\n\n${KEY_LINE}\n\n`);
+      expect(shown.stdout.indexOf(KEY_LINE)).toBeLessThan(shown.stdout.indexOf("has already run; it carries no workflow work"));
+      expect(relayedOutput(shown.stdout) ?? "").not.toContain(KEY_LINE);
+      expect(waiting(dir)).not.toContain(KEY_LINE);
+      const latch = JSON.parse(readFileSync(latchPath(dir), "utf-8")) as { source?: string; flag?: string };
+      expect(latch.source).toBe("read-only-flag");
+      expect(latch.flag).toBe("status");
+      const again = turn(dir, "--status");
+      expect(again.code).toBe(0);
+      expect(again.stdout).not.toContain(KEY_LINE);
+      expect(again.stdout).not.toContain(ORDER);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a typed space or intent command says no waiting line, as on the engine's path; the next --status does", () => {
+    const dir = scratchProject();
+    try {
+      withWork(dir);
+      expect(turn(dir, `where are we? the build printed ${TOKEN}`).code).toBe(0);
+      const listed = turn(dir, "intent");
+      expect(listed.code).toBe(0);
+      expect(listed.stdout).toContain("has already run; it carries no workflow work");
+      expect(listed.stdout).not.toContain(KEY_LINE);
+      expect(listed.stdout).not.toContain(ORDER);
+      expect(waiting(dir)).toContain(KEY_LINE);
+      const shown = turn(dir, "--status");
+      expect(count(shown.stdout, KEY_LINE), shown.stdout).toBe(1);
+      expect(waiting(dir)).not.toContain(KEY_LINE);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a line kept for the reply rides a typed space or intent command too, as every step on the engine's path", () => {
+    const dir = scratchProject();
+    try {
+      expect(turn(dir, `where are we? the build printed ${TOKEN}`).code).toBe(0);
+      const reply = "AI-DLC approved the Unit checkpoint for you; say so if you want to look first.";
+      const kept = spawnSync(process.execPath, ["-e", [
+        `const { addPendingPersonLines } = await import(${JSON.stringify(join(dir, ".kiro", "tools", "aidlc-lib.ts"))});`,
+        `if (!addPendingPersonLines(${JSON.stringify(dir)}, ${JSON.stringify(SID)}, [${JSON.stringify(reply)}], { forReply: true })) process.exit(1);`,
+      ].join("\n")], { cwd: dir, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
+      expect(kept.status, `${kept.stdout}${kept.stderr}`).toBe(0);
+      const listed = turn(dir, "intent");
+      expect(listed.code).toBe(0);
+      expect(count(listed.stdout, KEY_LINE), listed.stdout).toBe(1);
+      expect(count(listed.stdout, reply), listed.stdout).toBe(1);
+      expect(waiting(dir)).toEqual([reply]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // A stand-in for the command the hook runs: it queues a line of its own
+  // while it runs (a plugin sync's rules line), through AI-DLC's own queue, or
+  // prints an output of a given size.
+  function standInExecutable(dir: string): string {
+    const queue = join(dir, "queue-line.ts");
+    writeFileSync(queue, [
+      `const { addPendingPersonLines } = await import(${JSON.stringify(join(dir, ".kiro", "tools", "aidlc-lib.ts"))});`,
+      `addPendingPersonLines(${JSON.stringify(dir)}, ${JSON.stringify(SID)}, [process.env.AIDLC_TEST_QUEUED_LINE ?? ""]);`,
+      "",
+    ].join("\n"), "utf-8");
+    const path = join(dir, process.platform === "win32" ? "stand-in-aidlc.exe" : "stand-in-aidlc");
+    if (process.platform === "win32") {
+      writeWindowsExecutable(path, `using System;
+using System.Diagnostics;
+internal static class StandInAidlcFixture {
+  public static int Main(string[] args) {
+    if (args.Length > 0 && args[0] != "--internal-aidlc-record-human-turn") {
+      if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("AIDLC_TEST_QUEUED_LINE"))) {
+        var queue = new ProcessStartInfo(Environment.GetEnvironmentVariable("AIDLC_TEST_BUN"),
+          "\\"" + Environment.GetEnvironmentVariable("AIDLC_TEST_QUEUE_SCRIPT") + "\\"");
+        queue.UseShellExecute = false;
+        Process.Start(queue).WaitForExit();
+      }
+      string bytes = Environment.GetEnvironmentVariable("AIDLC_TEST_OUTPUT_BYTES");
+      if (!string.IsNullOrEmpty(bytes)) {
+        Console.Write(new string('x', int.Parse(bytes)));
+        return 0;
+      }
+    }
+    Console.WriteLine(string.Join(" ", args));
+    return 0;
+  }
+}
+`);
+    } else {
+      writeFileSync(path, "#!/bin/sh\n" +
+        'if [ "$1" != --internal-aidlc-record-human-turn ]; then\n' +
+        '  if [ -n "$AIDLC_TEST_QUEUED_LINE" ]; then "$AIDLC_TEST_BUN" "$AIDLC_TEST_QUEUE_SCRIPT"; fi\n' +
+        '  if [ -n "$AIDLC_TEST_OUTPUT_BYTES" ]; then head -c "$AIDLC_TEST_OUTPUT_BYTES" /dev/zero | tr "\\000" x; exit 0; fi\n' +
+        "fi\n" +
+        "printf '%s\\n' \"$*\"\n", "utf-8");
+      chmodSync(path, 0o755);
+    }
+    return path;
+  }
+  const standIn = (dir: string, env: Record<string, string>) =>
+    runAdapter(dir, "verb-intercept", { session_id: SID, prompt: promptWithNext("--status"), cwd: dir }, {
+      ...chat,
+      AIDLC_COMPILED_EXECUTABLE: standInExecutable(dir),
+      AIDLC_TEST_BUN: process.execPath,
+      AIDLC_TEST_QUEUE_SCRIPT: join(dir, "queue-line.ts"),
+      ...env,
+    });
+
+  test("a line the command queues itself while it runs waits for the next step, and the waiting line is said", () => {
+    const dir = scratchProject();
+    try {
+      expect(turn(dir, `where are we? the build printed ${TOKEN}`).code).toBe(0);
+      expect(waiting(dir)).toEqual([KEY_LINE]);
+      const queued = "The test-pro plugin's rules now apply to this work.";
+      const shown = standIn(dir, { AIDLC_TEST_QUEUED_LINE: queued });
+      expect(shown.code).toBe(0);
+      expect(count(shown.stdout, KEY_LINE), shown.stdout).toBe(1);
+      expect(shown.stdout).not.toContain(queued);
+      expect(waiting(dir)).toEqual([queued]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("an output the waiting line would push past what Kiro keeps goes whole, and the line waits", () => {
+    const dir = scratchProject();
+    try {
+      // What the relay adds around an output, measured with nothing waiting.
+      const bare = standIn(dir, { AIDLC_TEST_OUTPUT_BYTES: "100" });
+      const around = Buffer.byteLength(bare.stdout, "utf-8") - 100;
+      expect(turn(dir, `where are we? the build printed ${TOKEN}`).code).toBe(0);
+      // Fits alone, 100 bytes to spare; the key line alone is longer than that.
+      const size = 10 * 1024 - around - 100;
+      const shown = standIn(dir, { AIDLC_TEST_OUTPUT_BYTES: String(size) });
+      expect(shown.code).toBe(0);
+      expect(Buffer.byteLength(shown.stdout, "utf-8")).toBe(10 * 1024 - 100);
+      expect(Buffer.byteLength(KEY_LINE, "utf-8")).toBeGreaterThan(100);
+      expect(relayedOutput(shown.stdout)).toBe("x".repeat(size));
+      expect(shown.stdout).not.toContain(ORDER);
+      expect(waiting(dir)).toEqual([KEY_LINE]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a line that would not fit in what Kiro keeps of the hook's output waits for the next step", () => {
+    const dir = scratchProject();
+    try {
+      expect(turn(dir, `where are we? the build printed ${TOKEN}`).code).toBe(0);
+      const saved = JSON.parse(readFileSync(personLinesPath(dir), "utf-8")) as { lines: Array<{ line: string }> };
+      const long = "A line AI-DLC keeps for this chat. ".repeat(320);
+      saved.lines.push({ ...saved.lines[0], line: long });
+      writeFileSync(personLinesPath(dir), `${JSON.stringify(saved)}\n`, "utf-8");
+      const shown = turn(dir, "--status");
+      expect(shown.code).toBe(0);
+      expect(shown.stdout).toContain("has already run; it carries no workflow work");
+      expect(shown.stdout).not.toContain(ORDER);
+      expect(shown.stdout).not.toContain(KEY_LINE);
+      expect(waiting(dir)).toEqual([KEY_LINE, long]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

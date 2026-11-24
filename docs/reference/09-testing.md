@@ -339,8 +339,9 @@ blocked hand-off) and opencode's plugin (loaded into one opencode process, a
 worker thread the host waits on; a refusal is the hook's thrown error).
 `tests/unit/t-scope-hosts.test.ts` pins those payloads against the ones recorded
 from each tool (`tests/fixtures/<tool>-hook-payloads`). Each tool's answer is
-read in its own form: Codex and Kiro refuse with exit 2, Copilot with a deny
-decision, Copilot runs the command its hook rewrote, and Kiro's person-turn hook
+read in its own form: Kiro refuses with exit 2, Codex with exit 2 or, on
+Windows, a deny decision (read by `tests/harness/codex-hook-answer.ts`), Copilot
+with a deny decision, Copilot runs the command its hook rewrote, and Kiro's person-turn hook
 may run the turn's first `next` itself, so the agent acts on that reply. Every
 tool call fires the hooks, so a refusal stops the run, and a hook command that
 fails is a problem. A host can also run on a project an installed release set
@@ -712,13 +713,13 @@ the tool results so far satisfy it, for a stop that needs more than one result
 (an engine line that can arrive before or after the step that creates the
 work).
 
-A suite launched from inside a Claude Code session (`CLAUDECODE=1`) does not
-hand that session's `ANTHROPIC_DEFAULT_*_MODEL` defaults to its drives: the
-SDK's bundled Claude Code may be older than the session's model and refuse it.
-When a drive's final provider is Bedrock, it gets CI's pinned models
-(`CI_BEDROCK_MODELS` in `scripts/ci-credential-broker.ts`) for any model the
-project settings or the test did not set; otherwise the bundled defaults. A run
-from any other shell, CI's included, keeps its environment unchanged.
+Each drive runs the first `claude` on the run's `PATH`, the Claude Code a
+person and the TUI legs start, never the Agent SDK's bundled copy; with none
+there it stops before it starts and says so in one line. It names no model of
+its own: the installed Claude Code takes the model the run's environment names,
+else the model names in the env block of the box's own `~/.claude/settings.json`,
+and when neither names one it runs its own default. Each drive's trace records
+the Claude Code version and the model its session ran on.
 
 | Assertion | Surface | On fail |
 |-----------|---------|---------|
@@ -1133,6 +1134,7 @@ To add artifact assertions to an existing e2e workflow test under `tests/e2e/`:
 | `AIDLC_TEST_GUARD_PROFILE` | `fixture` (runner-set) | Runner-provided diagnostic for tests: `fixture` or `production`, selected by the runner CLI. An inherited value does not select the profile; the runner replaces it in every test child. |
 | `AIDLC_TEST_COMPILED_DIR` | `<runner log dir>/compiled` (runner-set) | Run-owned handoff from t238 to t249: the verified native `aidlc` / `aidlc.exe` plus adjacent `runtime/`. The runner replaces inherited values in every child, keeping the artifact outside per-file temp cleanup and isolated from other runs. |
 | `AIDLC_TEST_COMPILED_EXECUTABLE` | unset | Optional existing executable for direct, non-sharded t249 invocations without a runner handoff. Never a build destination; it cannot replace a missing sharded handoff. |
+| `GIT_ALLOW_PROTOCOL` | `file` (runner-set) | Git's own transport switch, set by the runner in every test child: a test's git reaches only local repositories and refuses https, http, ssh and `git://` before it looks a name up (`fatal: transport 'https' not allowed`); it also allows the local transport in submodule clones, which stock git does only when asked. A case that needs another transport (a stand-in ssh, the refusing port `127.0.0.1:9`, a loopback git server) names it in that call's own env, for example `GIT_ALLOW_PROTOCOL: "file:https"`. An inherited value does not reach the test. |
 | `AIDLC_TEST_UNIT_PARALLEL` | unset | A trial cap on how many files a `--unit --shard` run starts at once, on any platform, in place of the `parallel` entry in `tests/unit-shard-weights.json`; `-P` stays the ceiling. CI never sets it. See [Unit Sharding](#unit-sharding). |
 | `AIDLC_TUI_SETTING_SOURCES` | `project,local` | Setting sources injected into live `claude` TUI launches: the project's settings and its own `.claude/settings.local.json` (where AI-DLC's status line is the person's choice), never user settings. Use `default` or an empty value only for focused calibration that intentionally includes user Claude settings. |
 | `AIDLC_TUI_TRACE_POLL_MS` | `10000` | Minimum interval between `answer_gate_poll` snapshots in TUI NDJSON traces while a long journey is waiting for the next menu or disk terminator. |
@@ -1213,7 +1215,8 @@ Live SDK and TUI harness drivers default to the project's own Claude setting
 sources: the SDK driver loads the copied test `.claude/` project settings and
 hooks, and the TUI driver also loads that project's `.claude/settings.local.json`,
 where the person's choice of AI-DLC's status line lives. Both exclude developer
-user-level hooks/settings. This mirrors the installed
+user-level hooks/settings; the SDK driver takes only the model names from them,
+when the run names no model. This mirrors the installed
 framework surface and prevents local interactive preferences from changing test
 behavior; explicit driver options or `AIDLC_TUI_SETTING_SOURCES` remain the
 escape hatch for calibration.
@@ -1931,12 +1934,25 @@ stops dispatch and marks remaining files incomplete.
 Stock permission settings: the two golden journeys drive Claude Code in its
 default permission mode with the project's shipped settings (setting sources
 user, project and local; user is the drive's scratch config folder) and answer
-every prompt yes. A prompt for AI-DLC's own command or record (one that names
-`aidlc/` or `.claude/`), or a write outside the project, fails the journey;
-every other prompt is listed in its log (`tests/harness/stock-permissions.ts`).
-The other Claude SDK drives keep `bypassPermissions`. The Codex `--json`
-journeys run the shipped `workspace-write` sandbox, and a command naming
-`.codex/` or `aidlc/` that the sandbox refused fails the turn. Copilot CLI's
+every prompt yes. A file tool's prompt on a path inside `aidlc/` or
+`.claude/`, a write outside the project, or a prompt for a shell command that
+runs one of AI-DLC's own tools (one that names the launcher and the tools folder
+the shipped allow list names, `bun .claude/tools/aidlc.ts engine next` for one,
+by any path, alone or in a chain) fails the journey. The check reads words, not
+the shell, so a command that names both and runs neither
+(`grep -rn bun .claude/tools/`) fails too. Any other shell
+command that names AI-DLC's folders is a command the agent wrote itself: the
+journey lists and counts it under
+`Shell commands that name AI-DLC folders, listed not failed (N)`, printed once
+with its count by a Claude or opencode journey, `(0)` included, and by a Codex
+exec only when it has such a line. Every other prompt is listed in its log
+(`tests/harness/stock-permissions.ts`). The other Claude SDK drives keep
+`bypassPermissions`. The Codex `--json` journeys run the shipped
+`workspace-write` sandbox: a refused command that runs one of AI-DLC's own
+tools fails the turn, and one that only names `.codex/` or `aidlc/` is listed
+under the same heading. The opencode journey takes the same split on the calls
+its shipped permission table refused, and any other refused call that names
+`aidlc/` or `.aidlc/` fails it. Copilot CLI's
 terminal journeys answer each of its permission dialogs with the preselected
 "Yes" and count them by what drew them (AI-DLC's skill allows only its own
 record writes and its `.aidlc/bin/aidlc-engine` launcher); its `-p` case runs
@@ -2360,7 +2376,12 @@ returned through the actual tool call. `--single` skips hook pre-dispatch
 entirely, leaving its first issuance to that tool call. Only a line the engine
 reads exactly is pre-dispatched at all (`readNextLine`): anything it would hand
 to the agent goes to the agent untouched, so this seam never acts on the
-person's words before anyone has read them.
+person's words before anyone has read them. When the human-turn hook gives
+its first-step note (a line too long for the message record, kept whole beside
+it, under the rules `firstStepNote` owns), the line is neither pre-dispatched
+nor forwarded: the adapter says the note, which has the agent run `next` with
+nothing after it to read the kept copy, and holds no call for the guard to
+match (`t-long-message-note.test.ts`).
 
 `t147-kiro-hook-adapter.test.ts` checks the 10 KiB boundary with multibyte
 content, native shell aliases, retained terminal guards, and a real multipart

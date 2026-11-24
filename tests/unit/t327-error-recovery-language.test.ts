@@ -5,14 +5,12 @@
 // workshop-facing gate/question/review paths from regressing to internal names.
 
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
-import { REPO_ROOT } from "../harness/fixtures.ts";
+import { readConductorSurface } from "../harness/conductor-skill.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
 import { ENGINE_ERROR_RELAY_HARNESSES } from "../../core/tools/aidlc-lib.ts";
 
 function read(rel: string): string {
-  return readFileSync(join(REPO_ROOT, rel), "utf-8");
+  return readConductorSurface(rel);
 }
 
 function functionBody(source: string, start: string, end: string): string {
@@ -113,7 +111,7 @@ describe("t327 rewritten refusal strings stay in project language", () => {
     const rewrittenErrors = reviewErrors.slice(rewrittenStart);
     expect(rewrittenErrors).toContain("output document changed after");
     expect(rewrittenErrors).toContain("has not reviewed the current output");
-    expect(rewrittenErrors).toContain("aidlc-log.ts review --stage");
+    expect(rewrittenErrors).toContain(`aidlcToolInvocation("log")} review --stage`);
     for (const leaked of [
       "terminal review receipt from",
       "fresh REVIEW_COMPLETED",

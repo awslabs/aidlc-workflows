@@ -19,7 +19,7 @@ import {
   renderTestingContract, resolveCodeGenerationAuthority, resolveTestingPosture,
 } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 import {
-  fixtureIntentId8, AIDLC_SRC, cleanupWorktreeFixture, resetAidlcEnv, seedAidlcMemory,
+  fixtureIntentId8, AIDLC_SRC, cleanupWorktreeFixture, REPO_ROOT, resetAidlcEnv, seedAidlcMemory,
   runOrchestrateNext, seedBoltDagBatches, seededStateFile, setupWorktreeFixture,
 } from "./fixtures.ts";
 import {
@@ -50,10 +50,10 @@ export const ISOLATED_GIT_ENV: NodeJS.ProcessEnv = {
     : {}),
 };
 
-export function runCheckpointTool(pd: string, file: string, args: string[], input?: unknown) {
+export function runCheckpointTool(pd: string, file: string, args: string[], input?: unknown, env: NodeJS.ProcessEnv = ISOLATED_GIT_ENV) {
   const r = Bun.spawnSync([process.execPath, join(AIDLC_SRC, file), ...args], {
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
-    cwd: pd, env: { ...ISOLATED_GIT_ENV, AIDLC_PROJECT_DIR: pd, CLAUDE_PROJECT_DIR: pd },
+    cwd: pd, env: { ...env, AIDLC_PROJECT_DIR: pd, CLAUDE_PROJECT_DIR: pd },
     stdout: "pipe", stderr: "pipe",
     ...(input === undefined ? {} : { stdin: Buffer.from(JSON.stringify(input)) }),
   });
@@ -71,8 +71,8 @@ export function recordCommand(pd: string, command: string): void {
   expect(applied.code, `${applied.out}\n${applied.err}`).toBe(0);
 }
 
-export function swarm(pd: string, args: string[]) {
-  return runCheckpointTool(pd, "tools/aidlc-swarm.ts", [...args, "--project-dir", pd]);
+export function swarm(pd: string, args: string[], env?: NodeJS.ProcessEnv) {
+  return runCheckpointTool(pd, "tools/aidlc-swarm.ts", [...args, "--project-dir", pd], undefined, env);
 }
 
 export function git(pd: string, args: string[]): string {
@@ -233,11 +233,15 @@ export function fixture(
 - **Lifecycle Phase**: CONSTRUCTION
 - **Status**: Running
 `);
-  writeFileSync(join(pd, ".gitignore"), [
-    ".aidlc/", "aidlc/.aidlc-*", "aidlc/active-space",
-    "aidlc/spaces/*/intents/active-intent", "aidlc/spaces/*/intents/*/audit/",
-    "aidlc/spaces/*/intents/*/runtime-graph.json", "aidlc/spaces/*/intents/*/.aidlc-*", "",
-  ].join("\n"));
+  // Most cases keep the records out of git. fixtureWithShippedGitignore takes
+  // the part AI-DLC ships instead, which commits them as a team's project does.
+  writeFileSync(join(pd, ".gitignore"), shippedGitignore
+    ? readFileSync(join(REPO_ROOT, "harness", "claude", "dot-gitignore"), "utf-8")
+    : [
+      ".aidlc/", "aidlc/.aidlc-*", "aidlc/active-space",
+      "aidlc/spaces/*/intents/active-intent", "aidlc/spaces/*/intents/*/audit/",
+      "aidlc/spaces/*/intents/*/runtime-graph.json", "aidlc/spaces/*/intents/*/.aidlc-*", "",
+    ].join("\n"));
   if (repo !== null) {
     const registry = join(pd, "aidlc", "spaces", "default", "intents", "intents.json");
     const entries = JSON.parse(readFileSync(registry, "utf-8"));
@@ -274,8 +278,21 @@ export function fixtureWithSource(addSource: (code: string) => void, units = ["a
   }
 }
 
-export function prepare(pd: string, units = ["alpha"], resume = false) {
-  return swarm(pd, ["prepare", "--batch", "1", "--units", units.join(","), "--base", "main", ...(resume ? ["--resume-existing"] : [])]);
+// The .gitignore AI-DLC ships (Claude Code's part), so the project commits its
+// records; false for every other fixture.
+let shippedGitignore = false;
+
+export function fixtureWithShippedGitignore(units = ["alpha"]): string {
+  shippedGitignore = true;
+  try {
+    return fixture(units);
+  } finally {
+    shippedGitignore = false;
+  }
+}
+
+export function prepare(pd: string, units = ["alpha"], resume = false, env?: NodeJS.ProcessEnv) {
+  return swarm(pd, ["prepare", "--batch", "1", "--units", units.join(","), "--base", "main", ...(resume ? ["--resume-existing"] : [])], env);
 }
 
 export function nextDirective(pd: string) {

@@ -292,7 +292,7 @@ The four design stages (3.1-3.4) prune their artifacts to each unit's **kind** (
 
 ## Question Files
 
-Every stage that collects user input produces a co-located question file named `{stage-name}-questions.md`. Questions use lettered options (A-E, or A-D on Claude Code, whose question box shows four) plus a mandatory `X. Other (please specify)` option, with `[Answer]:` tags for recording responses. In a file the agent creates, each ordinary question's heading names who would usually answer it (`## Q3. [Developer] ...`), and each person's questions are kept together unless one has to wait for another person's answer. A question added later goes at the end. Confirmation, change-request and approval sections carry no label. An existing file keeps its questions as they were, unless you ask to redo the stage from scratch, which replaces it with a new one.
+Every stage that collects user input produces a co-located question file named `{stage-name}-questions.md`. Questions use lettered options (A-E, or A-D on Claude Code and A-C on Codex, whose question boxes show four and three) plus a mandatory `X. Other (please specify)` option, with `[Answer]:` tags for recording responses. In a file the agent creates, each ordinary question's heading names who would usually answer it (`## Q3. [Developer] ...`), and each person's questions are kept together unless one has to wait for another person's answer. A question added later goes at the end. Confirmation, change-request and approval sections carry no label. An existing file keeps its questions as they were, unless you ask to redo the stage from scratch, which replaces it with a new one.
 
 You choose how to answer at each stage:
 
@@ -323,6 +323,7 @@ settings, and machine-local derived state are ignored.
 | Each reviewed stage's `reviews/` copies | `.claude/settings.local.json`, `aidlc.settings.local.json` (your own settings) |
 | | `aidlc/active-memory/` (the engine's copy of the active space's `memory/` that every harness include reads; written at session start and on a space switch, so a switch changes no tracked file; each copied file starts with a comment naming the file to edit, and an edit made in the copy is replaced at the next refresh) |
 | | `aidlc/.aidlc-request-text/` (a request the agent wrote to a file for the engine to read; removed once the command goes ahead, left there when it did not) |
+| | `.aidlc/worktree-meta.json`, `.aidlc/base-source-listing.tsv` (the metadata inside a side-by-side Unit's checkout; machine-local, and never carried by a Unit's landing) |
 
 ---
 

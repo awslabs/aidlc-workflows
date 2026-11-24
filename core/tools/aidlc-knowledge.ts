@@ -79,6 +79,7 @@ import {
   errorMessage,
   type FileIdentity,
   fileIdentity,
+  HARDLINK_REMEDY,
   intentsDir,
   isPidAlive,
   knowledgeDir,
@@ -101,7 +102,7 @@ import {
   writeFileAtomic,
 } from "./aidlc-lib.ts";
 import { appendAuditEntryAtPathUnlocked } from "./aidlc-audit.ts";
-import { officeText, ooxmlKind, OoxmlError } from "./aidlc-ooxml.ts";
+import { officeText, ooxmlKind, OoxmlError, table } from "./aidlc-ooxml.ts";
 import {
   DOCUMENTKB_SCHEMA_VERSION,
   type DocumentIndex,
@@ -116,6 +117,7 @@ import {
   summaryIsCurrent,
   validateDocumentIndex,
   validateDocumentMetadata,
+  validDocumentPath,
 } from "./aidlc-documentkb-schema.ts";
 
 // --- Paths -------------------------------------------------------------------
@@ -319,6 +321,10 @@ export const WORD_DOCX_MIME =
 
 /** The MIME `detectMimeType` reports for a modern (OOXML) Excel workbook. */
 export const XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+
+/** The MIME `detectMimeType` reports for a page saved as HTML, and the names such a page has. */
+const HTML_MIME = "text/html";
+const HTML_NAME = /\.html?$/i;
 
 /**
  * Whether `buf` is a zip whose central directory names both
@@ -572,9 +578,10 @@ export interface ExtractionOutcome {
 
 /** The argv for a MIME type: a harness-configured one, else the default when the
  *  type is one this release knows. Null means no extractor program, which is
- *  `unsupported_type` rather than `extractor_unavailable` -- except for Word and
- *  Excel, which `extractDocument` reads itself (builtin-ooxml) unless the
- *  harness configured an extractor for that MIME, as text needs none. */
+ *  `unsupported_type` rather than `extractor_unavailable` -- except for Word,
+ *  Excel and HTML, which `extractDocument` reads itself (builtin-ooxml,
+ *  builtin-html) unless the harness configured an extractor for that MIME, as
+ *  text needs none. */
 export function extractorArgvFor(mime: string): readonly string[] | null {
   const configured = documentExtractors();
   const spec = configured?.get(mime);
@@ -591,46 +598,271 @@ function configuredTimeoutFor(mime: string): number {
   return documentExtractors()?.get(mime)?.timeoutMs ?? EXTRACT_TIMEOUT_MS;
 }
 
+const BUILTIN_TEXT = Object.freeze({ name: "builtin-text", version: "1" });
 const BUILTIN_OOXML = Object.freeze({ name: "builtin-ooxml", version: "1" });
+const BUILTIN_HTML = Object.freeze({ name: "builtin-html", version: "1" });
 const OFFICE_NAME = /\.(docx|xlsx)$/i;
 
-function builtinOfficeKind(mime: string): "word" | "excel" | null {
-  return mime === WORD_DOCX_MIME ? "word" : mime === XLSX_MIME ? "excel" : null;
+type BuiltinKind = "word" | "excel" | "html";
+
+/** The one owner of which types the engine reads itself. */
+function builtinKind(mime: string): BuiltinKind | null {
+  return mime === WORD_DOCX_MIME ? "word" : mime === XLSX_MIME ? "excel" : mime === HTML_MIME ? "html" : null;
 }
 
-/** Whether the built-in reader takes this row's document on a retry: its kind, or an Office name recorded as octet-stream before Excel was recognised. */
-function builtinReadsRow(row: DocumentRow): boolean {
+/**
+ * Whether the next sync reads this row's document again though it is
+ * unchanged, because it was recorded before AI-DLC read its kind: a Word or
+ * Excel file left `unsupported_type` (or an Office name recorded as
+ * octet-stream before Excel was recognised), or an HTML page stored as its
+ * markup, or as no type when it was not UTF-8. A page is judged by its bytes
+ * at `abs`, so an .html that holds plain text is never read again; a file that
+ * cannot be read here answers false, and a sync goes on.
+ */
+function builtinReadsRow(row: DocumentRow, abs: string): boolean {
+  const rec = row.extraction;
   const mime = detectMimeFromRow(row);
-  const office = builtinOfficeKind(mime) !== null || (mime === "application/octet-stream" && OFFICE_NAME.test(row.source.path));
-  return office && documentExtractors()?.get(mime) === undefined;
+  if (rec.state === "unsupported_type" && documentExtractors()?.get(mime) === undefined &&
+      (builtinKind(mime) !== null || (mime === "application/octet-stream" && OFFICE_NAME.test(row.source.path)))) {
+    return true;
+  }
+  const beforeHtml = rec.state === "extracted"
+    ? rec.extractor?.name === BUILTIN_TEXT.name
+    : rec.state === "unsupported_type" && mime === "application/octet-stream";
+  if (!beforeHtml || !HTML_NAME.test(row.source.path)) return false;
+  try {
+    return detectMimeType(abs, readRegularFileNoFollowOrThrow(abs, "document", EXTRACT_INPUT_BYTE_CAP)) === HTML_MIME;
+  } catch {
+    return false;
+  }
 }
 
-function extractOffice(absPath: string, kind: "word" | "excel", sourceRevision: string): ExtractionOutcome {
+// --- An HTML page's text ---
+//
+// The tokenizer is Bun's HTMLRewriter (lol-html); this code only lays its text
+// out the way docxText lays out a Word file's: block elements as lines, tables
+// as Markdown tables, no heading or list marks.
+
+/** Text a reader never sees: script and style bodies, templates, the title
+ *  (Word writes a stale Title property there), and the fallbacks a browser with
+ *  scripts and frames never shows. lol-html hands their bodies to a text
+ *  handler as text, so they are skipped by count. */
+const HTML_HIDDEN = "script, style, template, title, noscript, iframe, noembed, noframes";
+/** Elements that end a line; SVG `text` is a diagram's label. */
+const HTML_LINES = "address, article, aside, blockquote, br, caption, center, dd, details, dialog, dir, div, dl, dt, " +
+  "fieldset, figcaption, figure, footer, form, h1, h2, h3, h4, h5, h6, header, hgroup, hr, legend, li, main, menu, " +
+  "nav, ol, optgroup, option, p, section, summary, text, ul";
+/** A `<meta>` charset is looked for in the head, the text before `<body`, within this many bytes. */
+const HTML_HEAD_BYTES = 64 * 1024;
+const WINDOWS_1252 = new TextDecoder("windows-1252");
+
+/** A page's characters: UTF-8 when the bytes are UTF-8, which never reads worse
+ *  than the text reader did; else the charset its head declares, when Bun
+ *  knows the label; else Windows-1252, the web's default for an undeclared
+ *  8-bit page. */
+function htmlSource(buf: Buffer): string {
+  if (decodesAsUtf8(buf)) return new TextDecoder("utf-8").decode(buf);
+  const head = buf.subarray(0, HTML_HEAD_BYTES).toString("latin1");
+  const body = head.search(/<body[\s>]/i);
+  const declared = (body < 0 ? head : head.slice(0, body)).match(/<meta\b[^>]*?charset\s*=\s*["']?\s*([\w.:-]+)/i)?.[1];
+  if (declared !== undefined) {
+    try {
+      const decoder = new TextDecoder(declared);
+      // Eight-bit bytes with no NUL are not UTF-16, whatever the meta says.
+      if (!decoder.encoding.startsWith("utf-16")) return decoder.decode(buf);
+    } catch {
+      // A label Bun does not know: the default below.
+    }
+  }
+  return WINDOWS_1252.decode(buf);
+}
+
+const HTML_REFERENCE = /&(?:#[xX][0-9a-fA-F]+|#[0-9]+|[A-Za-z][A-Za-z0-9]*);/g;
+
+/** Character references decoded. Bun ships no HTML reference decoder, but its
+ *  Markdown renderer carries the HTML5 table, so each reference the pattern
+ *  matched, alone, goes through it; no Markdown is read, since nothing else of
+ *  the text reaches it. A code in 0x80..0x9F is Windows-1252, as in HTML. The
+ *  cache is one page's, so it holds at most that page's distinct references. */
+function htmlReferences(text: string, cache: Map<string, string>): string {
+  return text.replace(HTML_REFERENCE, (ref) => {
+    let decoded = cache.get(ref);
+    if (decoded === undefined) {
+      decoded = Bun.markdown.render(ref, { paragraph: (children) => children, text: (chars) => chars });
+      if (decoded.length === 1 && decoded.charCodeAt(0) >= 0x80 && decoded.charCodeAt(0) <= 0x9f) {
+        decoded = WINDOWS_1252.decode(Uint8Array.of(decoded.charCodeAt(0)));
+      }
+      cache.set(ref, decoded);
+    }
+    return decoded;
+  });
+}
+
+/** An HTML page's text: block elements as lines, `pre` as written, tables as
+ *  the Word reader writes them. */
+function htmlText(html: string): string {
+  const out: string[] = [];
+  const references = new Map<string, string>();
+  let line = "";
+  let hidden = 0;
+  let pre = 0;
+  let depth = 0;
+  let rows: string[][] = [];
+  let row: string[] | null = null;
+  let cell: string[] | null = null;
+  // Rows still covered by a `rowspan`, by column: the markup leaves those cells out.
+  let spans: number[] = [];
+  const emit = (text: string): void => {
+    (cell ?? out).push(text);
+  };
+  const flush = (): void => {
+    if (line.length === 0) return;
+    const text = htmlReferences(line, references);
+    line = "";
+    if (pre === 0) {
+      const flat = text.replace(/\s+/g, " ").trim();
+      if (flat.length > 0) emit(flat);
+      return;
+    }
+    const kept = text.replace(/\r\n?/g, "\n").replace(/^\n/, "").trimEnd();
+    if (kept.length > 0) for (const each of kept.split("\n")) emit(each.trimEnd());
+  };
+  const closeCell = (): void => {
+    flush();
+    if (cell === null) return;
+    row ??= [];
+    row.push(cell.join("\n"));
+    cell = null;
+  };
+  // An empty cell under a spanning one, as Word writes a merged cell.
+  const spanned = (): void => {
+    while (row !== null && (spans[row.length] ?? 0) > 0) {
+      spans[row.length]--;
+      row.push("");
+    }
+  };
+  const closeRow = (): void => {
+    closeCell();
+    spanned();
+    if (row !== null) rows.push(row);
+    row = null;
+  };
+  new HTMLRewriter()
+    // canHaveContent is false for a void or self-closing element (an SVG
+    // `<style/>`), which has no end tag to count back down on.
+    .on(HTML_HIDDEN, {
+      element(e) {
+        if (!e.canHaveContent) return;
+        hidden++;
+        e.onEndTag(() => {
+          hidden--;
+        });
+      },
+    })
+    .on(HTML_LINES, {
+      element(e) {
+        flush();
+        if (e.canHaveContent) e.onEndTag(flush);
+      },
+    })
+    .on("pre", {
+      element(e) {
+        flush();
+        if (!e.canHaveContent) return;
+        pre++;
+        e.onEndTag(() => {
+          flush();
+          pre--;
+        });
+      },
+    })
+    .on("table", {
+      element(e) {
+        flush();
+        if (!e.canHaveContent) return;
+        if (++depth === 1) {
+          rows = [];
+          spans = [];
+        }
+        e.onEndTag(() => {
+          if (depth === 1) {
+            closeRow();
+            out.push(...table(rows), "");
+          } else {
+            flush();
+          }
+          depth--;
+        });
+      },
+    })
+    // A nested table's text joins its outer cell, as in the Word reader.
+    .on("tr", {
+      element(e) {
+        if (depth !== 1) return flush();
+        closeRow();
+        row = [];
+        if (e.canHaveContent) e.onEndTag(closeRow);
+      },
+    })
+    .on("td, th", {
+      element(e) {
+        if (depth !== 1) return flush();
+        closeCell();
+        spanned();
+        const span = Number(e.getAttribute("rowspan") ?? 1);
+        if (span > 1 && row !== null) spans[row.length] = span - 1;
+        cell = [];
+        if (e.canHaveContent) e.onEndTag(closeCell);
+      },
+    })
+    .onDocument({
+      text(chunk) {
+        if (hidden === 0) line += chunk.text;
+      },
+    })
+    .transform(html);
+  if (depth > 0) {
+    closeRow();
+    out.push(...table(rows));
+  }
+  flush();
+  return out.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+function builtinText(buf: Buffer, kind: BuiltinKind): string {
+  return kind === "html" ? htmlText(htmlSource(buf)) : officeText(buf, kind);
+}
+
+const BUILTIN_NAMES: Readonly<Record<BuiltinKind, string>> = { word: "a Word", excel: "an Excel", html: "an HTML" };
+const BUILTIN_MIMES: Readonly<Record<BuiltinKind, string>> = { word: WORD_DOCX_MIME, excel: XLSX_MIME, html: HTML_MIME };
+
+function extractBuiltin(absPath: string, kind: BuiltinKind, sourceRevision: string): ExtractionOutcome {
   const buf = readRegularFileNoFollowOrThrow(absPath, "document");
+  const extractor = kind === "html" ? BUILTIN_HTML : BUILTIN_OOXML;
   let full: string;
   try {
-    full = officeText(buf, kind);
+    full = builtinText(buf, kind);
   } catch (e) {
     return {
       record: {
         state: "extraction_failed",
-        extractor: { ...BUILTIN_OOXML },
+        extractor: { ...extractor },
         reason: e instanceof OoxmlError
-          ? `AI-DLC could not read it as ${kind === "word" ? "a Word" : "an Excel"} file: ${e.message}`
-          : `AI-DLC could not read it as ${kind === "word" ? "a Word" : "an Excel"} file`,
-        detectedType: kind === "word" ? WORD_DOCX_MIME : XLSX_MIME,
+          ? `AI-DLC could not read it as ${BUILTIN_NAMES[kind]} file: ${e.message}`
+          : `AI-DLC could not read it as ${BUILTIN_NAMES[kind]} file`,
+        detectedType: BUILTIN_MIMES[kind],
         source_revision: sourceRevision,
       },
     };
   }
   if (full.trim().length === 0) {
-    return { record: { state: "no_extractable_text", extractor: { ...BUILTIN_OOXML }, source_revision: sourceRevision } };
+    return { record: { state: "no_extractable_text", extractor: { ...extractor }, source_revision: sourceRevision } };
   }
   const truncated = full.length > EXTRACT_OUTPUT_CHAR_CAP;
   return {
     record: {
       state: "extracted",
-      extractor: { ...BUILTIN_OOXML },
+      extractor: { ...extractor },
       chars: Math.min(full.length, EXTRACT_OUTPUT_CHAR_CAP),
       truncated,
       source_revision: sourceRevision,
@@ -665,7 +897,7 @@ export function extractDocument(
     return {
       record: {
         state: "extracted",
-        extractor: { name: "builtin-text", version: "1" },
+        extractor: { ...BUILTIN_TEXT },
         chars: Math.min(full.length, EXTRACT_OUTPUT_CHAR_CAP),
         truncated,
         source_revision: sourceRevision,
@@ -674,10 +906,11 @@ export function extractDocument(
     };
   }
 
-  // Word and Excel are read in-process unless the harness configured its own
-  // extractor for the MIME (the team's choice wins).
-  if (builtinOfficeKind(mime) !== null && documentExtractors()?.get(mime) === undefined) {
-    return extractOffice(absPath, builtinOfficeKind(mime)!, sourceRevision);
+  // Word, Excel and HTML are read in-process unless the harness configured its
+  // own extractor for the MIME (the team's choice wins).
+  const kind = builtinKind(mime);
+  if (kind !== null && documentExtractors()?.get(mime) === undefined) {
+    return extractBuiltin(absPath, kind, sourceRevision);
   }
   // A .docx or .xlsx name on bytes that are not an Office zip (a password-
   // protected workbook is an OLE file, or the name is wrong): recorded once as
@@ -802,10 +1035,20 @@ export function extractDocument(
   };
 }
 
+/** Whether the bytes open with markup: after an optional UTF-8 BOM and whitespace, a `<`. */
+function opensWithMarkup(buf: Buffer): boolean {
+  let at = buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf ? 3 : 0;
+  while (at < buf.length && (buf[at] === 0x20 || (buf[at] >= 0x09 && buf[at] <= 0x0d))) at++;
+  return buf[at] === 0x3c;
+}
+
 /** Best-effort MIME for a document, from its magic bytes then its extension.
  *  Magic first: an extension is a claim, and the bytes are evidence. */
 export function detectMimeType(absPath: string, buf: Buffer): string {
   if (hasPdfMagicInWindow(buf)) return "application/pdf";
+  // Before the text branch: a page Word saves is often Windows-1252, which is
+  // not UTF-8. An .html that holds plain text, or a NUL (UTF-16), keeps its type.
+  if (HTML_NAME.test(absPath) && opensWithMarkup(buf) && !hasNulByte(buf)) return HTML_MIME;
   if (!looksBinary(buf)) {
     return absPath.toLowerCase().endsWith(".md") ? "text/markdown" : "text/plain";
   }
@@ -1453,10 +1696,7 @@ function statOnlyRefusal(real: string, rel: string): string | null {
   // every sync quietly passed over it — the exact list/sync disagreement the
   // present_but_refused state exists to prevent.
   if (st.nlink !== 1) {
-    return (
-      `${rel} is multiply linked (a hardlink) and is not trusted. Replace it with an ` +
-      `independent copy - cp <file> <file>.copy && mv <file>.copy <file> - and re-run.`
-    );
+    return `${rel} is multiply linked (a hardlink) and is not trusted. ${HARDLINK_REMEDY}`;
   }
   try {
     // fs.constants.R_OK, as a literal: this file's restricted fs allowlist
@@ -1479,12 +1719,83 @@ function readCandidate(documentsReal: string, absPath: string): Buffer {
   return readDocumentBytes(real, rel);
 }
 
+/** A path named among several that was left out, as the person typed it, and why. */
+export interface OnboardNotAdded {
+  path: string;
+  reason: string;
+}
+
 export interface OnboardResult {
   space: string;
   indexed: OnboardOutcome[];
   /** Present only on a refusal, so a caller can distinguish "nothing to do" from
    *  "the batch was rejected". */
   refused?: { path: string; reason: string };
+  /** Present only when several paths were named and some could not be taken. */
+  not_added?: OnboardNotAdded[];
+}
+
+/**
+ * Why one path named among several cannot be taken, or the files it adds.
+ * The checks are the ones the single-path form refuses on, said as a reason
+ * instead, so one bad path never costs the person the others.
+ */
+function namedOnboardFiles(
+  projectDir: string,
+  space: string,
+  documentsReal: string,
+  projectReal: string,
+  given: string,
+): { files: string[] } | { reason: string } {
+  const abs = isAbsolute(given) ? given : resolve(projectDir, given);
+  if (!existsSync(abs)) return { reason: "no such file or folder" };
+  const real = realpathSync(abs);
+  const under = (root: string): boolean => real.startsWith(root.endsWith(sep) ? root : root + sep);
+  if (real !== projectReal && !under(projectReal)) return { reason: "outside your project" };
+  if (!under(documentsReal)) {
+    const documents = portableSourcePath(projectDir, space, documentsReal);
+    return { reason: `outside ${documents}; copy it under ${documents}/ first` };
+  }
+  if (statSync(real).isDirectory()) {
+    const files = walkDocuments(real);
+    return files.length === 0 ? { reason: "it holds no documents" } : { files };
+  }
+  const refusal = statOnlyRefusal(real, "it");
+  return refusal === null ? { files: [real] } : { reason: refusal };
+}
+
+/**
+ * What a batch would index, judged by stat alone: a file with no live row, or
+ * whose size or mtime moved since its row was indexed. The batch caps count
+ * this, and the dispatcher counts the same before it copies anything, so a cap
+ * refusal never comes after the copies.
+ */
+export function onboardBatchWork(
+  projectDir: string,
+  space: string,
+  candidates: readonly string[],
+  index: DocumentIndex = readIndex(projectDir, space),
+): { abs: string; bytes: number; indexed: boolean }[] {
+  const liveBySource = new Map(
+    index.documents.filter((row) => !isTombstoned(row)).map((row) => [row.source.path, row]),
+  );
+  const work: { abs: string; bytes: number; indexed: boolean }[] = [];
+  for (const abs of candidates) {
+    try {
+      const stat = statSync(abs);
+      const sourcePath = portableSourcePath(projectDir, space, abs);
+      const existing = liveBySource.get(sourcePath);
+      const indexedAt = existing === undefined ? Number.NaN : Date.parse(existing.indexed_at);
+      if (
+        existing === undefined ||
+        stat.size !== existing.bytes ||
+        (!Number.isNaN(indexedAt) && stat.mtimeMs > indexedAt)
+      ) {
+        work.push({ abs, bytes: stat.size, indexed: existing !== undefined });
+      }
+    } catch { /* vanished mid-walk; readCandidate will skip or refuse it */ }
+  }
+  return work;
 }
 
 /**
@@ -1516,7 +1827,55 @@ function assertPublishable(candidate: DocumentIndex): void {
 }
 
 /**
- * Index one path, or every not-yet-indexed file under `documents/` when pathless.
+ * The copy the command layer made of `original` (that file's project-relative
+ * POSIX path) that it may write the file's new bytes over: a live row records
+ * that original, and its copy, read through the same boundary as any candidate,
+ * still holds the bytes copied (nobody edited it, by hand or by a sync after an
+ * edit) or already holds `newSha256` (a run that wrote them stopped before the
+ * index took them). Null when no copy, or more than one, qualifies: the caller
+ * then copies beside it, as it always has.
+ */
+export function copiedDocumentFor(
+  projectDir: string,
+  space: string,
+  original: string,
+  newSha256: string,
+): { copyPath: string; holdsNew: boolean } | { changedCopy: string } | null {
+  assertKnowledgeRootTrusted(projectDir, space);
+  const documentsAbs = documentsDir(projectDir, space);
+  if (!existsSync(documentsAbs)) return null;
+  const documentsReal = realpathSync(documentsAbs);
+  const fits: { copyPath: string; holdsNew: boolean }[] = [];
+  const changed: string[] = [];
+  for (const row of readIndex(projectDir, space).documents) {
+    const from = row.copied_from;
+    if (from === undefined || from.path !== original || isTombstoned(row)) continue;
+    if (row.source.kind !== "managed" || !row.source.path.startsWith("documents/")) continue;
+    const copyPath = join(documentsReal, ...row.source.path.slice("documents/".length).split("/"));
+    let digest: string;
+    try {
+      digest = sha256Hex(readCandidate(documentsReal, copyPath));
+    } catch {
+      continue;
+    }
+    if (digest === from.sha256 || digest === newSha256) fits.push({ copyPath, holdsNew: digest === newSha256 });
+    else changed.push(row.source.path.slice("documents/".length));
+  }
+  if (fits.length === 1) return fits[0];
+  // The one copy made from this original no longer holds what was copied: the
+  // caller copies beside it, and says so, so nobody takes the earlier copy for
+  // a stale duplicate and deletes a change made to it.
+  if (fits.length === 0 && changed.length === 1) return { changedCopy: changed[0] };
+  return null;
+}
+
+/**
+ * Index one path, several, or every not-yet-indexed file under `documents/`
+ * when pathless.
+ *
+ * Several paths (an array) are checked one by one first: a path that cannot be
+ * taken is reported in `not_added` with why, and the rest go in as one batch.
+ * One path (a string) keeps the single-path refusals.
  *
  * A pathless run IS a batch, and a batch is ALL-OR-NOTHING. Two distinct
  * collisions reach the same bad end, and closing only the first leaves a real
@@ -1531,9 +1890,10 @@ function assertPublishable(candidate: DocumentIndex): void {
 export function onboard(
   projectDir: string,
   space: string,
-  pathArg: string | undefined,
+  pathArg: string | readonly string[] | undefined,
   now: string,
   intentUuid?: string,
+  copiedFrom?: ReadonlyMap<string, string>,
 ): OnboardResult {
   assertKnowledgeRootTrusted(projectDir, space);
   const documentsAbs = documentsDir(projectDir, space);
@@ -1546,17 +1906,36 @@ export function onboard(
   const documentsReal = realpathSync(documentsAbs);
 
   let candidates: string[];
+  const notAdded: OnboardNotAdded[] = [];
   if (pathArg === undefined) {
     candidates = walkDocuments(documentsReal);
+  } else if (typeof pathArg !== "string") {
+    // Several: in the order named, each file once however often it was named.
+    candidates = [];
+    const taken = new Set<string>();
+    const projectReal = realpathSync(projectDir);
+    for (const given of pathArg) {
+      const named = namedOnboardFiles(projectDir, space, documentsReal, projectReal, given);
+      if ("reason" in named) {
+        notAdded.push({ path: given, reason: named.reason });
+        continue;
+      }
+      for (const file of named.files) {
+        if (taken.has(file)) continue;
+        taken.add(file);
+        candidates.push(file);
+      }
+    }
+    if (candidates.length === 0) return { space, indexed: [], ...(notAdded.length === 0 ? {} : { not_added: notAdded }) };
   } else {
     const abs = isAbsolute(pathArg) ? pathArg : resolve(projectDir, pathArg);
     if (!existsSync(abs)) throw new Error(`No such path: ${pathArg}`);
     const real = realpathSync(abs);
     const documentsWithSep = documentsReal.endsWith(sep) ? documentsReal : documentsReal + sep;
     if (!real.startsWith(documentsWithSep)) {
-      // Copying an external path in is the design's default behaviour, but it
-      // belongs with the story that owns source kinds; refusing clearly beats
-      // guessing.
+      // The dispatcher copies a file named inside the project into documents/
+      // before this runs (withNamedDocumentCopied in aidlc.ts), so what reaches
+      // here is a path outside the project, or this tool run on its own.
       throw new Error(
         `${pathArg} is outside ${portableSourcePath(projectDir, space, documentsAbs)}. ` +
           `Copy it under documents/ first, then re-run.`,
@@ -1565,10 +1944,20 @@ export function onboard(
     candidates = statSync(real).isDirectory() ? walkDocuments(real) : [real];
   }
 
+  const result = onboardCandidates(projectDir, space, documentsReal, candidates, now, intentUuid, copiedFrom);
+  return notAdded.length === 0 ? result : { ...result, not_added: notAdded };
+}
+
+function onboardCandidates(
+  projectDir: string,
+  space: string,
+  documentsReal: string,
+  candidates: readonly string[],
+  now: string,
+  intentUuid?: string,
+  copiedFrom?: ReadonlyMap<string, string>,
+): OnboardResult {
   const index = readIndex(projectDir, space);
-  const liveBySource = new Map(
-    index.documents.filter((row) => !isTombstoned(row)).map((row) => [row.source.path, row]),
-  );
 
   // The BATCH caps -- distinct from EXTRACT_INPUT_BYTE_CAP's per-document
   // bound -- apply to the WORK this sweep can see without opening any content.
@@ -1578,28 +1967,17 @@ export function onboard(
   // one item over the cap; avoiding content reads before this resource gate is
   // the more important invariant.
   if (candidates.length > 1) {
-    const work: { abs: string; bytes: number }[] = [];
-    for (const abs of candidates) {
-      try {
-        const stat = statSync(abs);
-        const sourcePath = portableSourcePath(projectDir, space, abs);
-        const existing = liveBySource.get(sourcePath);
-        const indexedAt = existing === undefined ? Number.NaN : Date.parse(existing.indexed_at);
-        if (
-          existing === undefined ||
-          stat.size !== existing.bytes ||
-          (!Number.isNaN(indexedAt) && stat.mtimeMs > indexedAt)
-        ) {
-          work.push({ abs, bytes: stat.size });
-        }
-      } catch { /* vanished mid-walk; readCandidate below will skip or refuse it */ }
-    }
+    const work = onboardBatchWork(projectDir, space, candidates, index);
+    // Sync reads content, so it can pass where this stat-only count saw
+    // indexed documents touched; brand-new ones hit its own cap too.
+    const orSync = work.some((item) => item.indexed)
+      ? `, or run \`${entrySkillInvocation()} knowledge sync\` instead of a pathless onboard`
+      : "";
     if (work.length > EXTRACT_BATCH_DOC_CAP) {
       throw new Error(
         `This run would index ${work.length} new or changed documents, over the ` +
           `${EXTRACT_BATCH_DOC_CAP}-document batch cap; nothing was indexed. Onboard a ` +
-          `subdirectory or a single file at a time, or run \`${entrySkillInvocation()} knowledge sync\` ` +
-          `instead of a pathless onboard.`,
+          `subdirectory or a single file at a time${orSync}.`,
       );
     }
     const batchBytes = work.reduce((total, item) => total + item.bytes, 0);
@@ -1607,8 +1985,7 @@ export function onboard(
       throw new Error(
         `This run would read ${batchBytes} bytes across ${work.length} new or changed documents, over ` +
           `the ${EXTRACT_BATCH_BYTE_CAP}-byte batch cap; nothing was indexed. Onboard a ` +
-          `subdirectory or a single file at a time, or run \`${entrySkillInvocation()} knowledge sync\` instead ` +
-          `of a pathless onboard.`,
+          `subdirectory or a single file at a time${orSync}.`,
       );
     }
   }
@@ -1681,6 +2058,9 @@ export function onboard(
       }
       const contentNeedsRepair = existing.extraction.state === "extracted" &&
         verifiedContentBytes(projectDir, space, existing) === null;
+      // The command layer handed this copy in for its original (its new bytes
+      // were written over it): the edited branch below records them.
+      const original = copiedFrom?.get(abs);
       if (existing.sha256 === digest && !contentNeedsRepair) {
         // Already indexed, unchanged. Reported, never swallowed.
         outcomes.push({
@@ -1702,6 +2082,8 @@ export function onboard(
           indexed_at: now,
           extraction: outcome.record,
         };
+        // The command layer wrote this original's new bytes over its copy.
+        if (original !== undefined) row.copied_from = { path: original, sha256: digest };
         setRowContentFields(row, outcome.text);
         editedIds.add(row.id);
         staged.push({ row, buf, abs, text: outcome.text, baseRow: structuredClone(existing) });
@@ -1709,6 +2091,8 @@ export function onboard(
       continue;
     }
     const { row, text } = buildRow(projectDir, space, abs, buf, now);
+    const original = copiedFrom?.get(abs);
+    if (original !== undefined) row.copied_from = { path: original, sha256: row.sha256 };
     // Present means intent-scoped; OMITTED means space-wide. Never an empty list,
     // which the schema rejects as ambiguous between the two.
     if (intentUuid !== undefined) row.related_intent_ids = [intentUuid];
@@ -1879,6 +2263,7 @@ export function onboard(
           existing.bytes = row.bytes;
           existing.indexed_at = row.indexed_at;
           existing.extraction = row.extraction;
+          if (row.copied_from !== undefined) existing.copied_from = row.copied_from;
           setRowContentFields(existing, text);
           edited.push(existing);
           editedStageIds.set(existing.id, stagedRowId);
@@ -2264,9 +2649,8 @@ export const UNTRUSTED_TAGS_NOTICE =
  * from here on, and, when their original is git-ignored, that this copy is not.
  * Null when nothing was copied. Plain words: no record paths, no flags.
  *
- * It does NOT say to add the document again after editing the original: a
- * second add copies the original beside the first (`vision-2.md`, or a new
- * folder), which would leave two live rows for one document.
+ * A changed original named again updates this copy in place (the row's
+ * copied_from), and `onboardNote` says so instead.
  */
 export function onboardCopyNote(
   projectDir: string,
@@ -2285,14 +2669,145 @@ export function onboardCopyNote(
     ? ` ${leftOut} ${leftOut === 1 ? "file" : "files"} inside it ${leftOut === 1 ? "is" : "are"} kept out of ` +
       `git, so ${leftOut === 1 ? "it was" : "they were"} not copied; name one directly to add it.`
     : "";
-  const ignored = gitIgnored === "yes" || gitIgnored === "unknown"
-    ? ` Your ${name} is ${gitIgnored === "yes" ? "" : "likely "}kept out of git, but this copy is not, ` +
-      "so it will be committed unless you keep it out there too."
-    : "";
+  const ignored = keptOutOfGitNote([{ from: copiedFrom, ignored: gitIgnored }]);
   return `Copied ${name} into AI-DLC's documents as ${where} and added ${what}.` +
     skipped +
     ` The knowledge base reads that copy from now on, not ${theirs}.` +
     ignored;
+}
+
+/**
+ * The one risk a copy line carries: a copy of something git ignores will be
+ * committed. Each such original is named, never summed; "this copy" when the
+ * line is about one copy. The one writer of this sentence for every copy line.
+ */
+function keptOutOfGitNote(copies: ReadonlyArray<{ from: string; ignored: string | undefined }>): string {
+  let note = "";
+  for (const [state, likely] of [["yes", ""], ["unknown", "likely "]] as const) {
+    const names = copies.filter((copy) => copy.ignored === state).map((copy) => basename(copy.from));
+    if (names.length === 0) continue;
+    const one = names.length === 1;
+    const copyIs = copies.length === 1 ? "this copy is" : one ? "its copy is" : "their copies are";
+    note += ` Your ${inWords(names)} ${one ? "is" : "are"} ${likely}kept out of git, but ${copyIs} not, so ` +
+      `${one ? "it" : "they"} will be committed unless you keep ${one ? "it" : "them"} out there too.`;
+  }
+  return note;
+}
+
+/** One document the dispatcher copied in for an onboard: the path the person
+ *  named, where the copy is, whether git ignores the original, and how many
+ *  files inside a named folder it left out because git ignores them. */
+export interface OnboardCopy {
+  from: string;
+  to: string;
+  ignored: "yes" | "no" | "unknown";
+  leftOut: number;
+  /** A copied file's project-relative path, recorded as the row's copied_from. */
+  original?: string;
+  /** Its new bytes were written over the copy made from it before. */
+  updated?: boolean;
+  /** The earlier copy made from it (documents-relative) had changed, so this one went in beside it. */
+  besideChanged?: string;
+}
+
+function inWords(items: readonly string[]): string {
+  return items.length <= 1 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
+}
+
+/** The paths left out, each with why, as one list. */
+function describeNotAdded(notAdded: readonly OnboardNotAdded[]): string {
+  return inWords(notAdded.map((entry) => `${entry.path} (${entry.reason.replace(/\.$/, "")})`));
+}
+
+const SEVERAL_NAMES_SHOWN = 5;
+
+/**
+ * The line for an onboard of several paths: the paths left out first, each
+ * with why (so a person who reads one line still sees them), then what was
+ * copied. One copy says what `onboardCopyNote` says. Null when there is
+ * nothing to say.
+ */
+function onboardNote(
+  projectDir: string,
+  space: string,
+  allCopies: readonly OnboardCopy[],
+  indexed: readonly OnboardOutcome[],
+  notAdded: readonly OnboardNotAdded[],
+): string | null {
+  const parts: string[] = [];
+  if (notAdded.length > 0) {
+    parts.push(
+      `Not added: ${describeNotAdded(notAdded)}. Name only ${notAdded.length === 1 ? "that one" : "those"} ` +
+        `again once ${notAdded.length === 1 ? "it is" : "they are"} fixed.`,
+    );
+  }
+  const under = (copy: OnboardCopy): number => {
+    const rel = portableSourcePath(projectDir, space, copy.to);
+    return indexed.filter((outcome) => outcome.path === rel || outcome.path.startsWith(`${rel}/`)).length;
+  };
+  // An update is said only where the knowledge base took it (the copy's row
+  // came back `edited`); otherwise the copy reads as any other copy does.
+  const updated = allCopies.filter((copy) => {
+    if (copy.updated !== true) return false;
+    const rel = portableSourcePath(projectDir, space, copy.to);
+    return indexed.some((outcome) => outcome.path === rel && outcome.status === "edited");
+  });
+  const copies = allCopies.filter((copy) => !updated.includes(copy));
+  if (copies.length === 1) {
+    const [copy] = copies;
+    const one = onboardCopyNote(projectDir, copy.from, copy.to, copy.ignored, under(copy), copy.leftOut);
+    if (one !== null) parts.push(one);
+  } else if (copies.length > 1) {
+    const documentsAbs = documentsDir(projectDir, space);
+    const labels = copies.map((copy) => {
+      const name = basename(copy.from);
+      const as = toPosix(relative(realpathOrSelf(documentsAbs), realpathOrSelf(copy.to)));
+      return as === name ? name : `${name} as ${as}`;
+    });
+    // A name the copy did not keep is always said: it is where their document is now.
+    const shown = labels.filter((label, at) => at < SEVERAL_NAMES_SHOWN || label.includes(" as "));
+    const more = labels.length - shown.length;
+    const total = copies.reduce((sum, copy) => sum + under(copy), 0);
+    const where = toPosix(relative(projectDir, documentsAbs));
+    let line = `Copied ${total} ${total === 1 ? "document" : "documents"} into AI-DLC's documents in ${where} ` +
+      `and added them: ${more > 0 ? `${shown.join(", ")} and ${more} more` : inWords(shown)}.`;
+    const withLeftOut = copies.filter((copy) => copy.leftOut > 0);
+    const leftOut = withLeftOut.reduce((sum, copy) => sum + copy.leftOut, 0);
+    if (leftOut > 0) {
+      const inside = withLeftOut.length === 1 ? basename(withLeftOut[0].from) : "the folders you named";
+      line += ` ${leftOut} ${leftOut === 1 ? "file" : "files"} inside ${inside} ${leftOut === 1 ? "is" : "are"} ` +
+        `kept out of git, so ${leftOut === 1 ? "it was" : "they were"} not copied; name one directly to add it.`;
+    }
+    line += " The knowledge base reads those copies from now on, not your own.";
+    parts.push(line + keptOutOfGitNote(copies));
+  }
+  for (const copy of copies) {
+    if (copy.besideChanged === undefined) continue;
+    parts.push(
+      `The earlier copy, ${copy.besideChanged}, has changed since it was copied, so it was left as it is; the ` +
+        "knowledge base now holds both.",
+    );
+  }
+  if (updated.length > 0) parts.push(updatedCopiesNote(projectDir, space, updated));
+  return parts.length === 0 ? null : parts.join(" ");
+}
+
+/** What to say when a changed original's new bytes were written over its copy. */
+function updatedCopiesNote(projectDir: string, space: string, updated: readonly OnboardCopy[]): string {
+  const ignored = keptOutOfGitNote(updated);
+  if (updated.length === 1) {
+    const [copy] = updated;
+    return `Updated ${toPosix(relative(projectDir, copy.to))} to your new ${basename(copy.from)}. It stays the ` +
+      "same document in the knowledge base." + ignored;
+  }
+  const documentsAbs = documentsDir(projectDir, space);
+  const names = updated.map((copy) => {
+    const name = basename(copy.from);
+    const as = toPosix(relative(realpathOrSelf(documentsAbs), realpathOrSelf(copy.to)));
+    return as === name ? name : `${as} (your ${name})`;
+  });
+  return `Updated ${inWords(names)} in ${toPosix(relative(projectDir, documentsAbs))} to your new versions. ` +
+    "Each stays the same document in the knowledge base." + ignored;
 }
 
 function emitJson(payload: Record<string, unknown>): void {
@@ -2687,15 +3202,15 @@ export interface UnreadDocument {
   reason: UnreadReason;
 }
 
-function unreadReason(row: DocumentRow): UnreadReason | null {
+function unreadReason(row: DocumentRow, abs: string): UnreadReason | null {
   switch (effectiveExtractionState(row)) {
     case "extracted":
       return null;
     case "invalidated":
       return "changed";
     case "unsupported_type":
-      // A Word or Excel file added before AI-DLC read them is read on the next sync.
-      return builtinReadsRow(row) ? "office" : "no-reader";
+      // A Word, Excel or HTML file added before AI-DLC read them is read on the next sync.
+      return builtinReadsRow(row, abs) ? "office" : "no-reader";
     case "extractor_unavailable":
       // A PDF added when the computer had no PDF reader: AI-DLC reads it itself on the next sync (the rule
       // shouldRetryExtraction uses). A team's own extractor that is missing stays a program to install.
@@ -2736,7 +3251,7 @@ export function unreadDocuments(projectDir: string, space: string): UnreadDocume
   const found = walkDocuments(folder).map((abs) => {
     const path = portableSourcePath(projectDir, space, abs);
     const row = rows.get(path);
-    return { path, reason: row === undefined ? "new" as const : unreadReason(row) };
+    return { path, reason: row === undefined ? "new" as const : unreadReason(row, abs) };
   });
   const readable = found.filter((file) => file.reason === null).map((file) => file.path);
   return found.filter((file): file is UnreadDocument =>
@@ -2755,7 +3270,7 @@ const UNREAD_SENTENCES: Readonly<Record<UnreadReason, (names: string, one: boole
   changed: (names, one) => `${names} changed since ${one ? "it was" : "they were"} added.`,
   "no-reader": (names, one) =>
     `The knowledge base has no reader for ${names}: save ${one ? "it" : "each"} as .md, .txt or .csv beside ${one ? "it" : "the original"}.`,
-  office: (names, one) => `${names} ${one ? "was" : "were"} added before AI-DLC could read Word and Excel files.`,
+  office: (names, one) => `${names} ${one ? "was" : "were"} added before AI-DLC could read Word, Excel and HTML files.`,
   pdf: (names, one) => `${names} ${one ? "was" : "were"} added before AI-DLC could read a PDF without pdftotext.`,
   "no-extractor": (names, one) =>
     `The program set up to read ${names} is not installed on this computer: install it, or save ${one ? "the file" : "each"} as .md beside ${one ? "it" : "the original"}.`,
@@ -3063,7 +3578,7 @@ export function syncDocuments(
       }
       // Digest unchanged. Normally nothing to do -- EXCEPT when the environment
       // is what changed.
-      if (shouldRetryExtraction(row) ||
+      if (shouldRetryExtraction(row, here.abs) ||
           (row.extraction.state === "extracted" &&
             verifiedContentBytes(projectDir, space, row) === null)) {
         needsRetry.push({ row, here });
@@ -3136,6 +3651,22 @@ export function syncDocuments(
   // extracting) while 21 BRAND-NEW documents in one pathless sync still hit
   // the same cap onboard's pathless walk would refuse -- same batch-scope
   // hazard, now measured against the right quantity.
+  // A row read again though unchanged is the engine's own catch-up, which the
+  // person cannot make smaller (onboard answers `already`): retries take only
+  // the room both caps leave after new and edited files, and the rest stay as
+  // they are for a later sync.
+  let roomDocs = EXTRACT_BATCH_DOC_CAP - needsChanged.length - needsNew.length;
+  let roomBytes = EXTRACT_BATCH_BYTE_CAP -
+    [...needsChanged.map(({ here }) => here.bytes), ...needsNew.map((n) => n.bytes)].reduce((sum, b) => sum + b, 0);
+  for (const item of needsRetry.splice(0)) {
+    if (roomDocs > 0 && item.here.bytes <= roomBytes) {
+      needsRetry.push(item);
+      roomDocs--;
+      roomBytes -= item.here.bytes;
+    } else {
+      plans.push({ row: item.row, change: "unchanged" });
+    }
+  }
   const workItems = [...needsChanged, ...needsRetry, ...needsNew.map((n) => ({ here: n }))];
   if (workItems.length > EXTRACT_BATCH_DOC_CAP) {
     throw new Error(
@@ -3359,6 +3890,9 @@ export function syncDocuments(
           break;
         case "moved":
           row.source = { ...row.source, path: plan.nextPath! } as DocumentRow["source"];
+          // A copy moved under documents/ is no longer the copy its original
+          // updates: naming the original again copies it in afresh.
+          delete row.copied_from;
           changes.push({ id: row.id, path: plan.nextPath!, change: "moved" });
           audits.push(() => emitDocumentUpdated(projectDir, space, row, "moved"));
           break;
@@ -3523,11 +4057,15 @@ export function syncDocuments(
  * already equal to the current digest. There is no further condition to check
  * -- the row's own message says the next sync re-extracts, so this is that
  * promise kept, not a second gate re-litigating it.
+ *
+ * A row recorded before AI-DLC read its kind is `builtinReadsRow`'s to answer,
+ * the same answer doctor's unread line gives; `abs` is the document on disk,
+ * which it reads for an HTML page.
  */
-export function shouldRetryExtraction(row: DocumentRow): boolean {
+export function shouldRetryExtraction(row: DocumentRow, abs: string): boolean {
   const rec = row.extraction;
   if (rec.state === "invalidated") return true;
-  if (rec.state === "unsupported_type" && builtinReadsRow(row)) return true;
+  if (builtinReadsRow(row, abs)) return true;
   if (rec.state === "extractor_unavailable" || rec.state === "unsupported_type") {
     const argv = extractorArgvFor(detectMimeFromRow(row));
     if (argv === null) return false; // still nothing configured for this type
@@ -4461,6 +4999,7 @@ export function rebindDocument(
     }
     const from = row.source.path;
     row.source = { kind: "managed", path: nextPath };
+    delete row.copied_from;
     row.sha256 = digest;
     row.bytes = buf.length;
     // The identity SURVIVES: same id, same intents. That is the point -- the
@@ -4532,7 +5071,7 @@ function parseFlags(
       allowInactive = true;
     } else if (
       a === "--to" || a === "--text-file" || a === "--source-revision" || a === "--tags" ||
-      a === "--copied-from" || a === "--copied-ignored" || a === "--copied-left-out"
+      a === "--copied"
     ) {
       if (!allowedValueFlags.has(a)) throw new Error(`Unknown flag: ${a}`);
       if (values[a] !== undefined) throw new Error(`${a} may be specified only once`);
@@ -4551,6 +5090,52 @@ function parseFlags(
   return { space, json, intent, allowInactive, positional, values };
 }
 
+/** What the dispatcher did for this onboard: the copies it made, and the
+ *  paths it left out, each by its place among the paths named. Only the
+ *  dispatcher writes the value; one that does not parse says nothing. */
+function dispatcherCopies(raw: string | undefined): {
+  copies: OnboardCopy[];
+  notAdded: Array<OnboardNotAdded & { at: number }>;
+} {
+  const none = { copies: [], notAdded: [] };
+  if (raw === undefined) return none;
+  try {
+    const parsed = JSON.parse(raw) as { copies?: unknown; notAdded?: unknown };
+    const copies = parsed.copies ?? [];
+    const notAdded = parsed.notAdded ?? [];
+    if (!Array.isArray(copies) || !Array.isArray(notAdded)) return none;
+    const count = (value: unknown): boolean => Number.isInteger(value) && (value as number) >= 0;
+    const isCopy = (entry: Record<string, unknown>): boolean =>
+      typeof entry.from === "string" && typeof entry.to === "string" &&
+      (entry.ignored === "yes" || entry.ignored === "no" || entry.ignored === "unknown") && count(entry.leftOut) &&
+      (entry.original === undefined || validDocumentPath(entry.original)) &&
+      (entry.updated === undefined || typeof entry.updated === "boolean") &&
+      (entry.besideChanged === undefined || typeof entry.besideChanged === "string");
+    const isLeftOut = (entry: Record<string, unknown>): boolean =>
+      count(entry.at) && typeof entry.path === "string" && typeof entry.reason === "string";
+    if (!copies.every((entry) => typeof entry === "object" && entry !== null && isCopy(entry))) return none;
+    if (!notAdded.every((entry) => typeof entry === "object" && entry !== null && isLeftOut(entry))) return none;
+    return { copies, notAdded } as ReturnType<typeof dispatcherCopies>;
+  } catch {
+    return none;
+  }
+}
+
+/** Every path left out, by the dispatcher or the verb, in the order named. */
+function notAddedInOrder(
+  kept: ReadonlyArray<{ token: string; at: number }>,
+  byVerb: readonly OnboardNotAdded[],
+  byDispatcher: ReadonlyArray<OnboardNotAdded & { at: number }>,
+): OnboardNotAdded[] {
+  const placed = [...byDispatcher];
+  let next = 0;
+  for (const { token, at } of kept) {
+    if (next < byVerb.length && byVerb[next].path === token) placed.push({ ...byVerb[next++], at });
+  }
+  for (; next < byVerb.length; next++) placed.push({ ...byVerb[next], at: Number.MAX_SAFE_INTEGER });
+  return placed.sort((a, b) => a.at - b.at).map(({ path, reason }) => ({ path, reason }));
+}
+
 let projectDir: string | undefined;
 
 export function main(argv: string[]): void {
@@ -4564,35 +5149,49 @@ export function main(argv: string[]): void {
   try {
     switch (subcommand) {
       case "onboard": {
-        // `--copied-from`, `--copied-ignored` and `--copied-left-out` are set
-        // by the dispatcher when it copied a document the person named from
-        // elsewhere in the project (withNamedDocumentCopied in aidlc.ts). They
-        // say what happened; the indexing below is the same either way.
+        // `--copied` is set by the dispatcher when it copied in a document the
+        // person named from elsewhere in the project, or left one of several
+        // out (withNamedDocumentCopied in aidlc.ts). It says what happened; the
+        // indexing below is the same either way.
         const { space: spaceFlag, intent, allowInactive, positional, values } =
-          parseFlags(args.slice(1), ["--copied-from", "--copied-ignored", "--copied-left-out"]);
+          parseFlags(args.slice(1), ["--copied"]);
         const pd = resolveProjectDir(projectDir);
         const space = resolveSpaceFlag(spaceFlag, pd);
         assertKnowledgeRootTrusted(pd, space);
         // Resolved BEFORE the transaction: it reads intents.json and can fail, and
         // holding a lock across a failure path serialises the workspace for nothing.
         const resolved = resolveIntentFlag(pd, space, intent, allowInactive);
-        const result = onboard(
-          pd, space, positional[0], new Date().toISOString(), resolved?.uuid,
-        );
-        if (result.refused) {
-          error(`Refused ${result.refused.path}: ${result.refused.reason}`);
+        const handed = dispatcherCopies(values["--copied"]);
+        const skipped = new Set(handed.notAdded.map((entry) => entry.at));
+        const kept = positional.flatMap((token, at) => (skipped.has(at) ? [] : [{ token, at }]));
+        const several = positional.length > 1;
+        // Each file the dispatcher copied, by where its copy is, to the original it came from.
+        const copiedFrom = new Map<string, string>();
+        for (const copy of handed.copies) {
+          if (copy.original === undefined || !existsSync(copy.to)) continue;
+          copiedFrom.set(realpathSync(copy.to), copy.original);
         }
-        const note = onboardCopyNote(
-          pd,
-          values["--copied-from"],
-          positional[0],
-          values["--copied-ignored"],
-          result.indexed.length,
-          Number(values["--copied-left-out"] ?? 0),
+        const result = onboard(
+          pd, space, several ? kept.map((entry) => entry.token) : positional[0], new Date().toISOString(),
+          resolved?.uuid, copiedFrom,
         );
+        const notAdded = notAddedInOrder(kept, result.not_added ?? [], handed.notAdded);
+        if (result.refused) {
+          const reason = result.refused.reason;
+          error(
+            `Refused ${result.refused.path}: ${reason}` +
+              (several ? `${/[.!?]$/.test(reason) ? "" : "."} None of the ${positional.length} paths you named was added.` : ""),
+          );
+        }
+        if (several && result.indexed.length === 0 && notAdded.length > 0) {
+          error(`Nothing was added: ${describeNotAdded(notAdded)}.`);
+        }
+        const note = onboardNote(pd, space, handed.copies, result.indexed, notAdded);
+        const { not_added: _verbNotAdded, ...outcome } = result;
         emitJson({
           ...(note === null ? {} : { onboard_note: note }),
-          ...(result as unknown as Record<string, unknown>),
+          ...(outcome as unknown as Record<string, unknown>),
+          ...(notAdded.length === 0 ? {} : { not_added: notAdded }),
         });
         break;
       }
@@ -4739,8 +5338,8 @@ export function main(argv: string[]): void {
           "Usage: aidlc-knowledge <onboard|sync|list|show|associate|dissociate|rebind|summarize> " +
             "[args] [--space <name>] [--json]\n" +
             "\n" +
-            "  onboard [path]  Index one document, or every new file under\n" +
-            "                  knowledge/documents/ when no path is given.\n" +
+            "  onboard [path ...]  Index one or more documents, or every new file\n" +
+            "                  under knowledge/documents/ when no path is given.\n" +
             "                  Add --intent [slug] to scope it, and\n" +
             "                  --allow-inactive to target a finished intent.\n" +
             "  list            The catalog: every row, with its state visible.\n" +

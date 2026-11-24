@@ -31,9 +31,10 @@
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { cleanupTestProject, createTestProject, REPO_ROOT, seededStateFile } from "../harness/fixtures.ts";
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
+import { conductorSkillPaths, readConductorSurface } from "../harness/conductor-skill.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
 
 /** Authored conductor SKILLs for every manifest-discovered distribution. */
@@ -189,7 +190,7 @@ function stageTableRows(body: string): string[] {
 // always started at writing the plan. Every conductor SKILL, the stage file and
 // its reference say an approved plan is built as it is.
 describe("an approved code plan is built as it is", () => {
-  const flat = (rel: string) => readFileSync(join(REPO_ROOT, rel), "utf-8").replace(/\s+/g, " ");
+  const flat = (rel: string) => readConductorSurface(rel).replace(/\s+/g, " ");
 
   test("every conductor SKILL builds an approved plan as it is", () => {
     // The step says whether to plan, revise, repair or build (plan_note); the skill keeps only the one rule.
@@ -236,6 +237,12 @@ describe("an approved code plan is built as it is", () => {
 
 describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () => {
   const skills = harnessSkills();
+  const CLAUDE_SKILL = "harness/claude/skills/aidlc/SKILL.md";
+  const CODEX_SKILL = "harness/codex/skills/aidlc/SKILL.md";
+  // The skills whose first command is `next --entry`: their prompt hook keeps the typed line for the engine to read.
+  const ENTRY_SKILLS = [CLAUDE_SKILL, CODEX_SKILL];
+  const FIRST_COMMAND_CARRIES_NONE = "The first `next --entry` carries none of the person's words, which AI-DLC reads " +
+    "from its own record.";
 
   test("the matrix-derived harness-SKILL set covers every shipped tree", () => {
     expect(skills.length).toBe(HARNESS_MATRIX.length);
@@ -244,11 +251,14 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
 
   test("no shipped conductor SKILL carries the retired `--init` command", () => {
     const offenders: string[] = [];
-    for (const rel of skills) {
-      const lines = readFileSync(join(REPO_ROOT, rel), "utf-8").split("\n");
-      for (let i = 0; i < lines.length; i++) {
-        if (BARE_INIT.test(lines[i])) {
-          offenders.push(`${rel}:${i + 1}  ${lines[i].trim()}`);
+    for (const harness of HARNESS_MATRIX) {
+      for (const path of conductorSkillPaths(harness.name, join(REPO_ROOT, "harness", harness.name, "skills", "aidlc"))) {
+        const rel = relative(REPO_ROOT, path);
+        const lines = readFileSync(path, "utf-8").split("\n");
+        for (let i = 0; i < lines.length; i++) {
+          if (BARE_INIT.test(lines[i])) {
+            offenders.push(`${rel}:${i + 1}  ${lines[i].trim()}`);
+          }
         }
       }
     }
@@ -260,7 +270,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
   test("every shipped conductor SKILL carries the workspace-anchor vocabulary", () => {
     const missing: string[] = [];
     for (const rel of skills) {
-      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      const body = readConductorSurface(rel);
       for (const tok of REQUIRED_TOKENS) {
         if (!body.includes(tok)) missing.push(`${rel}  missing: ${tok}`);
       }
@@ -271,7 +281,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
   test("every shipped conductor SKILL names --config and the engine's print carries its steps", () => {
     const missing: string[] = [];
     for (const rel of skills) {
-      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      const body = readConductorSurface(rel);
       if (!body.includes("--config [section]")) missing.push(`${rel}  missing: --config [section]`);
       if (body.includes("**In-session configuration")) missing.push(`${rel}  still carries the config steps`);
     }
@@ -285,7 +295,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
   test("every shipped conductor composer.md separates in-flight deltas from stock routing", () => {
     const missing: string[] = [];
     for (const rel of skills.map((skill) => skill.replace(/SKILL\.md$/, "composer.md"))) {
-      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      const body = readConductorSurface(rel);
       for (const tok of COMPOSER_ROUTE_TOKENS) {
         if (!body.includes(tok)) missing.push(`${rel}  missing: ${tok}`);
       }
@@ -299,7 +309,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     // rule had the agent ask Approve / Edit / Reject first on some harnesses.
     const problems: string[] = [];
     for (const rel of skills) {
-      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      const body = readConductorSurface(rel);
       for (const tok of [
         "**Named stage changes are done at once.**",
         "`{{INVOKE}} engine orchestrate next --skip <slugs>` or `--add <slugs>`",
@@ -333,7 +343,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     // new work, so the name goes alone.
     const missing: string[] = [];
     for (const rel of skills) {
-      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      const body = readConductorSurface(rel);
       for (const tok of [
         "UNLESS the request names the stages to skip or add, or the plan to switch to,",
         '(see "Named stage changes are done at once" and "A named plan is switched at once" below)',
@@ -354,11 +364,13 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     // come first.
     const missing: string[] = [];
     for (const rel of skills) {
-      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      const body = readConductorSurface(rel);
       const step = body.split("\n").find((line) => line.trimStart().startsWith("1. directive = the JSON printed by running"));
-      if (!step?.includes("`--help` goes here too, like every other argument: `{{INVOKE}} --help` is the command-line tool's own help")) {
-        missing.push(rel);
-      }
+      // Claude Code's and Codex's step 1 takes no argument at all: what they typed, `--help` included, the engine reads.
+      const help = ENTRY_SKILLS.includes(rel)
+        ? "whatever they typed: `{{INVOKE}} --help` is the command-line tool's own help"
+        : "`--help` goes here too, like every other argument: `{{INVOKE}} --help` is the command-line tool's own help";
+      if (!step?.includes(help)) missing.push(rel);
       if (body.includes("Every invocation starts here")) missing.push(`${rel}  still overrides the steps before the loop`);
     }
     expect(missing).toEqual([]);
@@ -366,8 +378,9 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
 
   // Kiro IDE's agent quoted "/aidlc classic: ..." whole as one argument, so the
   // person was asked which plan to use after naming it. Every SKILL that passes
-  // the request on verbatim has the agent give a named plan its own argument;
-  // Codex already forwards the words as separate arguments.
+  // the request on verbatim has the agent give a named plan its own argument.
+  // On Claude Code and Codex the first command carries none of their words, so
+  // the engine reads the plan they named from their typed line.
   test("every shipped conductor SKILL gives a plan the person named its own argument", () => {
     const passOn = "Pass `$ARGUMENTS` through to the first `next` verbatim - the engine parses flags";
     const named = "The one thing you read first is whether the request opens with the name of a plan, as in " +
@@ -375,13 +388,35 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       "which you quote as usual (`next classic 'Build a notes app'`), so the person is not asked for the plan they already named; " +
       "when the opening word is part of what they want built (`/aidlc classic car rental website`), it stays in the request.";
     const missing = skills.flatMap((rel) => {
-      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
-      if (!body.includes(passOn)) {
-        return body.includes("as separate arguments, never re-quoted into one string") ? [] : [`${rel}: no pass-on rule`];
-      }
+      const body = readConductorSurface(rel);
+      if (ENTRY_SKILLS.includes(rel)) return body.includes(FIRST_COMMAND_CARRIES_NONE) ? [] : [`${rel}: no first-command rule`];
+      if (!body.includes(passOn)) return [`${rel}: no pass-on rule`];
       return body.includes(named) ? [] : [rel];
     });
     expect(missing).toEqual([]);
+  });
+
+  // AI-DLC's first command no longer carries the person's words: the engine
+  // reads their typed line from its own record. Only step 1 and the sentence
+  // that says what it carries name the flag, which is never offered to the
+  // person (the description and the argument hint list what they type).
+  test("the Claude and Codex skills' first command carries none of the person's words", () => {
+    for (const rel of ENTRY_SKILLS) {
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      const lines = body.split("\n");
+      const step = lines.find((line) => line.trimStart().startsWith("1. directive = the JSON printed by running"));
+      expect(step, rel).toContain("running `{{INVOKE}} engine orchestrate next --entry` bare (no shell capture, no pipe), whatever they typed:");
+      expect(body, rel).toContain(FIRST_COMMAND_CARRIES_NONE);
+      // One command with no exception: no sentence sends anything of theirs after `next`.
+      expect(body, rel).not.toContain("goes after `next`");
+      expect(body, rel).not.toContain("in place of `--entry`");
+      expect(body, rel).not.toContain("$ARGUMENTS");
+      expect(body, rel).not.toContain("as separate arguments, never re-quoted into one string");
+      expect(lines.filter((line) => line.includes("--entry")), rel).toEqual([step as string, lines.find((line) => line.includes(FIRST_COMMAND_CARRIES_NONE)) as string]);
+    }
+    for (const rel of skills.filter((r) => !ENTRY_SKILLS.includes(r))) {
+      expect(readConductorSurface(rel), rel).not.toContain("--entry");
+    }
   });
 
   // Claude Code shows the stop note to the person ("Stop hook feedback", or
@@ -395,7 +430,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     const waiting = "If you had just asked the person a question in your own words and are waiting for their answer, record it with " +
       "`{{INVOKE}} engine log decision --stage <stage> --decision '<the question>' --options '<the choices>'`";
     const missing = skills.flatMap((rel) => {
-      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      const body = readConductorSurface(rel);
       return [
         ...(body.includes(clause) ? [] : [`${rel}: clause`]),
         ...(body.includes(forYou) ? [] : [`${rel}: for you`]),
@@ -416,7 +451,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     const problems: string[] = [];
     const silent = "and end your turn without asking it again or saying anything else.";
     for (const rel of skills) {
-      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      const body = readConductorSurface(rel);
       if (body.includes("first say the carrying-on line to them once")) problems.push(`${rel}: must not say the line`);
       if (!body.includes(silent)) problems.push(`${rel}: question step says nothing`);
     }
@@ -432,7 +467,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       "Utilities, each an argument to `{{INVOKE}} engine orchestrate next` and never a command of its own: --status, --doctor, --config [section],";
     const missing: string[] = [];
     for (const rel of skills) {
-      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      const body = readConductorSurface(rel);
       const frontmatter = body.slice(0, body.indexOf("\n---", 4)).replace(/\s+/g, " ");
       if (!frontmatter.includes(lead)) missing.push(`${rel}  utility list does not say where the utilities go`);
       if (/\{\{INVOKE\}\} --config\b/.test(body)) missing.push(`${rel}  names --config as a command of its own`);
@@ -477,7 +512,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     // The onboarding every chat loads is the one place for the checks (#1330):
     // a plain chat turn has only it, and the skill no longer repeats it.
     for (const rel of skills) {
-      if (readFileSync(join(REPO_ROOT, rel), "utf-8").includes("**The person's checks, off or on when they ask.**")) {
+      if (readConductorSurface(rel).includes("**The person's checks, off or on when they ask.**")) {
         problems.push(`${rel}  repeats the onboarding's checks`);
       }
     }
@@ -497,16 +532,16 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       if (!onboarding.includes(tok)) problems.push(`core/templates/onboarding-harness.md  missing: ${tok}`);
     }
     for (const rel of prose) {
-      if (readFileSync(join(REPO_ROOT, rel), "utf-8").includes(WIDEN_SAY)) {
+      if (readConductorSurface(rel).includes(WIDEN_SAY)) {
         problems.push(`${rel}  still carries: ${WIDEN_SAY}`);
       }
     }
     if (table(onboarding) === "") problems.push("core/templates/onboarding-harness.md  has no check table");
     for (const rel of skills) {
-      if (table(readFileSync(join(REPO_ROOT, rel), "utf-8")) !== "") problems.push(`${rel}  repeats the check table`);
+      if (table(readConductorSurface(rel)) !== "") problems.push(`${rel}  repeats the check table`);
     }
     for (const rel of prose) {
-      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      const body = readConductorSurface(rel);
       for (const stale of [
         "never the agent's",
         "command for them to type",
@@ -525,7 +560,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       "docs/reference/06-hooks-and-tools.md",
       "docs/reference/12-state-machine.md",
     ]) {
-      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      const body = readConductorSurface(rel);
       for (const stale of [
         "have the person type the switch",
         "a person must type the exact policy switch",
@@ -544,7 +579,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
   test("every shipped conductor SKILL relays engine-authored narration", () => {
     const missing: string[] = [];
     for (const rel of skills) {
-      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      const body = readConductorSurface(rel);
       for (const tok of NARRATION_TOKENS) {
         if (!body.includes(tok)) missing.push(`${rel}  missing: ${tok}`);
       }
@@ -557,7 +592,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
   test("every shipped conductor SKILL says a print's and a run-stage's narration first", () => {
     const missing: string[] = [];
     for (const rel of skills) {
-      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      const body = readConductorSurface(rel);
       for (const tok of [
         "| `print` | When the directive carries `narration`, say it first.",
         "Say the step's line for the person first, in the same message as your first reads",
@@ -577,7 +612,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     const speech = 'So a message never starts with "SAY:", never puts the sentence in quotation marks, and never ' +
       "names a field, a directive, a protocol, or a fence.";
     const missing = skills.flatMap((rel) => {
-      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      const body = readConductorSurface(rel);
       return [
         ...(body.includes(notice) ? [] : [`${rel}: change_notices`]),
         ...(body.includes(speech) ? [] : [`${rel}: speaking`]),
@@ -596,7 +631,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       'run: "Let me get started on [the user\'s request, in their own words]."';
     const named = ["run-then-continue", "**terminal**", "directive is transport, not stage work", '**SAY:** "Let me get started'];
     const missing = skills.flatMap((rel) => {
-      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      const body = readConductorSurface(rel);
       return [
         ...named.filter((words) => body.includes(words)).map((words) => `${rel}: still says ${words}`),
         ...(body.includes(firstTurn) ? [] : [`${rel}: the first turn's line`]),
@@ -612,7 +647,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
   // in the row would end the turn there with the jump not made.
   test("the print row adds no stop of its own", () => {
     const stopping = skills.filter((rel) => {
-      const row = readFileSync(join(REPO_ROOT, rel), "utf-8").split("\n").find((line) => line.startsWith("| `print` |"));
+      const row = readConductorSurface(rel).split("\n").find((line) => line.startsWith("| `print` |"));
       return row === undefined || /\bstop/i.test(row);
     });
     expect(stopping).toEqual([]);
@@ -624,7 +659,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     // line numbers, which move as each SKILL gains harness-specific prose.
     const blocks = new Map<string, string[]>();
     for (const rel of skills) {
-      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      const body = readConductorSurface(rel);
       const start = body.indexOf("**Saying what is happening");
       const end = body.indexOf("**Isolated stage-runner branch.**");
       expect(start, `${rel} lacks the narration rule`).toBeGreaterThan(-1);
@@ -649,7 +684,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     const failures: string[] = [];
     for (const harness of HARNESS_MATRIX) {
       const rel = `harness/${harness.name}/skills/aidlc/SKILL.md`;
-      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      const body = readConductorSurface(rel);
       for (const token of [
         "Only the person parks: never park on your own to hand them a decision",
         "Carry on with the next stage, or ask your question and wait for their answer in this conversation.",
@@ -674,7 +709,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     }
     for (const harness of HARNESS_MATRIX) {
       const rel = `harness/${harness.name}/skills/aidlc/SKILL.md`;
-      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      const body = readConductorSurface(rel);
       for (const stale of [
         "**run-then-stop**",
         "STOP and hand off to a fresh session",
@@ -699,7 +734,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     const missing = skills.flatMap((rel) => {
       // The plan offer's rules live in the composer.md beside SKILL.md.
       const body = [rel, rel.replace(/SKILL\.md$/, "composer.md")]
-        .map((file) => readFileSync(join(REPO_ROOT, file), "utf-8"))
+        .map((file) => readConductorSurface(file))
         .join("\n");
       return [
         ...(body.includes(short) ? [] : [`${rel}: short offer`]),
@@ -749,7 +784,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
   test("every shipped conductor SKILL asks the learnings question only after a correction, with its three options", () => {
     const missing: string[] = [];
     for (const rel of skills) {
-      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      const body = readConductorSurface(rel);
       for (const tok of LEARNINGS_QUESTION_TOKENS) {
         if (!body.includes(tok)) missing.push(`${rel}  missing: ${tok}`);
       }
@@ -760,7 +795,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
   test("every shipped conductor SKILL lets the person drive: read the reply, record their choice, never ask them to repeat", () => {
     const missing: string[] = [];
     for (const rel of skills) {
-      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      const body = readConductorSurface(rel);
       for (const token of [
         "## The Person Drives",
         "Never make them repeat themselves, retype an option, or confirm what they already said.",
@@ -785,7 +820,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
   test("no shipped conductor SKILL or the stage protocol tells the agent a rule in team memory wins over the person", () => {
     const found: string[] = [];
     for (const rel of [...skills, "core/aidlc-common/protocols/stage-protocol.md"]) {
-      const body = readFileSync(join(REPO_ROOT, rel), "utf-8").replace(/\s+/g, " ");
+      const body = readConductorSurface(rel).replace(/\s+/g, " ");
       if (body.includes("A rule the team recorded in memory")) found.push(rel);
     }
     expect(found).toEqual([]);
@@ -799,7 +834,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
   test("every shipped conductor SKILL and the protocol record a review the person asks for through AI-DLC", () => {
     const missing: string[] = [];
     for (const rel of [...skills, "core/aidlc-common/protocols/stage-protocol.md"]) {
-      const body = readFileSync(join(REPO_ROOT, rel), "utf-8").replace(/\s+/g, " ");
+      const body = readConductorSurface(rel).replace(/\s+/g, " ");
       for (const token of [
         "When they ask for a review of a stage or of a Unit",
         "record it through AI-DLC the first time they ask, under every Guard Policy",
@@ -822,7 +857,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
   test("every shipped conductor SKILL names the setters for a change to how Construction runs", () => {
     const missing: string[] = [];
     for (const rel of skills) {
-      const body = readFileSync(join(REPO_ROOT, rel), "utf-8").replace(/\s+/g, " ");
+      const body = readConductorSurface(rel).replace(/\s+/g, " ");
       for (const token of [
         "A change to how Construction runs is its setter:",
         "`{{INVOKE}} engine state set-construction-iteration <unit-major|stage-major>`",
@@ -843,7 +878,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
   test("every shipped conductor SKILL and the protocol keep the gate open for a request with no approval in it", () => {
     const missing: string[] = [];
     for (const rel of [...skills, "core/aidlc-common/protocols/stage-protocol.md"]) {
-      const body = readFileSync(join(REPO_ROOT, rel), "utf-8").replace(/\s+/g, " ");
+      const body = readConductorSurface(rel).replace(/\s+/g, " ");
       if (!/no approval in it[^.]*is not the gate's answer/i.test(body) || !body.includes("keep the gate open for their answer")) {
         missing.push(`${rel}  missing: a request with no approval in it is not the gate's answer`);
       }
@@ -857,7 +892,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
   test("every shipped conductor SKILL and the protocol correct a Plan Approval misread with the choice they meant", () => {
     const missing: string[] = [];
     for (const rel of [...skills, "core/aidlc-common/protocols/stage-protocol.md"]) {
-      const body = readFileSync(join(REPO_ROOT, rel), "utf-8").replace(/\s+/g, " ");
+      const body = readConductorSurface(rel).replace(/\s+/g, " ");
       if (!/at Plan Approval, record the choice they meant: Approve Plan corrects a Request Changes you recorded, and after a wrong approval, "Review the plan" brings the question back\./i.test(body)) {
         missing.push(`${rel}  missing: a misread Request Changes is corrected with Approve Plan`);
       }
@@ -875,13 +910,13 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     // The protocol keeps the rule; the skills point at the step's reading instruction, whose list the engine
     // already ordered (the step carries the lead's persona; the list is the lead's knowledge).
     for (const rel of ["core/aidlc-common/protocols/stage-protocol.md"]) {
-      const body = readFileSync(join(REPO_ROOT, rel), "utf-8").replace(/\s+/g, " ");
+      const body = readConductorSurface(rel).replace(/\s+/g, " ");
       if (!/On `mob`, the roster holds the lead's knowledge only, because supports are dispatched: read all of it\./.test(body)) {
         missing.push(`${rel}  missing: a mob's lead reads all of its knowledge`);
       }
     }
     for (const rel of skills) {
-      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      const body = readConductorSurface(rel);
       if (!body.includes("do what the step's reading instruction says: one file at a time, waiting for every result")) {
         missing.push(`${rel}  missing: the step's reading instruction, one file at a time`);
       }
@@ -952,7 +987,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       expect(said, "the setter ran against a state file").not.toContain("State file not found");
       const takesMessage = !/requires exactly one value/.test(said);
       const named = "set-construction-execution <serial|swarm>`, each with `--message <id>`";
-      const wrong = skills.filter((rel) => readFileSync(join(REPO_ROOT, rel), "utf-8").includes(named) !== takesMessage);
+      const wrong = skills.filter((rel) => readConductorSurface(rel).includes(named) !== takesMessage);
       expect(wrong, `the setter ${takesMessage ? "takes" : "refuses"} --message`).toEqual([]);
     } finally {
       cleanupTestProject(proj);
@@ -962,7 +997,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
   test("no protocol or SKILL says Plan Approval keeps the person's words as what to change", () => {
     const found: string[] = [];
     for (const rel of [...skills, "core/aidlc-common/protocols/stage-protocol.md"]) {
-      const body = readFileSync(join(REPO_ROOT, rel), "utf-8").replace(/\s+/g, " ");
+      const body = readConductorSurface(rel).replace(/\s+/g, " ");
       if (/Plan Approval\), pass only the choice/.test(body)) found.push(rel);
     }
     expect(found).toEqual([]);
@@ -1006,7 +1041,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     for (const rel of skills) {
       // The composer gate's setters live in the composer.md beside SKILL.md.
       const body = [rel, rel.replace(/SKILL\.md$/, "composer.md")]
-        .map((file) => readFileSync(join(REPO_ROOT, file), "utf-8"))
+        .map((file) => readConductorSurface(file))
         .join("\n");
       for (const setter of [
         "run `{{INVOKE}} engine config set guard-policy <value> --message <id>` yourself",
@@ -1024,7 +1059,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
   test("every shipped conductor SKILL and the protocol single-quote the person's words on a command line", () => {
     const missing: string[] = [];
     for (const rel of [...skills, "core/aidlc-common/protocols/stage-protocol.md"]) {
-      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      const body = readConductorSurface(rel);
       if (!/put them in single\s+quotes, never double quotes/.test(body)) missing.push(`${rel}  missing the quoting rule`);
       if (!body.includes("'\\''")) missing.push(`${rel}  missing the '\\'' escape`);
       // Copilot's terminal can be cmd.exe, and opencode's shell on Windows is cmd.exe unless its settings name
@@ -1045,7 +1080,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
   test("every shipped conductor SKILL carries the ensemble execution contract", () => {
     const missing: string[] = [];
     for (const rel of skills) {
-      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      const body = readConductorSurface(rel);
       for (const tok of ENSEMBLE_TOKENS) {
         if (!body.includes(tok)) missing.push(`${rel}  missing: ${tok}`);
       }
@@ -1085,7 +1120,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
         "the design review\"), never a field, a directive, a step's id, or a word from this skill.",
     );
     for (const rel of skills.filter((r) => r !== "harness/claude/skills/aidlc/SKILL.md")) {
-      expect(readFileSync(join(REPO_ROOT, rel), "utf-8"), rel).not.toContain("**Tool-call titles");
+      expect(readConductorSurface(rel), rel).not.toContain("**Tool-call titles");
     }
   });
 
@@ -1096,7 +1131,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     );
     expect(canonical.length).toBeGreaterThan(0);
     for (const rel of skills.map((skill) => skill.replace(/SKILL\.md$/, "tables.md"))) {
-      expect(stageTableRows(readFileSync(join(REPO_ROOT, rel), "utf-8")), rel)
+      expect(stageTableRows(readConductorSurface(rel)), rel)
         .toEqual(canonical);
     }
   });
@@ -1105,7 +1140,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     const missing: string[] = [];
     for (const harness of ["kiro", "kiro-ide"]) {
       const rel = `harness/${harness}/skills/aidlc/SKILL.md`;
-      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      const body = readConductorSurface(rel);
       if (!body.includes(KIRO_TASK_LIST_TOKEN)) {
         missing.push(`${rel}  missing: ${KIRO_TASK_LIST_TOKEN}`);
       }
@@ -1117,7 +1152,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     const missing: string[] = [];
     for (const harness of ["kiro", "kiro-ide"]) {
       const rel = `harness/${harness}/skills/aidlc/SKILL.md`;
-      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      const body = readConductorSurface(rel);
       if (!body.includes(KIRO_SUBAGENT_TOKEN)) {
         missing.push(`${rel}  missing: ${KIRO_SUBAGENT_TOKEN}`);
       }
@@ -1138,7 +1173,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     const bodies = new Map<string, string>();
     for (const harness of ["kiro", "kiro-ide"]) {
       const rel = `harness/${harness}/skills/aidlc/SKILL.md`;
-      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      const body = readConductorSurface(rel);
       bodies.set(harness, body);
       for (const token of KIRO_DIARY_TOKENS) {
         if (!body.includes(token)) failures.push(`${rel}  missing: ${token}`);
@@ -1179,7 +1214,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       ["harness/kiro/skills/aidlc", "core/aidlc-common/protocols"],
       ["dist/kiro/.kiro/skills/aidlc", "dist/kiro/.kiro/aidlc-common/protocols"],
     ]) {
-      const read = (rel: string) => readFileSync(join(REPO_ROOT, rel), "utf-8");
+      const read = (rel: string) => readConductorSurface(rel);
       const protocol = read(`${protocolRoot}/stage-protocol.md`);
       expect(protocol).toContain("Kiro CLI `resources`");
       expect(protocol).toContain("through that preload instead of pasting it");
@@ -1213,7 +1248,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     const citation = '`stage-protocol.md` § "For subagent stages" step 2';
     const stalePaste =
       /\bpastes? the (?:accumulated|complete) (?:rule|steering) bundle\b|\b(?:complete|accumulated) (?:rule|steering) bundle verbatim\b|rules as the accumulated `?(?:load-)?steering`? bundle|verbatim paste otherwise|and the accumulated steering bundle\)|paths-only briefs/i;
-    const read = (path: string) => readFileSync(path, "utf-8");
+    const read = (path: string) => readConductorSurface(path);
     const section = (path: string, start: string, end: string) => {
       const body = read(path);
       const from = body.indexOf(start);
@@ -1300,7 +1335,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
   test("every conductor stops for summary confirmation before artifact work", () => {
     const missing: string[] = [];
     for (const rel of skills) {
-      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      const body = readConductorSurface(rel);
       for (const token of SUMMARY_STOP_SKILL_TOKENS) {
         if (!body.includes(token)) {
           missing.push(`${rel}  missing: ${token}`);
@@ -1314,7 +1349,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     const missing: string[] = [];
     for (const harness of HARNESS_MATRIX) {
       const rel = `harness/${harness.name}/skills/aidlc/SKILL.md`;
-      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      const body = readConductorSurface(rel);
       if (harness.name === "codex") {
         const token =
           "native **None of the above** escape or the numbered-prose **Other** escape with no words of their own";
@@ -1352,7 +1387,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
   // The own-words tip names the free-text row as the person's tool shows it:
   // Claude Code's picker calls it "Type something", never "Other".
   test("the own-words tip names the escape row in each tool's own words", () => {
-    const read = (rel: string) => readFileSync(join(REPO_ROOT, rel), "utf-8");
+    const read = (rel: string) => readConductorSurface(rel);
     const protocol = read("core/aidlc-common/protocols/stage-protocol.md");
     expect(protocol).not.toContain("Select 'Other' on any question");
     expect(protocol).toContain(`"Pick "[the escape's label]" on any question to answer in your own words or talk it through."`);
@@ -1367,7 +1402,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
   test("every question renderer pins the mandatory summary checkpoint", () => {
     const missing: string[] = [];
     for (const rel of harnessQuestionAnnexes()) {
-      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      const body = readConductorSurface(rel);
       for (const token of SUMMARY_STOP_ANNEX_TOKENS) {
         if (!body.includes(token)) {
           missing.push(`${rel}  missing: ${token}`);
@@ -1382,7 +1417,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     // work they never chose, and "not now" is lost.
     const missing: string[] = [];
     for (const rel of skills) {
-      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      const body = readConductorSurface(rel);
       if (!body.includes("even one that lists a single piece of work is asked and waited for")) missing.push(rel);
     }
     expect(missing).toEqual([]);
@@ -1397,7 +1432,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
         "message, as the question-rendering annex shows; never only in a tool's output or a file.",
     );
     const missing = harnessQuestionAnnexes().filter((rel) => {
-      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      const body = readConductorSurface(rel);
       const checkpoint = body.slice(body.indexOf("## Mandatory consolidated-summary checkpoint"));
       return !checkpoint.includes("- <each answer, as a summary bullet>");
     });
@@ -1409,7 +1444,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     for (const harness of ["kiro", "kiro-ide"]) {
       const skillRel = `harness/${harness}/skills/aidlc/SKILL.md`;
       const annexRel = `harness/${harness}/skills/aidlc/question-rendering.md`;
-      const skill = readFileSync(join(REPO_ROOT, skillRel), "utf-8");
+      const skill = readConductorSurface(skillRel);
       const annex = readFileSync(join(REPO_ROOT, annexRel), "utf-8");
       // The question arrives rendered (numbers, Other and the reply hint are the
       // step's); the row and the annex say to show it as given and act on a pick.
@@ -1455,7 +1490,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     const sentences = new Map<string, string[]>();
     const paragraphs = new Map<string, string[]>();
     for (const rel of skills) {
-      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      const body = readConductorSurface(rel);
       const askRow = body
         .split("\n")
         .find((line) => line.startsWith("| `ask` |"));
@@ -1493,7 +1528,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     const rows = new Map<string, string[]>();
     const stopRules = new Map<string, string[]>();
     for (const rel of skills) {
-      const lines = readFileSync(join(REPO_ROOT, rel), "utf-8").split("\n");
+      const lines = readConductorSurface(rel).split("\n");
       const row = lines.find((line) => line.startsWith("| `done` |"));
       const stopRule = lines.find((line) => line.startsWith("  3. Before any further `next` or `report`:"));
       expect(row, `${rel} lacks the done row`).toBeDefined();
@@ -1528,7 +1563,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     // "Approve, but let's stop there for today" approves the gate, then the
     // engine parks: the conductor must not tell the person nothing was done.
     for (const rel of skills) {
-      const row = readFileSync(join(REPO_ROOT, rel), "utf-8").split("\n").find((line) => line.startsWith("| `parked` |"));
+      const row = readConductorSurface(rel).split("\n").find((line) => line.startsWith("| `parked` |"));
       expect(row, `${rel} lacks the parked row`).toBeDefined();
       expect(row, rel).toContain("a `report` that answers `parked` recorded the person's answer first");
       expect(row, rel).not.toContain("No stage was advanced and nothing was marked complete.");
@@ -1543,7 +1578,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     // and commands.
     const failures: string[] = [];
     const askRowOf = (rel: string): string =>
-      readFileSync(join(REPO_ROOT, rel), "utf-8")
+      readConductorSurface(rel)
         .split("\n")
         .find((line) => line.startsWith("| `ask` |")) ?? "";
     for (const rel of skills) {
@@ -1584,7 +1619,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
   // stay exactly as given even when the rest of the question is translated.
   test("every conductor keeps the Plan Approval choice labels exactly as given", () => {
     for (const rel of skills) {
-      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      const body = readConductorSurface(rel);
       expect(body, rel).toContain(
         "keep their labels exactly as given, in any language: the person's pick is matched on them",
       );
@@ -1597,7 +1632,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
   // is the whole account, then and later.
   test("every conductor says a change line once and never retells it later", () => {
     for (const rel of skills) {
-      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      const body = readConductorSurface(rel);
       expect(body, rel).toContain(
         "Never add a second account of the change, then or later: no summary, recap, gate message or closing line of yours tells it again in other words or adds that an approval still stands.",
       );
@@ -1607,7 +1642,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
 
   test("every conductor quotes AI-DLC's instructions only when asked and still names the work's own files", () => {
     for (const rel of skills) {
-      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      const body = readConductorSurface(rel);
       expect(body, rel).toContain(
         "any other AI-DLC instruction file to them on your own; when they ask about one, answer them. The work's own files, such as a plan to approve, and a file AI-DLC asks the person to change, such as where a setting is locked, are still named by path.",
       );
@@ -1618,7 +1653,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
   test("every conductor distinguishes recovery work from separate human feedback", () => {
     const missing: string[] = [];
     for (const rel of skills) {
-      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      const body = readConductorSurface(rel);
       for (const token of [
         "branch on its `interaction`",
         "`command`: execute the exact returned `command`",
@@ -1645,7 +1680,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     // Each of these stops used to leave the person with no next step.
     const missing: string[] = [];
     for (const rel of skills) {
-      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      const body = readConductorSurface(rel);
       // Each names the doctor the way that harness's entry is typed.
       const entry = rel.includes("/codex/") ? "$aidlc" : "/aidlc";
       for (const token of [
@@ -1666,7 +1701,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       const skillRel = `harness/${harness}/skills/aidlc/SKILL.md`;
       const annexRel =
         `harness/${harness}/skills/aidlc/question-rendering.md`;
-      const skill = readFileSync(join(REPO_ROOT, skillRel), "utf-8");
+      const skill = readConductorSurface(skillRel);
       const annex = readFileSync(join(REPO_ROOT, annexRel), "utf-8");
       if (!skill.includes("per `question-rendering.md`")) {
         missing.push(`${skillRel}  does not send questions to the annex`);
@@ -1698,7 +1733,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       "opencode",
     ]) {
       const rel = `harness/${harness}/skills/aidlc/question-rendering.md`;
-      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      const body = readConductorSurface(rel);
       if (!body.includes("start every question at `1`")) {
         missing.push(`${rel}  missing fresh numbering`);
       }
@@ -1731,7 +1766,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       "docs/reference/04-stage-protocol.md",
     ];
     for (const rel of files) {
-      const text = readFileSync(join(REPO_ROOT, rel), "utf-8").replace(/\s+/g, " ");
+      const text = readConductorSurface(rel).replace(/\s+/g, " ");
       for (const old of [
         'On Request changes, ask **"What should change?"**',
         'If the user requests changes, ask **"What should change?"**',
@@ -1751,14 +1786,14 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       }
     }
     for (const rel of harnessQuestionAnnexes()) {
-      const text = readFileSync(join(REPO_ROOT, rel), "utf-8").replace(/\s+/g, " ");
+      const text = readConductorSurface(rel).replace(/\s+/g, " ");
       if (!text.includes("already says what should change, those words are the feedback")) {
         stale.push(`${rel}  missing: a change request that says what to change is the feedback`);
       }
     }
     // A guard-recovery ask is not put to a person who already asked for changes.
     for (const rel of harnessSkills()) {
-      const text = readFileSync(join(REPO_ROOT, rel), "utf-8").replace(/\s+/g, " ");
+      const text = readConductorSurface(rel).replace(/\s+/g, " ");
       if (!text.includes("that is their choice of the `request-changes` remedy: follow it with their words instead of presenting the ask")) {
         stale.push(`${rel}  missing: a change request already made selects the request-changes remedy`);
       }
@@ -1841,7 +1876,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     ];
     const stale: string[] = [];
     for (const rel of surfaces) {
-      const text = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      const text = readConductorSurface(rel);
       for (const old of [
         /prompt-rendered resume menu/i,
         /Resume \/ Redo \/\s*Jump \/ Start Fresh/i,
@@ -1884,7 +1919,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     // The conductor reads redo, jump, or start fresh from the person's words and
     // passes the choice; the engine never classifies their words.
     const typed = "report --result resumed --choice <redo|jump|fresh>` with the choice you read from their words";
-    const missing = skills.filter((rel) => !readFileSync(join(REPO_ROOT, rel), "utf-8").includes(typed));
+    const missing = skills.filter((rel) => !readConductorSurface(rel).includes(typed));
     expect(missing).toEqual([]);
     const recovery = readFileSync(
       join(REPO_ROOT, "core/aidlc-common/protocols/stage-protocol-recovery.md"),
@@ -1906,7 +1941,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       "harness/opencode/skills/aidlc/SKILL.md",
       "dist/opencode/.aidlc/skills/aidlc/SKILL.md",
     ]) {
-      const text = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      const text = readConductorSurface(rel);
       const start = text.indexOf("**Bare session re-entry on opencode.**");
       expect(start, rel).toBeGreaterThan(-1);
       const rule = text.slice(start, text.indexOf("\n\n", start)).replace(/\s+/g, " ");
@@ -1921,7 +1956,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     // The SAY line invites these requests at a gate too, so every place that
     // reads a gate reply gives them precedence over Request Changes.
     const gateToo = "start fresh (at an approval gate too, where it is that request and not the gate's answer), call `report --result resumed";
-    const missing = skills.filter((rel) => !readFileSync(join(REPO_ROOT, rel), "utf-8").includes(gateToo));
+    const missing = skills.filter((rel) => !readConductorSurface(rel).includes(gateToo));
     expect(missing).toEqual([]);
     const protocol = (name: string) =>
       readFileSync(join(REPO_ROOT, "core/aidlc-common/protocols", name), "utf-8").replace(/\s+/g, " ");
@@ -1941,7 +1976,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
   test("every shipped conductor SKILL and the protocol send shell-unsafe answer text through a file", () => {
     const missing: string[] = [];
     for (const rel of [...skills, "core/aidlc-common/protocols/stage-protocol.md"]) {
-      const body = readFileSync(join(REPO_ROOT, rel), "utf-8").replace(/\s+/g, " ");
+      const body = readConductorSurface(rel).replace(/\s+/g, " ");
       for (const token of [
         "goes in a file instead, so no shell reads it at all",
         "`<record>/.aidlc-engine/answer-text/answer.txt` and pass `--details-file .aidlc-engine/answer-text/answer.txt`",

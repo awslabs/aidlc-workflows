@@ -32,7 +32,7 @@ On every topology, a reviewer NOT-READY (stage-protocol-reviewer.md §12a step 3
 
 When a subagent completes its work, it MUST return a structured summary to the orchestrator. This ensures no context is lost between subagent execution and orchestrator continuation.
 
-If the dispatch returns before that summary exists (a harness that runs agents in the background), do not write a shell loop or a sleep. Run `{{INVOKE}} engine orchestrate wait --stage <directive.stage> --for collaborators` after dispatching support agents, or `--for artifacts` after dispatching the lead (add `--unit <directive.unit>` on a per-unit stage), and re-run that same command while it answers `status: waiting`. It returns within its bound and lists exactly what is still missing.
+If the dispatch returns before that summary exists (a harness that runs agents in the background), do not write a shell loop or a sleep. Run `{{INVOKE}} engine orchestrate wait --stage <directive.stage> --for collaborators` after dispatching support agents, or `--for artifacts` after dispatching the lead (add `--unit <directive.unit>` on a per-unit stage, and `--agent-id` where your harness binding below says so), and re-run that same command while it answers `status: waiting`. It returns within its bound and lists exactly what is still missing.
 
 ### Required return format:
 ```markdown
@@ -85,6 +85,10 @@ If a Task tool call fails (timeout, error, or returns truncated/incomplete outpu
 ## Harness topology bindings
 
 ### Claude Code
+
+**Waiting for a lead in the background:** when Claude Code's answer to the `Task` that just started the lead gives its `agentId`, add `--agent-id <that agentId>` to the §11 `--for artifacts` wait. It settles once that helper's finish is recorded, before the outputs the stage has you write after it. While it answers `waiting`, keep running it in the same turn rather than ending the turn for Claude Code's notice, unless that notice says the helper finished or stopped: a chat left idle past its prompt cache's lifetime (five minutes by default with API or cloud billing) loses that cache, and the next step then writes the whole conversation to it again. A helper you continued by sending it a message keeps its earlier finish on record, so for that work wait for Claude Code's notice instead of passing its id.
+
+**Waiting for other helpers in the background:** for a pipeline link Claude Code started in the background, add `--agent-id <that link's agentId>` to the `--for artifacts` wait; for support agents it started in the background, run the §11 `--for collaborators` wait. Run it at once and keep running it in the same turn while it answers `waiting`, as for the lead, rather than ending the turn for Claude Code's notices.
 
 **Pipeline receipt rule:** after every pipeline `Task` return, run that link's command from `directive.pipeline.record` before the next dispatch, and resume from `directive.pipeline.completed`.
 

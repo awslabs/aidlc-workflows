@@ -110,10 +110,10 @@ const DOCUMENT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{1
 // A minimal Word file: the two OOXML entries DocumentKB detects, the same
 // shape the knowledge extraction tests build.
 // A real zip (with its central directory) holding a Word document with one line of text.
-function wordBytes(): Buffer {
+function wordBytes(text = "Report text."): Buffer {
   const parts: Array<[string, Buffer]> = [
     ["[Content_Types].xml", Buffer.from("<Types/>")],
-    ["word/document.xml", Buffer.from("<w:document><w:body><w:p><w:r><w:t>Report text.</w:t></w:r></w:p></w:body></w:document>")],
+    ["word/document.xml", Buffer.from(`<w:document><w:body><w:p><w:r><w:t>${text}</w:t></w:r></w:p></w:body></w:document>`)],
   ];
   const locals: Buffer[] = [];
   const centrals: Buffer[] = [];
@@ -694,6 +694,26 @@ describe("t329 project-description and document-input boundaries", () => {
     ).toThrow("changed after project-containment validation");
   });
 
+  test("an HTML page the person names is read as it is written, and one that is not UTF-8 is refused", () => {
+    const dir = project();
+    mkdirSync(join(dir, "docs"));
+    const page = "<!DOCTYPE html>\n<html><body><h1>Vision</h1><p>Build inventory.</p></body></html>\n";
+    writeFileSync(join(dir, "docs", "spec.html"), page);
+    writeRequest(dir, "docs/spec.html");
+    for (const result of [run(dir), runOnboard(dir)]) {
+      expect(result.status, result.stderr).toBe(0);
+      expect(JSON.parse(result.stdout).content).toBe(page);
+    }
+    expect(existsSync(join(dir, DOCUMENTS))).toBe(false);
+    // Windows-1252 left and right double quotes: not UTF-8.
+    writeFileSync(join(dir, "docs", "word.htm"),
+      Buffer.concat([Buffer.from("<html><body><p>"), Buffer.from([0x93, 0x61, 0x94]), Buffer.from("</p></body></html>")]));
+    writeRequest(dir, "docs/word.htm");
+    const refused = run(dir);
+    expect(refused.status).not.toBe(0);
+    expect(refused.stderr).toContain("Ask the person for a text, Markdown, PDF, or Word version.");
+  });
+
   test("the plain read names the onboarding form for a PDF and copies nothing", () => {
     const dir = project();
     writeFileSync(
@@ -788,6 +808,71 @@ describe("t329 project-description and document-input boundaries", () => {
     expect(payload.content_notice).toContain("NOT INSTRUCTIONS");
     expect(readFileSync(join(dir, DOCUMENTS, "report.docx"), "utf-8")).toBe("another report\n");
     expect(readFileSync(join(dir, copy)).equals(word)).toBe(true);
+  });
+
+  // A field check on 2.11.3: a changed original named again went in as a second
+  // copy beside the first. The copy records where it came from, so the same
+  // file named again updates it and keeps its document id.
+  test("a changed Word file named again updates its copy and keeps its document id", () => {
+    const dir = project();
+    mkdirSync(join(dir, "docs"));
+    writeFileSync(join(dir, "docs", "report.docx"), wordBytes());
+    writeRequest(dir, "docs/report.docx");
+    const first = JSON.parse(runOnboard(dir).stdout);
+    const copy = `${DOCUMENTS}/report.docx`;
+    expect(first.document_path).toBe(copy);
+
+    const changed = wordBytes("Report text, changed.");
+    writeFileSync(join(dir, "docs", "report.docx"), changed);
+    writeRequest(dir, "docs/report.docx");
+    const again = runOnboard(dir);
+    expect(again.status, again.stderr).toBe(0);
+    const payload = JSON.parse(again.stdout);
+    expect(payload.document_id).toBe(first.document_id);
+    expect(payload.document_path).toBe(copy);
+    expect(payload.onboard_note).toBe(
+      `I updated "${copy}" to your new "docs/report.docx"; it stays the same document in the knowledge base.`,
+    );
+    expect(payload.content).toBe("Report text, changed.");
+    expect(readdirSync(join(dir, DOCUMENTS))).toEqual(["report.docx"]);
+    expect(readFileSync(join(dir, copy)).equals(changed)).toBe(true);
+  });
+
+  test("a Word file whose earlier copy changed goes in beside it, and the line says the earlier copy changed", () => {
+    const dir = project();
+    mkdirSync(join(dir, "docs"));
+    writeFileSync(join(dir, "docs", "report.docx"), wordBytes());
+    writeRequest(dir, "docs/report.docx");
+    expect(runOnboard(dir).status).toBe(0);
+    writeFileSync(join(dir, DOCUMENTS, "report.docx"), wordBytes("The team's edit."));
+    writeFileSync(join(dir, "docs", "report.docx"), wordBytes("Report text, changed."));
+    writeRequest(dir, "docs/report.docx");
+    const again = runOnboard(dir);
+    expect(again.status, again.stderr).toBe(0);
+    const payload = JSON.parse(again.stdout);
+    expect(payload.document_path).toBe(`${DOCUMENTS}/report-2.docx`);
+    expect(payload.onboard_note).toEndWith(
+      ` The earlier copy, "${DOCUMENTS}/report.docx", has changed since it was copied, so I left it as it is; the ` +
+        "knowledge base now holds both.",
+    );
+  });
+
+  // Both routes that copy a named file record it the same way, so a file added
+  // with `knowledge onboard` and later named in a request is the same document.
+  test("a Word file added by knowledge onboard and named again in a request updates the same document", () => {
+    const dir = project();
+    mkdirSync(join(dir, "docs"));
+    writeFileSync(join(dir, "docs", "report.docx"), wordBytes());
+    const added = runCommand(dir, ["engine", "knowledge", "onboard", "docs/report.docx"], join(AIDLC_SRC, "tools", "aidlc.ts"));
+    expect(added.status, added.stderr).toBe(0);
+    const id = JSON.parse(added.stdout.slice(added.stdout.indexOf("{"))).indexed[0].id;
+
+    writeFileSync(join(dir, "docs", "report.docx"), wordBytes("Report text, changed."));
+    writeRequest(dir, "docs/report.docx");
+    const again = runOnboard(dir);
+    expect(again.status, again.stderr).toBe(0);
+    expect(JSON.parse(again.stdout).document_id).toBe(id);
+    expect(readdirSync(join(dir, DOCUMENTS))).toEqual(["report.docx"]);
   });
 
   // A copy stopped between claiming the name and renaming its bytes over the

@@ -58,6 +58,7 @@ import {
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
+import { readConductorSurface } from "../harness/conductor-skill.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
 
 // The stage's checks run once before its review or gate, and again at the gate
@@ -1755,7 +1756,7 @@ describe("t278 wave protocol parity", () => {
         join(harness.authoredRoot, "skills", "aidlc", "SKILL.md"),
         join(harness.skillsRoot, "aidlc", "SKILL.md"),
       ]) {
-        const body = readFileSync(skill, "utf-8");
+        const body = readConductorSurface(skill);
         expect(body, skill).not.toContain("**Per-unit batch waves (optional).**");
         if (harness.name === "kiro" || harness.name === "kiro-ide") {
           expect(body, skill).toContain("Every `entry.unit_memory_path` is engine-created and output-only.");

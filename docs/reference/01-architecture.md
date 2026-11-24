@@ -895,7 +895,9 @@ aidlc/                                    # neutral, harness-independent, commit
 **Resolution.** Workflow identity is resolved at one library chokepoint with
 precedence `in-process sessionId > AIDLC_SESSION_OVERRIDE > the chat the host
 names in the agent's shell (CODEX_THREAD_ID; CLAUDE_CODE_SESSION_ID while its
-CLAUDE_PID process is alive; KIRO_SESSION_ID) > PID ancestry > none`. Hook payload identity uses the in-process option and is authoritative.
+CLAUDE_PID process is alive, or, in a command Claude Code's Linux sandbox marks
+with SANDBOX_RUNTIME=1, while that process cannot be found but Claude Code's
+sessions/<pid>.json record of that chat is there; KIRO_SESSION_ID) > PID ancestry > none`. Hook payload identity uses the in-process option and is authoritative.
 When the host or a hook payload names the chat, the process ancestry is not walked at all: its answer could not
 change the result.
 Whatever id that yields passes through `resolveChat` before a binding is read: a
@@ -979,6 +981,15 @@ refresh therefore
 cannot restore the previous session when process inspection recovers; explicit
 payload identity, environment identity, and the shared-cursor fallback still
 apply. A later successful SessionStart replaces the null record.
+
+Beside an entry, `aidlc/.aidlc-sessions/pids/<pid>.release-check` records that a
+pinned project's release passed its whole-release check in that session
+process for that chat (the release, the project's harness and the resolved
+executable). The pinned dispatch writes it after a full check and, while the
+live entry names the same chat with the same known start time, later calls
+leave out only the hashing. An entry with no start time never counts. GC
+removes a `.release-check` with its stale entry, and the dispatch's own write
+sweeps any whose entry is gone.
 
 The Codex adapter additionally pins its validated payload identity into every
 POSIX Bash command and core-hook child, so sandboxed macOS does not depend on

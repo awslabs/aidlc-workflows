@@ -28,6 +28,7 @@ import {
   resolveCodeGenerationAuthority,
   resolveTestingPosture,
   resolveTestingPostureFromSections,
+  testingContractCurrent,
   type ProjectType,
   type TestStrategy,
   type TestingMethodology,
@@ -39,7 +40,7 @@ import {
   writePlanApprovalReceipt,
   stateDigest,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
-import { REPO_ROOT } from "../harness/fixtures.ts";
+import { readConductorSurface } from "../harness/conductor-skill.ts";
 
 const STAGE_REL = "core/aidlc-common/stages/construction/code-generation.md";
 const PRACTICES_REL =
@@ -52,7 +53,7 @@ const TEAM_REL = "core/memory/team.md";
 const PROJECT_REL = "core/memory/project.md";
 
 function read(rel: string): string {
-  return readFileSync(join(REPO_ROOT, rel), "utf-8");
+  return readConductorSurface(rel);
 }
 
 const ORG = [
@@ -419,19 +420,31 @@ describe("t299 (1) additive methodology resolution", () => {
     }
   });
 
-  test("comment-only changes alter input_sha256 without entering applicable_notes", () => {
-    const first = resolve({
+  // A comment block is the editor's note and never reaches the agent (the
+  // stage's rules drop it), so it binds nothing; a comment inside a line is
+  // handed to the agent with the rest of the line, so it is bound, but it is
+  // no note a person sees.
+  test("a comment block changes nothing; a comment inside a line is bound, not shown", () => {
+    const block = (word: string) => resolve({
       org: ORG,
-      team: "<!-- alpha -->\n- **Methodology**: tdd\n- **Ordering**: tests first.",
+      team: `<!-- ${word} -->\n- **Methodology**: tdd\n- **Ordering**: tests first.`,
     });
-    const second = resolve({
-      org: ORG,
-      team: "<!-- beta -->\n- **Methodology**: tdd\n- **Ordering**: tests first.",
-    });
+    expect(block("beta").contract_sha256).toBe(block("alpha").contract_sha256);
 
-    expect(second.methodology).toBe("tdd");
-    expect(second.applicable_notes).toEqual(first.applicable_notes);
-    expect(second.input_sha256).not.toBe(first.input_sha256);
+    const inline = (word: string) => resolve({
+      org: ORG,
+      team: `- **Methodology**: tdd <!-- ${word} -->\n- **Ordering**: tests first.`,
+    });
+    expect(inline("beta").methodology).toBe("tdd");
+    expect(inline("beta").applicable_notes).toEqual(inline("alpha").applicable_notes);
+    expect(inline("beta").input_sha256).not.toBe(inline("alpha").input_sha256);
+    expect(inline("alpha").applicable_notes.find((note) => note.layer === "team")?.text)
+      .toBe("- **Methodology**: tdd\n- **Ordering**: tests first.");
+
+    // A comment block that shows text after its close is shown whole.
+    const shown = resolve({ org: ORG, team: "<!-- note --> Always write tests first." });
+    expect(shown.applicable_notes.find((note) => note.layer === "team")?.text)
+      .toBe("<!-- note --> Always write tests first.");
   });
 
   test("a project coverage note does not erase team TDD", () => {
@@ -957,7 +970,7 @@ describe("t299 (5) authored consumers use the same contract", () => {
     const stage = read(STAGE_REL);
     expect(stage).toContain("aidlc-testing-posture.ts render");
     expect(stage).toContain("aidlc-testing-posture.ts fingerprint");
-    expect(stage).toContain("AIDLC-TESTING-CONTRACT: <contract_sha256>");
+    expect(stage).toContain("the current Testing Contract in the tool-produced brief is\n  authoritative for Part 2");
     expect(stage).toContain("BDD");
     expect(stage).toContain("ATDD");
     expect(stage).toContain("Custom/mixed");
@@ -1004,6 +1017,127 @@ describe("t299 (5) authored consumers use the same contract", () => {
       // The swarm step names its modules; the skill's row loads them.
       const row = read(`harness/${harness}/skills/aidlc/SKILL.md`).split("\n").find((line) => line.startsWith("| `invoke-swarm` |"));
       expect(row, harness).toContain("plus `construction` and `swarm`");
+    }
+  });
+});
+
+// What an approved plan's Testing Contract binds: the Testing Posture as the
+// agent is handed it, its spacing aside. An edit that changes nothing the agent
+// is handed or a person sees leaves the approval holding; a change to what
+// either reads brings the plan back.
+describe("t299 (6) what an approved plan's Testing Contract binds", () => {
+  const BASE = {
+    org: "\nWe treat tests as a deliverable.\n\n- **Methodology**: test-after\n- **Ordering**: implement each layer, then\n  test it.\n\nCoverage is measured in CI.\n",
+    team: "\n- **Methodology**: tdd\n- **Ordering**: tests first.\n\nUnit tests live beside the code.\n\n```sh\nbun test\n\nbun run lint\n```\n",
+    project: "\nThe legacy adapter keeps its regression suite.\n\nRun it before each release.\n",
+  };
+  type Layer = keyof typeof BASE;
+  const LAYERS: Layer[] = ["org", "team", "project"];
+  const hashWith = (layer: Layer, edit: (text: string) => string): string =>
+    resolve({ ...BASE, [layer]: edit(BASE[layer]) }).contract_sha256;
+  const before = resolve(BASE).contract_sha256;
+
+  const FORMATTING: Array<[string, (text: string) => string]> = [
+    ["a blank line beside a blank line", (text) => text.replace("\n\n", "\n\n\n")],
+    ["a blank line at the start", (text) => `\n${text}`],
+    ["a blank line at the end", (text) => `${text}\n`],
+    ["trailing spaces", (text) => text.replace(/^(.+)$/m, "$1  ")],
+    ["a trailing tab", (text) => text.replace(/^(.+)$/m, "$1\t")],
+    ["a comment line between two paragraphs", (text) => text.replace(/\n\n(?=[A-Z])/, "\n\n<!-- reviewed with the team -->\n\n")],
+    ["a comment line after the heading", (text) => `\n<!-- reviewed with the team -->${text}`],
+    ["a comment block over two lines", (text) => text.replace(/\n\n(?=[A-Z])/, "\n\n<!-- reviewed\nwith the team -->\n")],
+  ];
+  for (const layer of LAYERS) {
+    for (const [name, edit] of FORMATTING) {
+      test(`${layer}.md, ${name}: the contract is the one approved`, () => {
+        expect(edit(BASE[layer])).not.toBe(BASE[layer]);
+        expect(hashWith(layer, edit)).toBe(before);
+      });
+    }
+  }
+
+  const MEANING: Array<[string, Layer, (text: string) => string]> = [
+    ["a changed word", "team", (text) => text.replace("beside", "next to")],
+    ["a comment added inside a line", "project", (text) => text.replace("suite.", "suite. <!-- since 2026 -->")],
+    ["a changed fenced line", "team", (text) => text.replace("bun run lint", "bun run check")],
+    ["a blank line inside a fence", "team", (text) => text.replace("bun test\n", "bun test\n\n")],
+    ["a trailing space inside a fence", "team", (text) => text.replace("bun test\n", "bun test \n")],
+    ["two lines swapped", "project", () => "\nRun it before each release.\n\nThe legacy adapter keeps its regression suite.\n"],
+    ["a changed indentation", "org", (text) => text.replace("\n  test it.", "\n    test it.")],
+    ["a paragraph split", "org", (text) => text.replace("then\n  test it.", "then\n\n  test it.")],
+  ];
+  for (const [name, layer, edit] of MEANING) {
+    test(`${layer}.md, ${name}: the contract moves`, () => {
+      expect(hashWith(layer, edit)).not.toBe(before);
+    });
+  }
+
+  test("a hard break in the wrapped Ordering value the contract carries: the contract is the one approved", () => {
+    const wrapped = "\n- **Methodology**: tdd\n- **Ordering**: write the failing test first, then\n  the code that passes it.\n";
+    const plain = resolve({ ...BASE, team: wrapped });
+    expect(resolve({ ...BASE, team: wrapped.replace("then\n", "then  \n") }).contract_sha256).toBe(plain.contract_sha256);
+  });
+
+  // The engine reads a wrapped value only up to a comment line inside it, so
+  // in the layer the contract takes its Ordering from, that line moves it.
+  test("a comment line inside the wrapped Ordering value the contract carries: the contract moves", () => {
+    const wrapped = "\n- **Methodology**: tdd\n- **Ordering**: write the failing test first, then\n  the code that passes it.\n";
+    const plain = resolve({ ...BASE, team: wrapped });
+    const commented = resolve({ ...BASE, team: wrapped.replace("then\n", "then\n<!-- note -->\n") });
+    expect(plain.ordering).toBe("write the failing test first, then the code that passes it.");
+    expect(commented.contract_sha256).not.toBe(plain.contract_sha256);
+  });
+
+  // A plan approved on v2.11.4 or a preview since carries a contract computed
+  // over the raw section text; the earlier reading is kept byte for byte, so
+  // that approval still holds after the update for the same text, and only for it.
+  function earlierProject(): string {
+    const project = mkdtempSync(join(tmpdir(), "t299-earlier-form-"));
+    const memoryDir = join(project, "aidlc", "spaces", "default", "memory");
+    mkdirSync(memoryDir, { recursive: true });
+    writeFileSync(join(memoryDir, "org.md"),
+      "# Org\n\n## Testing Posture\n\n- **Methodology**: test-after\n- **Ordering**: implement each layer, then\n  test it.\n\n## Guard Policy\n");
+    writeFileSync(join(memoryDir, "team.md"),
+      "# Team\r\n\r\n## Testing Posture\r\n\r\n<!-- Affirmed during practices-discovery. -->\r\n- **Methodology**: tdd  \r\n" +
+        "- **Ordering**: tests first.\r\n\r\n\r\n```sh\r\nbun test  \r\n```\r\n\r\n## Deployment\r\n");
+    writeFileSync(join(memoryDir, "project.md"),
+      "# Project\n\n## Testing Posture\n\nThe legacy adapter keeps its regression suite. <!-- since 2026 -->\n");
+    return project;
+  }
+
+  test("the earlier reading is the contract v2.11.4 rendered for the same memory", () => {
+    const project = earlierProject();
+    try {
+      // Rendered by v2.11.4 (61fdb122) for this memory.
+      expect(resolveTestingPosture(project, "raw").contract_sha256)
+        .toBe("sha256:bdfa140c465ef5c5a2f5234eed8a95dcadba8c482a45b20a70a0cc5f3b6acfc7");
+      expect(resolveTestingPosture(project).contract_sha256)
+        .not.toBe("sha256:bdfa140c465ef5c5a2f5234eed8a95dcadba8c482a45b20a70a0cc5f3b6acfc7");
+    } finally {
+      rmSync(project, { recursive: true, force: true });
+    }
+  });
+
+  test("a plan rendered the earlier way stays current for the same text, and only for it", () => {
+    const project = earlierProject();
+    try {
+      const team = join(project, "aidlc", "spaces", "default", "memory", "team.md");
+      const text = readFileSync(team, "utf-8");
+      const earlier = resolveTestingPosture(project, "raw");
+      const now = resolveTestingPosture(project);
+      expect(testingContractCurrent(project, earlier)).toBe(true);
+      expect(testingContractCurrent(project, now)).toBe(true);
+      expect(testingContractCurrent(project, null)).toBe(false);
+
+      writeFileSync(team, text.replace("## Testing Posture\r\n", "## Testing Posture\r\n\r\n"));
+      expect(testingContractCurrent(project, earlier)).toBe(false);
+      expect(testingContractCurrent(project, now)).toBe(true);
+
+      writeFileSync(team, text.replace("tests first.", "tests first, always."));
+      expect(testingContractCurrent(project, earlier)).toBe(false);
+      expect(testingContractCurrent(project, now)).toBe(false);
+    } finally {
+      rmSync(project, { recursive: true, force: true });
     }
   });
 });

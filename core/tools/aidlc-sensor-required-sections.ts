@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { basename, join, relative, sep } from "node:path";
 import { artifactFilename, headingKey } from "./aidlc-artifact-vocabulary.ts";
 import { asksForHelp, errorMessage, parseBoltDag, printUsageAndExit, unitsBlockRepair } from "./aidlc-lib.ts";
-import { sensorFireUsage } from "./aidlc-runtime-paths.ts";
+import { sensorFireUsage, writeSensorResult } from "./aidlc-runtime-paths.ts";
 
 interface Result {
 	pass: boolean;
@@ -147,14 +147,13 @@ export function main(argv: string[]): void {
 	const flags = parseFlags(argv);
 	if (flags.pathsStdin) {
 		evaluatePathSet(flags);
-		process.exit(0);
+		return;
 	}
 
 	if (!flags.outputPath) {
 		fail("--output-path is required");
 	}
-	process.stdout.write(`${JSON.stringify(evaluate(flags.outputPath, flags))}\n`);
-	process.exit(0);
+	writeSensorResult(evaluate(flags.outputPath, flags));
 }
 
 // The gate at a codekb stage hands every repository's files on stdin, a JSON
@@ -187,7 +186,7 @@ function evaluatePathSet(flags: Flags): void {
 		files: failing,
 	};
 	if (failing.length > 0) result.message = failing.map((f) => f.message).filter(Boolean).join(" ");
-	process.stdout.write(`${JSON.stringify(result)}\n`);
+	writeSensorResult(result);
 }
 
 // `named` is how a finding names the file: its basename alone, or its path in a set.

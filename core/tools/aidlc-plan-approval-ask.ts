@@ -18,13 +18,14 @@
 // (generation start, the worker brief, the swarm, team merge, worktree
 // delegation) reads this one unchanged. What changed is who writes them.
 
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import { appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import { personGitNameField } from "./aidlc-git-name.ts";
 import {
   activeIntentUuid,
+  assertNoSymlinkInChainOrThrow,
   auditBlockField,
   auditMark,
   type AuditMark,
@@ -37,12 +38,15 @@ import {
   fenceSwitchSentence,
   getField,
   isoTimestamp,
+  isReadOnlyEngineProbe,
   isReplyTurn,
   personAtOwnTerminal,
   personRepliedAfter,
   personsGateReply,
   latestMainWorkflowStageRunFloorForProject,
   memoryStrictHoldsGuardPolicy,
+  parseCheckboxes,
+  pendingPersonLines,
   GUARD_RECOVERY_ASK_TYPE,
   PLAN_APPROVAL_ASK_TYPE,
   planApprovalRuntimeFile,
@@ -51,12 +55,14 @@ import {
   readBaselineSourceSnapshot,
   readPlanApprovalReceipt,
   readPlanApprovalRuntimeRecord,
+  readProtectedQuestion,
   readWorkspaceSourceSnapshot,
   recordedSourceListingUnderCurrentBoundary,
   rejectionAtRunFloor,
   rejectionIsFreshAttempt,
   removePlanApprovalRuntimeRecord,
   runStateContent,
+  sessionsDir,
   renderChangedPaths,
   sourceChangedOutsideAidlc,
   stalePlanApprovalReceiptsForTarget,
@@ -72,6 +78,7 @@ import {
   visibleMarkdownLines,
   withActiveDirectiveLock,
   withAuditLock,
+  withRepoBaselineAdditions,
   workspaceSourceFailureSuffix,
   workspaceSourceState,
   writeFileAtomic,
@@ -98,11 +105,14 @@ import {
   keepApprovedPlanCopy,
   PlanApprovalUnbindableError,
   planAsSentBack,
+  planWithTestingContract,
   readPlanApprovalSettingWith,
   readTestingContract,
+  recordedApprovalFingerprint,
   replaceTestingContractSection,
   resolveCodeGenerationAuthority,
   resolveTestingPosture,
+  testingContractCurrent,
   codeGenerationFinishedUnderPlanContract,
   stepNextCommand,
   testingContractDefectMessage,
@@ -114,6 +124,7 @@ import {
 import { QUESTION_ASKED_EVENTS, readMessage } from "./aidlc-message-store.ts";
 import {
   askedQuestionFields,
+  boxQuestionId,
   newQuestionId,
   openSlotQuestionId,
   QUESTION_TEXT_FIELD,
@@ -123,7 +134,7 @@ import {
   shownAgainFields,
 } from "./aidlc-questions.ts";
 import { exactOptionPick, isNonAnswer, pickerOffersChoices } from "./aidlc-reply-reader.ts";
-import { aidlcDispatcherInvocation, aidlcToolInvocation } from "./aidlc-runtime-paths.ts";
+import { aidlcDispatcherInvocation, aidlcToolInvocation, runtimeHarnessName } from "./aidlc-runtime-paths.ts";
 import { type PlanApprovalSetting, resolvePlanApprovalSetting } from "./aidlc-guard-switch.ts";
 import type {
   CodeGenerationPlanApprovalState,
@@ -473,11 +484,26 @@ function labels(units: Array<string | null>): string {
 //
 // The engine never asks a question it could not accept: an Approve on a plan
 // whose Testing Contract is missing, broken, or out of date would record
-// nothing. So those are repairs to finish first, each named in one sentence.
+// nothing. `next` writes that block itself; what it cannot write, and an empty
+// plan or instructions, are repairs to finish first, each named in one sentence.
 
-export type PlanReadiness = { ready: true } | { ready: false; note?: string };
+export type PlanReadiness = { ready: true; written?: true } | { ready: false; note?: string };
 
-export function codeGenerationPlanReadiness(projectDir: string, unit: string | null): PlanReadiness {
+// What the check does with a Testing Contract block the engine would write:
+// "write" writes it (the engine's own routing, `next` and `continue`), "count"
+// reads the plan as ready without writing it (a reader asking whether the
+// question is due), "as-is" reads the plan as it stands (the Stop hook's
+// read-only probe).
+export type ContractBlockUse = "write" | "count" | "as-is";
+
+// `theirEdit`: the person's own edit left the plan as it is (their repair
+// result), so their words in the section are kept after the block.
+export function codeGenerationPlanReadiness(
+  projectDir: string,
+  unit: string | null,
+  contract: ContractBlockUse = "as-is",
+  theirEdit = false,
+): PlanReadiness {
   const dir = codeGenerationRecordDir(projectDir, unit);
   const plan = readText(join(dir, PLAN_FILE));
   const instructions = readText(join(dir, INSTRUCTIONS_FILE));
@@ -488,11 +514,31 @@ export function codeGenerationPlanReadiness(projectDir: string, unit: string | n
     return { ready: false, note: `${INSTRUCTIONS_FILE} is missing or empty: write it beside the plan, then run next.` };
   }
   const read = readTestingContract(plan);
+  // The block is engine output, so the engine writes it into the plan when it
+  // is missing, broken or out of date: a block copied by hand can break, and an
+  // agent with only a shell may never copy it right. Only that section is
+  // written (planWithTestingContract); a plan it cannot be written into, a
+  // posture that cannot be resolved or a failed write keeps the repairs below.
+  if (contract !== "as-is") {
+    try {
+      const current = resolveTestingPosture(projectDir);
+      const written = usableTestingContract(current) &&
+          ("defect" in read || !testingContractCurrent(projectDir, read.contract, current))
+        ? planWithTestingContract(plan, current, theirEdit)
+        : null;
+      if (written !== null) {
+        if (contract === "count") return { ready: true };
+        writeFileAtomic(join(dir, PLAN_FILE), written);
+        return { ready: true, written: true };
+      }
+    } catch {
+      // The repairs below.
+    }
+  }
   if ("defect" in read) {
     return { ready: false, note: testingContractDefectMessage(read.defect, "run next") };
   }
-  const current = resolveTestingPosture(projectDir);
-  if (read.contract.contract_sha256 !== current.contract_sha256) {
+  if (!testingContractCurrent(projectDir, read.contract)) {
     return {
       ready: false,
       note: "The plan's Testing Contract is out of date: memory, scope, test strategy, project type, or the " +
@@ -545,10 +591,9 @@ export function planSummaryLines(plan: string, instructions: string): string[] {
   return fallback;
 }
 
-// `changed` is the line naming source that already changed since Code
-// Generation started (changedBeforeApprovalLine), shown under the summary when
-// the question is asked or its record rewritten; null says nothing.
-function targetView(projectDir: string, unit: string | null, changed: string | null = null): PlanApprovalAskTargetView {
+// `under` is what the question says under the summary when it is asked or its
+// record rewritten (underSummary); without it, the plan's own lines alone.
+function targetView(projectDir: string, unit: string | null, under: readonly string[] = []): PlanApprovalAskTargetView {
   const dir = codeGenerationRecordDir(projectDir, unit);
   const rel = (name: string) => toPosix(relative(projectDir, join(dir, name)));
   const summary = planSummaryLines(readText(join(dir, PLAN_FILE)), readText(join(dir, INSTRUCTIONS_FILE)));
@@ -557,7 +602,7 @@ function targetView(projectDir: string, unit: string | null, changed: string | n
     plan_path: rel(PLAN_FILE),
     instructions_path: rel(INSTRUCTIONS_FILE),
     questions_path: rel(QUESTIONS_FILE),
-    summary: changed === null ? summary : [...summary, changed],
+    summary: [...summary, ...under],
   };
 }
 
@@ -569,7 +614,9 @@ function targetView(projectDir: string, unit: string | null, changed: string | n
  * previous plan approval in this stage (the workspace snapshot kept at each
  * approval), so a later Unit's question does not repeat what the person saw
  * when they approved the earlier one, and a unit-major run's first question
- * does not reach back into earlier stages. The files the plans approved since
+ * does not reach back into earlier stages. A repo that joined the work since
+ * that start counts from what it held when it joined, as the stage's own
+ * baseline counts it (withRepoBaselineAdditions). The files the plans approved since
  * that start name are their own build, not something that ran ahead, and
  * AI-DLC's own files (an update the person took) are nobody's. Nothing
  * is said when the start is not on record or cannot be read, or nothing changed.
@@ -578,7 +625,8 @@ function changedBeforeApprovalLine(projectDir: string): string | null {
   try {
     const current = workspaceSourceState(projectDir);
     if (current === null) return null;
-    const rows = readAuditShardEvents(projectDir)
+    const events = readAuditShardEvents(projectDir);
+    const rows = events
       .filter((row) =>
         auditBlockField(row.block, "Stage") === STAGE &&
         (row.event === "STAGE_STARTED" || row.event === "PLAN_APPROVAL_RECORDED" || row.event === "PLAN_APPROVAL_SKIPPED"))
@@ -604,6 +652,8 @@ function changedBeforeApprovalLine(projectDir: string): string | null {
       start = recorded === null ? null : recordedSourceListingUnderCurrentBoundary(recorded, current.listing);
     }
     if (start === null) return null;
+    const joined = withRepoBaselineAdditions(projectDir, STAGE, { state: "ready", listing: start }, events, last);
+    if (joined.state !== "ready") return null;
     // The plans approved since this stage started: what they name is their build.
     const approved: Array<string | null> = [];
     for (let index = rows.length - 1; index >= 0 && rows[index].event !== "STAGE_STARTED"; index--) {
@@ -613,7 +663,7 @@ function changedBeforeApprovalLine(projectDir: string): string | null {
     const theirBuild = (path: string): boolean =>
       named.some((entry) =>
         path === entry || path.startsWith(`${entry}/`) || (!entry.includes("/") && path.split("/").at(-1) === entry));
-    const changed = sourceChangedOutsideAidlc(projectDir, start, current.listing).filter((path) => !theirBuild(path));
+    const changed = sourceChangedOutsideAidlc(projectDir, joined.listing, current.listing).filter((path) => !theirBuild(path));
     if (changed.length === 0) return null;
     return changed.length === 1
       ? `Already changed before you approved: ${renderChangedPaths(changed)}.`
@@ -673,6 +723,32 @@ function plansNamedPaths(projectDir: string, units: Array<string | null>): strin
     }
   }
   return [...named];
+}
+
+// The recorded repos the plans name a file or folder in, in work with more than
+// one: a path counts for a repo when it starts with the repo's name. Read from
+// the plans' own paths, as the guard reads them, so a summary line cut at 200
+// characters never hides one. None on any failure: the question goes out
+// without them.
+function namedRepos(projectDir: string, units: Array<string | null>): string[] {
+  try {
+    const repos = intentRepos(projectDir);
+    if (repos.length < 2) return [];
+    const named = plansNamedPaths(projectDir, units);
+    return repos.filter((repo) => named.some((path) => path.startsWith(`${repo}/`)));
+  } catch {
+    return [];
+  }
+}
+
+// What the question says under the summary: the repos the plans name, then the
+// source that already changed (changedBeforeApprovalLine).
+function underSummary(projectDir: string, units: Array<string | null>, changed: string | null): string[] {
+  const repos = namedRepos(projectDir, units);
+  const named = repos.length === 0
+    ? []
+    : [units.length > 1 ? `These plans name files in ${labels(repos)}.` : `Names files in ${labels(repos)}.`];
+  return changed === null ? named : [...named, changed];
 }
 
 // A recorded repo's files as a plan names them, `<repo>/<path>`: the word split
@@ -821,10 +897,11 @@ function singleBoxQuestion(toolInput: unknown): BoxQuestion | null {
 // lines, else its path only. Several Units always get each Unit's name and
 // path, never the summaries: the box does not scroll, and a short window (an
 // editor's terminal panel) would show the last plan alone, as if it were the
-// only one. The line naming source that already changed is in each, said once.
+// only one. The lines under the summary (the repos the plans name, the source
+// that already changed) are in each, said once.
 function boxAdditions(projectDir: string, record: PlanApprovalAskRecord): string[] {
   const views = record.targets.map((target) => targetView(projectDir, target.unit));
-  const changed = changedBeforeApprovalLine(projectDir);
+  const under = underSummary(projectDir, views.map((view) => view.unit), changedBeforeApprovalLine(projectDir));
   const several = views.length > 1;
   return (several ? [false] : [true, false]).map((summaries) => [
     ...views.flatMap((view, index) => [
@@ -832,14 +909,14 @@ function boxAdditions(projectDir: string, record: PlanApprovalAskRecord): string
       ...(several ? [view.unit ?? ""] : []),
       ...(!summaries
         ? [`Full plan: ${view.plan_path}`]
-        : planLines(changed === null ? view.summary : [...view.summary, changed], view.plan_path)),
+        : planLines([...view.summary, ...under], view.plan_path)),
     ]),
-    ...(changed !== null && !summaries ? ["", changed] : []),
+    ...(under.length > 0 && !summaries ? ["", ...under] : []),
   ].join("\n"));
 }
 
-// A line of the plan's own (a summary line, its path, the changed-source line).
-const PLAN_LINE_RE = /^(?:- |Full plan: |Already changed before you approved)/;
+// A line of the plan's own (a summary line, its path, the lines under its summary).
+const PLAN_LINE_RE = /^(?:- |Full plan: |Already changed before you approved|Names files in |These plans name files in )/;
 
 // The question with the additions under it, less the plan's lines its text
 // already shows: Step 3 asks the agent to show them, and an agent may put them
@@ -950,6 +1027,107 @@ export function planQuestionBoxAsAsked(projectDir: string, payload: string): str
     });
   } catch {
     return payload;
+  }
+}
+
+// --- A stage gate's own lines in the question box (Claude Code) ---------------
+//
+// The agent retold a gate's lines for the person beside the box. Where the box
+// can carry them, the gate step keeps them for the chat (prepareEmission), the
+// box shows them under the agent's question and its answer takes them off the
+// list. Only the interactive CLI draws the box at a gate (no recorded SDK run
+// did); elsewhere, and unattended, the step carries them as before.
+export function gateNoticesInBox(projectDir: string): boolean {
+  return runtimeHarnessName(projectDir) === "claude" && process.env.CLAUDE_CODE_ENTRYPOINT === "cli" &&
+    process.env.AIDLC_UNATTENDED !== "1";
+}
+
+// Room kept for the agent's own question when the gate step is written, before
+// the question exists (126 recorded interactive gate questions ran 30 to 77
+// characters). Of the gate's lines, in order, each whole one that fits beside
+// it goes to the box; the rest stay on the step, said before the question.
+const GATE_QUESTION_ROOM = 500;
+export function gateLinesThatFit(lines: readonly string[]): string[] {
+  let left = BOX_QUESTION_MAX_CHARS - GATE_QUESTION_ROOM;
+  return lines.filter((line) => {
+    if (line.length + 2 > left) return false;
+    left -= line.length + 2;
+    return true;
+  });
+}
+
+// Said once per project (addNoGitLine in aidlc-orchestrate.ts), counted when a
+// written step or the box's answer carried it; kept for a box is not said.
+export const NO_GIT_LINE =
+  "This project has no git, so AI-DLC can't undo the changes it makes to your files; " +
+  "to get an undo, run `git init` and commit them.";
+const NO_GIT_SAID_FILE = "no-git-said";
+export function noGitLineSaid(projectDir: string): boolean {
+  return existsSync(join(sessionsDir(projectDir), NO_GIT_SAID_FILE));
+}
+export function writeNoGitLineSaid(projectDir: string): void {
+  try {
+    const dir = sessionsDir(projectDir);
+    assertNoSymlinkInChainOrThrow(projectDir, relative(projectDir, dir));
+    mkdirSync(dir, { recursive: true });
+    writeFileAtomic(join(dir, NO_GIT_SAID_FILE), `${isoTimestamp()}\n`);
+  } catch {
+    // Unrecorded: the next gate says it once more.
+  }
+}
+
+// The box and the chat's kept lines, when it is one single-choice question while
+// a stage awaits approval, and none of the engine's own questions whose text a
+// reader matches (the code plan question, an engine ask, a logged decision).
+function gateNoticeLines(
+  projectDir: string,
+  toolInput: unknown,
+  session: unknown,
+): { box: BoxQuestion; lines: string[]; said: () => void } | null {
+  if (typeof session !== "string" || session === "" || !gateNoticesInBox(projectDir)) return null;
+  const box = singleBoxQuestion(toolInput);
+  if (box === null) return null;
+  return forPayloadChat(projectDir, session, () => {
+    const state = runStateContent(projectDir);
+    if (state === null || !parseCheckboxes(state).some((line) => line.state === "awaiting-approval")) return null;
+    if (
+      currentPlanApprovalAsk(projectDir) !== null || readProtectedQuestion(projectDir, session) !== null ||
+      boxQuestionId(projectDir, session, box.question) !== null
+    ) return null;
+    const kept = pendingPersonLines(projectDir, session, { ordinaryOnly: true });
+    return kept.lines.length === 0 ? null : { box, lines: kept.lines, said: kept.said };
+  });
+}
+
+// The box with the kept lines under the agent's question when they all fit;
+// null otherwise, so it goes out as written and the lines wait. Writes nothing.
+export function gateNoticeBoxInput(projectDir: string, toolInput: unknown, session: unknown): Record<string, unknown> | null {
+  try {
+    const found = gateNoticeLines(projectDir, toolInput, session);
+    if (found === null) return null;
+    const question = [found.box.question, ...found.lines].join("\n\n");
+    if (question.length > BOX_QUESTION_MAX_CHARS) return null;
+    return { ...(toolInput as Record<string, unknown>), questions: [{ ...found.box.entry, question }] };
+  } catch {
+    return null;
+  }
+}
+
+// The answer to a box gateNoticeBoxInput filled (its question ends with the
+// kept lines): they are said, so they come off the chat's list.
+export function gateNoticeBoxShown(projectDir: string, payload: string): void {
+  try {
+    const parsed = JSON.parse(payload) as Record<string, unknown> | null;
+    if (parsed === null || parsed.hook_event_name !== "PostToolUse" || parsed.tool_name !== "AskUserQuestion") return;
+    // What the box showed was said, whether or not its lines are still kept (they age out).
+    const shown = gateNoticesInBox(projectDir) ? singleBoxQuestion(parsed.tool_input) : null;
+    if (shown?.question.split("\n\n").slice(1).includes(NO_GIT_LINE)) writeNoGitLineSaid(projectDir);
+    const found = gateNoticeLines(projectDir, parsed.tool_input, parsed.session_id);
+    const tail = found === null ? "" : ["", ...found.lines].join("\n\n");
+    if (found === null || !found.box.question.endsWith(tail) || found.box.question.length <= tail.length) return;
+    found.said();
+  } catch {
+    // The lines stay for the next step.
   }
 }
 
@@ -1124,6 +1302,7 @@ function targetState(
   issued: CodeGenerationIssuance,
   planApprovalOff = false,
   use: CodeGenerationApprovalUse = "build",
+  contract: ContractBlockUse = "as-is",
 ): TargetState {
   const approval = evaluateCodeGenerationApproval(projectDir, { unit }, issued, use);
   const reviewRequested = codeGenerationPlanReviewRequested(projectDir, unit, intentId);
@@ -1131,7 +1310,8 @@ function targetState(
     return { unit, kind: "approved" };
   }
   const result = record?.results?.find((entry) => entry.unit === unit);
-  const readiness = codeGenerationPlanReadiness(projectDir, unit);
+  // A plan sent back waits for its change before its Testing Contract is
+  // written: a fresh block would make it read as revised.
   if (result?.choice === "request-changes" && result.fingerprint === approval.approvalFingerprint) {
     return {
       unit,
@@ -1139,14 +1319,24 @@ function targetState(
       ...(result.feedback ? { feedback: result.feedback } : {}),
     };
   }
+  const revision = rejectionRevision(projectDir, unit, intentId);
+  if (revision !== null) return { unit, kind: "revise", ...revision };
+  // A plan with an approval on record is no question coming: a reader counts it as it stands.
+  const readiness = codeGenerationPlanReadiness(
+    projectDir, unit, contract === "count" && approval.approved ? "as-is" : contract,
+    result?.choice === "repair" && result.edited === true,
+  );
+  // The plan's Testing Contract was written: the target is read again as it now
+  // stands, so a plan sent back reads as sent back, an approved one as approved.
+  if (readiness.ready && readiness.written) {
+    return targetState(projectDir, unit, intentId, record, issued, planApprovalOff, use);
+  }
   if (result?.choice === "repair" && !readiness.ready) {
     return { unit, kind: "repair", ...(result.note ? { note: result.note } : {}) };
   }
   if (!readiness.ready) {
     return { unit, kind: "plan", ...(readiness.note ? { note: readiness.note } : {}) };
   }
-  const revision = rejectionRevision(projectDir, unit, intentId);
-  if (revision !== null) return { unit, kind: "revise", ...revision };
   // Plan approval is off: build the plan as written, unless the person asked to
   // review it first. That request is for this plan only; later Units still build.
   if (planApprovalOff && !reviewRequested) return { unit, kind: "skip" };
@@ -1185,7 +1375,9 @@ export const planApprovalOverrideOffers = new WeakSet<Directive>();
 /**
  * The directive `next` emits in place of a code-generation run-stage or
  * invoke-swarm: the same directive marked plan or build, or the engine's Plan
- * Approval question. Read-only: nothing is written until `publishPlanApprovalAsk`.
+ * Approval question. Nothing is written until `publishPlanApprovalAsk`, but a
+ * plan's Testing Contract block (codeGenerationPlanReadiness), outside the Stop
+ * hook's read-only probe.
  * An isolated run's plan step and question carry that run's own `next`
  * (stepNextCommand) for the step to name, since a bare `next` routes the main
  * workflow; the workflow's carry none.
@@ -1244,7 +1436,8 @@ function routedPlanApproval(projectDir: string, directive: Directive): Directive
   // plan again: finishedReviewStep, codeGenerationBuildFinishes).
   const use: CodeGenerationApprovalUse =
     directive.kind === "run-stage" && directive.unit_record_step !== undefined ? "completion" : "build";
-  const states = units.map((unit) => targetState(projectDir, unit, intentId, record, directive, planApprovalOff, use));
+  const contract: ContractBlockUse = isReadOnlyEngineProbe() ? "as-is" : "write";
+  const states = units.map((unit) => targetState(projectDir, unit, intentId, record, directive, planApprovalOff, use, contract));
   if (states.every((state) => state.kind === "approved")) {
     // Under a lowered Guard Policy an approved plan that changed still builds;
     // the person hears what changed and is asked whether to go back to it, or,
@@ -1329,7 +1522,7 @@ function planApprovalAskDirective(
     question: options.question,
     ...(units.length === 1 && units[0] !== null ? { unit: units[0] } : {}),
     plan_approval: {
-      targets: units.map((unit) => targetView(projectDir, unit, changed)),
+      targets: units.map((unit) => targetView(projectDir, unit, underSummary(projectDir, [unit], changed))),
       choices: [...(grouped ? GROUPED_PLAN_APPROVAL_CHOICES : PLAN_APPROVAL_CHOICES)],
       editing: options.editing,
       ...(options.note ? { note: options.note } : {}),
@@ -1460,22 +1653,41 @@ export function publishPlanApprovalAsk(
     recordPlanQuestion(projectDir, directive, record, session ?? null);
     directive.plan_approval.targets.forEach((view, index) => {
       const path = join(projectDir, view.questions_path);
-      const content = questionsFileContent(
+      const fileWith = (summary: string[]) => questionsFileContent(
         directive.question,
-        view,
+        { ...view, summary },
         directive.plan_approval.choices,
         targets[index].fingerprint,
         source?.fingerprint ?? "unbindable",
         "",
       );
+      const content = fileWith(view.summary);
       const onDisk = readText(path);
       if (onDisk === content) return;
       // The file invites the person to answer on its `[Answer]:` line. While
-      // the same question stands, their answer is the only difference from the
-      // template, so it stays: the engine never erases what they wrote. A new
-      // question, or a file changed in any other way, is written as usual.
+      // the same question stands, the engine never erases what they wrote: a
+      // file where only their answer differs stays as it is, and a file
+      // written again for another line carries their answer (below). A new
+      // question is written fresh.
       if (same && onlyTheirAnswerDiffers(onDisk, content)) return;
-      writeFileAtomic(path, content);
+      // Nor is it rewritten for the repos line alone: a file an earlier AI-DLC
+      // wrote without it (a teammate's clone included) is kept wherever the file
+      // without the line would be, and the line comes with a rewrite for another reason.
+      const named = underSummary(projectDir, [view.unit], null);
+      const without = named.length === 0 ? null : fileWith(view.summary.filter((line) => !named.includes(line)));
+      if (without !== null && (onDisk === without || (same && onlyTheirAnswerDiffers(onDisk, without)))) return;
+      // Their answer is the `[Answer]:` line and whatever they wrote under it:
+      // the template ends with that line. It is carried whole, and only out of
+      // the file about this plan; the engine's record of a plan built without
+      // asking holds no answer of theirs.
+      const at = onDisk.search(/^\[Answer\]:/m);
+      const theirs = at < 0 ? "" : onDisk.slice(at).replace(/\r\n/g, "\n");
+      const written = theirs.slice("[Answer]:".length).trim();
+      const carry = same && written !== "" && !onDisk.slice(0, at).includes(BUILT_WITHOUT_ASKING_INTRO[0]) &&
+        recordedApprovalFingerprint(onDisk) === targets[index].fingerprint;
+      const file = carry ? `${content.slice(0, content.lastIndexOf("[Answer]:"))}${theirs}` : content;
+      // The same bytes are not written again: an editor holding the file open would ask about a change on disk.
+      if (file !== onDisk) writeFileAtomic(path, file);
     });
   });
 }
@@ -1692,7 +1904,7 @@ function planQuestionDue(projectDir: string): boolean {
     const record = readPlanApprovalAsk(projectDir, intentId);
     const units = issued.kind === "invoke-swarm" ? issued.units : [issued.unit?.trim() || null];
     const off = planApprovalSettingFor(projectDir)?.value === "off";
-    return units.some((unit) => targetState(projectDir, unit, intentId, record, issued, off).kind === "ask");
+    return units.some((unit) => targetState(projectDir, unit, intentId, record, issued, off, "build", "count").kind === "ask");
   } catch {
     return false;
   }
@@ -1701,13 +1913,16 @@ function planQuestionDue(projectDir: string): boolean {
 /**
  * The engine's Plan Approval question while it is the open step: whether every
  * plan it asks about has an answer, the choice on record when every plan has
- * the same one, and whether the person is editing the files. It reads none of
- * the person's words: the conductor reads their reply and records the choice.
- * Null when it is not the open step.
+ * the same one, whether the person is editing the files, and its question id
+ * (null on a record from before ids). It reads none of the person's words: the
+ * conductor reads their reply and records the choice. Null when it is not the
+ * open step.
  */
 export function openPlanApprovalQuestion(
   projectDir: string,
-): { answered: boolean; editing: boolean; recorded: PlanApprovalAnswerChoice | null } | null {
+): {
+  answered: boolean; editing: boolean; recorded: PlanApprovalAnswerChoice | null; questionId: string | null;
+} | null {
   try {
     const open = currentPlanApprovalAsk(projectDir, "all");
     if (open === null) return null;
@@ -1719,6 +1934,7 @@ export function openPlanApprovalQuestion(
       answered,
       editing: record.mode === "editing",
       recorded: record.mode === "editing" ? "edit" : answered && only !== null && only !== "repair" ? only : null,
+      questionId: record.questionId ?? null,
     };
   } catch {
     return null;
@@ -1746,7 +1962,7 @@ function approveTarget(
   const planAsFound = readText(planPath);
   let plan = planAsFound;
   const instructions = readText(join(dir, INSTRUCTIONS_FILE));
-  const view = targetView(projectDir, unit, changedBeforeApprovalLine(projectDir));
+  const view = targetView(projectDir, unit, underSummary(projectDir, [unit], changedBeforeApprovalLine(projectDir)));
   // Only the person's own editing turn makes a repair theirs. Anything else is
   // the engine's or the agent's own doing, and a question that calls it their
   // edit describes work they never did.
@@ -1796,8 +2012,8 @@ function approveTarget(
   const posture = resolveTestingPosture(projectDir);
   let contractHash = read.contract.contract_sha256;
   let rendered: string | null = null;
-  if (contractHash !== posture.contract_sha256) {
-    const refreshed = usableTestingContract(posture) ? replaceTestingContractSection(plan, posture) : null;
+  if (!testingContractCurrent(projectDir, read.contract, posture)) {
+    const refreshed = usableTestingContract(posture) ? replaceTestingContractSection(plan, posture, theirEdit) : null;
     if (refreshed === null) {
       return repair(`the Testing Contract in ${view.plan_path} is out of date and needs to be rendered again.`);
     }
@@ -1907,7 +2123,7 @@ function requestChangesFor(
   const approval = evaluateCodeGenerationApproval(projectDir, { unit });
   const dir = codeGenerationRecordDir(projectDir, unit);
   const questionsPath = join(dir, QUESTIONS_FILE);
-  const view = targetView(projectDir, unit, changedBeforeApprovalLine(projectDir));
+  const view = targetView(projectDir, unit, underSummary(projectDir, [unit], changedBeforeApprovalLine(projectDir)));
   const asked = record.targets.find((target) => target.unit === unit);
   const existing = readText(questionsPath);
   const theirLine = answerLineAsFound(
@@ -2288,8 +2504,9 @@ export function openEngineQuestion(projectDir: string): string | null {
 
 /**
  * The person sent the words of this message to separate new work, to a
- * reshape, or to park the work: the code plan question of this piece of work
- * keeps none of them as its reply.
+ * reshape, or to park the work, or sent them in a chat that was not shown the
+ * question as it stands: the code plan question of this piece of work keeps
+ * none of them as its reply.
  */
 export function withdrawPlanApprovalReplies(projectDir: string, which: { messageId: string }): void {
   const drop = (reply: PlanApprovalAskReply): boolean => reply.messageId === which.messageId;

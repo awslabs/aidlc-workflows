@@ -120,6 +120,11 @@ describe("t-unit-notes-in-unit-folder a solo Unit keeps its stage notes in its o
     expect(directive.memory_path).toBe(`${RP}/construction/alpha/functional-design/memory.md`);
     expect(existsSync(diary(p, "alpha", "functional-design"))).toBe(true);
     expect(existsSync(join(seededRecordDir(p), "construction", "functional-design"))).toBe(false);
+    // The diary's one line for the person says what is true: the step after the
+    // stage asks about corrections, never about these notes.
+    const made = readFileSync(diary(p, "alpha", "functional-design"), "utf-8").split(/\r?\n/);
+    expect(made).toContain("> This file is kept up to date automatically while the stage runs.");
+    expect(made.filter((line) => line.startsWith(">"))).toHaveLength(1);
   });
 
   test("the walking-skeleton ask, which names no Unit, makes no stage folder either", () => {

@@ -113,7 +113,7 @@ import {
   recordPlanApprovalHumanResponse,
   recordProtectedHumanResponse,
 } from "../tools/aidlc-testing-posture.ts";
-import { notePlanApprovalAskReply, openEngineQuestion, planQuestionBoxAsAsked } from "../tools/aidlc-plan-approval-ask.ts";
+import { gateNoticeBoxShown, notePlanApprovalAskReply, openEngineQuestion, planQuestionBoxAsAsked } from "../tools/aidlc-plan-approval-ask.ts";
 import { claudeTurnKey, noteClaudeTurnPending } from "../tools/aidlc-claude-turn-origin.ts";
 import { settleClaudeTurnsFirst } from "../tools/aidlc-claude-turn-pending.ts";
 import { openPlanQuestion } from "../tools/aidlc-question-store.ts";
@@ -583,7 +583,7 @@ async function run(input: string): Promise<number> {
   // fired: a host takes a hook's context only under its own event (a box
   // answer's line named UserPromptSubmit is dropped on Claude Code). And, for an
   // adapter that asked for it (wants_first_step_note), the first-step note in
-  // its own key: its host takes no context line from this hook (opencode).
+  // its own key, which it says its own way (opencode, Kiro CLI's V2 engine).
   const handover: {
     help: string | null; event: "UserPromptSubmit" | "PostToolUse"; firstStepNote: string | null;
   } = { help: null, event: "UserPromptSubmit", firstStepNote: null };
@@ -618,6 +618,8 @@ try {
   // the agent's question (planQuestionBoxInput); everything below reads the box
   // as the agent asked it.
   const input = runtimeHarnessName() === "claude" ? planQuestionBoxAsAsked(projectDir, received) : received;
+  // Before the turn moves the kept lines on (gateNoticeBoxShown).
+  gateNoticeBoxShown(projectDir, received);
   // A turn Claude Code started itself before this one is settled first, so
   // nothing below reads it as the person's (aidlc-claude-turn-origin.ts).
   settleClaudeTurnsFirst(projectDir);
@@ -649,8 +651,8 @@ try {
   // An adapter whose host may show the person this hook's context line says
   // so; the message-id line is then left to the steps of `next`.
   let contextMayReachPerson = false;
-  // An adapter whose host takes no context line from this hook asks for the
-  // first-step note in its own key (opencode); no other output changes.
+  // An adapter that says the first-step note its own way asks for it in its
+  // own key (opencode, Kiro CLI's V2 engine); no other output changes.
   let wantsFirstStepNote = false;
   try {
     const parsed = JSON.parse(input) as {
@@ -786,7 +788,7 @@ try {
     const theirText = [humanResponseText, ...picked].join("\n");
     if (!sessionId || !personHere || turnOrigin.kind === "host" || maskSecretShapes(theirText) === theirText) return;
     const session = sessionId;
-    forThePerson.push(() => saySecretMaskedOnce(projectDir, session));
+    forThePerson.push(() => saySecretMaskedOnce(projectDir, session, true));
   };
   // A help request the person typed is answered here, before any work exists
   // or this chat joins one, on every host that hands this hook's line to the

@@ -64,7 +64,7 @@ This chapter covers common issues and their solutions, organized by symptom.
 | `--offline requires --from <release-directory>` | Offline mode never falls back to a network release. Transfer the complete release asset set, then pass its directory with `--from` / `-From`; the installer verifies it. |
 | `aidlc` exits 4 or the Windows active pointer is invalid | The launcher (`aidlc.exe` or `aidlc.cmd` in bin) prints one `aidlc:` line naming the file it could not use (the active version marker, the active command target, or the active executable) followed by `Rerun the AI-DLC installer (install.ps1) to repair the aidlc command.` After `aidlc update` from an earlier release, that release's launcher, which exits 4 without printing anything, stays until the next `aidlc` command other than `aidlc doctor` or `aidlc uninstall` replaces it; that one command still runs through the old launcher, which splits a value with spaces into separate words. While it is there, `aidlc doctor` shows a `Windows launcher` row; when AI-DLC cannot replace it (for example because `aidlc.cmd` or `aidlc-shim.ps1` was changed after install), the row says why and names the step that fixes it. If the old launcher exits 4 before any command starts, rerun the installer. Do not edit `%LOCALAPPDATA%\aidlc\active-executable`. Rerun the same verified installer or use `aidlc use <version>` from a working retained executable. A line that says PowerShell runs the launcher in `ConstrainedLanguage` mode means an application control policy (AppLocker or WDAC) blocks it: ask your administrator to allow `aidlc-shim.ps1`, or run `%LOCALAPPDATA%\aidlc\versions\<version>\aidlc.exe` directly. |
 | On Windows, `aidlc-shim.ps1 cannot be loaded` or `is not digitally signed`, or the installer, `aidlc update`, `aidlc use` or `aidlc rollback` stops with an error that begins `command pointer validation failed for <version>: version probe returned 1 ""` | A Group Policy execution policy overrides the `-ExecutionPolicy Bypass` that `aidlc.cmd` passes, so PowerShell refuses the launcher before it runs. A release whose activation checks the new version through `aidlc.cmd` then undoes the activation: the previous version stays active, and after a first install none is. Run `Get-ExecutionPolicy -List`: the first row from the top that is not `Undefined` is the policy in effect, so `MachinePolicy` comes before `UserPolicy`. When that row is `MachinePolicy` or `UserPolicy` and reads `AllSigned` or `Restricted`, it is the cause; `RemoteSigned` and `Unrestricted` let the launcher run. Ask your administrator to allow the script, or run `%LOCALAPPDATA%\aidlc\versions\<version>\aidlc.exe` directly. |
-| `pending Windows uninstall` or a Windows uninstall recovery failure | Close active AI-DLC commands and run `aidlc doctor`. A pending cleanup resumes on the next command. If doctor reports a failed cleanup, resolve the reason it shows and run `aidlc uninstall` again by the full path doctor prints (normally `& "$env:LOCALAPPDATA\aidlc\bin\aidlc.exe" uninstall`, or the recorded `aidlc.cmd` when `aidlc.exe` and `aidlc.cmd` in bin are not both as AI-DLC installed them, since the PATH entry may already be gone; add `--purge` if the original used it): a cleanup that failed before removing files is planned again from disk, and one that had begun resumes. If that command no longer runs, run the installer again; it retries the pending cleanup first, so you may need to run it twice. Older or altered journals without a bound file plan are refused; keep the temp journal, cleanup script, machine fence, and remaining files for inspection. |
+| `pending Windows uninstall` or a Windows uninstall recovery failure | Close active AI-DLC commands and run `aidlc doctor`. A pending cleanup resumes on the next command. If doctor reports a failed cleanup, resolve the reason it shows and run `aidlc uninstall` again by the full path doctor prints (normally `& "$env:LOCALAPPDATA\aidlc\bin\aidlc.exe" uninstall`, or the recorded `aidlc.cmd` when `aidlc.exe` and `aidlc.cmd` in bin are not both as AI-DLC installed them, since the PATH entry may already be gone; add `--purge` if the original used it): a cleanup that failed before removing files is planned again from disk, and one that had begun resumes. If that command no longer runs, run the installer again; it retries the pending cleanup first, so you may need to run it twice. If doctor lists an invalid continuation (its temp journal or script is gone, unreadable, or was changed), run `aidlc uninstall` or the installer: either one removes the listed files, and nothing in them is run. |
 | `the last AI-DLC uninstall is still finishing` | Windows removes AI-DLC's files after `aidlc uninstall` ends: under a minute for one or two installed versions, longer for more or on a slower machine. Nothing was changed; run the installer again when the line says. A cleanup that stopped without finishing is started again by the first AI-DLC command other than doctor ten minutes after it began. |
 | Alpine reports missing `libstdc++.so.6` or `libgcc_s.so.1` | Install the same runtime dependencies required by Bun's and Node.js's musl builds with `apk add libgcc libstdc++`, then rerun the installer or command. Fully static Bun musl compile targets are not available today; the installer reports this remediation but does not install packages. |
 | `Providers` shows `[needs]` with `no recorded answers` although the harness already has its own model access | On Kiro CLI and Kiro IDE the row reads `[ok]` and `aidlc config providers` asks nothing, because model access comes with Kiro. On GitHub Copilot and Cursor the row reads `[ok]` with no answer, because the session brings model access; run `aidlc config providers` only to use your own Amazon Bedrock access (on Cursor, only the IDE takes Bedrock keys; its CLI always uses Cursor's backend). On every other harness the row is genuine: answer `amazon-bedrock`, or choose `keep current` (`--provider current`) to preserve and record the provider already configured for the harness. `--provider other --acknowledge` records a different provider you configured yourself. |
@@ -383,8 +383,8 @@ On Claude Code, per-stage token usage and cost tracking is on by default: the fo
 
 Hooks are registered project-wide in the harness's native configuration. On
 Claude, verify that `.claude/settings.json` contains the expected `hooks`
-events. For a native project, complete active workflows,
-then run `aidlc config --harness claude` to restore the shipped registrations;
+events. For a native project,
+run `aidlc config --harness claude` to restore the shipped registrations;
 your own hook entries are kept. A copy-channel project instead uses
 `bun .claude/tools/aidlc.ts config --harness claude --from <the runtime/claude root you copied from>`.
 No `--force` is needed. Notes tell you when registrations were restored.
@@ -417,7 +417,7 @@ Kiro IDE lets you switch any project hook off in its Agent Hooks panel, and then
 
 ---
 
-## Kiro Read Denials <a id="kiro-ide-read-denials"></a>
+## Kiro Read Denials<a id="kiro-ide-read-denials"></a>
 
 ### Kiro IDE or Kiro CLI v3 denies every read under .kiro/ ("deny fs_read matching")
 
@@ -729,12 +729,13 @@ anything more is built.
 
 **Symptom**: you answered the Plan Approval question, but AI-DLC shows it again.
 
-Your answer counts from any chat on this piece of work, in your own words ("1",
-"approve", "looks good", "rename the handler"): the agent records the choice
-you made, with your words beside it. The question comes back only when the
-agent could not record a choice, most often because the reply arrived before
-the question was shown, or in a chat where the harness did not pass it to
-AI-DLC. Answer the question it shows. If it keeps coming back, run
+Your answer counts from any chat on this piece of work that has shown you the
+question, in your own words ("1", "approve", "looks good", "rename the
+handler"): the agent records the choice you made, with your words beside it.
+In a new chat the question is shown to you there first, once, and your pick
+there is recorded. Otherwise the question comes back only when the agent could
+not record a choice, most often because the reply arrived before the question
+was shown, or in a chat where the harness did not pass it to AI-DLC. Answer the question it shows. If it keeps coming back, run
 `/aidlc --doctor`: a harness whose prompt hook does not run cannot record any
 reply. A long chat that compacts its context while the question waits keeps
 the question open, so your answer still counts.
@@ -760,7 +761,7 @@ pack, update AI-DLC and refresh the project's install. Repacking the repository
 or changing jj settings is unnecessary. A genuinely missing or unreadable
 HEAD object still needs repair.
 
-If the plan's Testing Contract is refused, the message names one of three
+The plan's `## Testing Contract` block is AI-DLC's own: before it asks you to approve the plan, it writes the block into the plan when the block is missing, broken or out of date. If the plan's Testing Contract is still refused, the message names one of three
 causes: the block is missing, it is not valid JSON, or it changed after it was
 rendered. The repair is the same for all three: re-run `render` and replace the
 whole `## Testing Contract` section. A changed block usually means a shell
@@ -779,7 +780,7 @@ you answer in your own words, from any chat, or edit the files.
 
 ---
 
-## A Bolt attempt was set aside — getting the files back
+## A Bolt attempt was set aside — getting the files back<a id="a-bolt-attempt-was-set-aside-getting-the-files-back"></a>
 
 A recovery can set aside an attempt when its reviewed files changed again and
 its one allowed re-review was already used. The recovery abort's `--discard`
@@ -939,7 +940,7 @@ To have the stage that was in progress done again, say "redo this stage".
 
 **Symptom** (GitHub Copilot): you approved the code plan, the build started, and after the chat compacted every build step the assistant tries is refused.
 
-Your approval, the workflow state, and every file already written are kept; only what the assistant had not yet written to a file is gone from the chat. After a compaction the assistant must read its step again before it builds anything. It runs `next` as its own command, which hands the approved build straight back without asking you again. `/aidlc --doctor` shows the step as out of date, with the time and the reason (the chat was compacted, or the workflow state changed after the step was issued, naming what changed when it is known), until that `next` runs.
+Your approval, the workflow state, and every file already written are kept; only what the assistant had not yet written to a file is gone from the chat. After a compaction the assistant must read its step again before it builds anything. It runs `next` as its own command, which hands the approved build straight back without asking you again. The chat is also handed the workflow contract and its current position back with the next tool result it gets, so the commands it issues keep their flags and names. `/aidlc --doctor` shows the step as out of date, with the time and the reason (the chat was compacted, or the workflow state changed after the step was issued, naming what changed when it is known), until that `next` runs.
 
 ---
 
@@ -1043,7 +1044,7 @@ code. The row is absent when the records are visible, outside a Git repository,
 or when Git is unavailable.
 
 On Claude Code, doctor also reads the machine-managed `managed-settings.json` and alphabetical `managed-settings.d/` fragments. If the effective `allowManagedHooksOnly` value is `true`, organization policy blocks every hook declared by the project's `.claude/settings.json`; only your Claude Code administrator can lift that policy. When that policy is not set and heartbeats are still absent after workflow progress, set `"disableAllHooks": false` in this project's `.claude/settings.local.json`; it works in the same chat.
-When a workflow has issues, `--doctor` also prints a **Workflow diagnosis** section listing structured findings (unresolved gates, a missing runtime graph, cold hooks, and similar "it will not advance" causes) — the same analysis `--doctor --export` writes to its report.
+When a workflow has issues, `--doctor` also prints a **Workflow diagnosis** section listing structured findings (a missing runtime graph, cold hooks, and similar "it will not advance" causes), the same analysis `--doctor --export` writes to its report.
 
 See [CLI Commands](12-cli-commands.md#aidlc-doctor-health-check) for full details on what each check validates and how to fix failures.
 
@@ -1071,15 +1072,16 @@ intent ids and Unit names are hashed, and secret-like values are scrubbed.
 The report reconstructs the workflow timeline from the audit trail and runs
 deterministic condition→remedy rules. The two most common causes it catches:
 
-- **Unresolved approval gates** — a stage whose gate never resolved is the single
-  most common "it will not advance" cause.
-- **Missing runtime graph / cold hooks**: a runtime graph that is absent, or a
-  hook that last fired more than a day before the newest stage or approval step
-  recorded on the intent, points at a recompile that did not run. Opening a chat,
+- **A stage waiting at its approval gate**: the single most common reason the
+  work does not advance. The report's timeline shows its Gate as `unresolved`;
+  it is no warning, since the workflow is waiting for your answer.
+- **Missing runtime graph / cold hooks**: a runtime graph that is absent, or
+  hooks that all last fired more than a day before the newest stage or approval
+  step recorded on the intent, point at a recompile that did not run. Opening a chat,
   a prompt and doctor's own audit rows are not counted as work, so an intent
   nobody is working on does not read as having cold hooks.
 
-`report.md` inside the report lists every finding with a remedy; a remedy that
+`report.md` inside the report lists every error and warning with a remedy (`report.json` also keeps the informational findings); a remedy that
 names a recovery bypass (such as an `AIDLC_DISABLE_*` env var) is flagged
 as not safe to automate. See [CLI Commands](12-cli-commands.md#aidlc-doctor-export-write-a-diagnostic-report)
 for the full report contents and safety model.

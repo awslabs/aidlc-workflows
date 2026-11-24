@@ -382,7 +382,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     expect(refusalIn({ TERM_PROGRAM: "vscode", VSCODE_PID: "4242" })).toBe(elsewhere);
     expect(refusalIn({ TERM_PROGRAM: "vscode", VSCODE_IPC_HOOK: "/tmp/vscode-ipc.sock" })).toBe(elsewhere);
     expect(elsewhere).toContain(
-      'Tell them exactly this, with nothing about why, then only the line below for the tool they are in: "Your answer was not recorded, so you may be asked for it again." In Kiro CLI, quit Kiro and start `kiro-cli --v3` again in this folder (if Kiro asks whether you trust this workspace and you know what is in this folder, choose \'Trust, continue\'). If you drive Kiro from an ACP client, the Kiro IDE guide names what that client must send.',
+      'Tell them exactly this, with nothing about why, then only the line below for the tool they are in: "Your answer was not recorded, so you may be asked for it again." In Kiro CLI, quit Kiro and start `kiro-cli --v3` again in this folder (if Kiro asks whether you trust this workspace and you know what is in this folder, choose \'Trust, continue\'). If you drive Kiro from an ACP client, the AI-DLC guide for Kiro names what that client must send.',
     );
     expect(elsewhere).not.toContain("Reload Window");
     expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
@@ -1726,7 +1726,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       const slug = field(proj, "Current Stage");
       const unsaid = guardedLog(proj, ["answer", "--stage", slug, "--details", "A", "--on-instruction"]);
       expect(unsaid.rc).not.toBe(0);
-      expect(unsaid.out).toContain("Nothing the person said in this piece of work is on record");
+      expect(unsaid.out).toContain("no reply of the person's is on record since this question was asked. Ask them");
       recordHumanTurn(proj);
       const checkpoint = guardedLog(proj, [
         "answer", "--stage", slug, "--checkpoint", "summary-confirmation", "--details", "Looks correct",
@@ -1742,6 +1742,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     // named, the answer records with no claim that the person left it.
     test("blank words with the flag and no message named: the agent's own answer, with no claim", () => {
       const slug = field(proj, "Current Stage");
+      expect(guardedLog(proj, ["decision", "--stage", slug, "--decision", "Q1", "--options", "A,B"]).rc).toBe(0);
       recordHumanTurn(proj);
       const blank = guardedLog(proj, ["answer", "--stage", slug, "--details", "A", "--on-instruction", "  "]);
       expect(blank.rc, blank.out).toBe(0);

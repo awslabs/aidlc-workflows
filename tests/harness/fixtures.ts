@@ -264,6 +264,28 @@ export function intentsDirOf(proj: string, space = DEFAULT_SPACE): string {
   return join(proj, "aidlc", "spaces", space, "intents");
 }
 
+/**
+ * Takes every repo addition's snapshot (the `Source Baseline Addition` an
+ * INTENT_REPOS_CHANGED row names) off this machine, as on a machine the add did
+ * not run on; the rows still name them. Returns how many files went.
+ */
+export function dropRepoBaselineAdditions(proj: string): number {
+  const named = new Set<string>();
+  for (const file of new Bun.Glob("**/audit/*.md").scanSync({ cwd: proj, dot: true })) {
+    for (const hit of readFileSync(join(proj, file), "utf-8").matchAll(/^\*\*Source Baseline Addition\*\*: sha256:([0-9a-f]{12})/gm)) {
+      named.add(hit[1]);
+    }
+  }
+  let dropped = 0;
+  for (const hash of named) {
+    for (const file of new Bun.Glob(`**/baseline-${hash}.tsv`).scanSync({ cwd: proj, dot: true })) {
+      rmSync(join(proj, file));
+      dropped++;
+    }
+  }
+  return dropped;
+}
+
 /** Which piece of work and stage a learnings selections file is bound to. */
 export interface LearningsSelectionsBinding {
   space: string;

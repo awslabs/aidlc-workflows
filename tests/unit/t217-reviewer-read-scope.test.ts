@@ -14,6 +14,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { readConductorSurface } from "../harness/conductor-skill.ts";
 import { AIDLC_SRC } from "../harness/fixtures.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
 
@@ -70,7 +71,7 @@ describe("t217 reviewer read-scope bound is stated on every surface", () => {
     expect(protocol.toLowerCase()).toContain("workflow-level");
     expect(protocol).toMatch(/workflow-level[\s\S]*contract-design/i);
     for (const harness of HARNESS_MATRIX) {
-      const body = readFileSync(join(harness.authoredRoot, SKILL), "utf-8");
+      const body = readConductorSurface(join(harness.authoredRoot, SKILL));
       const labelled = `harness ${harness.name}`;
       expect(body, labelled).toContain("stage-protocol-reviewer.md");
     }

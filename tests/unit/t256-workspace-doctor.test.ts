@@ -23,7 +23,7 @@ import {
 } from "../harness/test-budget.ts";
 import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { appendFileSync, cpSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { workspaceManifestChecks } from "../../core/tools/aidlc-workspace-doctor.ts";
@@ -149,6 +149,75 @@ describe("t256 workspace-doctor - advisory manifest rows", () => {
     expect(readFileSync(join(ws, "aidlc", ".aidlc-request-text", "request.txt"), "utf-8")).toBe("my later words\n");
   });
 
+  // The Kiro CLI (V2) hook's forwarding latch holds the first call it named
+  // for a request of the person's. Before the .gitignore part listed it, the
+  // records row's `git add aidlc/` took it in; once tracked, each request
+  // changes it in git, so doctor leaves it out of the records and names the
+  // step that takes it out of git.
+  test("a committed forwarding latch is left out of W1 and named with the step that untracks it", () => {
+    const ws = freshGitWorkspace();
+    const g = (...args: string[]) => spawnSync("git", ["-C", ws, ...args], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
+    const latch = join(ws, "aidlc", ".aidlc-forwarding-latch");
+    mkdirSync(dirname(latch), { recursive: true });
+    writeFileSync(latch, '{"turn":3,"raw":"my first words","args":["my","first","words"]}\n', "utf-8");
+    // Untracked and not ignored: never a record to commit, the ignore line is the step.
+    let rows = workspaceManifestChecks(ws);
+    expect(rows[0].label).toContain("no uncommitted changes under aidlc/");
+    let row = rows.find((r) => r.label.startsWith("Forwarding latch:"));
+    expect(row?.label).toBe("Forwarding latch: aidlc/.aidlc-forwarding-latch holds the words of a request of yours (1 not ignored)");
+    expect(row?.fix).toBe("add the line `aidlc/.aidlc-forwarding-latch` to the project folder's .gitignore, and check no later rule of yours un-ignores it, then commit and push the .gitignore change");
+    g("add", "aidlc");
+    g("commit", "-q", "-m", "earlier commit");
+    // The refreshed part ignores it, and a later request changes the tracked file.
+    writeFileSync(join(ws, ".gitignore"), "aidlc/.aidlc-forwarding-latch\n", "utf-8");
+    writeFileSync(latch, '{"turn":7,"raw":"my later words","args":["my","later","words"]}\n', "utf-8");
+    writeFileSync(join(ws, "aidlc", "note.md"), "a record\n", "utf-8");
+    rows = workspaceManifestChecks(ws);
+    row = rows.find((r) => r.label.startsWith("Forwarding latch:"));
+    expect(row).toMatchObject({ pass: false, severity: "warn" });
+    expect(row?.label).toContain("(1 that git tracks)");
+    expect(row?.fix).toBe(
+      "in the project folder, take it out of git, keeping the file: `git rm --cached -f -- aidlc/.aidlc-forwarding-latch`, " +
+        "then commit and push the removal, with .gitignore if its change is not committed yet",
+    );
+    // The records row counts the record, not the latch, and gives no commit command.
+    expect(rows[0].label).toContain("1 uncommitted change(s) under aidlc/");
+    expect(rows[0].label).toContain("once the forwarding latch steps below are done");
+    expect(rows[0].label).not.toContain("git add aidlc/");
+    expect(rows[0].fix).toBe("do the forwarding latch steps below first; then this row names the commit");
+    // Doctor only names the step: the file is still tracked.
+    expect(g("ls-files", "--", "aidlc/.aidlc-forwarding-latch").stdout.trim()).toBe("aidlc/.aidlc-forwarding-latch");
+    // The person runs it and commits: no row, and the records row its command again.
+    expect(g("rm", "--cached", "-f", "-q", "--", "aidlc/.aidlc-forwarding-latch").status).toBe(0);
+    g("commit", "-q", "-m", "untrack the latch");
+    rows = workspaceManifestChecks(ws);
+    expect(rows.some((r) => r.label.startsWith("Forwarding latch:"))).toBe(false);
+    expect(rows[0].label).toContain("`git add aidlc/`, `git commit`, `git push`");
+  });
+
+  // When git cannot run, the records and request-folder rows say so, and the
+  // latch row, a file of one harness, adds nothing.
+  test("with git not found, no latch row is added to the rows that say the check was skipped", () => {
+    const ws = freshGitWorkspace();
+    const path = process.env.PATH;
+    process.env.PATH = join(ws, "no-git-here");
+    try {
+      const skippedRows = () => {
+        const rows = workspaceManifestChecks(ws);
+        expect(rows.find((r) => r.label.startsWith("Workspace records:"))?.label).toContain("check skipped");
+        expect(rows.find((r) => r.label.startsWith("Request folder:"))?.label).toContain("check skipped");
+        expect(rows.some((r) => r.label.startsWith("Forwarding latch:"))).toBe(false);
+      };
+      skippedRows();
+      mkdirSync(join(ws, "aidlc"), { recursive: true });
+      writeFileSync(join(ws, "aidlc", ".aidlc-forwarding-latch"), '{"turn":1,"raw":"my words","args":["my","words"]}\n', "utf-8");
+      skippedRows();
+    } finally {
+      if (path === undefined) delete process.env.PATH;
+      else process.env.PATH = path;
+    }
+  });
+
   test("a request folder an older .gitignore does not ignore is named with the ignore line first", () => {
     const ws = freshGitWorkspace();
     const g = (...args: string[]) => spawnSync("git", ["-C", ws, ...args], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
@@ -194,7 +263,7 @@ describe("t256 workspace-doctor - advisory manifest rows", () => {
     expect(request?.fix).toBe("commit and push the removal, with .gitignore if its change is not committed yet");
     // With only the removal left, the records row gives its command again.
     writeFileSync(join(ws, "aidlc", "note.md"), "a record\n", "utf-8");
-    expect(workspaceManifestChecks(ws)[0].label).toContain("`git add aidlc/ && git commit && git push`");
+    expect(workspaceManifestChecks(ws)[0].label).toContain("`git add aidlc/`, `git commit`, `git push`");
     rmSync(join(ws, "aidlc", "note.md"));
     g("commit", "-q", "-m", "untrack the request");
     expect(workspaceManifestChecks(ws).some((r) => r.label.startsWith("Request folder:"))).toBe(false);
@@ -571,7 +640,7 @@ describe("t256 workspace-doctor - doctor's own audit log entries", () => {
     appendFileSync(seededAuditShard(ws), STAGE_ROW, "utf-8");
     row = workspaceManifestChecks(ws)[0];
     expect(row.label).toContain("Workspace records: 2 uncommitted change(s) under aidlc/");
-    expect(row.label).toContain("`git add aidlc/ && git commit && git push`");
+    expect(row.label).toContain("`git add aidlc/`, `git commit`, `git push`");
   });
 
   test("a clone whose audit log doctor started, beside a teammate's, is not told to commit it", () => {
@@ -602,5 +671,124 @@ describe("t256 workspace-doctor - doctor's own audit log entries", () => {
     expect(readFileSync(shard, "utf-8")).toContain("\r\n");
     doctorRecordsRow(ws);
     expect(workspaceManifestChecks(ws)[0]).toEqual({ pass: true, label: OWN_ENTRIES_ONLY });
+  });
+});
+
+// The setup config writes is the team's to share. The note config says once,
+// on the run that first writes a harness's setup into a git clone, doctor says
+// for as long as it holds: one row for each installed harness, in the note's
+// own words, and the records row then gives no command of its own, since
+// `git add aidlc/` alone leaves that setup out.
+describe("t256 workspace-doctor - the setup git does not track", () => {
+  const INIT = join(REPO_ROOT, "core", "tools", "aidlc-init.ts");
+  const SAID = "git does not track AI-DLC's setup";
+  const RECORDS_TO_COMMIT =
+    /^Workspace records: \d+ uncommitted change\(s\) under aidlc\/ \(advisory - the shared records travel by git; commit & push so teammates get them\)$/;
+
+  // A git repository with one commit of the project's own, at its canonical path.
+  function repository(): { ws: string; g: (...args: string[]) => ReturnType<typeof spawnSync> } {
+    const ws = realpathSync(freshGitWorkspace());
+    const g = (...args: string[]) => spawnSync("git", ["-C", ws, ...args], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
+    writeFileSync(join(ws, "README.md"), "# Shop\n", "utf-8");
+    g("add", "-A");
+    g("commit", "-q", "-m", "seed");
+    return { ws, g };
+  }
+
+  // Config as a person runs it, from the packaged release; its output with whitespace folded.
+  function configure(project: string, harness: string): string {
+    const run = spawnSync(process.execPath, [
+      INIT, "config", "--project-dir", project, "--from", join(REPO_ROOT, "dist-release", harness),
+      "--harness", harness, "--mcp", "none",
+    ], { cwd: project, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS) });
+    expect(run.status, `${run.stdout}${run.stderr}`).toBe(0);
+    return run.stdout.replace(/\s+/g, " ");
+  }
+
+  // The note as config printed it, without its "Note: " frame.
+  function noted(out: string): string {
+    const at = out.indexOf(SAID);
+    expect(at, out).toBeGreaterThan(-1);
+    const end = out.indexOf("get the same setup.", at);
+    expect(end, out).toBeGreaterThan(at);
+    return out.slice(at, end + "get the same setup.".length);
+  }
+
+  const setupRows = <Row extends { label: string }>(rows: Row[]): Row[] => rows.filter((row) => row.label.startsWith(SAID));
+
+  test("a new setup: doctor shows the line config said, and the records row names no command", () => {
+    const { ws } = repository();
+    const said = noted(configure(ws, "claude"));
+    expect(said).toContain("for Claude Code in this project yet: .claude/, aidlc/ and .gitignore.");
+    const rows = workspaceManifestChecks(ws);
+    expect(setupRows(rows)).toEqual([{ pass: false, severity: "warn", label: said }]);
+    expect(rows[0].label).toMatch(RECORDS_TO_COMMIT);
+    // The report doctor prints carries the same row, counted as a warning only.
+    const doctor = spawnSync(process.execPath, [join(ws, ".claude", "tools", "aidlc-doctor.ts"), "--json", "--project-dir", ws], {
+      cwd: ws,
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    const checks = (JSON.parse(doctor.stdout) as { data: { checks: Array<{ pass: boolean; severity?: string; label: string }> } }).data.checks;
+    expect(checks.filter((check) => check.label === said), doctor.stdout).toEqual([{ pass: false, severity: "warn", label: said }]);
+  });
+
+  test("aidlc/ committed and the rest not: the records row passes and the setup row names the rest", () => {
+    const { ws, g } = repository();
+    configure(ws, "claude");
+    g("add", "aidlc");
+    g("commit", "-q", "-m", "records");
+    const rows = workspaceManifestChecks(ws);
+    expect(rows[0]).toEqual({ pass: true, label: "Workspace records: no uncommitted changes under aidlc/" });
+    expect(setupRows(rows).map((row) => row.label)).toEqual([
+      `${SAID} for Claude Code in this project yet: .claude/ and .gitignore. Commit them so teammates who use Claude Code get the same setup.`,
+    ]);
+    // A record of the person's work beside it: counted, with no command that leaves the setup out.
+    writeFileSync(join(ws, "aidlc", "note.md"), "a record\n", "utf-8");
+    expect(workspaceManifestChecks(ws)[0].label).toMatch(RECORDS_TO_COMMIT);
+  });
+
+  test("two harnesses: one row each, in the words config said for each", () => {
+    const { ws } = repository();
+    const claude = noted(configure(ws, "claude"));
+    const codex = noted(configure(ws, "codex"));
+    expect(codex).toContain("for Codex CLI in this project yet: .agents/, .codex/, aidlc/, .gitignore and AGENTS.md.");
+    expect(setupRows(workspaceManifestChecks(ws)).map((row) => row.label)).toEqual([claude, codex]);
+  });
+
+  test("no row once git holds the setup, in a clone of it, outside git, or for a copied setup with no install record", () => {
+    const { ws, g } = repository();
+    configure(ws, "claude");
+    g("add", "-A");
+    g("commit", "-q", "-m", "Set up AI-DLC");
+    expect(setupRows(workspaceManifestChecks(ws))).toEqual([]);
+    const clones = realpathSync(mkdtempSync(join(tmpdir(), "aidlc-t256-clone-")));
+    tmpRoots.push(clones);
+    const clone = join(clones, "shop");
+    expect(spawnSync("git", ["clone", "-q", ws, clone], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) }).status).toBe(0);
+    configure(clone, "claude");
+    expect(setupRows(workspaceManifestChecks(clone))).toEqual([]);
+    const plain = realpathSync(mkdtempSync(join(tmpdir(), "aidlc-t256-plain-")));
+    tmpRoots.push(plain);
+    configure(plain, "claude");
+    expect(workspaceManifestChecks(plain)).toEqual([{ pass: true, label: "Workspace records: not a git repo - nothing to commit" }]);
+    const copied = freshGitWorkspace();
+    cpSync(join(REPO_ROOT, "dist", "claude"), copied, { recursive: true });
+    const rows = workspaceManifestChecks(copied);
+    expect(setupRows(rows)).toEqual([]);
+    expect(rows[0].label).toContain("`git add aidlc/`, `git commit`, `git push`");
+  });
+
+  test("while a request file git can see blocks a commit, no setup row names aidlc/ and the records row waits for the steps", () => {
+    const { ws } = repository();
+    configure(ws, "claude");
+    // A later rule of the person's un-ignores the request folder.
+    appendFileSync(join(ws, ".gitignore"), "\n!aidlc/.aidlc-request-text/\n", "utf-8");
+    mkdirSync(join(ws, "aidlc", ".aidlc-request-text"), { recursive: true });
+    writeFileSync(join(ws, "aidlc", ".aidlc-request-text", "request.txt"), "my words\n", "utf-8");
+    const rows = workspaceManifestChecks(ws);
+    expect(setupRows(rows)).toEqual([]);
+    expect(rows[0].label).toContain("commit & push them so teammates get them once the request folder steps below are done)");
+    expect(rows.some((row) => row.label.startsWith("Request folder:"))).toBe(true);
   });
 });

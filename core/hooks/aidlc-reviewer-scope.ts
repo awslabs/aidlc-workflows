@@ -73,7 +73,12 @@ import {
   validSessionId,
 } from "../tools/aidlc-lib.ts";
 import { scopeStampLanded } from "../tools/aidlc-unit-landing.ts";
-import { writeTargets } from "./review-freeze-command.ts";
+import {
+  RG_SHORT_VALUE_OPTIONS,
+  RG_VALUE_OPTIONS,
+  shellPatchTargets,
+  writeTargets,
+} from "./review-freeze-command.ts";
 
 const HOOK_NAME = "reviewer-scope";
 
@@ -503,15 +508,6 @@ const GREP_VALUE_OPTIONS = new Set([
   "--file", "--group-separator", "--include", "--include-dir", "--label",
   "--max-count", "--regexp",
 ]);
-const RG_VALUE_OPTIONS = new Set([
-  "--after-context", "--before-context", "--color", "--colors", "--context",
-  "--context-separator", "--dfa-size-limit", "--encoding", "--engine",
-  "--field-context-separator", "--field-match-separator", "--file", "--generate",
-  "--glob", "--hostname-bin", "--hyperlink-format", "--iglob", "--ignore-file",
-  "--max-columns", "--max-count", "--max-depth", "--max-filesize", "--path-separator",
-  "--pre", "--pre-glob", "--regex-size-limit", "--regexp", "--replace", "--sort",
-  "--sortr", "--threads", "--type", "--type-add", "--type-clear", "--type-not",
-]);
 
 // Parse options before deciding which positional word is a content pattern.
 // With -e/-f (even after an operand), every positional word names a file.
@@ -532,7 +528,7 @@ function searchArguments(words: ShellWord[], ripgrep: boolean): {
   let stdinPatterns = false;
   let optionsEnded = false;
   const valueOptions = ripgrep ? RG_VALUE_OPTIONS : GREP_VALUE_OPTIONS;
-  const shortValueOptions = ripgrep ? "ABCEMdefgjmrtT" : "ABCDdefm";
+  const shortValueOptions = ripgrep ? RG_SHORT_VALUE_OPTIONS : "ABCDdefm";
   const option = (name: string, value: string) => {
     if (name === "-e" || name === "--regexp") {
       patternSupplied = true;
@@ -980,9 +976,19 @@ async function checkScope(input: string, projectDir: string, outside: boolean, b
       };
       // A shell call that writes nothing (a read, a listing, a search) is the
       // checkout owner's own: only a command that writes is held to this Unit.
-      const writes = toolName !== "Bash" || writeTargets("Bash", toolInput, context.cwd).length > 0;
-      if (writes) {
-        scopedVerdict = evaluateReviewerScope(toolName, toolInput, { unit: unitScope.unit, exempt: [] }, context);
+      // A line whose every write is a patch's file is judged by those files,
+      // never by the patch's text, which may name another Unit's folder.
+      const written = toolName === "Bash" ? writeTargets("Bash", toolInput, context.cwd) : [];
+      const command = typeof toolInput?.command === "string" ? toolInput.command : "";
+      const patched = toolName === "Bash" ? shellPatchTargets(command, context.cwd) : [];
+      const scope = { unit: unitScope.unit, exempt: [] };
+      if (patched.length > 0 && written.every((target) => patched.includes(target))) {
+        for (const file of patched) {
+          scopedVerdict = evaluateReviewerScope("Write", { file_path: file }, scope, context);
+          if (scopedVerdict.block) break;
+        }
+      } else if (toolName !== "Bash" || written.length > 0) {
+        scopedVerdict = evaluateReviewerScope(toolName, toolInput, scope, context);
       }
     } catch (e) {
       recordHookDrop(projectDir, HOOK_NAME, errorMessage(e));

@@ -7,6 +7,7 @@
 // a reply keeps both halves; a question about a switch is the agent's to
 // answer. Driven end to end over the real hook, the real engine and the real
 // setter, with the session the chat runs under.
+import { readConductorSurface } from "../harness/conductor-skill.ts";
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -450,7 +451,7 @@ describe("the chain the agent follows ends, within three steps, and applies a se
     const refused: string[] = [];
     for (let call = 0; call < max; call += 1) {
       // The first call is the agent's own: bare (Copilot CLI), or with the
-      // person's line as its arguments (`next $ARGUMENTS`, Claude Code).
+      // person's line as its arguments (`next $ARGUMENTS`, as Cursor's and opencode's skills run it).
       const step = next(proj, call === 0 ? first : []);
       const kind = step.directive?.kind ?? "none";
       if (kind !== "print") return { prints, ran, refused, ended: kind };
@@ -611,7 +612,7 @@ describe("the chain the agent follows ends, within three steps, and applies a se
 describe("one reader of the line", () => {
   test("no skill says the hook applied the switch, and the hook's parser family is gone", () => {
     for (const harness of HARNESSES) {
-      const skill = readFileSync(join(REPO_ROOT, "harness", harness, "skills", "aidlc", "SKILL.md"), "utf-8");
+      const skill = readConductorSurface(join(REPO_ROOT, "harness", harness, "skills", "aidlc", "SKILL.md"));
       expect(skill, harness).not.toContain("the human-turn hook applied it");
       expect(skill, harness).not.toContain("the harness has already applied it");
     }

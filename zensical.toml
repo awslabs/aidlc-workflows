@@ -58,6 +58,7 @@ nav = [
       "guide/harnesses/codex-cli.md",
       "guide/harnesses/cursor.md",
       "guide/harnesses/opencode.md",
+      "guide/harnesses/copilot.md",
       "guide/harnesses/hermes.md",
     ] },
     { "Help and Examples" = [
@@ -102,6 +103,7 @@ nav = [
     { "Stage System" = [
       "reference/04-stage-protocol.md",
       "reference/15-stage-definition.md",
+      "reference/04-stages/README.md",
       "reference/04-stages/initialization.md",
       "reference/04-stages/ideation.md",
       "reference/04-stages/inception.md",

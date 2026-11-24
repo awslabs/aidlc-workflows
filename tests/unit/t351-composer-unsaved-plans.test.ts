@@ -68,6 +68,7 @@ import {
   setupIntegrationProject,
   withEnvAndFreshCaches,
 } from "../harness/fixtures.ts";
+import { readConductorSurface } from "../harness/conductor-skill.ts";
 
 const BUN = process.execPath;
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -1091,7 +1092,7 @@ describe("t351 (7) every conductor surface offers the save and never writes scop
   const harnesses = ["claude", "codex", "copilot", "cursor", "kiro", "kiro-ide", "opencode"];
   // A conductor reads the composer.md beside its SKILL.md when a plan is composed.
   const read = (surface: string) => {
-    const text = readFileSync(join(REPO_ROOT, surface), "utf-8");
+    const text = readConductorSurface(surface);
     if (!surface.endsWith("/skills/aidlc/SKILL.md")) return text;
     return `${text}\n${readFileSync(join(REPO_ROOT, surface.replace(/SKILL\.md$/, "composer.md")), "utf-8")}`;
   };
@@ -1153,7 +1154,7 @@ describe("t351 (8) a custom plan starts from classic's ceremony, whatever stock 
   } as const;
   // A conductor reads the composer.md beside its SKILL.md when a plan is composed.
   const read = (surface: string) => {
-    const text = readFileSync(join(REPO_ROOT, surface), "utf-8");
+    const text = readConductorSurface(surface);
     const composer = surface.endsWith("/skills/aidlc/SKILL.md")
       ? `\n${readFileSync(join(REPO_ROOT, surface.replace(/SKILL\.md$/, "composer.md")), "utf-8")}`
       : "";

@@ -170,7 +170,7 @@ describe("parseWorkspaceCommand", () => {
       noun: "intent",
       code: "missing-name",
       verb: "switch",
-      message: "Usage: aidlc intent switch <name>",
+      message: "Usage: /aidlc intent switch <name>",
     });
     expect(parseWorkspaceCommand(["intent", "create", "--scope", "poc", "--label", "x"])).toEqual({
       kind: "create-intent",
@@ -228,13 +228,13 @@ describe("parseWorkspaceCommand", () => {
       kind: "error",
       noun: "space",
       code: "missing-name",
-      message: "Usage: aidlc space create <name>",
+      message: "Usage: /aidlc space create <name>",
     });
     expect(parseWorkspaceCommand(["space", "switch"])).toMatchObject({
       kind: "error",
       noun: "space",
       code: "missing-name",
-      message: "Usage: aidlc space switch <name>",
+      message: "Usage: /aidlc space switch <name>",
     });
   });
 
@@ -301,7 +301,7 @@ describe("parseWorkspaceCommand", () => {
       kind: "error",
       code: "missing-name",
       verb: "set-repos",
-      message: "Usage: aidlc intent set-repos <name,...|--all>",
+      message: "Usage: /aidlc intent set-repos <name,...|--all>",
     });
   });
 
@@ -325,7 +325,7 @@ describe("parseWorkspaceCommand", () => {
       kind: "error",
       code: "missing-name",
       verb: "add-checkout",
-      message: "Usage: aidlc intent add-checkout <path>",
+      message: "Usage: /aidlc intent add-checkout <path>",
     });
   });
 
@@ -362,7 +362,7 @@ describe("parseWorkspaceCommand", () => {
         noun: "intent",
         code: "missing-name",
         verb,
-        message: `Usage: aidlc intent ${verb} <name>`,
+        message: `Usage: /aidlc intent ${verb} <name>`,
       });
       expect(parseWorkspaceCommand(["intent", verb, "--reason", "x"])).toMatchObject({
         kind: "error",
@@ -498,11 +498,11 @@ describe("classifier and next parser parity", () => {
 
   test("parser errors agree between classifier and next", () => {
     const rows = [
-      { args: ["space", "create"], message: "Usage: aidlc space create <name>" },
-      { args: ["space", "switch"], message: "Usage: aidlc space switch <name>" },
-      { args: ["intent", "switch"], message: "Usage: aidlc intent switch <name>" },
-      { args: ["intent", "archive"], message: "Usage: aidlc intent archive <name>" },
-      { args: ["intent", "unarchive"], message: "Usage: aidlc intent unarchive <name>" },
+      { args: ["space", "create"], message: "Usage: /aidlc space create <name>" },
+      { args: ["space", "switch"], message: "Usage: /aidlc space switch <name>" },
+      { args: ["intent", "switch"], message: "Usage: /aidlc intent switch <name>" },
+      { args: ["intent", "archive"], message: "Usage: /aidlc intent archive <name>" },
+      { args: ["intent", "unarchive"], message: "Usage: /aidlc intent unarchive <name>" },
     ];
     for (const row of rows) {
       const cmd = classifyTerminalCommand(row.args);
@@ -875,7 +875,7 @@ describe("utility handlers and reservation chokepoints", () => {
       // A shell has no agent to hand extra words to: the dispatcher says the usage line.
       const extra = runDispatcher(REPO_ROOT, ["engine", "intent", "show", "extra", "--project-dir", projectDir]);
       expect(extra.status).not.toBe(0);
-      expect(`${extra.stdout}${extra.stderr}`).toContain("Usage: aidlc intent switch <name>");
+      expect(`${extra.stdout}${extra.stderr}`).toContain("Usage: bun .claude/tools/aidlc.ts engine intent switch <name>");
       const made = scratchProject();
       try {
         expect(() => createIntent(made, "show", "default", "feature")).not.toThrow();

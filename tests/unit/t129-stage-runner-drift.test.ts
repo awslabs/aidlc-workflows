@@ -60,10 +60,11 @@
 //        stages; init stages are bootstrap and ship no per-stage runner).
 //   handleWrite() - (re)generate one skills/aidlc-<slug>/SKILL.md per runnable
 //        stage + the single /aidlc-init wrapper; PRUNE stale init-stage runners.
-//   isRunnerSkill(path) - on-disk runner SIGNATURE: SKILL.md body carries the
-//        `--stage` + `--single` markers (so an orphan is detectable by body, not by
-//        compiled-set membership — non-runner skills + scope-runners are never
-//        mistaken for stage-runners).
+//   runnerSkill(path, dir) - an on-disk runner AI-DLC generated: SKILL.md body
+//        drives `--stage <slug> --single` (so an orphan is detectable by body, not
+//        by compiled-set membership) and carries the generated-by marker or a
+//        markerless runner's aidlc-<slug> name, so the main aidlc skill, a
+//        project's own skill and the scope-runners are never counted.
 //   handleCheck() - drift guard: onDiskRunnerSlugs() set == stageSlugs() set;
 //        exit 0 + "in sync" on match, else console.log MISSING/ORPHAN diff +
 //        process.exit(1).
@@ -106,6 +107,7 @@ import { join } from "node:path";
 import {
   AIDLC_SRC,
   cleanupTestProject,
+  REPO_ROOT,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
 
@@ -141,7 +143,7 @@ function compiledRunnableSlugs(): string[] {
 
 /** The on-disk runner slugs whose slug is a RUNNABLE compiled slug, sorted — the
  *  .sh's ON_DISK set: every skills/aidlc-<slug>/ dir with a SKILL.md whose slug is
- *  a compiled runnable stage. Independent of isRunnerSkill (the .sh kept any
+ *  a compiled runnable stage. Independent of runnerSkill (the .sh kept any
  *  aidlc-<slug>/ dir present in COMPILED), so this is a pure second source. */
 function onDiskRunnableSlugs(compiledSet: Set<string>): string[] {
   const found: string[] = [];
@@ -253,7 +255,7 @@ describe("t129 stage-runner drift guard (migrated from t129-stage-runner-drift.s
   // Test 5 — §6-E NON-GOLDEN: the guard CATCHES an ORPHAN runner. In a SANDBOX,
   // add a bogus runner carrying the `--stage … --single` signature for a slug NOT
   // in the graph; `check` must FIRE: exit 1 AND name it under "ORPHAN". The orphan
-  // must carry the runner SIGNATURE or isRunnerSkill would not see it.
+  // must carry the runner SIGNATURE or runnerSkill would not see it.
   // ===========================================================================
   test("check exits 1 and names an ORPHAN runner for a slug not in the graph [.sh test 6]", () => {
     const { gen, skills } = newSandbox();
@@ -262,7 +264,7 @@ describe("t129 stage-runner drift guard (migrated from t129-stage-runner-drift.s
     mkdirSync(orphanDir, { recursive: true });
     // Byte-for-byte the .sh's orphan heredoc: a realistic stage-runner left behind
     // after its stage was dropped — it carries the `--stage <slug> --single`
-    // signature isRunnerSkill keys on (so a non-runner skill is never miscounted).
+    // signature runnerSkill keys on, under a generated runner's aidlc-<slug> name.
     writeFileSync(
       join(orphanDir, "SKILL.md"),
       [
@@ -284,6 +286,26 @@ describe("t129 stage-runner drift guard (migrated from t129-stage-runner-drift.s
     expect(r.out).toContain("ORPHAN");
     // STRONGER than the .sh's word grep: the diff NAMES the orphan slug.
     expect(r.out).toContain(orphanSlug);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // AI-DLC's main skill names the single Reverse Engineering run in its
+  // plain-chat paragraph and carries no generated-by marker: it is no runner.
+  test("check names a missing reverse-engineering runner although the main aidlc skill names its single run", () => {
+    const { gen, skills } = newSandbox();
+    expect(readFileSync(join(skills, "aidlc", "SKILL.md"), "utf-8")).toContain("--stage reverse-engineering --single");
+    rmSync(join(skills, "aidlc-reverse-engineering"), { recursive: true, force: true });
+    const r = runGen(gen, ["check"]);
+    expect(r.status, r.out).toBe(1);
+    expect(r.out).toContain("MISSING");
+    expect(r.out).toContain("reverse-engineering (aidlc-reverse-engineering)");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("write says nothing about AI-DLC's main skill", () => {
+    const { gen, skills } = newSandbox();
+    const r = runGen(gen, ["write"]);
+    expect(r.status, r.out).toBe(0);
+    expect(r.out).not.toContain("unmanaged skill");
+    expect(existsSync(join(skills, "aidlc", "SKILL.md"))).toBe(true);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // ===========================================================================
@@ -344,7 +366,10 @@ describe("t129 stage-runner drift guard (migrated from t129-stage-runner-drift.s
   // `/aidlc "<description>"` shows, never a default scope the person did not see.
   test("the /aidlc-init runner sends a description without a scope to the plan offer", () => {
     const initSkill = readFileSync(join(SKILLS_DIR, "aidlc-init", "SKILL.md"), "utf-8");
-    expect(initSkill).toContain("orchestrate.ts next --new-intent $ARGUMENTS");
+    // On Claude Code the first command carries none of the person's words; another tree's still forwards them.
+    expect(initSkill).toContain("orchestrate.ts next --entry --new-intent\n");
+    expect(readFileSync(join(REPO_ROOT, "dist", "codex", ".agents", "skills", "aidlc-init", "SKILL.md"), "utf-8"))
+      .toContain("orchestrate.ts next --new-intent $ARGUMENTS");
     expect(initSkill.replace(/\s+/g, " ")).toContain("From here the flow IS the `/aidlc` flow");
     expect(initSkill).not.toContain("else `classic`");
     expect(initSkill).not.toMatch(/orchestrate(?:\.ts)?\s+next\s+--scope/);

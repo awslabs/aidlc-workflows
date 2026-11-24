@@ -65,6 +65,18 @@ describe("a value AI-DLC's word list holds is kept only where its field holds AI
   });
 });
 
+describe("a Unit approved over its check that did not pass", () => {
+  test("the verification's and the approval's fields keep AI-DLC's words, and hold none of the person's", () => {
+    const v = vocab();
+    v.words.add("approved in words");
+    v.words.add("not passed");
+    const s = shape();
+    expect(shapeValue(v, s, "CHECKPOINT_VERIFICATION_RECORDED", "Check Not Passed", "approved in words")).toBe("approved in words");
+    expect(shapeValue(v, s, "GATE_APPROVED", "Check", "not passed")).toBe("not passed");
+    expect(shapeValue(v, s, "GATE_APPROVED", "Check", "something they said")).toBe("<custom-value-1>");
+  });
+});
+
 describe("AI-DLC's own sentences keep their fixed text and label what was filled in", () => {
   test("an error: the phrase stays, the Unit in it is a label", () => {
     const v = vocab();

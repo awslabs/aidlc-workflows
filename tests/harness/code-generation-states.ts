@@ -13,6 +13,7 @@ import { expect } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
+import { codexRefusal } from "./codex-hook-answer.ts";
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "./test-budget.ts";
 import {
   AIDLC_SRC,
@@ -126,13 +127,13 @@ export function stageDir(proj: string, unit: string | null = null): string {
   return join(seededRecordDir(proj), "construction", ...(unit ? [unit] : []), "code-generation");
 }
 
-export function writePlan(proj: string, extra = "", unit: string | null = null): void {
+export function writePlan(proj: string, extra = "", unit: string | null = null, contract = resolveTestingPosture(proj)): void {
   mkdirSync(stageDir(proj, unit), { recursive: true });
   writeFileSync(
     join(stageDir(proj, unit), "code-generation-plan.md"),
     "# Code Generation Plan\n\n## Summary\n\n- Builds: slugify for titles\n- Touches: src/slugify.ts\n" +
       `- Tests: 3 unit tests\n\n## Steps\n\n- [ ] Step 1: write slugify\n${extra}\n` +
-      renderTestingContract(resolveTestingPosture(proj)),
+      renderTestingContract(contract),
     "utf-8",
   );
   writeFileSync(
@@ -510,6 +511,23 @@ export const STATES: StateBuilder[] = [
     },
   },
   {
+    id: "S13", name: "Guard Policy strict, the Testing Contract moved after approval",
+    build: () => {
+      const proj = createCodeGenerationProject("strict");
+      next(proj);
+      askOpen(proj);
+      approve(proj);
+      next(proj);
+      // A practice added to the posture, as a teammate's merged change brings it.
+      const memory = join(proj, "aidlc", "spaces", "default", "memory", "project.md");
+      const text = readFileSync(memory, "utf-8");
+      if (!text.includes("## Testing Posture\n")) throw new Error("project.md has no Testing Posture section");
+      writeFileSync(memory, text.replace("## Testing Posture\n",
+        "## Testing Posture\n\n- Run the unit tests of each changed module before reporting a build.\n"), "utf-8");
+      return { proj, session: SESSION, approved: false, how: "approved and building, then a Testing Posture line added under strict" };
+    },
+  },
+  {
     id: "S9", name: "a recovery question left behind while the plan waits",
     build: () => {
       // The engine issues its recovery question from a guard's refusal routed
@@ -711,6 +729,12 @@ function stderrVerdict(result: RunResult): Verdict {
   return { code: result.status === 2 ? 2 : result.status === 0 ? 0 : result.status, said: result.status === 0 ? "" : result.stderr.trim() };
 }
 
+// The Codex adapter's guard-tool-call refuses on Windows with the deny JSON.
+function codexVerdict(result: RunResult): Verdict {
+  const refusal = codexRefusal({ code: result.status, stdout: result.stdout, stderr: result.stderr });
+  return refusal === null ? stderrVerdict(result) : { code: 2, said: refusal.trim() };
+}
+
 function claudeInput(call: ToolCall, dir: string): { tool_name: string; tool_input: Record<string, unknown> } {
   switch (call.tool) {
     case "Bash": return { tool_name: "Bash", tool_input: { command: respell(call.command, dir) } };
@@ -761,7 +785,7 @@ const codex: Shape = {
       CODEX_ENV,
     ));
   },
-  mcp: (proj, session) => stderrVerdict(spawnShape(
+  mcp: (proj, session) => codexVerdict(spawnShape(
     proj, [join(proj, ".codex", "hooks", "aidlc-codex-adapter.ts"), "guard-tool-call"],
     {
       hook_event_name: "PreToolUse", cwd: proj, session_id: session,
