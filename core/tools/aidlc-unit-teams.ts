@@ -229,6 +229,19 @@ export function recordsNoReposFromHere(projectDir: string, work: { dirName: stri
     constructionHasStarted(readStateFile(projectDir, work.dirName, work.space), recordDir(projectDir, work.dirName, work.space));
 }
 
+// A repository of its own that a Unit's record names, in the work here when it
+// records no repos from here: a folder that is a git repository other than the
+// workspace's own. The one check a Unit's push and its review request read
+// before they say the Unit changed a repository of its own; a name with nothing
+// on disk (a record spelt wrongly), a plain folder, or the workspace's own
+// folder keeps their own lines.
+export function namesRepoOfItsOwn(projectDir: string, repo: string): boolean {
+  const { intent, space } = resolveWorkflowSelection(projectDir);
+  if (!intent || !recordsNoReposFromHere(projectDir, { dirName: intent, space, repos: intentRepos(projectDir, intent, space) })) return false;
+  const dir = resolve(repoDir(projectDir, repo));
+  return dir !== resolve(projectDir) && isGitRepoDir(dir);
+}
+
 // The rows since the person last chose teams, in time order.
 function sinceTeams(rows: readonly AuditShardEvent[]): AuditShardEvent[] {
   const ordered = [...rows].sort((a, b) => (a.timestamp < b.timestamp ? -1 : a.timestamp > b.timestamp ? 1 : 0));

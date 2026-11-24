@@ -19,6 +19,7 @@ import { basename, dirname, join, relative } from "node:path";
 import { noteEngineAskMark, personRepliedAfter, readAuditShardEvents, engineAskMark } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { bringBranchLevel, unitBranchInTheWay, workToCommit } from "../../dist/claude/.claude/tools/aidlc-unit.ts";
+import { namesRepoOfItsOwn } from "../../dist/claude/.claude/tools/aidlc-unit-teams.ts";
 import { AIDLC_SRC, fixtureIntentId8, REPO_ROOT, seededStateFile, writeLearningsSelections } from "../harness/fixtures.ts";
 import { typedHarnessName } from "../../core/tools/aidlc-runtime-paths.ts";
 import {
@@ -188,6 +189,32 @@ describe("a Unit on the workspace's own repository", () => {
     expect(pushed.status, pushed.out).toBe(0);
     const claim = claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds") as { result: { repos: Array<{ repo: string; address?: string }> } };
     expect(claim.result.repos.map((repo) => [repo.repo, repo.address ?? null])).toEqual([[".", null]]);
+  });
+
+  // One check says a Unit's record names a repository of its own, in work that keeps its code in the workspace
+  // folder itself once Construction has started: a folder that is a git repository other than the workspace's own,
+  // beside it or inside it. A name with nothing on disk, a plain folder, or the workspace's own folder is none.
+  test("one check says when a record names a repository of its own in work that records no repos", () => {
+    const home = oneRepoTeams();
+    const alice = cloneOf(home.remote, "alice");
+    builtHere(alice, "refunds", "refunds.ts");
+    const inside = join(alice, "web");
+    mkdirSync(inside, { recursive: true });
+    git(inside, ["init", "-q", "-b", "main"]);
+    const beside = `${alice}-billing`;
+    mkdirSync(beside, { recursive: true });
+    git(beside, ["init", "-q", "-b", "main"]);
+    mkdirSync(join(alice, "docs"), { recursive: true });
+    writeFileSync(join(alice, "aidlc", "repos.json"), `${JSON.stringify({
+      repos: [{ name: "billing", path: `../${basename(beside)}` }, { name: "shop", path: "." }],
+    }, null, 2)}\n`);
+    expect(namesRepoOfItsOwn(alice, "web")).toBe(true);
+    expect(namesRepoOfItsOwn(alice, "billing")).toBe(true);
+    expect(namesRepoOfItsOwn(alice, "docs")).toBe(false);
+    expect(namesRepoOfItsOwn(alice, "wbe")).toBe(false);
+    expect(namesRepoOfItsOwn(alice, "shop")).toBe(false);
+    // The lead's own project, nothing built there: add-repo still records repos from here.
+    expect(namesRepoOfItsOwn(home.dir, "web")).toBe(false);
   });
 
   test("its branch starts from the lead's main as fetched, never from the clone's own main left behind", () => {
