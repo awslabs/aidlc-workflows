@@ -612,17 +612,21 @@ describe("a Unit on the workspace's own repository", () => {
       "web/app.js and 1 more are inside web, a repository of its own, and yours to commit and push there", "web",
     ));
     endedAsNotNow(home, alice, record);
-    // In that chat the push is not asked again, and nothing says it is not pushed yet.
+    // In that chat the Units still open are offered once, then the build's end
+    // says nothing of the push: the line it says after a Not now was heard here.
     const after = personsNext(alice, chat, session);
-    expect(after.ask_type ?? null, JSON.stringify(after).slice(0, 600)).not.toBe("unit-push");
-    expect(JSON.stringify(after)).not.toContain("not pushed yet");
-    // A new chat opens on the board, as after a Not now: it offers to carry on
-    // refunds and says nothing of its push; carrying it on is what says it once.
+    expect(after.ask_type, JSON.stringify(after).slice(0, 600)).toBe("unit-take");
+    const end = personsNext(alice, chat, session);
+    expect(end.kind, JSON.stringify(end).slice(0, 600)).toBe("done");
+    expect(JSON.stringify(end)).not.toContain("not pushed yet");
+    // A new chat, as after a Not now: the board's offer, then the build's end
+    // says once that it is not pushed yet; its yes comes back to the same notice.
     const other = "t-unit-own-repo-nothing-left-other";
     const there = personsNext(alice, personsChat(other), other);
     expect(there.ask_type, JSON.stringify(there).slice(0, 600)).toBe("unit-take");
     expect((there.choices as Array<{ label: string }>).map((choice) => choice.label)).toContain("Carry on refunds");
-    expect(JSON.stringify(there)).not.toContain("not pushed yet");
+    const thereEnd = personsNext(alice, personsChat(other), other);
+    expect(JSON.stringify(thereEnd)).toContain("refunds is built and approved, and not pushed yet. Do you want me to push it now?");
     // A redo they ask for in words still runs.
     expect(hook(alice, chat, { hook_event_name: "UserPromptSubmit", session_id: session, prompt: "take refunds back to Code Generation" }).status).toBe(0);
     const back = run(ORCH, ["report", "--result", "resumed", "--choice", "redo", "--target", "code-generation"], alice, chat);
