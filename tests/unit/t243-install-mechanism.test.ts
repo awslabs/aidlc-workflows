@@ -10099,8 +10099,11 @@ describe("t243 AI-DLC's .gitattributes part", () => {
     expect(configured.status, configured.stdout + configured.stderr).toBe(0);
   }
   const attributes = (project: string): string => readFileSync(join(project, ".gitattributes"), "utf-8");
-  const attr = (cwd: string, path: string, ...source: string[]): string =>
-    spawnSync("git", ["check-attr", ...source, "linguist-generated", "gitlab-generated", "--", path], { cwd, encoding: "utf-8" }).stdout;
+  const attr = (cwd: string, path: string): string => {
+    const result = spawnSync("git", ["check-attr", "linguist-generated", "gitlab-generated", "--", path], { cwd, encoding: "utf-8" });
+    expect(result.status, `git check-attr: ${result.stderr}`).toBe(0);
+    return result.stdout;
+  };
   const both = (path: string, value: string): string =>
     `${path}: linguist-generated: ${value}\n${path}: gitlab-generated: ${value}\n`;
   // The release before this part: none at the root, none in root-blocks, none declared.
@@ -10224,8 +10227,11 @@ describe("t243 AI-DLC's .gitattributes part", () => {
     const host = temp("aidlc-t243-ga-bare-");
     git(host, ["init", "-q", "--bare", "-b", "main"]);
     git(project, ["push", "-q", host, "main"]);
-    expect(attr(host, RECORD, "--source", "main")).toBe(both(RECORD, "set"));
-    expect(attr(host, RULES, "--source", "main")).toBe(both(RULES, "unspecified"));
+    // The host's own copy is a clone of it: check-attr --source on a bare repository needs git 2.40 or later.
+    const copy = temp("aidlc-t243-ga-copy-");
+    git(copy, ["clone", "-q", host, "."]);
+    expect(attr(copy, RECORD)).toBe(both(RECORD, "set"));
+    expect(attr(copy, RULES)).toBe(both(RULES, "unspecified"));
   });
 
   test("a release that stops shipping it takes AI-DLC's part out, and the person's file is byte for byte theirs", () => {
