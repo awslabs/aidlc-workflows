@@ -133,6 +133,7 @@ describe("t-mockups-preview-policy-at-review", () => {
     const said = String((JSON.parse(refused.out.trim().split("\n").at(-1) ?? "{}") as { error?: string }).error);
     expect(said).toContain("mockups-preview.html must open its <head> with");
     expect(said).toContain(PREVIEW_POLICY_TAG);
+    expect(said, "the refusal names the review to run again").toMatch(/run `[^`]*review --stage refined-mockups[^`]*`/);
     expect(requests(), "nothing is bound for review").toBe(0);
 
     put(join(dir, "mockups-preview.html"), FORMATTED);

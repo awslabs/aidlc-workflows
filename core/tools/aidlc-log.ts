@@ -3575,9 +3575,16 @@ class ReviewRefusal extends Error {
 // The Refined Mockups preview, when one is written, is opened in a browser:
 // the review request, where the engine first binds the outputs, refuses one
 // whose head does not open with the policy tag.
-function refusePreviewWithoutPolicy(pd: string, node: Parameters<typeof previewPolicyProblem>[1], stage: string): void {
+function refusePreviewWithoutPolicy(
+  pd: string,
+  node: Parameters<typeof previewPolicyProblem>[1],
+  stage: string,
+  again: string,
+): void {
   const problem = previewPolicyProblem(pd, node);
-  if (problem !== null) refuseReview(`Cannot start review for "${stage}": ${problem} Rewrite its head that way, then retry the review.`);
+  if (problem !== null) {
+    refuseReview(`Cannot start review for "${stage}": ${problem} Rewrite its head that way, then run \`${again}\`.`);
+  }
 }
 
 function refuseReview(message: string, changeNotices: readonly string[] = []): never {
@@ -4745,7 +4752,7 @@ function handleReview(args: string[]): void {
                 "NOT-READY fallback or start the next permitted review iteration.",
             );
           }
-          refusePreviewWithoutPolicy(pd, node, flags.stage);
+          refusePreviewWithoutPolicy(pd, node, flags.stage, requestAgain(iteration));
           const snapshot = reviewArtifactSnapshot(pd, node, flags.unit, {
             requireRequiredArtifacts,
             boltDag: unitResolution ?? undefined,
@@ -4862,7 +4869,7 @@ function handleReview(args: string[]): void {
                 `\`${requestAgain(replaceIteration)}\`.`,
             );
           }
-          refusePreviewWithoutPolicy(pd, node, flags.stage);
+          refusePreviewWithoutPolicy(pd, node, flags.stage, requestAgain(replaceIteration));
           const snapshot = reviewArtifactSnapshot(pd, node, flags.unit, {
             requireRequiredArtifacts,
             boltDag: unitResolution ?? undefined,
@@ -5009,7 +5016,7 @@ function handleReview(args: string[]): void {
                 : "source";
           recovery = "stale-receipt";
         }
-        refusePreviewWithoutPolicy(pd, node, flags.stage);
+        refusePreviewWithoutPolicy(pd, node, flags.stage, requestAgain(iteration));
         const snapshot = reviewArtifactSnapshot(pd, node, flags.unit, {
           requireRequiredArtifacts,
           boltDag: unitResolution ?? undefined,
