@@ -199,6 +199,7 @@ import {
   homeLocation,
   PROJECT_TYPE_SOURCE_FIELD,
   PROJECT_TYPE_SOURCE_HOME,
+  recordsNoReposFromHere,
   unitBuildOf,
 } from "./aidlc-unit-teams.ts";
 import {
@@ -9914,9 +9915,9 @@ function handleIntentRepos(
   }
   // Checked before anything is written or cloned, and again under the locks.
   const recorded = readIntentRegistry(projectDir, space).find((entry) => recordDirMatches(entry, dirName))?.repos ?? [];
-  const built = (): boolean =>
-    constructionHasStarted(readStateFile(projectDir, dirName, space), recordDir(projectDir, dirName, space));
-  if (verb === "add-repo" && recorded.length === 0 && built()) die(checkoutWayOn(projectDir, "add-repo", [name], flags.path));
+  if (verb === "add-repo" && recordsNoReposFromHere(projectDir, { dirName, space, repos: recorded })) {
+    die(checkoutWayOn(projectDir, "add-repo", [name], flags.path));
+  }
   const mapping = verb === "add-repo" && flags.path !== undefined && !recorded.includes(name)
     ? plannedRepoPath(projectDir, name, flags.path, flags.url)
     : null;
@@ -9996,7 +9997,7 @@ function handleIntentRepos(
       const started = constructionHasStarted(state, recordDir(projectDir, dirName, space));
       if (current.length === 0) {
         if (verb === "remove-repo") return { kind: "none" as const };
-        if (started) die(checkoutWayOn(projectDir, "add-repo", [name], flags.path));
+        if (recordsNoReposFromHere(projectDir, { dirName, space, repos: current })) die(checkoutWayOn(projectDir, "add-repo", [name], flags.path));
         if (repoIsWorkspace(projectDir, name)) return { kind: "itself" as const };
       }
       const boxes = new Map(parseCheckboxes(state).map((box) => [box.slug, box.state]));

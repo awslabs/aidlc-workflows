@@ -14,6 +14,7 @@ import {
   auditBlockField,
   type BoltDagResolution,
   committedTextBytes,
+  constructionHasStarted,
   docsRoot,
   ENGINE_DIR,
   engineDir,
@@ -218,6 +219,14 @@ export function unitDependencies(projectDir: string, intent?: string, space?: st
 export function unitsInPlanOrder(projectDir: string, units: readonly string[]): string[] {
   return [...unitDependencies(projectDir).keys(), ...units].filter((unit, at, all) =>
     units.includes(unit) && all.indexOf(unit) === at);
+}
+
+// Work that keeps its code in the workspace folder itself (it records no
+// repos) once Construction has started records no repos from here: the one
+// rule add-repo's refusal, a Unit's push and its review request read.
+export function recordsNoReposFromHere(projectDir: string, work: { dirName: string; space: string; repos: readonly string[] }): boolean {
+  return work.repos.length === 0 &&
+    constructionHasStarted(readStateFile(projectDir, work.dirName, work.space), recordDir(projectDir, work.dirName, work.space));
 }
 
 // The rows since the person last chose teams, in time order.
