@@ -3025,9 +3025,14 @@ describe("a Unit on the workspace's own repository", () => {
     builtHere(alice, "refunds", "refunds.ts");
     expect(run(UNIT, ["push"], alice).status).toBe(0);
     const changed = git(home.remote, ["diff", "--name-only", "main...refunds"]).split("\n").filter(Boolean);
-    const checked = spawnSync("git", ["check-attr", "--source", "refunds", "--stdin", "linguist-generated", "gitlab-generated"], {
-      cwd: home.remote, encoding: "utf-8", input: `${changed.join("\n")}\n`,
-    }).stdout.split("\n").filter(Boolean);
+    // The host's copy of refunds is a clone of it: check-attr --source on a bare repository needs git 2.40 or later.
+    const copy = cloneOf(home.remote, "copy");
+    git(copy, ["checkout", "-q", "--detach", "origin/refunds"]);
+    const read = spawnSync("git", ["check-attr", "--stdin", "linguist-generated", "gitlab-generated"], {
+      cwd: copy, encoding: "utf-8", input: `${changed.join("\n")}\n`,
+    });
+    expect(read.status, `git check-attr: ${read.stderr}`).toBe(0);
+    const checked = read.stdout.split("\n").filter(Boolean);
     const work = changed.filter((path) => /^aidlc\/spaces\/[^/]+\/intents\//.test(path));
     expect(work.length).toBeGreaterThan(0);
     for (const path of changed) {
