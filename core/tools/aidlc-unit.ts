@@ -284,7 +284,7 @@ import {
 } from "./aidlc-unit-teams.js";
 import { gitOperationUnderWay, rebaseUnderWay, recordChanged, recordCommitBlock, recordPaths, submoduleLeavesProjectRepo } from "./aidlc-git.ts";
 import { ownFilesToCommit } from "./aidlc-brought-files.ts";
-import { commitOwnCommand, displayRepoPath, leftFilesNamed, moveReposManifestIntoAidlc, REPOS_FILE, type WorkspaceRepoEntry, UPDATE_COMMIT_MESSAGE, UPDATE_MESSAGE_KEY, reposManifestPath, localUnreadableLine, readWorkspaceRepos, parseWorkspaceManifest, repoCloneable, repoCloneOfferLine, repoClonePath, repoNotThereLine, REPOS_MANIFEST_PLACES, workspaceManifestWith, withoutCredentials, workspaceManifestAt } from "./aidlc-workspace-manifest.js";
+import { commitOwnCommand, displayRepoPath, leftFilesNamed, moveReposManifestIntoAidlc, REPOS_FILE, type WorkspaceRepoEntry, UPDATE_COMMIT_MESSAGE, UPDATE_MESSAGE_KEY, reposManifestPath, localUnreadableLine, readWorkspaceRepos, parseWorkspaceManifest, placeOfAnotherComputer, repoCloneable, repoCloneOfferLine, repoClonePath, repoNotThereLine, REPOS_MANIFEST_PLACES, workspaceManifestWith, withoutCredentials, workspaceManifestAt } from "./aidlc-workspace-manifest.js";
 import { maskUserinfo, workspaceCloneUrl } from "./aidlc-workspace-sync.ts";
 import { gitAddressKey } from "./aidlc-workspace-repos.ts";
 import { loadGraph } from "./aidlc-graph.ts";
@@ -17375,7 +17375,8 @@ function saidPullRequest(pd: string, unit: string, repo: string, number: number,
   const takenBack = wasDone && (!done || before.number !== undefined || before.byWord);
   const after = takenBack ? mergeTakenBack(pd, unit, generation, fields) : "";
   if (done) recordNamedDone(pd, unit, verdicts.filter((verdict) => verdict.merged), generation);
-  const address = repoCloneable(pd, repo) || (plan?.repos.find((entry) => entry.name === repo)?.address ?? null) !== null;
+  const address = repoCloneable(pd, repo) ||
+    (!placeOfAnotherComputer(pd, repo) && (plan?.repos.find((entry) => entry.name === repo)?.address ?? null) !== null);
   const prs = (list: NamedPullRequest[]): string => joinNames(list.map((pr) => `pull request ${pr.number} in ${pr.repo}`));
   const notice = takenBack
     ? (read.kind === "merged"
@@ -17591,11 +17592,13 @@ function likelyReposNotHere(
   const unreadable = missing.length > 0 ? localUnreadableLine(pd, missing) : null;
   if (unreadable !== null) return { lines: ` ${unreadable}`, question: "", offer: {} };
   const cloneable = missing.filter((repo) => repoCloneable(pd, repo));
+  // Nothing is offered at a place the shared list gives as another computer's.
+  const offerable = missing.filter((repo) => !placeOfAnotherComputer(pd, repo));
   // A repo this workspace's list has no address for, that the lead's has.
-  const fromLead = missing.filter((repo) => !cloneable.includes(repo) && leadAddresses.has(repo));
+  const fromLead = offerable.filter((repo) => !cloneable.includes(repo) && leadAddresses.has(repo));
   const leadLine = fromLead.length === 0 ? "" : ` ${joinNames(fromLead.map((repo) => `${repo} is not here yet; the lead's list has it at ` +
     `${maskUserinfo(leadAddresses.get(repo)!)}`))}. Do you want me to clone ${fromLead.length === 1 ? "it" : "them"} here?`;
-  const fromPush = missing.filter((repo) => !cloneable.includes(repo) && !fromLead.includes(repo) && pushedAt.has(repo));
+  const fromPush = offerable.filter((repo) => !cloneable.includes(repo) && !fromLead.includes(repo) && pushedAt.has(repo));
   const pushLine = fromPush.map((repo) => ` ${repo} is not here yet; ${pushedAt.get(repo)!.unit}'s push names it at ` +
     `${maskUserinfo(pushedAt.get(repo)!.address)}. Do you want me to clone it here?`).join("");
   return {

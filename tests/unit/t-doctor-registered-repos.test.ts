@@ -2,7 +2,7 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import {
   collectDoctorReport,
   registeredRepoDoctorChecks,
@@ -55,6 +55,20 @@ describe("registeredRepoDoctorChecks", () => {
     expect(rows[0].label).toContain('Registered repo "web" has no folder at ../web-elsewhere, where repos.json puts it');
     expect(rows[0].fix).not.toContain("into the workspace folder");
     expect(rows[0].fix).toContain("engine intent add-repo web");
+    expect(rows[0].fix).toContain("engine intent remove-repo web");
+  });
+
+  // An absolute path whose parent folder is not on this computer is another
+  // computer's place: nothing is cloned there, so the fix does not say to.
+  test("a registered repo repos.json puts at another computer's place: the fix gives the path, never a clone there", () => {
+    const project = projectWithRepos(["web"]);
+    const place = `/aidlc-other-computer-${basename(project)}/src/web`;
+    writeFileSync(join(project, "repos.json"), `${JSON.stringify({ repos: [{ name: "web", url: "git@example.test:acme/web.git", path: place }] })}\n`);
+    const rows = registeredRepoDoctorChecks(project);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].label).toContain(`Registered repo "web" has no folder at ${place}, where repos.json puts it`);
+    expect(rows[0].fix).toStartWith("give its path in aidlc/repos.local.json; if this work no longer covers it, ");
+    expect(rows[0].fix).not.toContain("clone it there");
     expect(rows[0].fix).toContain("engine intent remove-repo web");
   });
 

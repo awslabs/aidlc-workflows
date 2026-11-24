@@ -9,7 +9,7 @@
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { AIDLC_SRC } from "../harness/fixtures.ts";
 import {
@@ -209,6 +209,22 @@ describe("the lead names a pull request as a Unit's build", () => {
     // The board offers the clone a build is offered, from this workspace's own list.
     const step = next(home.dir);
     expect(JSON.stringify(step.offers ?? []), JSON.stringify(step).slice(0, 600)).toContain("intent add-repo checkout-web");
+  });
+
+  // The shared list gives the repository a place of another computer (an
+  // absolute path whose parent folder is not on this one): no clone is
+  // offered there, so the line waits for the clone without asking for it.
+  test("the repository is not cloned here and the shared list puts it at another computer's place: the naming is written, no clone is asked", () => {
+    const home = makePlanHome();
+    partnerPullRequest(home.hosts["checkout-web"], 7, UI);
+    renameSync(join(home.dir, "checkout-web"), join(tempDir("moved"), "checkout-web"));
+    const listed = JSON.parse(readFileSync(join(home.dir, "repos.json"), "utf-8")) as { repos: Array<Record<string, string>> };
+    listed.repos.find((repo) => repo.name === "checkout-web")!.path = `/aidlc-other-computer-${basename(home.dir)}/checkout-web`;
+    writeFileSync(join(home.dir, "repos.json"), `${JSON.stringify(listed, null, 2)}\n`);
+    const named = name(home.dir, "checkout-ui", "checkout-web", "7");
+    expect(named.status, named.out).toBe(0);
+    expect(String(named.json?.notice)).toBe("Written on the plan: pull request 7 in checkout-web is the build of checkout-ui. " +
+      "checkout-web is not cloned in this workspace, so I cannot read that pull request yet; once it is cloned here, the next step reads it.");
   });
 
   test("the lead's other computer reads the Unit done on the plan and records it there too", () => {

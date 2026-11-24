@@ -5,8 +5,8 @@
 // can read it without an import cycle.
 
 import { spawnSync } from "node:child_process";
-import { lstatSync, readFileSync, renameSync, statSync } from "node:fs";
-import { isAbsolute, join, normalize, resolve } from "node:path";
+import { existsSync, lstatSync, readFileSync, renameSync, statSync } from "node:fs";
+import { dirname, isAbsolute, join, normalize, resolve } from "node:path";
 import { compareVersions } from "./aidlc-channel.ts";
 import { appendJsoncArrayItem } from "./aidlc-distribution.ts";
 import { normalizeDriveLetter, repoNameProblem, repoNameRefusal } from "./aidlc-runtime-paths.ts";
@@ -581,6 +581,10 @@ export function repoNotThereLine(projectDir: string, repoName: string): string {
     return `${repoName} is not at ${where}, where repos.local.json puts it. Clone it there, or change its path in ${REPOS_LOCAL_PLACE}.`;
   }
   if (source === REPOS_FILE) {
+    // Nothing is cloned at another computer's place, so the person is asked where theirs is instead.
+    if (placeOfAnotherComputer(projectDir, repoName)) {
+      return `repos.json puts ${repoName} at ${where}, which is not a place on this computer. Tell me where you keep it here, or where to clone it.`;
+    }
     return `${repoName} is not at ${where}, where repos.json puts it. Clone it there, or give its path in ${REPOS_LOCAL_PLACE}.`;
   }
   return repos.entries.has(repoName)
@@ -588,9 +592,21 @@ export function repoNotThereLine(projectDir: string, repoName: string): string {
     : `${repoName} is not at ${where} in this workspace. Clone it there, or list it in repos.json with its path.`;
 }
 
-// Whether repos.json gives a repo an address to clone it from: its own url.
+// Whether repos.json gives a repo an address to clone it from: its own url,
+// at a place this computer has (placeOfAnotherComputer).
 export function repoCloneable(projectDir: string, repoName: string): boolean {
-  return readWorkspaceRepos(projectDir).entries.get(repoName)?.url !== undefined;
+  return readWorkspaceRepos(projectDir).entries.get(repoName)?.url !== undefined && !placeOfAnotherComputer(projectDir, repoName);
+}
+
+// The place the shared repos.json gives a repo is another computer's: an
+// absolute path whose parent folder is not on this one (on Windows a path
+// from "/" is the drive's root). No clone is offered or made there; a path
+// whose parent is here, as a team that keeps one layout has it, is a place.
+export function placeOfAnotherComputer(projectDir: string, repoName: string): boolean {
+  const repos = readWorkspaceRepos(projectDir);
+  const path = repos.pathSource.get(repoName) === REPOS_FILE ? repos.entries.get(repoName)?.path : undefined;
+  if (path === undefined || !(isAbsolute(path) || /^([A-Za-z]:)?[\\/]/.test(path))) return false;
+  return !existsSync(dirname(mappedRepoDir(projectDir, path)));
 }
 
 // With this person's repos.local.json unreadable: what is wrong, and where the

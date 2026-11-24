@@ -146,6 +146,7 @@ import {
   hostedAddressOwner,
   mappedRepoDir,
   repoCloneable,
+  placeOfAnotherComputer,
   parseWorkspaceManifest,
   readWorkspaceRepos,
   REPOS_LOCAL_FILE,
@@ -4161,7 +4162,9 @@ export function registeredRepoDoctorChecks(projectDir: string): DoctorCheck[] {
         severity: "warn",
         label: `Registered repo "${repo}" has no folder at ${displayRepoPath(repos.entries.get(repo)?.path ?? repo)}, where ${source} puts it: ` +
           "Reverse Engineering would analyse the whole workspace under its name",
-        fix: `${clone}, or ${source === REPOS_LOCAL_FILE ? "change" : "give"} its path in ${REPOS_LOCAL_PLACE}; ${drop}`,
+        // Nothing is cloned at another computer's place (placeOfAnotherComputer), so the fix does not say to.
+        fix: `${placeOfAnotherComputer(projectDir, repo) ? "" : `${clone}, or `}${source === REPOS_LOCAL_FILE ? "change" : "give"} its path in ` +
+          `${REPOS_LOCAL_PLACE}; ${drop}`,
       });
       continue;
     }
@@ -10297,6 +10300,7 @@ function plannedRepoClone(
   name: string,
   url: string | undefined,
 ): { repo: WorkspaceRepoEntry; address: string; manifest: { raw: string | null; next: string | null }; note: string | null } {
+  if (placeOfAnotherComputer(projectDir, name)) die(`${repoNotThereLine(projectDir, name)} Nothing was changed.`);
   const path = reposManifestPath(projectDir);
   const raw = existsSync(path) ? readFileSync(path, "utf-8") : null;
   let manifest: WorkspaceManifest | null = null;

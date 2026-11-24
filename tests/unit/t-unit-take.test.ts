@@ -21,7 +21,7 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { auditBlockField, readAuditShardEvents, readIntentRegistry } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -2418,6 +2418,53 @@ describe("a likely repo this workspace has no copy of", () => {
     expect(billingAtTheirOwnPlace(false)).toBe("checkout-api is not at checkout-api in this workspace yet; billing is not at mine/billing yet, " +
       "where repos.local.json puts it. Do you want me to clone them there? If you already have one somewhere else on this computer, " +
       "tell me where instead.");
+  });
+
+  // The lead keeps billing at an absolute path of their own computer and the
+  // shared repos.json says so; on a teammate's computer that folder's parent
+  // is not there (on Windows a path from "/" is the drive's root). No clone is
+  // offered or made there, and the take says the list's place is not one on
+  // this computer, asking where the person keeps it or where to clone it. A
+  // path whose parent folder is on this computer (one every computer of the
+  // team keeps) is offered as before.
+  function billingAtAnAbsolutePlace(leads: string) {
+    const hosts = { "checkout-api": codeHost("checkout-api"), billing: codeHost("billing") };
+    const home = makeHome({ repos: hosts });
+    writeFileSync(join(home.dir, "repos.json"), `${JSON.stringify({ repos: [
+      { name: "checkout-api", url: hosts["checkout-api"] }, { name: "billing", url: hosts.billing, path: leads },
+    ] }, null, 2)}\n`);
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    git(home.dir, ["add", "-A"]);
+    git(home.dir, ["commit", "-q", "-m", "teams"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const plan = planShared(home);
+    const alice = cloneOf(home.remote, "alice");
+    cloneCode(hosts["checkout-api"], alice, "checkout-api", "alice");
+    const took = takeIn("payments", ["refunds", "--plan", plan.id8, "--from", Object.values(plan.hosts)[0]], alice);
+    expect(took.status, took.out).toBe(0);
+    return { alice, took, step: next(alice) };
+  }
+
+  test("the shared list names another computer's absolute path for a likely repo: no clone offered or made, the take says that place is not on this computer", () => {
+    const leads = `/aidlc-lead-only-${basename(tempDir("lead"))}/src/billing`;
+    const { alice, took, step } = billingAtAnAbsolutePlace(leads);
+    const notHere = `repos.json puts billing at ${leads}, which is not a place on this computer. Tell me where you keep it here, or where to clone it.`;
+    expect(String(took.json?.notice)).toContain(notHere);
+    expect(String(took.json?.notice)).not.toContain("Clone it there");
+    expect(step.ask_type ?? null, JSON.stringify(step).slice(0, 600)).not.toBe("unit-clone");
+    const add = run(UTILITY, ["intent", "add-repo", "billing"], alice);
+    expect(add.status, add.out).not.toBe(0);
+    expect(String(add.json?.error ?? add.out)).toBe(`${notHere} Nothing was changed.`);
+    expect(existsSync(dirname(dirname(resolve(alice, leads))))).toBe(false);
+  });
+
+  test("the shared list names an absolute path whose parent folder is on this computer: the clone is offered as before", () => {
+    const parent = join(tempDir("team-src"), "src");
+    mkdirSync(parent, { recursive: true });
+    const leads = join(parent, "billing");
+    const { step } = billingAtAnAbsolutePlace(leads);
+    expect(step.ask_type, JSON.stringify(step).slice(0, 600)).toBe("unit-clone");
+    expect(String(step.question)).toStartWith(`billing is not at ${leads.replaceAll("\\", "/")} yet, where repos.json puts it. Do you want me to clone it there?`);
   });
 
   test("with their repos.local.json unreadable, the take says so and offers no clone: their own copy may be elsewhere", () => {
