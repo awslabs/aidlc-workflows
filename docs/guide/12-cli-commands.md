@@ -3147,6 +3147,10 @@ the workspace root (see
 aidlc system workspace-sync [--force]
 ```
 
+If your shell has no `aidlc` command (a copied project, or a teammate's clone
+of one), run `bun .claude/tools/aidlc-workspace-sync.ts` instead, with your
+harness folder in place of `.claude`.
+
 It serializes reconciles with a workspace lock whose live owner is never reaped
 for age, then runs a read-only preflight before staging clones and generated
 files. Generated outputs are installed with no-replace links and reversible
