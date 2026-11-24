@@ -14,7 +14,10 @@
 // keeps what an earlier Unit's approval kept. Silent when no listing is here or
 // one cannot be read. A file AI-DLC's install or a refresh wrote, as its install
 // record says it wrote it, is AI-DLC's and not the build's change (an `aidlc
-// update` and `aidlc config` while the work was open rewrite them).
+// update` and `aidlc config` while the work was open rewrite them). After a
+// `git pull`, a file exactly as the remote branch of its own repository holds
+// it is nobody's change in this work (remoteBranchCopies), and the readers of
+// the build's changes leave it out.
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { lstatSync, readdirSync, readFileSync } from "node:fs";
@@ -36,14 +39,17 @@ import {
   parseSourceListing,
   personLineHeard,
   readAuditShardEvents,
+  readRecordedSourceCheckouts,
   readUnitSourceManifest,
   recordDir,
+  recordedCheckoutOfListingPath,
   recordedSourceListingForCompare,
   repoDir,
   serializeSourceListing,
   sourceClaimCovers,
   sourceListingChangedKeys,
   sourceListingSha256,
+  sourcePathKey,
   splitSourcePathKey,
   workStartSourceBaseline,
   type WorkspaceSourceListing,
@@ -78,6 +84,8 @@ function git(dir: string, args: string[], input?: string): Buffer | null {
   try {
     const run = spawnSync("git", ["--literal-pathspecs", "-C", dir, ...args], {
       input, timeout: GIT_TIMEOUT_MS, maxBuffer: GIT_READ_MAX_BYTES,
+      // A partial clone fetches no missing object for these reads, on a git that knows this.
+      env: { ...process.env, GIT_NO_LAZY_FETCH: "1" },
     });
     return run.status === 0 ? run.stdout : null;
   } catch {
@@ -91,25 +99,36 @@ function holdsContent(blob: Buffer, sha: string): boolean {
   return text === sha || currentFingerprintForm(sha) === text;
 }
 
-// Which of `files` HEAD holds as they were, from one `git cat-file --batch`.
-function heldAtHead(dir: string, files: readonly BroughtFile[]): Set<BroughtFile> {
-  const held = new Set<BroughtFile>();
-  const asked = files.filter((file) => !/[\r\n]/.test(file.path));
-  if (asked.length === 0) return held;
-  const out = git(dir, ["cat-file", "--batch"], asked.map((file) => `HEAD:./${file.path}\n`).join(""));
-  if (out === null) return held;
+// Each of `names` (an object, or `<commit>:./<path>`) from one `git cat-file
+// --batch`: its bytes when it is a file's, otherwise null. Null when git could
+// not be read.
+function blobsAt(dir: string, names: readonly string[]): Array<Buffer | null> | null {
+  if (names.length === 0) return [];
+  const out = git(dir, ["cat-file", "--batch"], names.map((name) => `${name}\n`).join(""));
+  if (out === null) return null;
+  const blobs: Array<Buffer | null> = names.map(() => null);
   let at = 0;
-  for (const file of asked) {
+  for (let index = 0; index < names.length; index++) {
     const end = out.indexOf(10, at);
     if (end < 0) break;
     const header = /^[0-9a-f]+ (\w+) (\d+)$/.exec(out.subarray(at, end).toString("utf-8"));
     at = end + 1;
     if (header === null) continue;
     const size = Number(header[2]);
-    if (header[1] === "blob" && holdsContent(out.subarray(at, at + size), file.sha)) held.add(file);
+    if (header[1] === "blob") blobs[index] = out.subarray(at, at + size);
     at += size + 1;
   }
-  return held;
+  return blobs;
+}
+
+// Which of `files` HEAD holds as they were.
+function heldAtHead(dir: string, files: readonly BroughtFile[]): Set<BroughtFile> {
+  const asked = files.filter((file) => !/[\r\n]/.test(file.path));
+  const blobs = blobsAt(dir, asked.map((file) => `HEAD:./${file.path}`)) ?? [];
+  return new Set(asked.filter((file, index) => {
+    const blob = blobs[index];
+    return blob != null && holdsContent(blob, file.sha);
+  }));
 }
 
 // The newest commit that touched `path` and holds the content the build
@@ -127,6 +146,138 @@ function olderCommit(dir: string, file: BroughtFile): string | null {
   const copy = committedCopy(dir, file);
   if (copy === null) return null;
   return git(dir, ["rev-parse", "--short", copy.rev])?.toString("utf-8").trim() || copy.rev;
+}
+
+/** A changed file as the remote branch of its own repository has it (remoteBranchCopies). */
+export interface RemoteBranchCopy {
+  // That branch's copy, as the walk hashes it; "" when it has no such file, or not as a file.
+  sha: string;
+  // The file is now exactly as that branch holds it: nobody's change in this work.
+  held: boolean;
+}
+
+/**
+ * Of `keys` (source paths changed from `start` to `now`), the files the remote
+ * branch of their own repository moved on since this work found them: after a
+ * `git pull`, a teammate's. That branch is the one the folder's checked-out
+ * branch tracks, a remote's branch as this clone last fetched it, as far as
+ * this checkout has merged it (their merge base), so nothing fetched and not
+ * merged counts. Moved on: the branch holds the path otherwise than `start`
+ * does, or not at all, and a commit on its history held it as `start` does (it
+ * was the team's copy); a path `start` lacks, when the branch has it. `held`:
+ * the file is now as the branch holds it (its mode, and its content against
+ * git's copy as the walk reads both), nobody's change in this work; otherwise
+ * the build changed it on top of the team's copy. The workspace's repository, a
+ * recorded repo and a recorded checkout are each read in their own folder, never
+ * fetched, and nothing is written there. With no such branch, or when git cannot
+ * tell, a folder's files are not in the map and are named like any other
+ * changed file. Never throws.
+ */
+export function remoteBranchCopies(
+  projectDir: string,
+  start: ReadonlyMap<string, string>,
+  now: ReadonlyMap<string, string>,
+  keys: Iterable<string>,
+): Map<string, RemoteBranchCopy> {
+  const copies = new Map<string, RemoteBranchCopy>();
+  try {
+    const checkouts = readRecordedSourceCheckouts(projectDir);
+    // Each folder's keys, by the path git knows each by there.
+    const folders = new Map<string, Map<string, string>>();
+    for (const key of keys) {
+      const parsed = splitSourcePathKey(key);
+      if (parsed === null) continue;
+      const checkout = parsed.repo === "" ? recordedCheckoutOfListingPath(parsed.path, checkouts) : null;
+      const path = checkout?.rest ?? parsed.path;
+      if (path === "" || /[\r\n]/.test(path)) continue;
+      const dir = checkout?.checkout.real ?? (parsed.repo === "" ? projectDir : repoDir(projectDir, parsed.repo));
+      folders.set(dir, (folders.get(dir) ?? new Map<string, string>()).set(path, key));
+    }
+    for (const [dir, paths] of folders) {
+      const branch = git(dir, ["rev-parse", "--symbolic-full-name", "@{upstream}"])?.toString("utf-8").trim();
+      const base = branch?.startsWith("refs/remotes/") ? git(dir, ["merge-base", "HEAD", branch])?.toString("utf-8").trim() : undefined;
+      if (!base) continue;
+      // The branch's entries in this folder, by path: mode and object. A read that fails leaves the folder out.
+      const listing = git(dir, ["ls-tree", "-r", "-z", base]);
+      if (listing === null) continue;
+      const tree = new Map<string, { mode: string; object: string }>();
+      for (const line of listing.toString("utf-8").split("\0")) {
+        const tab = line.indexOf("\t");
+        const entry = tab > 0 && paths.has(line.slice(tab + 1)) ? /^(\d{6}) \w+ ([0-9a-f]+)$/.exec(line.slice(0, tab)) : null;
+        if (entry !== null) tree.set(line.slice(tab + 1), { mode: entry[1], object: entry[2] });
+      }
+      const listed = [...paths.keys()].filter((path) => tree.has(path));
+      const blobs = blobsAt(dir, listed.map((path) => tree.get(path)?.object ?? ""));
+      if (blobs === null) continue;
+      const theirs = new Map(listed.map((path, index) => [path, blobs[index]]));
+      // Where git keeps no executable bit (core.fileMode off, as Git for Windows sets it), the file now counts with
+      // either mode; what the work found compares exactly, so a teammate's change of the bit alone is still a move.
+      const anyFileMode = git(dir, ["config", "--type=bool", "--get", "core.filemode"])?.toString("utf-8").trim() === "false";
+      const file = (mode: string | undefined): boolean => mode === "100644" || mode === "100755";
+      // Whether a listing entry is exactly the branch's copy: the same mode (`either`: the two file modes as one),
+      // and the same content as the walk reads it, or for a submodule the same commit. An entry of the older listing
+      // form, its object alone, never is.
+      const asTheBranch = (path: string, entry: string | undefined, either = false): boolean => {
+        const branch = tree.get(path);
+        const [mode, sha] = entry?.split(" ") ?? [];
+        if (branch === undefined || sha === undefined) return false;
+        if (mode !== branch.mode && !(either && file(mode) && file(branch.mode))) return false;
+        const blob = theirs.get(path);
+        return mode === "160000" ? sha === branch.object : blob != null && holdsContent(blob, sha);
+      };
+      const added: string[] = [];
+      const others = new Map<string, string>();
+      for (const [path, key] of paths) {
+        const was = start.get(key);
+        if (was === undefined) {
+          if (tree.has(path)) added.push(path);
+        } else if (!asTheBranch(path, was)) {
+          others.set(path, was.split(" ").at(-1) ?? "");
+        }
+      }
+      const earlier = heldOnHistory(dir, base, others);
+      for (const path of [...added, ...[...others.keys()].filter((one) => earlier.has(one))]) {
+        const key = paths.get(path) ?? "";
+        const blob = theirs.get(path);
+        copies.set(key, {
+          sha: blob == null ? "" : committedTextSha256(blob),
+          held: tree.has(path) ? asTheBranch(path, now.get(key), anyFileMode) : !now.has(key),
+        });
+      }
+    }
+  } catch {
+    // Nothing read: every file is named like any other changed file.
+  }
+  return copies;
+}
+
+// Of `found` (each path with the content the work found there), the ones a
+// commit on `rev`'s history held so: read at and before each of the newest
+// changes to the path there, from one path-limited `git log` and one read.
+function heldOnHistory(dir: string, rev: string, found: ReadonlyMap<string, string>): Set<string> {
+  const held = new Set<string>();
+  if (found.size === 0) return held;
+  const log = git(dir, ["log", "--stdin", "--no-show-signature", "--format=%x01%H", "--name-only", "--no-renames", "--relative", "-z"],
+    `${rev}\n--\n${[...found.keys()].map((path) => `./${path}\n`).join("")}`);
+  if (log === null) return held;
+  const changes = new Map<string, string[]>();
+  for (const entry of log.toString("utf-8").split("\x01").slice(1)) {
+    const [commit, ...paths] = entry.split("\0");
+    for (const path of paths.map((name) => name.replace(/^\n/, "")).filter(Boolean)) {
+      const seen = changes.get(path) ?? [];
+      if (seen.length < COMMITS_SEARCHED) changes.set(path, [...seen, commit]);
+    }
+  }
+  const asked = [...changes].flatMap(([path, commits]) => commits.flatMap((commit) => [
+    { path, name: `${commit}:./${path}` }, { path, name: `${commit}^:./${path}` },
+  ]));
+  const blobs = blobsAt(dir, asked.map((one) => one.name));
+  if (blobs === null) return held;
+  asked.forEach(({ path }, index) => {
+    const blob = blobs[index];
+    if (blob !== null && holdsContent(blob, found.get(path) ?? "")) held.add(path);
+  });
+  return held;
 }
 
 // What the project's AI-DLC installs recorded writing (each harness's
@@ -401,8 +552,16 @@ export function broughtFilesChanged(
     }
     files.push(file);
   }
-  if (files.length === 0) return null;
-  return { files, attempt: sourceListingSha256(serializeSourceListing(before)) };
+  // A file the remote branch of its own repository holds as it is now is no change of the build's; one that branch
+  // moved on and the build changed on top is put back as that branch has it, or as the work found it when the
+  // branch has no such file.
+  const remote = remoteBranchCopies(projectDir, recorded, current.listing, files.map((file) => sourcePathKey(file.repo, file.path)));
+  const named = files.flatMap((file) => {
+    const copy = remote.get(sourcePathKey(file.repo, file.path));
+    return copy === undefined ? [file] : copy.held ? [] : [{ ...file, sha: copy.sha || file.sha }];
+  });
+  if (named.length === 0) return null;
+  return { files: named, attempt: sourceListingSha256(serializeSourceListing(before)) };
 }
 
 /**
