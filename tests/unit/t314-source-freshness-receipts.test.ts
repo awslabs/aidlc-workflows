@@ -6920,10 +6920,6 @@ describe("t314 a repo added during the work joins the stage-entry baseline", () 
   test.each([
     ["changed", (): void => writeFileSync(join(proj, "payments", "README.md"), "# payments, edited after the clone\n", "utf-8"), "payments/README.md"],
     ["committed", (): void => commitIn("payments", "src/consent.ts", "export const consent = true;\n"), "payments/src/consent.ts"],
-    ["committed and pushed", (): void => {
-      commitIn("payments", "src/consent.ts", "export const consent = true;\n");
-      git(join(proj, "payments"), ["push", "-q", "origin", "HEAD"]);
-    }, "payments/src/consent.ts"],
   ] as const)("a repo cloned by git itself after the stage began: a file %s there since is still named", (_how, since, named) => {
     const bare = clonedByGitAfterTheStageBegan();
     since();
@@ -6935,6 +6931,39 @@ describe("t314 a repo added during the work joins the stage-entry baseline", () 
     for (const kept of ["payments/src/api.ts", "payments/src/api-link.ts", "payments/bin/run.sh", "payments/README.md"]) {
       if (kept !== named) expect(r.out).not.toContain(kept);
     }
+    rmSync(bare, { recursive: true, force: true });
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  // What the repo's remote branch holds, pushed from here or pulled from a
+  // teammate, is nobody's change in this work, as everywhere else.
+  test.each([
+    ["committed and pushed", (): void => {
+      commitIn("payments", "src/consent.ts", "export const consent = true;\n");
+      git(join(proj, "payments"), ["push", "-q", "origin", "HEAD"]);
+    }],
+    ["committed by a teammate and pulled", (): void => {
+      const bare = join(proj, "..", `${basename(proj)}-payments.git`);
+      const mate = `${bare}-mate`;
+      git(proj, ["clone", "-q", bare, mate]);
+      git(mate, ["config", "user.email", "mate@test"]);
+      git(mate, ["config", "user.name", "mate"]);
+      mkdirSync(join(mate, "src"), { recursive: true });
+      writeFileSync(join(mate, "src", "consent.ts"), "export const consent = true;\n", "utf-8");
+      git(mate, ["add", "-A"]);
+      git(mate, ["commit", "-qm", "a teammate's change"]);
+      git(mate, ["push", "-q", "origin", "HEAD"]);
+      rmSync(mate, { recursive: true, force: true });
+      git(join(proj, "payments"), ["pull", "-q", "--no-rebase"]);
+    }],
+  ] as const)("a repo cloned by git itself after the stage began: a file %s there since is the branch's, and nothing is named", (_how, since) => {
+    const bare = clonedByGitAfterTheStageBegan();
+    since();
+    reviewUnitsInAppA();
+    const gate = guarded(proj, ["gate-start", "code-generation"], { AIDLC_SKIP_REVIEWER_GATE_GUARD: "1" });
+    expect(gate.rc, gate.out).toBe(0);
+    const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(r.rc, r.out).toBe(0);
+    expect(r.out).not.toContain("payments/");
     rmSync(bare, { recursive: true, force: true });
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 

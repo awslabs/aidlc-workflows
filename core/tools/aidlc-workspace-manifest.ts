@@ -697,12 +697,13 @@ export function withoutCredentials(url: string): string {
 
 // A repo of the workspace as git cloned it here: the listing `read` makes of
 // the commit the clone checked out, which the first entry of the repo's HEAD
-// reflog (git's own record of the clone) names, so whatever was committed,
-// pushed or pulled there since still reads as a change. A clone that writes
-// links as plain files (core.symlinks false, Git for Windows' default) checked
-// each link out as a file holding its text, so the listing has it as that
-// file, its target unread. Null when git keeps no record of a clone there.
-// Kept per folder and commit for the process.
+// reflog (git's own record of the clone) names, so whatever was changed or
+// committed there since still reads as a change, but a file as its remote
+// branch holds it, pushed or pulled, is nobody's (remoteBranchCopies). A clone
+// that writes links as plain files (core.symlinks false, Git for Windows'
+// default) checked each link out as a file holding its text, so the listing
+// has it as that file, its target unread. Null when git keeps no record of a
+// clone there. Kept per folder and commit for the process.
 const clonedListings = new Map<string, Map<string, string> | null>();
 export function clonedRepoListing(
   dir: string,
