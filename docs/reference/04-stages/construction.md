@@ -993,7 +993,10 @@ This stage has a **two-part structure**: planning followed by generation.
    mocking/stubbing guidance, and test data management. Every run command MUST
    be scoped to this unit using exact test file paths or an exact unit filter.
    A bare project-wide command such as `npm test` is not acceptable because
-   Build and Test executes every unit's commands. A coverage floor set for the
+   Build and Test executes every unit's commands. Write each command to run as
+   written from the workspace root, with any folder it needs inside the
+   command and never in a note beside it: the review and Build and Test run it
+   exactly as recorded. A coverage floor set for the
    whole project is measured by Build and Test on the full suite, not by these
    commands (on one Unit's tests a runner's threshold can fail on source other
    Units' tests cover); the file names the floor, and the floor's threshold in
