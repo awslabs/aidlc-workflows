@@ -9106,7 +9106,8 @@ function bringOwnBuildHere(pd: string, homeWork: string, claim: UnitClaimView): 
 // (read before the rest: once the record's pull request merged, main holds the
 // build, and so does every branch cut from it since), then the other fetched
 // ones. Local reads only, never a fetch or a switch. Null when no branch has
-// it; "" when a git call is not ok, so nobody is sent anywhere for nothing.
+// it; "" when a git call is not ok or could not read a file it looked in, so
+// nobody is sent anywhere for nothing.
 type BuildPlace =
   | { switchTo: string }
   | { level: { remote: string; branch: string } }
@@ -9161,8 +9162,12 @@ function branchWithBuild(projectDir: string, homeWork: string, unit: string): Bu
     for (let at = 0; at < refs.length; at += 100) {
       const found = localGit(projectDir, ["grep", "--no-color", "-z", "-l", "-E", "-e", field, ...refs.slice(at, at + 100), "--",
         "aidlc/spaces/*/intents/*/aidlc-state.md"], env);
-      if (!found.ok && found.code === 1) continue;
-      if (!found.ok) return "";
+      // A file git cannot read (a partial clone's) stops one git at 128; a
+      // newer one says so on stderr and answers 1, no match, or 0 for a match
+      // on another branch. git translates its error and warning words, so
+      // anything on stderr counts as such a file; its words are never read.
+      const unread = found.stderr.trim() !== "";
+      if (!found.ok && (found.code !== 1 || unread)) return "";
       for (const hit of found.stdout.split("\0").filter(Boolean)) {
         const ref = hit.slice(0, hit.indexOf(":"));
         const shown = localGit(projectDir, ["show", `${ref}:./${hit.slice(ref.length + 1)}`], env);
@@ -9171,6 +9176,7 @@ function branchWithBuild(projectDir: string, homeWork: string, unit: string): Bu
         if (build === null || !isBuildOfUnit(build, homeWork, unit)) continue;
         return places.get(ref) ?? null;
       }
+      if (unread) return "";
     }
   }
   return null;

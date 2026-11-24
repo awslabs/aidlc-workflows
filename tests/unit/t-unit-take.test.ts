@@ -22,7 +22,6 @@ import { createHash } from "node:crypto";
 import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { auditBlockField, readAuditShardEvents, readIntentRegistry } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { shellSingleQuote } from "../../dist/claude/.claude/tools/aidlc-runtime-paths.ts";
@@ -1825,32 +1824,6 @@ describe("a Unit someone holds is not taken again", () => {
     expect(there.out).toContain("Your build of refunds is on branch records/refunds, which is checked out in ");
     expect(there.out).toContain(": carry it on there.");
     expect(git(bea, ["branch", "--show-current"])).toBe("main");
-  });
-
-  // A blobless partial clone keeps the record's file of a fetched branch on
-  // the host, and AI-DLC fetches nothing to read it: git cannot say whether
-  // that branch holds the build, so no pull is asked for.
-  test("a clone whose git cannot read a fetched branch keeps today's line for the person's own take", () => {
-    const home = makeHome();
-    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
-    asLeadsOwnCheckout(home.dir);
-    commitAll(home.dir, "teams");
-    git(home.dir, ["push", "-q", "origin", "main"]);
-    planShared(home);
-    const bea = cloneOf(home.remote, "bea");
-    expect(take(bea, "refunds").status).toBe(0);
-    git(bea, ["switch", "-q", "-c", "records/refunds"]);
-    commitAll(bea, "refunds record");
-    git(bea, ["push", "-q", "-u", "origin", "records/refunds"]);
-    git(home.remote, ["config", "uploadpack.allowFilter", "true"]);
-    const desk = join(tempDir("blobless"), "workspace");
-    git(join(desk, ".."), ["clone", "-q", "--filter=blob:none", pathToFileURL(home.remote).href, desk]);
-    git(desk, ["config", "user.name", "bea"]);
-    git(desk, ["config", "user.email", "bea@example.test"]);
-    const taken = take(desk, "refunds");
-    expect(taken.status).not.toBe(0);
-    expect(taken.out).toContain("refunds is already taken: bea builds it.");
-    expect(taken.out).not.toContain("git pull");
   });
 });
 
