@@ -485,7 +485,12 @@ describe("a Unit on the workspace's own repository", () => {
     expect(spawnSync("git", ["rev-parse", "--verify", "--quiet", "refs/heads/refunds"], { cwd: alice }).status).not.toBe(0);
   });
 
-  test("the same Unit after the repository beside the project was recorded as a checkout: the push asks for the way back, and names no add-repo", () => {
+  // Some of the Unit's code here and some in the checkout beside: the push
+  // goes for the rest, as it does for a repository of its own inside the
+  // project, and says the file beside is the person's to commit and push there.
+  const besideLine = (files: string, label: string): string =>
+    `${files} is not in refunds's commit: ${label} is a repository of its own, so it is yours to commit and push there.`;
+  test("the same Unit after the repository beside the project was recorded as a checkout: the push goes for the rest and says the file beside is yours to commit and push there", () => {
     const home = oneRepoTeams();
     const alice = cloneOf(home.remote, "alice");
     const record = builtHere(alice, "refunds", "refunds.ts");
@@ -497,12 +502,15 @@ describe("a Unit on the workspace's own repository", () => {
     writeFileSync(join(record, "construction", "refunds", "code-generation", "source-manifest.json"), `${JSON.stringify({
       stage: "code-generation", unit: "refunds", version: 1, writes: [{ path: "src/refunds.ts" }, { path: `${label}@checkout/lib/refund.ts` }],
     })}\n`);
-    const refused = run(UNIT, ["push"], alice);
-    expect(refused.status, refused.out).not.toBe(0);
-    const said = String(refused.json?.error ?? refused.out);
-    expect(said).toStartWith(BUILDS_HERE_ONLY(label));
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    const said = String(pushed.json?.notice);
+    expect(said).toStartWith("Pushed branch refunds in the repo.");
+    expect(said).toContain(besideLine("lib/refund.ts", label));
     expect(said).not.toContain("add-repo");
-    expect(spawnSync("git", ["rev-parse", "--verify", "--quiet", "refs/heads/refunds"], { cwd: alice }).status).not.toBe(0);
+    expect(committed(home.remote, "refunds~1")).toEqual(["src/refunds.ts"]);
+    expect(git(beside, ["status", "--porcelain"])).toBe("?? lib/");
+    expect(spawnSync("git", ["rev-parse", "--verify", "--quiet", "refs/heads/refunds"], { cwd: beside }).status).not.toBe(0);
   });
 
   // The repository beside the project recorded as a checkout, each named write
@@ -590,10 +598,10 @@ describe("a Unit on the workspace's own repository", () => {
       .toContain("refunds is built and approved, and not pushed yet. Do you want me to push it now, with this commit message?");
   });
 
-  // Some of the Unit's code in the workspace's own repository and some beside
-  // it: the way back stays, said once the push's other checks of the
-  // workspace have passed, so a merge of theirs under way is said first.
-  test("some of the Unit's code beside the project and a merge under way here: the merge is said first, the way back after it", () => {
+  // Some of the Unit's code here and some beside, with a merge of theirs under
+  // way here: the merge is said first, before anything is committed; once it
+  // is finished, the push goes for the rest.
+  test("some of the Unit's code beside the project and a merge under way here: the merge is said first, and once it is finished the push goes for the rest", () => {
     const home = oneRepoTeams();
     const alice = cloneOf(home.remote, "alice");
     const record = builtHere(alice, "refunds", "refunds.ts");
@@ -603,9 +611,26 @@ describe("a Unit on the workspace's own repository", () => {
     expect(merging.status, merging.out).not.toBe(0);
     expect(String(merging.json?.error ?? merging.out)).toStartWith("The repo is in the middle of a merge, so nothing was committed or pushed.");
     rmSync(join(alice, ".git", "MERGE_HEAD"));
-    const refused = run(UNIT, ["push"], alice);
-    expect(refused.status, refused.out).not.toBe(0);
-    expect(String(refused.json?.error ?? refused.out)).toStartWith(BUILDS_HERE_ONLY(label));
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(String(pushed.json?.notice)).toContain(besideLine("lib/refund.ts", label));
+    expect(committed(home.remote, "refunds~1")).toEqual(["src/refunds.ts"]);
+  });
+
+  // A Unit pushed before and redone with some of its code beside the project:
+  // its push again goes for the rest here and says the file beside.
+  test("a Unit pushed before, its redo partly beside the project: the push again goes for the rest and says the file beside", () => {
+    const home = oneRepoTeams();
+    const alice = cloneOf(home.remote, "alice");
+    const record = builtHere(alice, "refunds", "refunds.ts");
+    const first = run(UNIT, ["push"], alice);
+    expect(first.status, first.out).toBe(0);
+    writeFileSync(join(alice, "src", "refunds.ts"), "export const refunds = 2;\n");
+    const label = besideCheckout(alice, record, [{ path: "src/refunds.ts" }]);
+    const again = run(UNIT, ["push"], alice);
+    expect(again.status, again.out).toBe(0);
+    expect(String(again.json?.notice)).toContain(besideLine("lib/refund.ts", label));
+    expect(git(home.remote, ["show", "refunds:src/refunds.ts"])).toBe("export const refunds = 2;");
   });
 
   // A Unit pushed before and redone with all its code beside the project:
@@ -629,7 +654,7 @@ describe("a Unit on the workspace's own repository", () => {
     const pushed = run(UNIT, ["push"], alice);
     expect(pushed.status, pushed.out).toBe(0);
     expect(String(pushed.json?.notice)).toContain(
-      "web/app.js is not in refunds's commit: web is a repository of its own, so it is yours to commit there.",
+      "web/app.js is not in refunds's commit: web is a repository of its own, so it is yours to commit and push there.",
     );
     expect(committed(home.remote, "refunds~1")).toEqual(["src/refunds.ts"]);
     expect(git(join(alice, "web"), ["status", "--porcelain"])).toBe("?? app.js");
@@ -770,7 +795,7 @@ describe("a Unit on the workspace's own repository", () => {
     const pushed = run(UNIT, ["push"], alice);
     expect(pushed.status, pushed.out).toBe(0);
     expect(String(pushed.json?.notice)).toContain(
-      "web/app.js is not in refunds's commit: web is a repository of its own, so it is yours to commit there.",
+      "web/app.js is not in refunds's commit: web is a repository of its own, so it is yours to commit and push there.",
     );
     expect(committed(home.remote, "refunds~1")).toEqual(["src/refunds.ts"]);
   });

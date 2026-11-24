@@ -14071,8 +14071,11 @@ function pushUnit(args: string[], projectDir?: string,
       `its pull request in ${own}, and they can name it as ${unit}'s build.`);
     return;
   }
-  // Some of the Unit's code beside the project and the rest here: the way back.
-  if (besideOut.length > 0) fail(ownRepoWayBack(unit, besideOut[0].repo));
+  // Some of the Unit's code beside the project and the rest here: the push
+  // goes for the rest and says the files beside, as it does for a repository
+  // of its own inside the project. A push again whose redo left nothing here
+  // keeps the way back: going on would send a result with no repos.
+  if (besideOut.length > 0 && planned.length === 0) fail(ownRepoWayBack(unit, besideOut[0].repo));
   // Then in each, onto the Unit's branch as their own hands would and its
   // commit made with their git (hooks, signing, identity), before anything is
   // pushed: a hook that stops one pushes nothing.
@@ -14418,10 +14421,15 @@ function pushUnit(args: string[], projectDir?: string,
     lines.push(`${joinNames(files)} ${files.length === 1 ? "is" : "are"} not in the commit: ${name}'s .gitignore leaves ` +
       `${files.length === 1 ? "it" : "them"} out.`);
   }
+  // Files in a repository of its own, inside the project and then beside it.
+  const ownRepoLine = (files: string[], repo: string): string =>
+    `${filesSaid(files)} ${files.length === 1 ? "is" : "are"} not in ${unit}'s commit: ${repo} is a repository of ` +
+    `its own, so ${files.length === 1 ? "it is" : "they are"} yours to commit and push there.`;
   for (const nested of [...new Set(nestedOut.map((entry) => entry.nested))]) {
-    const files = nestedOut.filter((entry) => entry.nested === nested).map((entry) => entry.path);
-    lines.push(`${filesSaid(files)} ${files.length === 1 ? "is" : "are"} not in ${unit}'s commit: ${nested} is a repository of ` +
-      `its own, so ${files.length === 1 ? "it is" : "they are"} yours to commit there.`);
+    lines.push(ownRepoLine(nestedOut.filter((entry) => entry.nested === nested).map((entry) => entry.path), nested));
+  }
+  for (const own of [...new Set(besideOut.map((entry) => entry.repo))]) {
+    lines.push(ownRepoLine(besideOut.filter((entry) => entry.repo === own).map((entry) => entry.path), own));
   }
   if (leftOut.length > 0) {
     lines.push(`${joinNames(leftOut)} ${leftOut.length === 1 ? "is" : "are"} not in the commit: ${leftOut.length === 1 ? "it" : "each"} ` +
