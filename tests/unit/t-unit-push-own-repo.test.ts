@@ -263,31 +263,27 @@ describe("a Unit on the workspace's own repository", () => {
   const OWN_REPO_REVIEW_END = ", then name those files in the manifest by the name its line gives (`<name>@checkout/<path>`, " +
     "leaving \"repo\" out) and request the review again.";
 
-  // Inside the project, as the live runs build it: a clone of its own with commits, which the review's walk already
-  // reaches, so add-checkout records nothing and gives no name. What the agent then meets, step by step.
-  test("a review request whose record names a repository of its own inside the project: it returns the add-checkout step and asks nothing; the path from the project goes through, and the push says the file is yours", () => {
+  // Inside the project: a clone of its own with commits, which the review's walk already
+  // reaches, so the step names the files by their path from the project, with no checkout to record.
+  const OWN_REPO_REVIEW_REACHED = (repo: string, folder: string): string => `refunds's Code Generation changed ${repo}, a ` +
+    "repository of its own, and this piece of work records no repos from here. The review already covers that code where " +
+    `it is: name those files in the manifest by their path from the project (\`${folder}/<path>\`, leaving "repo" out) ` +
+    "and request the review again.";
+  test("a review request whose record names a repository of its own inside the project: it returns the path from the project and asks nothing; the review is requested, and the push says the file is yours", () => {
     const home = oneRepoTeams();
     const alice = cloneOf(home.remote, "alice");
     const record = builtHere(alice, "refunds", "refunds.ts");
     git(alice, ["clone", "-q", codeHost("web"), "web"]);
     writeFileSync(join(alice, "web", "app.js"), "export const page = 1;\n");
-    const { write, rows, reach, runStep } = atReview(alice, record, [{ path: "src/refunds.ts" }, { repo: "web", path: "app.js" }], "t-unit-own-repo-review-web");
+    const { write, rows, reach } = atReview(alice, record, [{ path: "src/refunds.ts" }, { repo: "web", path: "app.js" }], "t-unit-own-repo-review-web");
     const asked = rows("QUESTION_ASKED");
     const refused = reach();
     expect(refused.status, refused.out).not.toBe(0);
     const said = String(refused.json?.error);
-    expect(said).toContain(OWN_REPO_REVIEW("web"));
-    expect(said).toEndWith(`intent add-checkout web\`${OWN_REPO_REVIEW_END}`);
+    expect(said).toEndWith(OWN_REPO_REVIEW_REACHED("web", "web"));
+    expect(said).not.toContain("add-checkout");
     expect(said).not.toContain("add-repo");
     expect(said).not.toContain("--choice redo");
-    const ran = runStep(said);
-    expect(ran.status, `${ran.stdout}${ran.stderr}`).toBe(0);
-    expect(String(ran.stdout).trim()).toBe("The review already covers web; nothing to record.");
-    // A checkout name for it is refused as one this work has not recorded; its path from the project is taken.
-    write([{ path: "src/refunds.ts" }, { path: "web@checkout/app.js" }]);
-    const named = reach();
-    expect(named.status, named.out).not.toBe(0);
-    expect(String(named.json?.error)).toContain("\"web@checkout/app.js\" names a checkout this piece of work has not recorded");
     write([{ path: "src/refunds.ts" }, { path: "web/app.js" }]);
     const requested = reach();
     expect(requested.status, requested.out).toBe(0);
@@ -505,9 +501,8 @@ describe("a Unit on the workspace's own repository", () => {
     expect(state).toMatch(/^- \*\*Status\*\*: Completed$/m);
   };
 
-  // Part of the project moved to a repository of its own beside it while a
-  // Unit was being built, in work that keeps its code in the workspace folder
-  // itself: the push names no step this work refuses, only the way back.
+  // The way back a push still names, for a Unit pushed before whose redo left
+  // all its code in a repository of its own beside the project, nothing here.
   const BUILDS_HERE_ONLY = (repo: string): string => `refunds's Code Generation changed ${repo}, a repository of its own, ` +
     "and this piece of work builds its Units in the workspace's own repository only, so nothing was pushed. Ask the person " +
     "whether to take refunds back to Code Generation so it changes only the workspace's own repository, with the change in " +
@@ -519,22 +514,133 @@ describe("a Unit on the workspace's own repository", () => {
     writeFileSync(join(beside, "lib", "refund.ts"), "export const refund = 1;\n");
     return beside;
   }
-  test("a Unit that changed a repository of its own beside the project: the push asks for the way back, and names no add-repo", () => {
+  // The push's step for a record that names a repository of its own by repo, in work that records no repos from here:
+  // nothing asked; the folder recorded as a checkout and the files named by it, or, where the review already reaches
+  // the folder, named by their path from the project. The step as printed is run as the agent runs it, and `next` is
+  // read after each end.
+  const OWN_REPO_PUSH = (repo: string): string => `refunds's Code Generation changed ${repo}, a repository of its own, and ` +
+    "this piece of work records no repos from here, so nothing was pushed. For the push to leave that code where it is, run `";
+  const OWN_REPO_PUSH_END = ", then name those files in the manifest by the name its line gives (`<name>@checkout/<path>`, " +
+    "leaving \"repo\" out) and push refunds again.";
+  const OWN_REPO_PUSH_REACHED = (repo: string, folder: string): string => `refunds's Code Generation changed ${repo}, a ` +
+    "repository of its own, and this piece of work records no repos from here, so nothing was pushed. For the push to leave " +
+    `that code where it is, name those files in the manifest by their path from the project (\`${folder}/<path>\`, leaving ` +
+    "\"repo\" out) and push refunds again.";
+  const printedStep = (alice: string, said: string): ReturnType<typeof spawnSync> => {
+    const step = /`([^`]*intent add-checkout [^`]+)`/.exec(said)?.[1];
+    expect(step, said).toBeDefined();
+    cpSync(AIDLC_SRC, join(alice, ".claude"), { recursive: true });
+    return spawnSync("bash", ["-c", bashLine(step!)], { cwd: alice, encoding: "utf-8", env: ENV });
+  };
+  const manifestOf = (record: string, writes: Array<Record<string, string>>): void =>
+    writeFileSync(join(record, "construction", "refunds", "code-generation", "source-manifest.json"),
+      `${JSON.stringify({ stage: "code-generation", unit: "refunds", version: 1, writes })}\n`);
+  // `next` after an end: no line of the Guard Policy's.
+  const nextAfter = (alice: string, end: string): void => {
+    expect(JSON.stringify(next(alice)), end).not.toContain("Guard Policy");
+  };
+  const besideNamedByRepo = (alice: string, record: string, writes: Array<Record<string, string>>): string => {
+    const beside = besideRepo(alice);
+    writeFileSync(join(alice, "aidlc", "repos.json"), `${JSON.stringify({ repos: [{ name: "billing", path: `../${basename(beside)}` }] }, null, 2)}\n`);
+    manifestOf(record, [...writes, { repo: "billing", path: "lib/refund.ts" }]);
+    return beside;
+  };
+  test("a Unit that changed a repository of its own beside the project: the push returns the add-checkout step and asks nothing, and the step as printed lets the push go for the rest", () => {
     const home = oneRepoTeams();
     const alice = cloneOf(home.remote, "alice");
     const record = builtHere(alice, "refunds", "refunds.ts");
-    const beside = besideRepo(alice);
-    writeFileSync(join(alice, "aidlc", "repos.json"), `${JSON.stringify({ repos: [{ name: "billing", path: `../${basename(beside)}` }] }, null, 2)}\n`);
-    writeFileSync(join(record, "construction", "refunds", "code-generation", "source-manifest.json"), `${JSON.stringify({
-      stage: "code-generation", unit: "refunds", version: 1, writes: [{ path: "src/refunds.ts" }, { repo: "billing", path: "lib/refund.ts" }],
-    })}\n`);
+    approvedHere(record);
+    const beside = besideNamedByRepo(alice, record, [{ path: "src/refunds.ts" }]);
     const refused = run(UNIT, ["push"], alice);
     expect(refused.status, refused.out).not.toBe(0);
     const said = String(refused.json?.error ?? refused.out);
-    expect(said).toStartWith(BUILDS_HERE_ONLY("billing"));
-    expect(said).toEndWith(" report --result resumed --choice redo --target code-generation` and follow what it returns.");
+    expect(said).toStartWith(OWN_REPO_PUSH("billing"));
+    expect(said).toEndWith(`intent add-checkout ../${basename(beside)}\`${OWN_REPO_PUSH_END}`);
     expect(said).not.toContain("add-repo");
+    expect(said).not.toContain("--choice redo");
     expect(spawnSync("git", ["rev-parse", "--verify", "--quiet", "refs/heads/refunds"], { cwd: alice }).status).not.toBe(0);
+    const ran = printedStep(alice, said);
+    expect(ran.status, `${ran.stdout}${ran.stderr}`).toBe(0);
+    const label = /as (\S+)@checkout\./.exec(String(ran.stdout))?.[1];
+    expect(label, String(ran.stdout)).toBeDefined();
+    manifestOf(record, [{ path: "src/refunds.ts" }, { path: `${label}@checkout/lib/refund.ts` }]);
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(String(pushed.json?.notice)).toContain(besideLine("lib/refund.ts", label!));
+    expect(committed(home.remote, "refunds~1")).toEqual(["src/refunds.ts"]);
+    nextAfter(alice, "beside, some here");
+  });
+
+  // The folder beside already recorded as a checkout (the review's step taken earlier), the record naming it by repo
+  // again: the review's walk reaches it, but its path is not the project's, so the step stays the checkout's, and
+  // add-checkout's line then says its name.
+  test("a record that names by repo a repository beside the project already recorded as a checkout: the push returns the add-checkout step, whose line gives the name", () => {
+    const home = oneRepoTeams();
+    const alice = cloneOf(home.remote, "alice");
+    const record = builtHere(alice, "refunds", "refunds.ts");
+    approvedHere(record);
+    const beside = besideNamedByRepo(alice, record, [{ path: "src/refunds.ts" }]);
+    expect(run(UTILITY, ["intent", "add-checkout", `../${basename(beside)}`], alice).status).toBe(0);
+    const refused = run(UNIT, ["push"], alice);
+    expect(refused.status, refused.out).not.toBe(0);
+    const said = String(refused.json?.error ?? refused.out);
+    expect(said).toStartWith(OWN_REPO_PUSH("billing"));
+    expect(said).toEndWith(`intent add-checkout ../${basename(beside)}\`${OWN_REPO_PUSH_END}`);
+    expect(said).not.toContain(`../${basename(beside)}/<path>`);
+    const ran = printedStep(alice, said);
+    expect(ran.status, `${ran.stdout}${ran.stderr}`).toBe(0);
+    const label = /\(as (\S+)@checkout\)/.exec(String(ran.stdout))?.[1];
+    expect(label, String(ran.stdout)).toBeDefined();
+    manifestOf(record, [{ path: "src/refunds.ts" }, { path: `${label}@checkout/lib/refund.ts` }]);
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(String(pushed.json?.notice)).toContain(besideLine("lib/refund.ts", label!));
+    nextAfter(alice, "beside, recorded before");
+  });
+
+  test("every write of the Unit's named in a repository of its own beside the project: after the step as printed, the push ends as Not now does, with the notice", () => {
+    const home = oneRepoTeams();
+    const alice = cloneOf(home.remote, "alice");
+    const record = builtHere(alice, "refunds", "refunds.ts");
+    approvedHere(record);
+    besideNamedByRepo(alice, record, []);
+    const refused = run(UNIT, ["push"], alice);
+    expect(refused.status, refused.out).not.toBe(0);
+    const said = String(refused.json?.error ?? refused.out);
+    expect(said).toStartWith(OWN_REPO_PUSH("billing"));
+    const ran = printedStep(alice, said);
+    expect(ran.status, `${ran.stdout}${ran.stderr}`).toBe(0);
+    const label = /as (\S+)@checkout\./.exec(String(ran.stdout))?.[1];
+    manifestOf(record, [{ path: `${label}@checkout/lib/refund.ts` }]);
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(String(pushed.json?.notice)).toBe(nothingLeft(
+      `lib/refund.ts is in ${label}, a repository of its own, and yours to commit and push there`, label!,
+    ));
+    endedAsNotNow(home, alice, record);
+    nextAfter(alice, "beside, all there");
+  });
+
+  test("a Unit whose record names a repository of its own inside the project: the push returns the path from the project and asks nothing, and the push then goes for the rest", () => {
+    const home = oneRepoTeams();
+    const alice = cloneOf(home.remote, "alice");
+    const record = builtHere(alice, "refunds", "refunds.ts");
+    approvedHere(record);
+    git(alice, ["clone", "-q", codeHost("web"), "web"]);
+    writeFileSync(join(alice, "web", "app.js"), "export const page = 1;\n");
+    manifestOf(record, [{ path: "src/refunds.ts" }, { repo: "web", path: "app.js" }]);
+    const refused = run(UNIT, ["push"], alice);
+    expect(refused.status, refused.out).not.toBe(0);
+    const said = String(refused.json?.error ?? refused.out);
+    expect(said).toBe(OWN_REPO_PUSH_REACHED("web", "web"));
+    manifestOf(record, [{ path: "src/refunds.ts" }, { path: "web/app.js" }]);
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(String(pushed.json?.notice)).toContain(
+      "web/app.js is not in refunds's commit: web is a repository of its own, so it is yours to commit and push there.",
+    );
+    expect(committed(home.remote, "refunds~1")).toEqual(["src/refunds.ts"]);
+    nextAfter(alice, "inside, some here");
   });
 
   // Some of the Unit's code here and some in the checkout beside: the push

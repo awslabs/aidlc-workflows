@@ -336,7 +336,7 @@ import {
 import { aidlcDispatcherInvocation, aidlcEngineCommand, aidlcToolInvocation, compiledExecutable, entrySkillInvocation, quoteCommandArgument, swarmUnitTestCommand } from "./aidlc-runtime-paths.ts";
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { chatTookStepHere } from "./aidlc-record-core.ts";
-import { addCheckoutRun, namesRepoOfItsOwn, unitPastCodeGeneration } from "./aidlc-unit-teams.ts";
+import { namesRepoOfItsOwn, ownRepoStep, unitPastCodeGeneration } from "./aidlc-unit-teams.ts";
 import { personGitNameField } from "./aidlc-git-name.ts";
 import {
   APPROVAL_GATE_CHOICES,
@@ -374,11 +374,7 @@ function unitManifestRefusal(
     const repo = manifest.unrecordedRepo;
     // Work that records no repo from here: the step that has the review cover
     // that code where it is, never the add it refuses, and nothing asked.
-    if (namesRepoOfItsOwn(pd, repo)) {
-      return `${unit}'s Code Generation changed ${repo}, a repository of its own, and this piece of work records no repos from here. ` +
-        `To have the review cover that code where it is, run ${addCheckoutRun(pd, [repo])}, then name those files in the manifest ` +
-        'by the name its line gives (`<name>@checkout/<path>`, leaving "repo" out) and request the review again.';
-    }
+    if (namesRepoOfItsOwn(pd, repo)) return ownRepoStep(pd, unit, repo, "review");
     return `unit "${unit}"'s source manifest at ${manifestPath} names repo ${JSON.stringify(repo)}, which this piece of work does not record. ` +
       `Run \`${aidlcDispatcherInvocation(`intent add-repo ${quoteCommandArgument(repo)} --reason '<why this work changes it>'`)}\` and say the line it prints once, ` +
       "then request the review again. Do not rewrite the manifest to drop a repo the code was written in.";

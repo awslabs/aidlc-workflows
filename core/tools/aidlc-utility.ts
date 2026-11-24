@@ -202,6 +202,7 @@ import {
   PROJECT_TYPE_SOURCE_FIELD,
   PROJECT_TYPE_SOURCE_HOME,
   recordsNoReposFromHere,
+  reviewReaches,
   unitBuildOf,
 } from "./aidlc-unit-teams.ts";
 import {
@@ -515,7 +516,6 @@ import {
   recordedCheckoutAt,
   sourceCheckoutLabelFor,
   sourceCheckoutListingRel,
-  sourceWalkReach,
   writeRecordedSourceCheckouts,
   type WorkspaceSourceState,
   boltName,
@@ -10610,7 +10610,7 @@ function handleIntentCheckouts(
           die(`intent add-checkout refused: ${typed} is inside AI-DLC's own ${own}/ folder, which holds no code of yours.`);
         }
       }
-      if (sourceWalkReach(projectDir, workspaceSourceState(projectDir, dirName, space)?.listing ?? null, checkouts)(real)) {
+      if (reviewReaches(projectDir, real, dirName, space, checkouts)) {
         return { kind: "reached" as const };
       }
       const checkout = { label: sourceCheckoutLabelFor(real, checkouts), path: typed, real };

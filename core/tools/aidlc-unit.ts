@@ -281,6 +281,7 @@ import {
   planJsonOf,
   soleRemote,
   namesRepoOfItsOwn,
+  ownRepoStep,
   ownRepoWayBack,
 } from "./aidlc-unit-teams.js";
 import { gitOperationUnderWay, rebaseUnderWay, recordChanged, recordCommitBlock, recordPaths, submoduleLeavesProjectRepo } from "./aidlc-git.ts";
@@ -13843,8 +13844,9 @@ function pushUnit(args: string[], projectDir?: string,
   while (!manifest.ok && manifest.unrecordedRepo !== undefined && !addedRepos.includes(manifest.unrecordedRepo)) {
     const repo = manifest.unrecordedRepo;
     // Work that keeps its code in the workspace folder itself records no repo
-    // once Construction has started: the way back, never the add it refuses.
-    if (namesRepoOfItsOwn(pd, repo)) fail(ownRepoWayBack(unit, repo));
+    // once Construction has started: the step that leaves that code where it
+    // is, never the add it refuses, and nothing asked.
+    if (namesRepoOfItsOwn(pd, repo)) fail(ownRepoStep(pd, unit, repo, "push"));
     const added = runEngineUtility(pd, ["intent", "add-repo", repo]);
     if (!added.ok) fail(`${unit} changed ${repo}, which the lead's plan did not list, and it could not be added: ${(added.stderr || added.stdout).trim()}`);
     addedRepos.push(repo);

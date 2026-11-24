@@ -5,7 +5,7 @@
 
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { artifactFilename } from "./aidlc-artifact-vocabulary.ts";
 import { validateUnitName } from "./aidlc-unit-dag.ts";
@@ -51,9 +51,11 @@ import {
   REQUEST_TEXT_DIR,
   shellArg,
   sourceCheckoutListingRel,
+  sourceWalkReach,
   stateDigest,
   UNIT_GATE_RHYTHM_FIELD,
   unitDependencyPath,
+  workspaceSourceState,
   writeEngineFileNoFollow,
 } from "./aidlc-lib.ts";
 import { visibleMarkdownLines } from "./aidlc-markdown.ts";
@@ -246,8 +248,8 @@ export function namesRepoOfItsOwn(projectDir: string, repo: string, folder = rep
 // The command that records each named repo as a checkout for the review, at
 // the folder the person typed, else where repoDir reads it (repos.json's path,
 // else the workspace's child of that name when it is a Git checkout); with no
-// folder to give, the one the person named. add-repo's refusal and the review
-// request's both say it.
+// folder to give, the one the person named. add-repo's refusal and the step a
+// review request and a push return (ownRepoStep) say it.
 export function addCheckoutRun(projectDir: string, names: readonly string[], typed?: string): string {
   const folders = names.map((name) => {
     const mapped = typed ?? readWorkspaceRepos(projectDir).entries.get(name)?.path;
@@ -258,9 +260,50 @@ export function addCheckoutRun(projectDir: string, names: readonly string[], typ
     : `\`${aidlcDispatcherInvocation("intent add-checkout '<folder>'")}\` with the folder the person named`;
 }
 
-// The way back at the push, to the agent, for a Unit whose Code Generation
-// changed such a repository: its Code Generation done again in the workspace's
-// own repository only.
+// Whether the review's walk of the work already reaches a folder (its real
+// path): add-checkout's own test, which the step below reads too.
+export function reviewReaches(projectDir: string, real: string, dirName: string, space: string,
+  checkouts = readRecordedSourceCheckouts(projectDir, dirName, space)): boolean {
+  return sourceWalkReach(projectDir, workspaceSourceState(projectDir, dirName, space)?.listing ?? null, checkouts)(real);
+}
+
+// The step, to the agent, for a Unit whose Code Generation changed a repository
+// of its own in work that records no repos from here, at its review request and
+// at its push: nothing asked; the manifest names those files as the review reads
+// them, by their path from the project where the review already reaches a folder
+// inside it, else by the checkout add-checkout records (or has recorded: its
+// line then says the name).
+export function ownRepoStep(projectDir: string, unit: string, repo: string, at: "review" | "push"): string {
+  const { intent, space } = resolveWorkflowSelection(projectDir);
+  const folder = repoDir(projectDir, repo);
+  let real = "";
+  try {
+    real = realpathSync(folder);
+  } catch {
+    // No folder to read: the checkout's step, with the folder the person named.
+  }
+  const opening = `${unit}'s Code Generation changed ${repo}, a repository of its own, and this piece of work records no repos ` +
+    `from here${at === "push" ? ", so nothing was pushed" : ""}.`;
+  const again = at === "push" ? `push ${unit} again` : "request the review again";
+  // The folder's path from the project as the walk lists it: from the two real
+  // paths, never as repos.json spells it.
+  const inside = real === "" ? "" : relative(realpathSync(projectDir), real);
+  if (intent && inside !== "" && inside !== ".." && !inside.startsWith(`..${sep}`) && !isAbsolute(inside) &&
+    reviewReaches(projectDir, real, intent, space)) {
+    const byPath = `name those files in the manifest by their path from the project (\`${inside.split(sep).join("/")}/<path>\`, ` +
+      `leaving "repo" out) and ${again}.`;
+    return at === "push"
+      ? `${opening} For the push to leave that code where it is, ${byPath}`
+      : `${opening} The review already covers that code where it is: ${byPath}`;
+  }
+  return `${opening} ${at === "push" ? "For the push to leave that code where it is" : "To have the review cover that code where it is"}, ` +
+    `run ${addCheckoutRun(projectDir, [repo])}, then name those files in the manifest by the name its line gives ` +
+    `(\`<name>@checkout/<path>\`, leaving "repo" out) and ${again}.`;
+}
+
+// The way back at the push, to the agent, for a Unit pushed before whose redo
+// left all its code in such a repository, nothing of it here: its Code
+// Generation done again in the workspace's own repository only.
 export function ownRepoWayBack(unit: string, repo: string): string {
   return `${unit}'s Code Generation changed ${repo}, a repository of its own, and this piece of work builds its Units in ` +
     "the workspace's own repository only, so nothing was pushed. Ask the person whether to take " +
