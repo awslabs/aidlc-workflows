@@ -66,7 +66,8 @@ says that whoever builds a Unit approves it after every stage unless the lead
 asks for one approval at the end of each Unit). A plan with one Unit, no Unit plan, or
 Construction already under way is never asked. A reply that picks neither
 leaves this session building, and the first step says how to leave the Units open
-for a person or a team to take before the first Unit is built. Team approvals come after every stage (`per-stage`)
+for a person or a team to take; when that is asked for later, the Units not started yet are left open and one already
+started stays with this session. Team approvals come after every stage (`per-stage`)
 unless the lead asks for one approval at the end of each Unit
 (`set-unit-gate-rhythm unit-end`) before the first team approval question;
 the first team step offers it. On the claim flow, while nobody has

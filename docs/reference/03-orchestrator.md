@@ -785,10 +785,11 @@ the lead asked to build here (`unit assign --here <unit>`, a `UNITS_ASSIGNED`
 walked, never claimed, in `buildOverview`) or was never written; every other
 Unit is left for takes (`unitsLeftForTakes`), held elsewhere for the walk, and
 the walk skips a Unit that waits, directly or through another, on one of them
-not merged yet. Where a Unit started there before teams were chosen, or teams
-came from a teammate's take of solo work (`takenFromSoloWork`), the walk keeps
-every Unit nobody took and puts no share offer. When none is left to the walk
-while a Unit is unmerged, the step is the team board, which puts the approval
+not merged yet. Where teams came from a teammate's take of solo work
+(`takenFromSoloWork`), the walk keeps every Unit nobody took and puts no share
+offer; a Unit the lead's project started before teams were chosen stays with its
+walk (`leadBuildsWithoutClaim`), and the rest are left for takes. When none is
+left to the walk while a Unit is unmerged, the step is the team board, which puts the approval
 rhythm until the lead answers it, while it can still change
 (`unitGateRhythmCanBe`, the setter's own rule); a Unit the walk builds first
 says it once with its step, before its first approval. Each step of teams building Units that
