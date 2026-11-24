@@ -58,11 +58,12 @@ import {
   writeFileSync,
 } from "node:fs";
 import { hostname, tmpdir } from "node:os";
-import { delimiter, dirname, join } from "node:path";
+import { basename, delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   createIntent,
   engineDir,
+  helperSessionRoot,
   humanActedSinceGate,
   humanTurnMarkerPath,
   humanTurnState,
@@ -2385,6 +2386,103 @@ describe("t149 Codex guard-tool-call runs the four PreToolUse checks in one proc
       rmSync(dir, { recursive: true, force: true });
     }
   });
+});
+
+// Since Codex CLI 0.166.0 a shell call's hook payload carries the call's own
+// working folder as cwd (a repository beside the project, a repo inside a
+// workspace), while Codex still starts the hook in the session's folder. The
+// project is that start folder: the call is judged against the person's work,
+// and nothing of AI-DLC's is written into the other folder.
+describe("t149 Codex: a shell call run in another folder is judged in the project", () => {
+  const ROOT_SESSION = "01a12051-e539-79b1-b035-e277202dc7e9";
+  const HELPER_THREAD = "01a12051-f83f-7e91-8a6c-9025a2eb68e2";
+  const besideFolder = (): string => realpathSync(mkdtempSync(join(tmpdir(), "t149-beside-")));
+
+  test("1: a write into the project's code from a folder beside it waits for the plan as from the project, and leaves nothing beside it", () => {
+    const dir = scratchProject(true);
+    const beside = besideFolder();
+    try {
+      seedUnapprovedCodeGeneration(dir, "todo-core");
+      const write = `printf blocked > ../${basename(dir)}/src/blocked.ts`;
+      const fromBeside = runAdapter(dir, "guard-tool-call", shellCall(beside, write));
+      const fromProject = runAdapter(dir, "guard-tool-call", shellCall(dir, write));
+      expect(codexRefusal(fromProject)).toContain("Code generation cannot");
+      expect(codexRefusal(fromBeside)).toBe(codexRefusal(fromProject));
+      expect(existsSync(join(beside, "aidlc"))).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(beside, { recursive: true, force: true });
+    }
+  });
+
+  test("1b: with plan approval off for the work, the write from beside gets the project's own words, which never ask the person", () => {
+    const dir = scratchProject(true);
+    const beside = besideFolder();
+    try {
+      seedUnapprovedCodeGeneration(dir, "todo-core");
+      const state = readFileSync(seededStateFile(dir), "utf-8")
+        .replace(/(- \*\*Scope\*\*:[^\n]*\n)/, "$1- **Plan Approval**: off (set by you)\n");
+      writeFileSync(seededStateFile(dir), state, "utf-8");
+      writeActiveDirectiveMarker(dir, {
+        kind: "run-stage",
+        stage: "code-generation",
+        unit: "todo-core",
+        state_sha256: stateDigest(state),
+      });
+      const write = `printf blocked > ../${basename(dir)}/src/blocked.ts`;
+      const fromBeside = runAdapter(dir, "guard-tool-call", shellCall(beside, write));
+      const fromProject = runAdapter(dir, "guard-tool-call", shellCall(dir, write));
+      expect(codexRefusal(fromProject)).toContain("plan approval is off for this work, so it starts the build without asking anyone");
+      expect(codexRefusal(fromBeside)).toBe(codexRefusal(fromProject));
+      expect(codexRefusal(fromBeside)).not.toContain("asks the person");
+      expect(existsSync(join(beside, "aidlc"))).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(beside, { recursive: true, force: true });
+    }
+  });
+
+  test("2: a helper's shell call in a folder beside the project notes the helper in the project", () => {
+    const dir = scratchProject(true);
+    const beside = besideFolder();
+    try {
+      const r = runAdapter(
+        dir,
+        "guard-tool-call",
+        shellCall(beside, "git status --short", { session_id: ROOT_SESSION, agent_id: HELPER_THREAD }),
+      );
+      expect(r.code, r.stderr).toBe(0);
+      expect(helperSessionRoot(dir, HELPER_THREAD)).toBe(ROOT_SESSION);
+      expect(existsSync(join(beside, "aidlc"))).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(beside, { recursive: true, force: true });
+    }
+  });
+
+  test.skipIf(process.platform !== "win32")(
+    "3: on Windows a payload that writes the project's drive letter in the other case names the same project",
+    () => {
+      const dir = scratchProject(true);
+      try {
+        seedUnapprovedCodeGeneration(dir, "todo-core");
+        const drive = dir.slice(0, 1);
+        const spelled = `${drive === drive.toUpperCase() ? drive.toLowerCase() : drive.toUpperCase()}${dir.slice(1)}`;
+        const patch = runAdapter(dir, "guard-tool-call", {
+          hook_event_name: "PreToolUse",
+          cwd: spelled,
+          session_id: "codex-command-session",
+          tool_name: "apply_patch",
+          tool_input: { command: "*** Begin Patch\n*** Add File: src/blocked.ts\n+blocked\n*** End Patch\n" },
+        });
+        const shell = runAdapter(dir, "guard-tool-call", shellCall(spelled, "git diff --output=src/blocked.diff"));
+        expect(codexRefusal(patch)).toContain("Code generation cannot");
+        expect(codexRefusal(shell)).toContain("Code generation cannot");
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
 });
 
 // On Windows Codex runs a call whose PreToolUse hook exits 2 (measured on Codex
