@@ -35,13 +35,15 @@
 //     paste it: on Claude Code the start context opens with the rules lead,
 //     then the two record files (and a line when the plan ends in an earlier
 //     review section) inside the part Claude Code shows inline, then the files
-//     rule, then an interrupted build's progress; on Copilot the whole brief heads
-//     the start message; on opencode, Codex and Kiro nothing is added; a start the plan
+//     rule, then an interrupted build's progress; on Copilot and opencode the whole brief heads
+//     the start message (on opencode with no copy of the rules where its memory
+//     include loads them); on Codex and Kiro nothing is added; a start the plan
 //     cannot be handed for is told to write nothing;
 //   - the plan-approval guard lets a developer start that names no target and
 //     carries no brief through only where the start hands the plan over (Claude
 //     Code with its SubagentStart entry registered), and refuses it
-//     everywhere else; the step's note says which.
+//     everywhere else; the step's note says which (with the plan-approval check
+//     switched off, Copilot and opencode get the brief command).
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -1251,6 +1253,18 @@ function rewritten(proj: string, harness: string, prompt: string): string {
     .hookSpecificOutput?.updatedInput?.prompt ?? prompt);
 }
 
+/** The chat's session start on the given harness, as its hook config runs it. */
+function sessionStartOn(proj: string, harness: string): void {
+  const result = spawnSync(BUN, [DISPATCHER, "engine", "hook", "session-start"], {
+    cwd: proj,
+    input: JSON.stringify({ hook_event_name: "SessionStart", session_id: SESSION, source: "startup", cwd: proj }),
+    env: { ...env(proj), AIDLC_HARNESS_NAME: harness },
+    encoding: "utf-8",
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+  });
+  expect(result.status, result.stderr).toBe(0);
+}
+
 /** This install's Claude Code settings, as shipped: they register the start delivery. */
 function registerStartDelivery(proj: string): void {
   mkdirSync(join(proj, ".claude"), { recursive: true });
@@ -1351,11 +1365,11 @@ describe("the developer is handed its plan as it starts", () => {
     expect(context).not.toContain(PLAN_POINTER);
   });
 
-  test("on Copilot the whole brief heads the start message; on opencode, Codex and Kiro CLI nothing is added", () => {
+  test("on Copilot and opencode the whole brief heads the start message; on Codex and Kiro CLI nothing is added", () => {
     const proj = project();
     approvedBuild(proj);
     const whole = brief(proj);
-    for (const harness of ["copilot"]) {
+    for (const harness of ["copilot", "opencode"]) {
       const sent = rewritten(proj, harness, CONDUCTOR_MESSAGE);
       expect(sent.startsWith("This is the plan and its test instructions as the person approved them; build from this, " +
         `not from a summary of it.\n\n${whole}\n\n${CONDUCTOR_MESSAGE}`), harness).toBe(true);
@@ -1363,11 +1377,25 @@ describe("the developer is handed its plan as it starts", () => {
       const pasted = `${whole}\n\n${CONDUCTOR_MESSAGE}`;
       expect(rewritten(proj, harness, pasted).startsWith(pasted), harness).toBe(true);
     }
-    // opencode runs a tool with the arguments it was called with, not a plugin's new copy, so a brief added there
-    // would not reach the developer.
-    for (const harness of ["opencode", "codex", "kiro"]) {
+    for (const harness of ["codex", "kiro"]) {
       expect(rewritten(proj, harness, CONDUCTOR_MESSAGE).startsWith(CONDUCTOR_MESSAGE), harness).toBe(true);
     }
+  });
+
+  test("on opencode the whole brief heads the start with or without its memory include; the rules follow only without it", () => {
+    const proj = project();
+    approvedBuild(proj);
+    const head = "This is the plan and its test instructions as the person approved them; build from this, " +
+      `not from a summary of it.\n\n${brief(proj)}\n\n${CONDUCTOR_MESSAGE}`;
+    const without = rewritten(proj, "opencode", CONDUCTOR_MESSAGE);
+    expect(without.startsWith(head)).toBe(true);
+    expect(without).toContain("AIDLC_DISPATCH_RULES_BEGIN");
+    // opencode.json's own instructions list loads the memory files into every
+    // request, as the chat's session start recorded: the rules are not copied in.
+    writeFileSync(join(proj, "opencode.json"), JSON.stringify({ instructions: [".aidlc/onboarding.md", "aidlc/.aidlc-engine/active-memory/**/*.md"] }));
+    sessionStartOn(proj, "opencode");
+    const included = rewritten(proj, "opencode", CONDUCTOR_MESSAGE);
+    expect(included).toBe(head);
   });
 
   test("the step's note says how the developer gets its plan, by what this install does", () => {
@@ -1386,7 +1414,7 @@ describe("the developer is handed its plan as it starts", () => {
   });
 
   test("where the work's hooks never ran, the note names the brief command; with them running, it is as above", () => {
-    for (const harness of ["claude", "copilot"]) {
+    for (const harness of ["claude", "copilot", "opencode"]) {
       for (const hooksRan of [false, true]) {
         const proj = project();
         registerStartDelivery(proj);
@@ -1405,6 +1433,30 @@ describe("the developer is handed its plan as it starts", () => {
         const label = `${harness}, hooks ${hooksRan ? "ran" : "never ran"}`;
         expect(note.includes("from AI-DLC as it starts"), label).toBe(hooksRan);
         expect(note.includes("Start the developer's message with the output of `"), label).toBe(!hooksRan);
+      }
+    }
+  });
+
+  test("with the plan-approval check switched off, the tools that hand the brief by rewrite get the brief command", () => {
+    for (const harness of ["claude", "copilot", "opencode"]) {
+      for (const switchedOff of [false, true]) {
+        const proj = project();
+        registerStartDelivery(proj);
+        appendAuditEntry("STAGE_STARTED", { Stage: "code-generation" }, proj);
+        writePlan(proj);
+        expect(next(proj).ask_type).toBe("plan-approval");
+        approve(proj);
+        // Nothing would refuse a start a tool left without the brief (a
+        // project's opencode adapter from before an update drops it), so the
+        // conductor passes it.
+        const run = runOrchestrateNext(ORCHESTRATE, proj, [], {
+          env: { ...env(proj), AIDLC_HARNESS_NAME: harness, ...(switchedOff ? { AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "1" } : {}) },
+        });
+        const note = String((run.directive as { plan_note?: string } | null)?.plan_note ?? "");
+        const label = `${harness}, check ${switchedOff ? "switched off" : "on"}`;
+        const passed = switchedOff && harness !== "claude";
+        expect(note.includes("Start the developer's message with the output of `"), label).toBe(passed);
+        expect(note.includes("from AI-DLC as it starts"), label).toBe(!passed);
       }
     }
   });
@@ -1465,7 +1517,7 @@ describe("the plan-approval guard and a developer start that carries no brief", 
 
   test("the step's note and the guard agree on every tree", () => {
     for (const [harness, registered, handed] of [
-      ["claude", true, true], ["claude", false, false], ["codex", true, false], ["opencode", true, false],
+      ["claude", true, true], ["claude", false, false], ["codex", true, false], ["opencode", true, true],
       ["copilot", true, true],
     ] as const) {
       const proj = project();
@@ -1478,8 +1530,8 @@ describe("the plan-approval guard and a developer start that carries no brief", 
       const label = `${harness}${registered ? ", start delivery registered" : ""}`;
       expect(note.includes("from AI-DLC as it starts"), label).toBe(handed);
       expect(note.includes("Start the developer's message with the output of"), label).toBe(!handed);
-      // Copilot's adapter hands the guard the message as the rewrite left it.
-      const sent = harness === "copilot" ? rewritten(proj, harness, CONDUCTOR_MESSAGE) : CONDUCTOR_MESSAGE;
+      // Copilot's and opencode's adapters hand the guard the message as the rewrite left it.
+      const sent = harness === "copilot" || harness === "opencode" ? rewritten(proj, harness, CONDUCTOR_MESSAGE) : CONDUCTOR_MESSAGE;
       expect(startThroughGuard(proj, sent, harness).status, label).toBe(handed ? 0 : 2);
     }
   });

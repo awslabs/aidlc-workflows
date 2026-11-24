@@ -1,4 +1,4 @@
-// covers: function:chatHoldsRules, function:recordRulesLoad, function:noteRulesDelivered, function:clearRulesDelivered, function:noteKiroIdeTurn, function:kiroIdeSteering, function:refreshKiroIdeSteering, function:trackedKiroIdeSteeringAsk, subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:continue
+// covers: function:chatHoldsRules, function:includeHoldsRules, function:recordRulesLoad, function:noteRulesDelivered, function:clearRulesDelivered, function:noteKiroIdeTurn, function:kiroIdeSteering, function:refreshKiroIdeSteering, function:trackedKiroIdeSteeringAsk, subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:continue
 //
 // #2023: every `next` sent the stage's whole rule bundle again (17 KB with the
 // shipped memory, 34 KB in three tool results with a grown team.md), so a long
@@ -9,6 +9,9 @@
 //   - Kiro CLI and opencode put the memory files in context on every request
 //     (live: an edit is seen at once and survives a compaction), so the pointer
 //     needs only the host's own include to cover the stage's files.
+//   - On opencode the stage-rules hook reads the same include before it adds
+//     the rules to a helper's start: none where the include covers them, the
+//     copy where it does not; Kiro CLI's hook output keeps the copy.
 //   - On every tool, a chat's first step, and a step whose bundle differs from
 //     the one this chat's last step named, gets the text once, so the rules are
 //     in front of the agent (live on Kiro IDE, an agent in a new chat that held
@@ -304,6 +307,25 @@ function sentInFull(delivery: { results: Printed[]; final: Printed }): boolean {
 const POINTER_NOTE =
   "This step's rules are the AI-DLC memory text already in your context; apply them to every file you write in this step.";
 
+// Whether a helper's start, as the stage-rules hook leaves it for the tool's
+// adapter (with the adapter's environment), carries the stage's rules.
+async function helperStartRules(proj: string, harness: string, sessionId: string | undefined): Promise<boolean> {
+  const tools = join(proj, HARNESS_DIR[harness], "tools", "aidlc.ts");
+  const stdout = await run(proj, [process.execPath, tools, "engine", "hook", "deliver-stage-rules"], {
+    AIDLC_PROJECT_DIR: proj, AIDLC_HARNESS_DIR: HARNESS_DIR[harness], AIDLC_HARNESS_NAME: harness,
+  }, JSON.stringify({
+    hook_event_name: "PreToolUse",
+    ...(sessionId ? { session_id: sessionId } : {}),
+    tool_name: "task",
+    tool_input: { subagent_type: "aidlc-product-agent", prompt: `Run the ${STAGE} stage.` },
+    cwd: proj,
+  }));
+  if (!stdout.trim()) return false;
+  const prompt = (JSON.parse(stdout) as { hookSpecificOutput?: { updatedInput?: { prompt?: string } } })
+    .hookSpecificOutput?.updatedInput?.prompt ?? "";
+  return prompt.includes("AIDLC_DISPATCH_RULES_BEGIN");
+}
+
 function pointerOnly(delivery: { results: Printed[]; final: Printed }): boolean {
   return delivery.results.length === 1 &&
     delivery.final.kind === "run-stage" &&
@@ -499,6 +521,37 @@ describe("Kiro CLI and opencode: the host sends the memory files with every requ
     await sessionStart(proj, "opencode", sid, "startup");
     expect(sentInFull(await next(proj, "opencode", { AIDLC_SESSION_OVERRIDE: sid, OPENCODE: "1" }))).toBe(true);
     expect(sentInFull(await next(proj, "opencode", { AIDLC_SESSION_OVERRIDE: sid, OPENCODE: "1" }))).toBe(true);
+  });
+
+  test("opencode: a helper's start gets no copy of the rules where the include loads them, the copy where it does not", async () => {
+    const proj = await projectFor("opencode");
+    const sid = randomUUID();
+    await sessionStart(proj, "opencode", sid, "startup");
+    expect(await helperStartRules(proj, "opencode", sid)).toBe(false);
+    // An edit the include's copy does not hold yet: the rules go in, until a step brings that copy up to date.
+    editTeam(proj, "Every endpoint has an owner.");
+    expect(await helperStartRules(proj, "opencode", sid)).toBe(true);
+    await next(proj, "opencode", { AIDLC_SESSION_OVERRIDE: sid, OPENCODE: "1" });
+    expect(await helperStartRules(proj, "opencode", sid)).toBe(false);
+    // No chat named, or a chat with no session start on record.
+    expect(await helperStartRules(proj, "opencode", undefined)).toBe(true);
+    expect(await helperStartRules(proj, "opencode", randomUUID())).toBe(true);
+
+    const config = join(proj, "opencode.json");
+    const parsed = JSON.parse(readFileSync(config, "utf-8")) as { instructions: string[] };
+    const kept = parsed.instructions.filter((entry) => !entry.includes("memory/"));
+    expect(kept.length).toBeLessThan(parsed.instructions.length);
+    writeFileSync(config, JSON.stringify({ ...parsed, instructions: kept }));
+    const fresh = randomUUID();
+    await sessionStart(proj, "opencode", fresh, "startup");
+    expect(await helperStartRules(proj, "opencode", fresh)).toBe(true);
+  });
+
+  test("Kiro CLI: the stage-rules hook still proposes the copy beside its preload", async () => {
+    const proj = await projectFor("kiro");
+    const sid = randomUUID();
+    await sessionStart(proj, "kiro", sid, "startup");
+    expect(await helperStartRules(proj, "kiro", sid)).toBe(true);
   });
 
   // A team that keeps opencode.jsonc writes comments and trailing commas in

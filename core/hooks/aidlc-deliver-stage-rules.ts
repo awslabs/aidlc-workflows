@@ -3,7 +3,10 @@
 // conductor-to-subagent boundary.
 //
 // Codex and Copilot consume the emitted updatedInput directly. OpenCode's
-// adapter consumes the same output and mutates output.args. Kiro CLI has no
+// adapter consumes the same output and mutates output.args. On opencode the
+// rules are left out of a helper's start where opencode's own `instructions`
+// list already loads every rule file of the stage (includeHoldsRules, the
+// proof the main chat's `rules_held` rests on). Kiro CLI has no
 // input-rewrite channel, so its adapter observes the proposed rewrite and
 // relies on native agent resource preload. Kiro IDE does not register this
 // hook because tool-argument delivery is not uniform across supported
@@ -21,9 +24,9 @@
 // A Code Generation developer starting a one-target build is also handed its
 // plan, which the conductor then leaves out (aidlc-testing-posture.ts, "The
 // brief handed over by a tool"): on Claude Code, as it starts, the two record
-// files that hold its plan and test instructions (briefPointer); on Copilot,
-// the whole brief at the head of its message (handedBrief). On Codex, opencode,
-// Kiro CLI, Kiro IDE and Cursor the conductor passes the brief.
+// files that hold its plan and test instructions (briefPointer); on Copilot
+// and opencode, the whole brief at the head of its message (handedBrief). On
+// Codex, Kiro CLI, Kiro IDE and Cursor the conductor passes the brief.
 
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
@@ -51,6 +54,7 @@ import {
   type RuleContent,
   resolvedRuleBundle,
 } from "../tools/aidlc-steering.ts";
+import { includeHoldsRules } from "../tools/aidlc-rules-held.ts";
 import { runtimeHarnessName } from "../tools/aidlc-runtime-paths.ts";
 import {
   BRIEF_NOT_HANDED,
@@ -174,18 +178,31 @@ function hasExactBundle(
   return prompt.includes(bundleBlock(stage, content));
 }
 
+// opencode's own `instructions` list puts the memory files into every request,
+// a helper's included, and opencode keeps a helper's start in the main chat's
+// record of the call, so a copy there would only fill that chat. The rules go
+// in wherever that include does not cover the stage's files. Kiro CLI's
+// adapter only observes the rewrite, so its output stays as it is.
+function includeLoadsRules(projectDir: string, sessionId: unknown, space: string, content: RuleContent[]): boolean {
+  return typeof sessionId === "string" && runtimeHarnessName(projectDir) === "opencode" &&
+    includeHoldsRules(projectDir, sessionId, space, [...new Set(content.map((entry) => entry.path))]);
+}
+
 function augmentText(
   prompt: string,
   projectDir: string,
   fallbackStage: string | null,
+  sessionId?: unknown,
 ): { prompt: string; changed: boolean; error?: string } {
   const node = promptStage(prompt, fallbackStage);
   if (!node) return { prompt, changed: false };
-  const bundle = resolvedRuleBundle(node, projectDir);
+  const space = resolveWorkflowSelection(projectDir).space;
+  const bundle = resolvedRuleBundle(node, projectDir, space);
   if (bundle.error) return { prompt, changed: false, error: bundle.error };
   if (
     bundle.content.length === 0 ||
-    hasExactBundle(prompt, node.slug, bundle.content)
+    hasExactBundle(prompt, node.slug, bundle.content) ||
+    includeLoadsRules(projectDir, sessionId, space, bundle.content)
   ) {
     return { prompt, changed: false };
   }
@@ -285,6 +302,7 @@ function augmentSingleDispatch(
   projectDir: string,
   fallbackStage: string | null,
   withBrief = true,
+  sessionId?: unknown,
 ): DispatchRuleResult {
   const agent = dispatchAgent(input);
   if (!isAidlcAgent(agent)) return { changed: false };
@@ -293,7 +311,7 @@ function augmentSingleDispatch(
   const brief = withBrief && BRIEF_REWRITE_HARNESSES.has(runtimeHarnessName(projectDir))
     ? startBrief(projectDir, agent, original) : "";
   const prefix = brief ? `${brief}\n\n` : "";
-  const augmented = augmentText(prefix + original, projectDir, fallbackStage);
+  const augmented = augmentText(prefix + original, projectDir, fallbackStage, sessionId);
   if (augmented.error) return { changed: false, error: augmented.error };
   if (!augmented.changed && !prefix) return { changed: false };
   return {
@@ -307,11 +325,12 @@ export function augmentDispatchRules(
   input: Record<string, unknown>,
   projectDir: string,
   withBrief = true,
+  sessionId?: unknown,
 ): DispatchRuleResult {
   if (!DISPATCH_TOOLS.has(toolName.toLowerCase())) return { changed: false };
   const fallbackStage = stageOnRecord(projectDir);
   if (toolName.toLowerCase() !== "subagent") {
-    return augmentSingleDispatch(input, projectDir, fallbackStage, withBrief);
+    return augmentSingleDispatch(input, projectDir, fallbackStage, withBrief, sessionId);
   }
 
   const stages = Array.isArray(input.stages) ? input.stages : [];
@@ -353,6 +372,8 @@ export function dispatchHookOutput(
     parsed.tool_name ?? "",
     parsed.tool_input ?? {},
     projectDir,
+    true,
+    parsed.session_id,
   );
 }
 
@@ -520,7 +541,7 @@ function deliver(parsed: HookInput, projectDir: string): number {
   // The rules' size limit is judged on the rules: a brief that would push the
   // output over it is left out, and the message goes as the conductor wrote it.
   if (result.changed && result.updatedInput && outputBytesOf(result.updatedInput) > DISPATCH_HOOK_OUTPUT_MAX_BYTES) {
-    result = augmentDispatchRules(parsed.tool_name ?? "", parsed.tool_input ?? {}, projectDir, false);
+    result = augmentDispatchRules(parsed.tool_name ?? "", parsed.tool_input ?? {}, projectDir, false, parsed.session_id);
   }
   if (result.error) {
     process.stderr.write(`${result.error}\n`);

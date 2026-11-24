@@ -438,6 +438,42 @@ describe("t222 plugin ownership and runner naming", () => {
     expect(run.stdout).toContain("pruned stale scope-runners");
   });
 
+  // A plan shortcut an older AI-DLC wrote on Claude Code forwards the words on its first command.
+  test("empty scope batch with plugin selection prunes an older install's scope runner too", () => {
+    const project = setupIntegrationProject({ noAidlcDocs: true });
+    tempDirs.push(project);
+    const gen = projectRunnerGen(project);
+    const scopesDir = tempDir("aidlc-t222-older-shape-scopes-");
+    writeScope(scopesDir, "doc-only", false);
+    setPluginSelection(project, []);
+    const existing = join(project, ".claude", "skills", "aidlc-bugfix", "SKILL.md");
+    const current = readFileSync(existing, "utf-8");
+    expect(current).toContain("next --entry --scope bugfix`");
+    writeFileSync(existing, current.replace("next --entry --scope bugfix`", "next --scope bugfix $ARGUMENTS`"), "utf-8");
+
+    const run = runRunnerGen(gen, ["scopes"], { AIDLC_SCOPES_DIR: scopesDir });
+    expect(run.status).toBe(0);
+    expect(existsSync(existing)).toBe(false);
+    expect(run.stdout).toContain("pruned stale scope-runners");
+  });
+
+  // A plugin's shortcut (`/<scope>`) is no line the engine reads as a shortcut's, so on Claude Code too it forwards
+  // the words, where AI-DLC's own plan shortcuts start with `next --entry`.
+  test("on Claude Code a plugin's scope runner forwards the words and a core one starts with next --entry", () => {
+    const project = setupIntegrationProject({ noAidlcDocs: true });
+    tempDirs.push(project);
+    const gen = projectRunnerGen(project);
+    const scopesDir = tempDir("aidlc-t222-plugin-entry-scopes-");
+    const out = tempDir("aidlc-t222-plugin-entry-out-");
+    writeScope(scopesDir, "test-pro-validation", true, "test-pro");
+    writeScope(scopesDir, "bugfix", true);
+
+    const run = runRunnerGen(gen, ["scopes", "--out", out], { AIDLC_SCOPES_DIR: scopesDir });
+    expect(run.status, run.stderr).toBe(0);
+    expect(readFileSync(join(out, "test-pro-validation", "SKILL.md"), "utf-8")).toContain("next --scope test-pro-validation $ARGUMENTS`");
+    expect(readFileSync(join(out, "aidlc-bugfix", "SKILL.md"), "utf-8")).toContain("next --entry --scope bugfix`");
+  });
+
   test("malformed scope file does not prevent stage runner write", () => {
     const project = setupIntegrationProject({ noAidlcDocs: true });
     tempDirs.push(project);

@@ -13,7 +13,9 @@
 //     include reads the engine's copy of the active space's memory
 //     (aidlc-includes.ts ACTIVE_MEMORY_DIR), so the proof also needs that copy
 //     to be the memory files now; a step that finds it behind sends the text
-//     and brings the copy up to date for the next request.
+//     and brings the copy up to date for the next request. The stage-rules
+//     hook reads the same proof before it adds the rules to an opencode
+//     helper's start (includeHoldsRules).
 //   - Claude Code (the `.claude/rules/aidlc.md` @-import) loads them at startup,
 //     resume, clear, compact and fork, but not after a mid-chat edit, and it can
 //     clear old tool results with no hook. The proof is that each file of the
@@ -593,6 +595,49 @@ function rolloutHolds(transcript: string, bundle: string): { holds: boolean; com
   }
 }
 
+// The include a per-request host recorded at the chat's start covers `paths`.
+// The host reads the copy with each request: it holds the exact text only
+// while each file of the bundle is in the copy as the memory file is now.
+function includeCovers(projectDir: string, record: LoadRecord, space: string, paths: string[]): boolean {
+  const dir = record.dir ?? "";
+  // An earlier release's copy goes once the includes are re-pointed: a chat
+  // whose host reads it may read nothing, so it gets the full text.
+  if (dir === "" || dir === EARLIER_COPY_DIR_REL) return false;
+  const memory = memoryDirRel(space);
+  if (dir === COPY_DIR_REL) {
+    const behind = new Set(activeMemoryCopyDrift(projectDir, space));
+    return paths.every((path) =>
+      path.startsWith(memory) && path.endsWith(".md") &&
+      sha256File(join(projectDir, path)) !== "" && !behind.has(path.slice(memory.length))
+    );
+  }
+  return paths.every((path) => path.startsWith(dir) && path.endsWith(".md"));
+}
+
+/**
+ * True only when the host's own include, as it stood when chat `sessionId`
+ * started, puts the exact text of `paths` into every request that chat sends
+ * now (Kiro CLI, opencode), and on opencode into a helper's it starts too. The
+ * stage-rules hook reads it before it adds the rules to an opencode helper's
+ * start; chatHoldsRules adds what the chat itself was handed.
+ */
+export function includeHoldsRules(
+  projectDir: string,
+  sessionId: string | undefined,
+  space: string,
+  paths: string[],
+): boolean {
+  try {
+    const sid = validSessionId(sessionId);
+    if (sid === null || paths.length === 0) return false;
+    const record = readJson<LoadRecord>(loadRecordPath(projectDir, sid));
+    if (record?.v !== 1 || record.harness !== runtimeHarnessName(projectDir) || record.space !== space) return false;
+    return record.refresh === "per-request" && includeCovers(projectDir, record, space, paths);
+  } catch {
+    return false;
+  }
+}
+
 /**
  * True only when the chat this command runs in provably holds the exact text
  * of `paths` (the stage's bundle, `bundle` its digest) right now.
@@ -625,23 +670,7 @@ export function chatHoldsRules(
       if (sha256File(join(projectDir, KIRO_IDE_STEERING)) !== sha256Text(text)) return false;
       return process.env.KIRO_SESSION_ID ? true : openTurnsHold(projectDir, sid, space, paths);
     }
-    if (record.refresh === "per-request") {
-      const dir = record.dir ?? "";
-      // An earlier release's copy goes once the includes are re-pointed: a chat
-      // whose host reads it may read nothing, so it gets the full text.
-      if (dir === "" || dir === EARLIER_COPY_DIR_REL) return false;
-      const memory = memoryDirRel(space);
-      // The host reads the copy with each request: it holds the exact text only
-      // while each file of the bundle is in the copy as the memory file is now.
-      if (dir === COPY_DIR_REL) {
-        const behind = new Set(activeMemoryCopyDrift(projectDir, space));
-        return paths.every((path) =>
-          path.startsWith(memory) && path.endsWith(".md") &&
-          sha256File(join(projectDir, path)) !== "" && !behind.has(path.slice(memory.length))
-        );
-      }
-      return paths.every((path) => path.startsWith(dir) && path.endsWith(".md"));
-    }
+    if (record.refresh === "per-request") return includeCovers(projectDir, record, space, paths);
     if (record.refresh === "at-load") {
       return record.stale !== true && filesUnchanged(projectDir, record.files, paths);
     }

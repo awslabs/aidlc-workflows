@@ -2219,7 +2219,9 @@ section says `Mode: strict`, an explicit `relaxed` or `off` refuses the whole
 command, including any other supplied settings, and names that file: edit the
 memory line there to relax it for everyone. An explicit strict setting is still
 allowed. At creation the flag can be given with the scope
-(`/aidlc --scope poc --guard-policy strict "..."`).
+(`/aidlc --scope poc --guard-policy strict "..."`); under a memory
+`Mode: strict`, a `relaxed` or `off` value given there is left off, and the
+work starts at strict with the sentence naming that file said once.
 
 The retired flag `--change-control` and the retired config key `change-control`
 still resolve for one release and print one deprecation line naming their removal

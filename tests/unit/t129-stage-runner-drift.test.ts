@@ -107,6 +107,7 @@ import { join } from "node:path";
 import {
   AIDLC_SRC,
   cleanupTestProject,
+  REPO_ROOT,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
 
@@ -365,7 +366,10 @@ describe("t129 stage-runner drift guard (migrated from t129-stage-runner-drift.s
   // `/aidlc "<description>"` shows, never a default scope the person did not see.
   test("the /aidlc-init runner sends a description without a scope to the plan offer", () => {
     const initSkill = readFileSync(join(SKILLS_DIR, "aidlc-init", "SKILL.md"), "utf-8");
-    expect(initSkill).toContain("orchestrate.ts next --new-intent $ARGUMENTS");
+    // On Claude Code the first command carries none of the person's words; another tree's still forwards them.
+    expect(initSkill).toContain("orchestrate.ts next --entry --new-intent\n");
+    expect(readFileSync(join(REPO_ROOT, "dist", "codex", ".agents", "skills", "aidlc-init", "SKILL.md"), "utf-8"))
+      .toContain("orchestrate.ts next --new-intent $ARGUMENTS");
     expect(initSkill.replace(/\s+/g, " ")).toContain("From here the flow IS the `/aidlc` flow");
     expect(initSkill).not.toContain("else `classic`");
     expect(initSkill).not.toMatch(/orchestrate(?:\.ts)?\s+next\s+--scope/);
