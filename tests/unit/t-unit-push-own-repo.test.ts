@@ -14,7 +14,7 @@
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, relative } from "node:path";
 import { noteEngineAskMark, personRepliedAfter, readAuditShardEvents, engineAskMark } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
@@ -47,6 +47,8 @@ import {
   fetchRecords,
   personsNext,
   UTILITY,
+  ORCH,
+  bashLine,
 } from "../harness/team-build.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
@@ -215,6 +217,56 @@ describe("a Unit on the workspace's own repository", () => {
     expect(namesRepoOfItsOwn(alice, "shop")).toBe(false);
     // The lead's own project, nothing built there: add-repo still records repos from here.
     expect(namesRepoOfItsOwn(home.dir, "web")).toBe(false);
+  });
+
+  // A teammate's Unit whose Code Generation wrote into a repository of its own inside the project, in work that keeps
+  // its code in the workspace folder itself: its review request is refused, and the way back the push and the review
+  // request name, as the agent runs it on the person's yes, starts Code Generation over for that Unit.
+  test("a review request whose record names a repository of its own: the way back starts Code Generation over", () => {
+    const home = oneRepoTeams();
+    const alice = cloneOf(home.remote, "alice");
+    const record = builtHere(alice, "refunds", "refunds.ts");
+    const web = join(alice, "web");
+    mkdirSync(web, { recursive: true });
+    git(web, ["init", "-q", "-b", "main"]);
+    writeFileSync(join(web, "app.js"), "export const page = 1;\n");
+    const manifest = join(record, "construction", "refunds", "code-generation", "source-manifest.json");
+    writeFileSync(manifest, `${JSON.stringify({
+      stage: "code-generation", unit: "refunds", version: 1, writes: [{ path: "src/refunds.ts" }, { repo: "web", path: "app.js" }],
+    })}\n`);
+    // The build at its Code Generation, the stages before it done, its outputs written.
+    for (const name of ["code-generation-plan.md", "unit-test-instructions.md", "traceability.json"]) {
+      writeFileSync(join(record, "construction", "refunds", "code-generation", name), name.endsWith(".json") ? "{}\n" : `# ${name}\n`);
+    }
+    const statePath = join(record, "aidlc-state.md");
+    writeFileSync(statePath, readFileSync(statePath, "utf-8")
+      .replace(/^- \[[-? ]\] (functional-design|nfr-requirements|nfr-design|infrastructure-design) /gm, "- [x] $1 ")
+      .replace(/^- \[[? ]\] code-generation /m, "- [-] code-generation ")
+      .replace(/^- \*\*Current Stage\*\*: .*$/m, "- **Current Stage**: code-generation"));
+    const session = "t-unit-own-repo-review-web";
+    const chat = personsChat(session);
+    expect(hook(alice, chat, { hook_event_name: "UserPromptSubmit", session_id: session, prompt: "build refunds" }).status).toBe(0);
+    const request = (): ReturnType<typeof run> => run(join(AIDLC_SRC, "tools", "aidlc-log.ts"),
+      ["review", "--stage", "code-generation", "--reviewer", "aidlc-architecture-reviewer-agent", "--unit", "refunds", "--iteration", "1"], alice, chat);
+    // The stage's checks run first, once, and say what they found; the request again reaches the record.
+    const checked = request();
+    const refused = checked.status === 0 ? request() : checked;
+    expect(refused.status, refused.out).not.toBe(0);
+    // Today's refusal names add-repo, which such work refuses; N4r takes its place with its words.
+    expect(String(refused.json?.error)).toContain('names repo "web", which this piece of work does not record');
+    expect(namesRepoOfItsOwn(alice, "web")).toBe(true);
+    expect(hook(alice, chat, { hook_event_name: "UserPromptSubmit", session_id: session, prompt: "yes, take it back" }).status).toBe(0);
+    const back = run(ORCH, ["report", "--result", "resumed", "--choice", "redo", "--target", "code-generation"], alice, chat);
+    const jump = /`(bun \S+aidlc-jump\.ts execute [^`]+)`/.exec(String(back.json?.message))?.[1];
+    expect(jump, back.out).toBeDefined();
+    cpSync(AIDLC_SRC, join(alice, ".claude"), { recursive: true });
+    const ran = spawnSync("bash", ["-c", bashLine(jump!)], { cwd: alice, encoding: "utf-8", env: chat });
+    expect(ran.status, `${ran.stdout}${ran.stderr}`).toBe(0);
+    // Code Generation of refunds again: its plan, unapproved here, is put up first.
+    const step = next(alice, chat);
+    expect(step.stage, JSON.stringify(step).slice(0, 800)).toBe("code-generation");
+    expect(step.unit).toBe("refunds");
+    expect(step.kind === "run-stage" || step.ask_type === "plan-approval", JSON.stringify(step).slice(0, 800)).toBe(true);
   });
 
   test("its branch starts from the lead's main as fetched, never from the clone's own main left behind", () => {
