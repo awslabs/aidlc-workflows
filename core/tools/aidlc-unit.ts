@@ -13315,6 +13315,23 @@ function untrackedIgnored(dir: string, paths: readonly string[]): string[] {
   return checked.status === 0 ? checked.stdout.split("\0").filter(Boolean) : [];
 }
 
+// The repository of its own a path of `dir` lies in, a nested clone or a
+// submodule (git adds neither's files here): the nearest folder above it,
+// below `dir` itself, that has a `.git` entry; null for none.
+function nestedRepoOf(dir: string, path: string): string | null {
+  const folders = path.split(/[\\/]/).slice(0, -1);
+  for (let depth = folders.length; depth > 0; depth--) {
+    const folder = folders.slice(0, depth).join("/");
+    if (existsSync(join(dir, folder, ".git"))) return folder;
+  }
+  return null;
+}
+
+// A list of files as the push's lines say it: the first, and how many more.
+function filesSaid(files: readonly string[]): string {
+  return `${files[0]}${files.length > 1 ? ` and ${files.length - 1} more` : ""}`;
+}
+
 // Whether a repo holds an uncommitted change of the person's, beyond the
 // Unit's. On the workspace's own repository (".") a file of AI-DLC's own is
 // none (aidlcOwnedSourceKey): its record in aidlc/ (the build's, which the
@@ -13837,6 +13854,8 @@ function pushUnit(args: string[], projectDir?: string,
   const takeTree = readTakeTree(activeRecordDir(pd));
   const leftOut: string[] = [];
   const gitIgnored: Array<{ path: string; name: string }> = [];
+  // Files inside a repository of its own, by their path from the project and that repository's folder.
+  const nestedOut: Array<{ path: string; nested: string }> = [];
   // Every repo first: there, and a remote to push to.
   const planned: Array<{ repo: string; dir: string; name: string; remote: string; paths: string[] }> = [];
   for (const [repo, paths] of byRepo) {
@@ -13919,12 +13938,23 @@ function pushUnit(args: string[], projectDir?: string,
           "--target code-generation` and follow what it returns.",
       );
     }
+    // Files inside a repository of its own in this one (part of the project
+    // split off as a clone or a submodule) are that repository's to commit:
+    // left out before anything is switched, and said by where they go, even
+    // where the .gitignore also leaves them out.
+    const fromProject = (path: string): string => relative(pd, join(dir, path)).split(sep).join("/");
+    const outer: string[] = [];
+    for (const path of paths) {
+      const nested = nestedRepoOf(dir, path);
+      if (nested === null) outer.push(path);
+      else nestedOut.push({ path: fromProject(path), nested: fromProject(nested) });
+    }
     // Files their .gitignore leaves out (a build's bundle, say) stay out of
     // the commit, as their own git keeps them; a repo with nothing else to
     // send is not switched or pushed. Said once, with the rest.
-    const ignored = untrackedIgnored(dir, paths);
+    const ignored = untrackedIgnored(dir, outer);
     for (const path of ignored) gitIgnored.push({ path, name });
-    const kept = paths.filter((path) => !ignored.includes(path));
+    const kept = outer.filter((path) => !ignored.includes(path));
     if (kept.length > 0) planned.push({ repo, dir, name, remote, paths: kept });
   }
   if (planned.length === 0 && gitIgnored.length > 0) {
@@ -14275,6 +14305,11 @@ function pushUnit(args: string[], projectDir?: string,
     const files = gitIgnored.filter((entry) => entry.name === name).map((entry) => `${entry.path} in ${name}`);
     lines.push(`${joinNames(files)} ${files.length === 1 ? "is" : "are"} not in the commit: ${name}'s .gitignore leaves ` +
       `${files.length === 1 ? "it" : "them"} out.`);
+  }
+  for (const nested of [...new Set(nestedOut.map((entry) => entry.nested))]) {
+    const files = nestedOut.filter((entry) => entry.nested === nested).map((entry) => entry.path);
+    lines.push(`${filesSaid(files)} ${files.length === 1 ? "is" : "are"} not in ${unit}'s commit: ${nested} is a repository of ` +
+      `its own, so ${files.length === 1 ? "it is" : "they are"} yours to commit there.`);
   }
   if (leftOut.length > 0) {
     lines.push(`${joinNames(leftOut)} ${leftOut.length === 1 ? "is" : "are"} not in the commit: ${leftOut.length === 1 ? "it" : "each"} ` +

@@ -26,6 +26,7 @@ import {
   claimPayload,
   cleanupTeamBuild,
   cloneOf,
+  codeHost,
   commitOnHost,
   ENV,
   finishBuild,
@@ -307,6 +308,73 @@ describe("a Unit on the workspace's own repository", () => {
     expect(pushed.status, pushed.out).toBe(0);
     expect(git(home.remote, ["rev-list", "--count", "main..refunds"])).toBe("1");
     expect(String(pushed.json?.notice)).not.toContain("AI-DLC's record of refunds");
+  });
+
+  // A Unit taken in a clone of the lead's work and built with `files` written
+  // there, by their path from the workspace, its record naming each of them.
+  function builtWriting(alice: string, files: Record<string, string>, afterTake?: () => void): string {
+    const took = takeIn("payments", ["refunds", "--plan", fixtureIntentId8(alice, undefined, "default"), "--from", git(alice, ["remote", "get-url", "origin"])], alice);
+    expect(took.status, took.out).toBe(0);
+    afterTake?.();
+    const intents = join(alice, "aidlc", "spaces", "payments", "intents");
+    const record = join(intents, readdirSync(intents).find((name) => name.endsWith("-refunds"))!);
+    for (const [path, text] of Object.entries(files)) {
+      mkdirSync(dirname(join(alice, path)), { recursive: true });
+      writeFileSync(join(alice, path), text);
+    }
+    const stage = join(record, "construction", "refunds", "code-generation");
+    mkdirSync(stage, { recursive: true });
+    writeFileSync(join(stage, "source-manifest.json"), `${JSON.stringify({
+      stage: "code-generation", unit: "refunds", version: 1, writes: Object.keys(files).map((path) => ({ path })),
+    })}\n`);
+    writeFileSync(join(stage, "code-summary.md"), "# Code summary\n\nrefunds.\n");
+    return record;
+  }
+  // Part of the project became a repository of its own inside it, as a split of
+  // a monorepo leaves it: `web`, with a commit of its own.
+  function webOfItsOwn(alice: string): void {
+    mkdirSync(join(alice, "web"), { recursive: true });
+    git(alice, ["init", "-q", "-b", "main", "web"]);
+    const web = join(alice, "web");
+    git(web, ["config", "user.name", "alice"]);
+    git(web, ["config", "user.email", "alice@example.test"]);
+    writeFileSync(join(web, "README.md"), "# web\n");
+    git(web, ["add", "README.md"]);
+    git(web, ["commit", "-q", "-m", "web"]);
+  }
+  test("a file of the Unit's inside a repository of its own in the project: the push says so and pushes the rest", () => {
+    const home = oneRepoTeams();
+    const alice = cloneOf(home.remote, "alice");
+    builtWriting(alice, { "src/refunds.ts": "export const refunds = 1;\n", "web/app.js": "app();\n" }, () => webOfItsOwn(alice));
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(String(pushed.json?.notice)).toContain(
+      "web/app.js is not in refunds's commit: web is a repository of its own, so it is yours to commit there.",
+    );
+    expect(committed(home.remote, "refunds~1")).toEqual(["src/refunds.ts"]);
+    expect(git(join(alice, "web"), ["status", "--porcelain"])).toBe("?? app.js");
+  });
+
+  // A split that makes part of the project a git submodule while the Unit is
+  // being built: the lead's commit, pulled into the clone. Git refuses a path
+  // inside a submodule as it does one in any repository of its own.
+  test("a file of the Unit's inside a submodule the project gained during its build: the push says so and pushes the rest", () => {
+    const webHost = codeHost("web");
+    const home = oneRepoTeams();
+    const alice = cloneOf(home.remote, "alice");
+    builtWriting(alice, { "src/refunds.ts": "export const refunds = 1;\n", "web/app.js": "app();\n" }, () => {
+      git(home.dir, ["-c", "protocol.file.allow=always", "submodule", "add", "-q", webHost, "web"]);
+      git(home.dir, ["commit", "-q", "-m", "web as a submodule"]);
+      git(home.dir, ["push", "-q", "origin", "main"]);
+      git(alice, ["pull", "-q", "--ff-only"]);
+      git(alice, ["-c", "protocol.file.allow=always", "submodule", "update", "--init", "-q"]);
+    });
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(String(pushed.json?.notice)).toContain(
+      "web/app.js is not in refunds's commit: web is a repository of its own, so it is yours to commit there.",
+    );
+    expect(committed(home.remote, "refunds~1")).toEqual(["src/refunds.ts"]);
   });
 
   test("its branch starts from the lead's main as fetched, never from the clone's own main left behind", () => {
