@@ -193,6 +193,7 @@ import {
   main as unitMain,
 } from "./aidlc-unit.ts";
 import {
+  addCheckoutRun,
   arrivedAtLastPull,
   checkInApplies,
   checkInState,
@@ -10243,18 +10244,11 @@ function workspaceBesideFirstRepo(
 
 // The way on for work that keeps its code in the workspace folder itself once
 // Construction has started: code elsewhere is reviewed as a checkout of its
-// own, at the folder repos.json gives, the person named, or the child there.
+// own, at the folder the person named, repos.json gives, or the child there.
 function checkoutWayOn(projectDir: string, verb: string, names: string[], typed?: string): string {
-  const folders = names.map((name) => {
-    const mapped = typed ?? readWorkspaceRepos(projectDir).entries.get(name)?.path;
-    return mapped !== undefined ? displayRepoPath(mapped) : isGitRepoDir(join(projectDir, name)) ? name : null;
-  });
-  const run = folders.every((folder) => folder !== null)
-    ? folders.map((folder) => `\`${aidlcDispatcherInvocation(`intent add-checkout ${quoteCommandArgument(folder!)}`)}\``).join(", then ")
-    : `\`${aidlcDispatcherInvocation("intent add-checkout '<folder>'")}\` with the folder the person named`;
   const them = names.length === 1 ? names[0] : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
   return `intent ${verb} refused: this piece of work keeps its code in the workspace folder itself and Construction has started, ` +
-    `so it records no repos from here. To have the review and its checks cover ${them} too, run ${run}.`;
+    `so it records no repos from here. To have the review and its checks cover ${them} too, run ${addCheckoutRun(projectDir, names, typed)}.`;
 }
 
 // A repo that is the workspace's child of its own name (repos.json gives it no other place).

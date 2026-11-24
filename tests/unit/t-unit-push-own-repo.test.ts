@@ -224,22 +224,14 @@ describe("a Unit on the workspace's own repository", () => {
     expect(namesRepoOfItsOwn(home.dir, "web")).toBe(false);
   });
 
-  // A teammate's Unit whose Code Generation wrote into a repository of its own inside the project, in work that keeps
-  // its code in the workspace folder itself: its review request is refused, and the way back the push and the review
-  // request name, as the agent runs it on the person's yes, starts Code Generation over for that Unit.
-  test("a review request whose record names a repository of its own: the way back starts Code Generation over", () => {
-    const home = oneRepoTeams();
-    const alice = cloneOf(home.remote, "alice");
-    const record = builtHere(alice, "refunds", "refunds.ts");
-    const web = join(alice, "web");
-    mkdirSync(web, { recursive: true });
-    git(web, ["init", "-q", "-b", "main"]);
-    writeFileSync(join(web, "app.js"), "export const page = 1;\n");
+  // A teammate's Unit at its Code Generation review whose record names, by repo, a repository of its own, in work that
+  // keeps its code in the workspace folder itself: the build's state at that review and the review request as the
+  // agent makes it. `reach` asks again once when the stage's checks ran first.
+  function atReview(alice: string, record: string, writes: Array<Record<string, string>>, session: string) {
     const manifest = join(record, "construction", "refunds", "code-generation", "source-manifest.json");
-    writeFileSync(manifest, `${JSON.stringify({
-      stage: "code-generation", unit: "refunds", version: 1, writes: [{ path: "src/refunds.ts" }, { repo: "web", path: "app.js" }],
-    })}\n`);
-    // The build at its Code Generation, the stages before it done, its outputs written.
+    const write = (list: Array<Record<string, string>>): void =>
+      writeFileSync(manifest, `${JSON.stringify({ stage: "code-generation", unit: "refunds", version: 1, writes: list })}\n`);
+    write(writes);
     for (const name of ["code-generation-plan.md", "unit-test-instructions.md", "traceability.json"]) {
       writeFileSync(join(record, "construction", "refunds", "code-generation", name), name.endsWith(".json") ? "{}\n" : `# ${name}\n`);
     }
@@ -248,37 +240,93 @@ describe("a Unit on the workspace's own repository", () => {
       .replace(/^- \[[-? ]\] (functional-design|nfr-requirements|nfr-design|infrastructure-design) /gm, "- [x] $1 ")
       .replace(/^- \[[? ]\] code-generation /m, "- [-] code-generation ")
       .replace(/^- \*\*Current Stage\*\*: .*$/m, "- **Current Stage**: code-generation"));
-    const session = "t-unit-own-repo-review-web";
     const chat = personsChat(session);
     expect(hook(alice, chat, { hook_event_name: "UserPromptSubmit", session_id: session, prompt: "build refunds" }).status).toBe(0);
+    const rows = (event: string): number => readAuditShardEvents(alice).filter((row) => row.event === event).length;
     const request = (): ReturnType<typeof run> => run(join(AIDLC_SRC, "tools", "aidlc-log.ts"),
       ["review", "--stage", "code-generation", "--reviewer", "aidlc-architecture-reviewer-agent", "--unit", "refunds", "--iteration", "1"], alice, chat);
-    // The stage's checks run first, once, and say what they found; the request again reaches the record.
-    const checked = request();
-    const refused = checked.status === 0 ? request() : checked;
+    const reach = (): ReturnType<typeof run> => {
+      const first = request();
+      return first.status === 0 && rows("REVIEW_REQUESTED") === 0 ? request() : first;
+    };
+    // The step the refusal prints, run as the agent runs it.
+    const runStep = (said: string): ReturnType<typeof spawnSync> => {
+      const step = /`([^`]*intent add-checkout [^`]+)`/.exec(said)?.[1];
+      expect(step, said).toBeDefined();
+      cpSync(AIDLC_SRC, join(alice, ".claude"), { recursive: true });
+      return spawnSync("bash", ["-c", bashLine(step!)], { cwd: alice, encoding: "utf-8", env: chat });
+    };
+    return { write, rows, reach, runStep };
+  }
+  const OWN_REPO_REVIEW = (repo: string): string => `refunds's Code Generation changed ${repo}, a repository of its own, and ` +
+    "this piece of work records no repos from here. To have the review cover that code where it is, run `";
+  const OWN_REPO_REVIEW_END = ", then name those files in the manifest by the name its line gives (`<name>@checkout/<path>`, " +
+    "leaving \"repo\" out) and request the review again.";
+
+  // Inside the project, as the live runs build it: a clone of its own with commits, which the review's walk already
+  // reaches, so add-checkout records nothing and gives no name. What the agent then meets, step by step.
+  test("a review request whose record names a repository of its own inside the project: it returns the add-checkout step and asks nothing; the path from the project goes through, and the push says the file is yours", () => {
+    const home = oneRepoTeams();
+    const alice = cloneOf(home.remote, "alice");
+    const record = builtHere(alice, "refunds", "refunds.ts");
+    git(alice, ["clone", "-q", codeHost("web"), "web"]);
+    writeFileSync(join(alice, "web", "app.js"), "export const page = 1;\n");
+    const { write, rows, reach, runStep } = atReview(alice, record, [{ path: "src/refunds.ts" }, { repo: "web", path: "app.js" }], "t-unit-own-repo-review-web");
+    const asked = rows("QUESTION_ASKED");
+    const refused = reach();
     expect(refused.status, refused.out).not.toBe(0);
-    // The way back, never the add of a repo such work refuses.
     const said = String(refused.json?.error);
-    expect(said).toContain(
-      "refunds's Code Generation changed web, a repository of its own, and this piece of work builds its Units in the " +
-        "workspace's own repository only. Ask the person whether to do refunds's Code Generation again so it changes only " +
-        "the workspace's own repository, with the change in web made as a piece of work of its own; on their yes, run `",
-    );
-    expect(said).toEndWith(" report --result resumed --choice redo --target code-generation` and follow what it returns.");
+    expect(said).toContain(OWN_REPO_REVIEW("web"));
+    expect(said).toEndWith(`intent add-checkout web\`${OWN_REPO_REVIEW_END}`);
     expect(said).not.toContain("add-repo");
-    expect(namesRepoOfItsOwn(alice, "web")).toBe(true);
-    expect(hook(alice, chat, { hook_event_name: "UserPromptSubmit", session_id: session, prompt: "yes, take it back" }).status).toBe(0);
-    const back = run(ORCH, ["report", "--result", "resumed", "--choice", "redo", "--target", "code-generation"], alice, chat);
-    const jump = /`(bun \S+aidlc-jump\.ts execute [^`]+)`/.exec(String(back.json?.message))?.[1];
-    expect(jump, back.out).toBeDefined();
-    cpSync(AIDLC_SRC, join(alice, ".claude"), { recursive: true });
-    const ran = spawnSync("bash", ["-c", bashLine(jump!)], { cwd: alice, encoding: "utf-8", env: chat });
+    expect(said).not.toContain("--choice redo");
+    const ran = runStep(said);
     expect(ran.status, `${ran.stdout}${ran.stderr}`).toBe(0);
-    // Code Generation of refunds again: its plan, unapproved here, is put up first.
-    const step = next(alice, chat);
-    expect(step.stage, JSON.stringify(step).slice(0, 800)).toBe("code-generation");
-    expect(step.unit).toBe("refunds");
-    expect(step.kind === "run-stage" || step.ask_type === "plan-approval", JSON.stringify(step).slice(0, 800)).toBe(true);
+    expect(String(ran.stdout).trim()).toBe("The review already covers web; nothing to record.");
+    // A checkout name for it is refused as one this work has not recorded; its path from the project is taken.
+    write([{ path: "src/refunds.ts" }, { path: "web@checkout/app.js" }]);
+    const named = reach();
+    expect(named.status, named.out).not.toBe(0);
+    expect(String(named.json?.error)).toContain("\"web@checkout/app.js\" names a checkout this piece of work has not recorded");
+    write([{ path: "src/refunds.ts" }, { path: "web/app.js" }]);
+    const requested = reach();
+    expect(requested.status, requested.out).toBe(0);
+    expect(rows("REVIEW_REQUESTED")).toBe(1);
+    expect(rows("QUESTION_ASKED")).toBe(asked);
+    // Approved, the push goes for the rest and says the file in web.
+    approvedHere(record);
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(String(pushed.json?.notice)).toContain(
+      "web/app.js is not in refunds's commit: web is a repository of its own, so it is yours to commit and push there.",
+    );
+    expect(committed(home.remote, "refunds~1")).toEqual(["src/refunds.ts"]);
+  });
+
+  // Beside the project, placed by repos.json: the step as printed records the checkout, and the record by its name
+  // reaches the review.
+  test("a review request whose record names a repository of its own beside the project: its add-checkout step as printed records it, and the review is requested", () => {
+    const home = oneRepoTeams();
+    const alice = cloneOf(home.remote, "alice");
+    const record = builtHere(alice, "refunds", "refunds.ts");
+    const beside = besideRepo(alice);
+    writeFileSync(join(alice, "aidlc", "repos.json"), `${JSON.stringify({ repos: [{ name: "billing", path: `../${basename(beside)}` }] }, null, 2)}\n`);
+    const { write, rows, reach, runStep } = atReview(alice, record, [{ path: "src/refunds.ts" }, { repo: "billing", path: "lib/refund.ts" }], "t-unit-own-repo-review-billing");
+    const asked = rows("QUESTION_ASKED");
+    const refused = reach();
+    expect(refused.status, refused.out).not.toBe(0);
+    const said = String(refused.json?.error);
+    expect(said).toContain(OWN_REPO_REVIEW("billing"));
+    expect(said).toEndWith(`intent add-checkout ../${basename(beside)}\`${OWN_REPO_REVIEW_END}`);
+    const ran = runStep(said);
+    expect(ran.status, `${ran.stdout}${ran.stderr}`).toBe(0);
+    const label = /as (\S+)@checkout\./.exec(String(ran.stdout))?.[1];
+    expect(label, String(ran.stdout)).toBeDefined();
+    write([{ path: "src/refunds.ts" }, { path: `${label}@checkout/lib/refund.ts` }]);
+    const requested = reach();
+    expect(requested.status, requested.out).toBe(0);
+    expect(rows("REVIEW_REQUESTED")).toBe(1);
+    expect(rows("QUESTION_ASKED")).toBe(asked);
   });
 
   // The push question says, before the yes, what its commit carries: the

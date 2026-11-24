@@ -65,8 +65,8 @@ import { isReadOnlyEngineProbe, writeFileAtomic } from "./aidlc-locks.ts";
 import { gitAddressKey } from "./aidlc-workspace-repos.ts";
 import type { UnitClaimPayload, UnitClaimView } from "./aidlc-unit.ts";
 import { homeCopyName, planRecordRef } from "./aidlc-unit-holders.ts";
-import { UPDATE_COMMIT_MESSAGE, withoutCredentials } from "./aidlc-workspace-manifest.ts";
-import { aidlcInvocation, aidlcToolInvocation } from "./aidlc-runtime-paths.ts";
+import { displayRepoPath, readWorkspaceRepos, UPDATE_COMMIT_MESSAGE, withoutCredentials } from "./aidlc-workspace-manifest.ts";
+import { aidlcDispatcherInvocation, aidlcInvocation, aidlcToolInvocation, quoteCommandArgument } from "./aidlc-runtime-paths.ts";
 
 // Where the home of team-built work is: the address of the code repository its
 // plan is shared in (with any user and token left out), or "local" while there
@@ -243,15 +243,29 @@ export function namesRepoOfItsOwn(projectDir: string, repo: string, folder = rep
   return dir !== resolve(projectDir) && isGitRepoDir(dir);
 }
 
-// The way back, to the agent, for a Unit whose Code Generation changed such a
-// repository: its Code Generation done again in the workspace's own repository
-// only. At the push nothing of it was pushed; at its review request the
-// review was not asked for, which the refusal already says.
-export function ownRepoWayBack(unit: string, repo: string, at: "push" | "review" = "push"): string {
+// The command that records each named repo as a checkout for the review, at
+// the folder the person typed, else where repoDir reads it (repos.json's path,
+// else the workspace's child of that name when it is a Git checkout); with no
+// folder to give, the one the person named. add-repo's refusal and the review
+// request's both say it.
+export function addCheckoutRun(projectDir: string, names: readonly string[], typed?: string): string {
+  const folders = names.map((name) => {
+    const mapped = typed ?? readWorkspaceRepos(projectDir).entries.get(name)?.path;
+    return mapped !== undefined ? displayRepoPath(mapped) : isGitRepoDir(join(projectDir, name)) ? name : null;
+  });
+  return folders.every((folder) => folder !== null)
+    ? folders.map((folder) => `\`${aidlcDispatcherInvocation(`intent add-checkout ${quoteCommandArgument(folder!)}`)}\``).join(", then ")
+    : `\`${aidlcDispatcherInvocation("intent add-checkout '<folder>'")}\` with the folder the person named`;
+}
+
+// The way back at the push, to the agent, for a Unit whose Code Generation
+// changed such a repository: its Code Generation done again in the workspace's
+// own repository only.
+export function ownRepoWayBack(unit: string, repo: string): string {
   return `${unit}'s Code Generation changed ${repo}, a repository of its own, and this piece of work builds its Units in ` +
-    `the workspace's own repository only${at === "push" ? ", so nothing was pushed" : ""}. Ask the person whether to ` +
-    `${at === "push" ? `take ${unit} back to Code Generation` : `do ${unit}'s Code Generation again`} so it changes only the ` +
-    `workspace's own repository, with the change in ${repo} made as a piece of work of its own; on their yes, run ` +
+    "the workspace's own repository only, so nothing was pushed. Ask the person whether to take " +
+    `${unit} back to Code Generation so it changes only the workspace's own repository, with the change in ${repo} made ` +
+    "as a piece of work of its own; on their yes, run " +
     `\`${aidlcToolInvocation("orchestrate")} report --result resumed --choice redo --target code-generation\` and follow what it returns.`;
 }
 
