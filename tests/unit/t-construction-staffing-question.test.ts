@@ -60,7 +60,7 @@ const CHAT = chat("01995000-7a11-7000-8000-000000001395");
 
 const QUESTION = "Inception is done, and the plan has 2 Units. Who builds them?";
 const DEFAULT_LINE = "This session builds the 2 Units one after another. To leave them open for a person or a team to take " +
-  "instead, say so before the first Unit is built.";
+  "instead, say so at any time.";
 const APPROVALS_LINE = "Whoever builds a Unit will approve it after every stage. Do you want them to approve once at the " +
   "end of each Unit instead? I'd keep after every stage, so a wrong turn is caught at the stage where it happens.";
 const REPOS_LINE = "This work spans 2 repos and this workspace is not a git repository, so this session builds " +

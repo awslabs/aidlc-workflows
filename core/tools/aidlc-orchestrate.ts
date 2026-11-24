@@ -6174,7 +6174,7 @@ function constructionStaffingAsk(
       sayWithStepOnce(
         projectDir,
         `This session builds the ${units} Units ${order}. To leave them open for a person or a team to take instead, ` +
-          "say so before the first Unit is built.",
+          "say so at any time.",
       );
     }
     return null;
