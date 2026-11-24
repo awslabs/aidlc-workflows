@@ -6028,7 +6028,7 @@ function openAgainNamed(pd: string, unit: string, live: UnitClaimView | null): v
   const notice = wasDone
     ? (its !== null
       ? `Taken off the plan: ${its} ${named.length === 1 ? "is" : "are"} no longer named as ${unit}'s build, and ${unit} is no longer counted merged by ${named.length === 1 ? "it" : "them"}.`
-      : `Taken off the plan: ${unit} is no longer counted merged in ${joinNames(byWord)} by your word.`) + ` ${unit} is open for a person or a team to take.${after}`
+      : `Taken off the plan: ${unit} is no longer counted merged in ${joinNames(byWord.map((name) => (name === "." ? "the repo" : name)))} by your word.`) + ` ${unit} is open for a person or a team to take.${after}`
     : `Taken off the plan: ${its} ${named.length === 1 ? "is" : "are"} no longer named as ${unit}'s build. ${unit} is open for a person or a team to take.`;
   console.log(JSON.stringify({ released: taken !== null, unit, notice: withPlanNotes(notice) }));
 }
@@ -17538,11 +17538,17 @@ export function namedCloneOffer(
 }
 
 // A Unit whose record holds no result (its take or its push never reached its
-// record repository): the lead's word alone counts it, against its
-// repositories on the plan, and it is done once each of them is counted.
+// record repository, or its code all went into a repository of its own): the
+// lead's word alone counts it, against its repositories on the plan, and it is
+// done once each of them is counted.
 function saidMergedWithNoRecord(pd: string, unit: string, repo: string, words: string, message?: string): void {
   const plan = keptPlan(pd, activeIdentity(pd).intentId8)?.plan ?? null;
-  const repos = plan?.units.find((entry) => entry.name === unit)?.repos ?? [];
+  const planned = plan?.units.find((entry) => entry.name === unit);
+  // Work built in the workspace's own repository lists no repos for its
+  // Units: the word counts the one it names, as a pull request's naming does.
+  const namedOnly = planned !== undefined && planned.repos.length === 0 && intentRepos(pd).length === 0;
+  if (namedOnly && repo !== "." && !isValidRepoName(repo)) fail(repoNameRefusal("Invalid --repo", repo));
+  const repos = namedOnly ? [repo] : planned?.repos ?? [];
   if (repos.length === 0) fail(`${unit} has no result to count merged.`);
   if (!repos.includes(repo)) fail(`${unit} changed ${joinNames(repos)}, not ${repo}.`);
   const signOffOn = leadSignOffOn(readStateFile(pd), pd, plan);
@@ -17568,7 +17574,7 @@ function saidMergedWithNoRecord(pd: string, unit: string, repo: string, words: s
     });
   }
   const notMerged = repos.filter((name) => !counted.includes(name));
-  const said = `${repo} counts as merged for ${unit}, in your words.`;
+  const said = `${repo === "." ? "The repo" : repo} counts as merged for ${unit}, in your words.`;
   const notice = done ? `${unit} is recorded as merged here.`
     : notMerged.length > 0 ? `${said} ${joinNames(notMerged)} ${notMerged.length === 1 ? "has" : "have"} not merged it yet, so nothing is recorded here.`
     : said;

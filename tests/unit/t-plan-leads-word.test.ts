@@ -24,6 +24,7 @@ import {
   cloneCode,
   cloneOf,
   codeGenerated,
+  DEPENDENCIES,
   ENV,
   finishBuild,
   GIT_ENV,
@@ -317,6 +318,15 @@ describe("a merge the lead counts by word for a Unit whose record has no result"
     expect(second.json?.notice, second.out).toBe("refunds is recorded as merged here.");
     expect(planWordAt(home, "refunds")).toMatchObject({ done: true });
     expect(readAuditShardEvents(home.dir).filter((row) => row.event === "UNIT_MERGED" && row.block.includes("refunds"))).toHaveLength(1);
+  });
+
+  // The word alone counts a Unit with no listed repos only in work built in the workspace's own repository.
+  test("in work that records repos, a Unit whose plan lists none still has no result to count merged", () => {
+    const { home } = refundsTaken(undefined, DEPENDENCIES.replace("    repos: [billing]\n    depends_on: [refunds]", "    depends_on: [refunds]"));
+    const said = run(UNIT, ["merged", "reporting", "--repo", "billing", "--person-words", "merged by hand"], home.dir);
+    expect(said.status, said.out).not.toBe(0);
+    expect(said.out).toContain("reporting has no result to count merged.");
+    expect(planWordAt(home, "reporting")).not.toMatchObject({ done: true });
   });
 });
 

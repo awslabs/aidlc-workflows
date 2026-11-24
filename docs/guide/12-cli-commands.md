@@ -1113,6 +1113,9 @@ done record keeps them ("by your word"). Once every repo the Unit changed is mer
 check or by your word, it is recorded at once:
 "<unit> is recorded as merged here." A repo still not merged records
 nothing, and the line says which.
+In work built in the workspace's own repository, a Unit whose builder pushed its code in a
+repository of its own, so that no result reached its record, is recorded as merged on your
+word for the repository you name.
 In a team's own build it names the way on instead: the lead's project checks the merge itself.
 
 With `--pull-request <n>`, your words name pull request `<n>` in that repo as the Unit's

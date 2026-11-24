@@ -749,6 +749,50 @@ describe("a Unit on the workspace's own repository", () => {
     expect(next(alice, chat).stage).toBe("code-generation");
   });
 
+  // The lead's word that it merged, for a Unit of work built in the workspace's own repository whose code all went into
+  // a repository of its own: the plan lists no repos for it and its record has no result, so the word names the
+  // repository, the Unit is recorded as merged, and the Unit waiting on it opens.
+  test("the lead's word that a Unit whose code all went into a repository of its own merged there: it is recorded as merged, and the Unit waiting on it opens", () => {
+    const home = oneRepoTeams();
+    const alice = cloneOf(home.remote, "alice");
+    const record = builtWriting(alice, { "web/app.js": "app();\n" }, () => webOfItsOwn(alice));
+    approvedHere(record);
+    expect(String(run(UNIT, ["push"], alice).json?.notice)).toStartWith("Nothing of refunds's is left to push");
+    const dana = cloneOf(home.remote, "dana");
+    expect(String(takeIn("data", ["reporting", ...fromHome(home)], dana).json?.error)).toContain("reporting waits on refunds");
+    expect(String(run(UNIT, ["merged", "refunds", "--repo", "../web", "--person-words", "merged in web"], home.dir).out)).toContain("Invalid --repo");
+    const said = run(UNIT, ["merged", "refunds", "--repo", "web", "--person-words", "merged in web"], home.dir);
+    expect(said.status, said.out).toBe(0);
+    expect(String(said.json?.notice)).toStartWith("refunds is recorded as merged here.");
+    const plan = JSON.parse(git(home.remote, ["show", `refs/aidlc/plans/${fixtureIntentId8(home.dir)}:plan.json`])) as
+      { units: Array<{ name: string; word: Record<string, unknown> }> };
+    expect(plan.units.find((entry) => entry.name === "refunds")?.word)
+      .toMatchObject({ done: true, said_merged: [{ repo: "web", words: "merged in web" }] });
+    const merged = readAuditShardEvents(home.dir).filter((row) => row.event === "UNIT_MERGED");
+    expect(merged).toHaveLength(1);
+    expect(merged[0].block).toContain("web (by your word)");
+    const took = takeIn("data", ["reporting", ...fromHome(home)], dana);
+    expect(took.status, took.out).toBe(0);
+  });
+
+  // The workspace's own repository named by its engine name: said as the push says it, here and when it is taken back.
+  test("the lead's word for such a Unit naming the workspace's own repository: the lines say the repo, never a dot", () => {
+    const home = oneRepoTeams();
+    const alice = cloneOf(home.remote, "alice");
+    const record = builtWriting(alice, { "web/app.js": "app();\n" }, () => webOfItsOwn(alice));
+    approvedHere(record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    expect(run(UNIT, ["lead-sign-off", "on"], home.dir).status).toBe(0);
+    const said = run(UNIT, ["merged", "refunds", "--repo", ".", "--person-words", "merged here"], home.dir);
+    expect(said.status, said.out).toBe(0);
+    expect(String(said.json?.notice)).toStartWith("The repo counts as merged for refunds, in your words.");
+    expect(run(UNIT, ["lead-sign-off", "off"], home.dir).status).toBe(0);
+    expect(run(UNIT, ["merged", "refunds", "--repo", ".", "--person-words", "merged here"], home.dir).status).toBe(0);
+    const back = run(UNIT, ["release", "refunds"], home.dir);
+    expect(back.status, back.out).toBe(0);
+    expect(String(back.json?.notice)).toContain("refunds is no longer counted merged in the repo by your word.");
+  });
+
   // When part of the project is split out: the moved files both ignored by the
   // project and inside the new repository, and the one project file the Unit
   // changed back as it was. Said by where the moved files can be committed.
