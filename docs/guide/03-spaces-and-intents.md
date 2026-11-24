@@ -626,7 +626,9 @@ and one git tracks moves when you say yes to committing the update
   records that folder as a gitlink; each file then counts once, under its own
   repo. When the workspace folder holds files of its own that the work changes
   (a `docs/` folder, say), list the workspace too, as `"."`: with only the repos
-  inside it listed, the reviews and change checks leave its folders out.
+  inside it listed, the reviews and change checks leave its folders out. The
+  first `intent add-repo` on work that kept its code in the workspace folder
+  writes that entry for you.
 - `url` is any address git clones (GitHub https or SSH, GitLab, anything else).
   A blank `url` counts as not set. A repo with no `url` is not cloned, and the
   sync tool says how to add its `url`.

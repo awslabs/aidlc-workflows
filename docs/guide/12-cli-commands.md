@@ -476,11 +476,14 @@ checkout (a real `.git` entry): a folder merely shaped like a repository is
 refused, as is a name with separators.
 
 Work that records no repos works on the workspace folder itself. Until
-Construction has started, its first repo is recorded the same way, and the line
-says so once: "Added billing (at ../billing) to this piece of work's repos;
-until now it worked on the workspace folder itself, which it still reads." The
-workspace folder is still read as before. While nothing is built, removing that
-repo again takes the work back to the workspace folder. Once Construction has
+Construction has started, its first repo is recorded together with the workspace
+folder itself, so the work covers both. `repos.json` lists the new repo and the
+workspace, the workspace as `"."` under the name its code knowledge already has
+(its folder's name) and with its origin's address, and the line says so once:
+"Added billing (at ../billing) to this piece of work's repos. The work still
+covers shop, the workspace folder itself, and repos.json lists both." While
+nothing is built, removing that repo again takes the work back to the workspace
+folder. Once Construction has
 started, the Units' files are already recorded against the workspace folder, so
 the work records no repos from there: the line names
 `/aidlc intent add-checkout <folder>` instead, which has the review and its
