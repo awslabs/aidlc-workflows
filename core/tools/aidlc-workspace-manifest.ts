@@ -611,6 +611,8 @@ export function repoClonePath(projectDir: string, name: string): string {
 }
 
 // The offer, when repos.json can clone a repo that is not where it puts it.
+// It asks too where the person may keep one already, where repos.json or the
+// default gives the place (their own repos.local.json's place is one they gave).
 export function repoCloneOfferLine(projectDir: string, repoNames: string[]): string {
   const repos = readWorkspaceRepos(projectDir);
   const where = (name: string): string => {
@@ -618,9 +620,13 @@ export function repoCloneOfferLine(projectDir: string, repoNames: string[]): str
     const at = repoClonePath(projectDir, name);
     return source === undefined ? `${name} is not at ${at} in this workspace yet` : `${name} is not at ${at} yet, where ${source} puts it`;
   };
-  return repoNames.length === 1
-    ? `${where(repoNames[0])}. Do you want me to clone it there?`
-    : `${repoNames.map(where).join("; ")}. Do you want me to clone them there?`;
+  const one = repoNames.length === 1;
+  const ask = repoNames.some((name) => repos.pathSource.get(name) !== REPOS_LOCAL_FILE)
+    ? ` If you already have ${one ? "it" : "one"} somewhere else on this computer, tell me where instead.`
+    : "";
+  return one
+    ? `${where(repoNames[0])}. Do you want me to clone it there?${ask}`
+    : `${repoNames.map(where).join("; ")}. Do you want me to clone them there?${ask}`;
 }
 
 // The lines repos.json's managed .gitignore block holds: the recovery folder

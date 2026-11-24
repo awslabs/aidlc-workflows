@@ -664,6 +664,23 @@ describe("at the home", () => {
     expect(said).not.toContain("-oProxyCommand");
   });
 
+  // The board's offer to clone the repos a team's build is in, where this
+  // checkout has none of them: as the build's own clone question, it asks too
+  // where the lead may keep one already.
+  test("the lead's board offer to clone repos this checkout has none of asks too where the lead may already keep one", () => {
+    const { home, alice, record } = refundsTakenInClone();
+    codeGenerated(alice, record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    const tree = join(tempDir("lead-worktree"), "lead-worktree");
+    git(home.dir, ["worktree", "add", "-q", "-b", "lead-worktree", tree, "main"]);
+    expect(run(UTILITY, ["intent", "switch", HOME_RECORD], tree).status).toBe(0);
+    const offers = (next(tree).offers ?? []) as Array<{ question: string }>;
+    expect(offers.map((offer) => offer.question)).toContain(
+      "checkout-api is not at checkout-api in this workspace yet; billing is not at billing in this workspace yet. Do you want me to " +
+        "clone them there? If you already have one somewhere else on this computer, tell me where instead.",
+    );
+  });
+
   // A new worktree of the lead's checkout has none of the clones git leaves out
   // of it: the board says which repos it cannot read there, offers their
   // clone, and counts the merge once they are there.

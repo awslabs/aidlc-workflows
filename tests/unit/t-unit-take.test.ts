@@ -2375,7 +2375,8 @@ describe("a likely repo this workspace has no copy of", () => {
     expect(took.json?.offer).toBeUndefined();
     const offer = next(alice);
     expect(offer.ask_type, JSON.stringify(offer).slice(0, 500)).toBe("unit-clone");
-    expect(String(offer.question)).toBe("billing is not at billing in this workspace yet. Do you want me to clone it there?");
+    expect(String(offer.question)).toBe("billing is not at billing in this workspace yet. Do you want me to clone it there? If you " +
+      "already have it somewhere else on this computer, tell me where instead.");
     expect(String(offer.question)).not.toContain("give its path in aidlc/repos.local.json");
     const choices = offer.choices as Array<{ label: string; command?: string }>;
     expect(choices.map((choice) => choice.label)).toEqual(["Clone billing", "Not now"]);
@@ -2388,6 +2389,35 @@ describe("a likely repo this workspace has no copy of", () => {
     expect(existsSync(join(alice, "billing", "README.md"))).toBe(true);
     const row = readIntentRegistry(alice, "payments").find((entry) => entry.dirName === took.json?.record);
     expect(row?.repos).toEqual(["billing", "checkout-api"]);
+  });
+
+  // Where their own aidlc/repos.local.json gives the place, they already keep
+  // the file: the question asks only about the clone. For several repos, one
+  // place from repos.json or the default is enough to ask the other way, as one.
+  function billingAtTheirOwnPlace(cloneApi: boolean) {
+    const hosts = { "checkout-api": codeHost("checkout-api"), billing: codeHost("billing") };
+    const home = makeHome({ repos: hosts });
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    git(home.dir, ["add", "-A"]);
+    git(home.dir, ["commit", "-q", "-m", "teams"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const plan = planShared(home);
+    const alice = cloneOf(home.remote, "alice");
+    if (cloneApi) cloneCode(hosts["checkout-api"], alice, "checkout-api", "alice");
+    writeFileSync(join(alice, "aidlc", "repos.local.json"), `${JSON.stringify({ repos: [{ name: "billing", path: "mine/billing" }] }, null, 2)}\n`);
+    const took = takeIn("payments", ["refunds", "--plan", plan.id8, "--from", Object.values(plan.hosts)[0]], alice);
+    expect(took.status, took.out).toBe(0);
+    const offer = next(alice);
+    expect(offer.ask_type, JSON.stringify(offer).slice(0, 500)).toBe("unit-clone");
+    return String(offer.question);
+  }
+  test("the clone question where their own list gives the place asks only the clone", () => {
+    expect(billingAtTheirOwnPlace(true)).toBe("billing is not at mine/billing yet, where repos.local.json puts it. Do you want me to clone it there?");
+  });
+  test("the clone question for several, one placed by default: the other way asked once, for one of them", () => {
+    expect(billingAtTheirOwnPlace(false)).toBe("checkout-api is not at checkout-api in this workspace yet; billing is not at mine/billing yet, " +
+      "where repos.local.json puts it. Do you want me to clone them there? If you already have one somewhere else on this computer, " +
+      "tell me where instead.");
   });
 
   test("with their repos.local.json unreadable, the take says so and offers no clone: their own copy may be elsewhere", () => {
