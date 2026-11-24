@@ -16953,7 +16953,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       const build = unitBuildOf(stateContent);
       // A send again held where it cannot go through now (resendHeld) is no push question to come.
       const pushField = getField(stateContent, UNIT_PUSH_FIELD)?.trim();
-      const pushDue = build !== null && buildWaitsForPush(stateContent) && /^- \[x\] code-generation\s/m.test(stateContent) &&
+      const pushDue = build !== null && buildWaitsForPush(stateContent) && unitPastCodeGeneration(stateContent) !== null &&
         pushField !== "pushed" && !(pushField === "unsent" && resendHeld(pd, stateContent, build.unit, buildRecordRepo(pd, build)) !== null) ? build.unit : undefined;
       emit(leadsWorkElsewhereWords(pd, stateContent, words.id, () =>
         reentryReplyDirective(words.id, pd, undo, workNamesHere(pd, selection), activeWorkLabel(stateContent), pushDue)));
