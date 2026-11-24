@@ -207,6 +207,20 @@ const engineMain = sliceBetween(
 const engineCommands = [...engineMain.matchAll(/case "([^"]+)":/g)].map((match) => match[1]);
 
 describe("documentation parity derives current behavior from authored implementation", () => {
+  test("the file and chat procedures both pair question and answer audit commands", () => {
+    const protocol = read("core", "aidlc-common", "protocols", "stage-protocol.md");
+    const modes = [
+      sliceBetween(protocol, "**Step 3b:", "**Step 3c:"),
+      sliceBetween(protocol, "**Step 3c:", "**Step 4:"),
+    ];
+    const decision = "`{{INVOKE}} engine log decision`";
+    const answer = "`{{INVOKE}} engine log answer`";
+    for (const mode of modes) {
+      expect(mode).toContain(decision);
+      expect(mode.indexOf(answer)).toBeGreaterThan(mode.indexOf(decision));
+    }
+  });
+
   test("provider docs use the interactive keep-current label", () => {
     const guides = [
       read("docs", "guide", "01-getting-started.md"),

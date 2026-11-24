@@ -593,17 +593,28 @@ the later stages use it too.
 - **Consolidated summary before generation**: only when the step asks for the summary confirmation; the summary module, which the engine names then, says how. When it does not, generate directly from the answers with no confirmation prompt, confirmation entry, or receipt.
 
 **Step 3b: If "I'll edit the file" (self-guided mode):**
+- Before handing off the file, record each non-gate question it asks the
+  person to answer with `{{INVOKE}} engine log decision`. Use the question
+  identifiers and choices shown in the file, following **Conversation event
+  logging** below.
 - Tell the user: "Edit the file at `[file path]`. When you're done, send **done** or **ready** and I'll continue."
 - WAIT for the user to send a completion signal (any message like "done", "ready", "finished", "continue", etc.)
-- Do NOT read the file or proceed until the user sends a completion signal
-- After the completion signal, read the answers, present their consolidated
-  summary, and run the same persisted **Looks correct / Request changes**
+- Wait for that signal before reading the person's edits or moving on.
+- After the completion signal, read the file and record the answers the person
+  supplied in one `{{INVOKE}} engine log answer`, identifying each answered
+  question. Leave blank answers open for Step 4.
+- Present the consolidated summary and run the same persisted **Looks correct / Request changes**
   checkpoint from Step 3a only when the step asks for the summary confirmation. Editing the source file does not waive an enabled checkpoint; when the step does not ask for it, generate directly with no checkpoint or receipt.
 
 **Step 3c: If "Chat" (freeform mode):**
 - Engage in open-ended conversation about the stage's topic
+- Before posing a non-gate question, including a follow-up, record it with
+  `{{INVOKE}} engine log decision` as described in **Conversation event logging**.
+  Omit options for an open-ended question with no choices.
 - Ask questions naturally and let the user elaborate at their own pace
-- Extract decisions and answers from the conversation as they emerge
+- As each reply supplies answers, record them together with
+  `{{INVOKE}} engine log answer`, naming the questions the person actually
+  answered. Ask and record any needed follow-up before moving on.
 - To end the conversation, tell the user: "When you're ready to proceed, say **done** and I'll summarize our decisions."
 - After the conversation reaches natural resolution, write all extracted answers back to the questions file (update each `[Answer]:` tag with the decided value, timestamp, and `**Mode:** chat`)
 - Present a summary of extracted decisions, then, only when the step asks for the summary confirmation, persist and use the same **Looks correct / Request changes** structured confirmation from Step 3a before proceeding; when it does not, generate directly with no checkpoint or receipt
@@ -611,7 +622,7 @@ the later stages use it too.
 
 Users can switch modes mid-stage. For example, start with "Guide Me" for the first few questions, then say "let me just chat about the rest."
 
-**Step 4: Verify completeness** — Read the file and confirm ALL `[Answer]:` tags are filled in. If any are blank, present the unanswered questions as structured questions and write answers back. Do NOT proceed with partial answers.
+**Step 4: Verify completeness** — Read the file and confirm ALL `[Answer]:` tags are filled in. If any are blank, present the unanswered questions as structured questions, following **Conversation event logging**, and write the answers back. Do NOT proceed with partial answers.
 
 The file is the authoritative record for all decision traceability and audit purposes.
 
