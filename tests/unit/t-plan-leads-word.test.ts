@@ -328,6 +328,55 @@ describe("a merge the lead counts by word for a Unit whose record has no result"
     expect(said.out).toContain("reporting has no result to count merged.");
     expect(planWordAt(home, "reporting")).not.toMatchObject({ done: true });
   });
+
+  // With the lead's sign-off on: for a Unit with no result the lead's word is all there is, so it closes the Unit,
+  // and the record says nothing of a sign-off they did not give.
+  test("with the lead's sign-off on, the word for every repository closes a Unit with no result, and no sign-off is written", () => {
+    const { home } = refundsTaken();
+    expect(run(UNIT, ["lead-sign-off", "on"], home.dir).status).toBe(0);
+    expect(run(UNIT, ["merged", "refunds", "--repo", "checkout-api", "--person-words", "merged by hand"], home.dir).status).toBe(0);
+    const last = run(UNIT, ["merged", "refunds", "--repo", "billing", "--person-words", "merged by hand"], home.dir);
+    expect(last.status, last.out).toBe(0);
+    expect(last.json?.notice).toBe("refunds is recorded as merged here.");
+    const word = planWordAt(home, "refunds") as Record<string, unknown>;
+    expect(word).toMatchObject({ done: true });
+    expect(word.signoff).toBeUndefined();
+    const rows = readAuditShardEvents(home.dir);
+    const merged = rows.filter((row) => row.event === "UNIT_MERGED" && row.block.includes("refunds"));
+    expect(merged).toHaveLength(1);
+    expect(merged[0].block).toContain("(by your word)");
+    expect(rows.filter((row) => row.event === "QUESTION_ANSWERED" && auditBlockField(row.block, "Question Type") === "unit-signoff")).toHaveLength(0);
+    const back = run(UNIT, ["release", "refunds"], home.dir);
+    expect(back.status, back.out).toBe(0);
+    expect(String(back.json?.notice)).toContain("Taken off the plan: refunds is no longer counted merged in checkout-api and billing by your word.");
+  });
+
+  // A pull request named as the Unit's build, and no result: the lead's word is all there is there too, so with the
+  // sign-off on it closes the Unit, and the record says nothing of a sign-off they did not give.
+  test("with the lead's sign-off on and a pull request named as the build but no result, the plain word closes the Unit, and no sign-off is written", () => {
+    const home = makePlanHome();
+    expect(run(UNIT, ["lead-sign-off", "on"], home.dir).status).toBe(0);
+    const named = run(UNIT, ["merged", "checkout-ui", "--repo", "checkout-web", "--pull-request", "7", "--person-words", "pull request 7 is its build"], home.dir);
+    expect(named.status, named.out).toBe(0);
+    const said = run(UNIT, ["merged", "checkout-ui", "--repo", "checkout-web", "--person-words", "it merged by hand"], home.dir);
+    expect(said.status, said.out).toBe(0);
+    expect(said.json?.notice).toBe("checkout-ui is recorded as merged here.");
+    const word = planWordAt(home, "checkout-ui") as Record<string, unknown>;
+    expect(word).toMatchObject({ done: true });
+    expect(word.signoff).toBeUndefined();
+    expect(readAuditShardEvents(home.dir).filter((row) => row.event === "QUESTION_ANSWERED" &&
+      auditBlockField(row.block, "Question Type") === "unit-signoff")).toHaveLength(0);
+  });
+
+  // Beside it, unchanged: a Unit with a pushed result keeps the sign-off the lead asked for.
+  test("with the lead's sign-off on and a pushed result, the word for every repository does not close the Unit, and the next step asks the sign-off", () => {
+    const { home } = refundsPushed();
+    expect(run(UNIT, ["lead-sign-off", "on"], home.dir).status).toBe(0);
+    expect(run(UNIT, ["merged", "refunds", "--repo", "checkout-api", "--person-words", "merged by hand"], home.dir).status).toBe(0);
+    expect(run(UNIT, ["merged", "refunds", "--repo", "billing", "--person-words", "merged by hand"], home.dir).status).toBe(0);
+    expect(planWordAt(home, "refunds")).not.toMatchObject({ done: true });
+    expect(next(home.dir).ask_type).toBe("unit-signoff");
+  });
 });
 
 // The lead's other computer: a clone of the lead's workspace as last pushed, the lead's work selected.

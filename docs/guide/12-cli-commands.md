@@ -1082,7 +1082,9 @@ you do lead it after all. A practice kept there stays there and is not written o
 
 `lead-sign-off on|off` records `Lead Sign-off` in the work's state at the lead's project;
 it is off by default. While it is on, a taken Unit counts as done only once the
-lead signed its result off and every repo it changed merged. The lead's project asks
+lead signed its result off and every repo it changed merged. A Unit with no result at
+the lead's project that you count merged in your own words is done on that word: there
+is nothing to sign off. The lead's project asks
 once as a result arrives, and the board keeps the choice after a "Not now"; the
 agent runs `sign-off <unit> --request-file <file>` with their reply written to
 that file, under the same rules as any answer of theirs (their own words, after

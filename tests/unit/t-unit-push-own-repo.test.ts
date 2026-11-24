@@ -784,8 +784,9 @@ describe("a Unit on the workspace's own repository", () => {
     expect(took.status, took.out).toBe(0);
   });
 
-  // The workspace's own repository named by its engine name: said as the push says it, here and when it is taken back.
-  test("the lead's word for such a Unit naming the workspace's own repository: the lines say the repo, never a dot", () => {
+  // With the lead's sign-off on, the word naming the workspace's own repository by its engine name: the Unit is
+  // recorded as merged with no sign-off written, and its take-back says the repo, as the push names it, never a dot.
+  test("the lead's word for such a Unit naming the workspace's own repository, with the sign-off on: it is recorded as merged, and its take-back says the repo", () => {
     const home = oneRepoTeams();
     const alice = cloneOf(home.remote, "alice");
     const record = builtWriting(alice, { "web/app.js": "app();\n" }, () => webOfItsOwn(alice));
@@ -794,9 +795,12 @@ describe("a Unit on the workspace's own repository", () => {
     expect(run(UNIT, ["lead-sign-off", "on"], home.dir).status).toBe(0);
     const said = run(UNIT, ["merged", "refunds", "--repo", ".", "--person-words", "merged here"], home.dir);
     expect(said.status, said.out).toBe(0);
-    expect(String(said.json?.notice)).toStartWith("The repo counts as merged for refunds, in your words.");
-    expect(run(UNIT, ["lead-sign-off", "off"], home.dir).status).toBe(0);
-    expect(run(UNIT, ["merged", "refunds", "--repo", ".", "--person-words", "merged here"], home.dir).status).toBe(0);
+    expect(String(said.json?.notice)).toStartWith("refunds is recorded as merged here.");
+    const plan = JSON.parse(git(home.remote, ["show", `refs/aidlc/plans/${fixtureIntentId8(home.dir)}:plan.json`])) as
+      { units: Array<{ name: string; word: Record<string, unknown> }> };
+    const word = plan.units.find((entry) => entry.name === "refunds")?.word;
+    expect(word).toMatchObject({ done: true, said_merged: [{ repo: ".", words: "merged here" }] });
+    expect(word?.signoff).toBeUndefined();
     const back = run(UNIT, ["release", "refunds"], home.dir);
     expect(back.status, back.out).toBe(0);
     expect(String(back.json?.notice)).toContain("refunds is no longer counted merged in the repo by your word.");

@@ -17540,7 +17540,8 @@ export function namedCloneOffer(
 // A Unit whose record holds no result (its take or its push never reached its
 // record repository, or its code all went into a repository of its own): the
 // lead's word alone counts it, against its repositories on the plan, and it is
-// done once each of them is counted.
+// done once each of them is counted, with the lead's sign-off on too, as there
+// is no result of a team's to sign off.
 function saidMergedWithNoRecord(pd: string, unit: string, repo: string, words: string, message?: string): void {
   const plan = keptPlan(pd, activeIdentity(pd).intentId8)?.plan ?? null;
   const planned = plan?.units.find((entry) => entry.name === unit);
@@ -17551,7 +17552,6 @@ function saidMergedWithNoRecord(pd: string, unit: string, repo: string, words: s
   const repos = namedOnly ? [repo] : planned?.repos ?? [];
   if (repos.length === 0) fail(`${unit} has no result to count merged.`);
   if (!repos.includes(repo)) fail(`${unit} changed ${joinNames(repos)}, not ${repo}.`);
-  const signOffOn = leadSignOffOn(readStateFile(pd), pd, plan);
   let counted: string[] = [];
   let done = false;
   const sent = leadsPlanWrite(pd, {
@@ -17560,7 +17560,7 @@ function saidMergedWithNoRecord(pd: string, unit: string, repo: string, words: s
       if (other !== unit) return null;
       const said_merged = [...(word.said_merged ?? []).filter((said) => said.repo !== repo), { repo, words, at: isoTimestamp() }];
       counted = said_merged.map((said) => said.repo);
-      done = repos.every((name) => counted.includes(name)) && (!signOffOn || word.signoff !== undefined);
+      done = repos.every((name) => counted.includes(name));
       return { ...word, said_merged, ...(done ? { done: true as const } : {}) };
     },
   });
@@ -17574,10 +17574,9 @@ function saidMergedWithNoRecord(pd: string, unit: string, repo: string, words: s
     });
   }
   const notMerged = repos.filter((name) => !counted.includes(name));
-  const said = `${repo === "." ? "The repo" : repo} counts as merged for ${unit}, in your words.`;
   const notice = done ? `${unit} is recorded as merged here.`
-    : notMerged.length > 0 ? `${said} ${joinNames(notMerged)} ${notMerged.length === 1 ? "has" : "have"} not merged it yet, so nothing is recorded here.`
-    : said;
+    : `${repo} counts as merged for ${unit}, in your words. ${joinNames(notMerged)} ${notMerged.length === 1 ? "has" : "have"} ` +
+      "not merged it yet, so nothing is recorded here.";
   console.log(JSON.stringify({ unit, notice: withPlanNotes(notice) }));
 }
 
