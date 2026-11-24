@@ -221,14 +221,14 @@ const HUMAN_TOP_ROUTE_IDS = new Set([
 
 export const ENGINE_NAMESPACE_HELP: NamespaceHelpOptions = {
   namespace: "engine",
-  usage: "aidlc engine <noun> <verb> [args]",
+  usage: "engine <noun> <verb> [args]",
   header: "Engine machinery - generated harness surfaces only; not for human scripts:",
   excludedRouteIds: HUMAN_TOP_ROUTE_IDS,
 };
 
 export const SYSTEM_NAMESPACE_HELP: NamespaceHelpOptions = {
   namespace: "system",
-  usage: "aidlc system <noun> <verb> [args]",
+  usage: "system <noun> <verb> [args]",
   header: "Operations on this user's aidlc installation; never system-wide (root only with --allow-root):",
 };
 
@@ -1134,7 +1134,7 @@ export const ROUTES: readonly Route[] = [
       "continue <token>",
       "report [args]",
       "park [args]",
-      "wait --stage <slug> --for collaborators|artifacts|review [--unit <unit>] [--review-file <path>] [--timeout <seconds>]",
+      "wait --stage <slug> --for collaborators|artifacts|review [--unit <unit>] [--review-file <path>] [--agent-id <id>] [--timeout <seconds>]",
       "team-board [--snapshot] [--space <name>] [--intent <name>]",
     ],
   },
@@ -1448,9 +1448,9 @@ export function copyChannelToolScripts(): string[] {
 }
 
 // The dispatcher's public commands, outside its engine namespace, that every
-// install pre-approves, each spelled exactly as AI-DLC runs it: the doctor,
-// status and version utilities in both spellings agents use (doctor with or
-// without `--verbose`), config's read-only forms (`--show`, with or without
+// install pre-approves, each spelled exactly as AI-DLC runs it: the doctor and
+// version utilities in both spellings agents use (doctor with or without
+// `--verbose`), status as `--status`, config's read-only forms (`--show`, with or without
 // `--json`, top level or per section, and `--help`), and
 // turning one recorded check back on
 // (`config flags --clear-bypass <switch> --yes`, the form the skills name),
@@ -1469,7 +1469,6 @@ export function copyChannelDispatcherCommands(): string[] {
     "--doctor",
     "--doctor --verbose",
     "--version",
-    "status",
     "--status",
     "config --help",
     // An unknown option there, answered with the config usage line and no
@@ -1814,15 +1813,15 @@ const PLUGIN_TEST_FLAG_SUMMARIES: Readonly<Record<string, string>> = {
   "--with": "Your checkout of the base plugin this one builds on, composed into the copy first",
 };
 
-export function pluginTestCommand(): { usage: string; options: RouteOption[] } {
+export function pluginAuthorCommand(verb: "validate" | "build" | "test"): { usage: string; options: RouteOption[] } {
   const route = ROUTES.find((candidate) => candidate.id === "plugin-author");
-  const form = route ? usageFormsFor(route, "test")[0] : undefined;
-  if (!route || !form) throw new Error("dispatcher route registry is missing plugin test");
-  return { usage: `${aidlcInvocation()} plugin ${form}`, options: routeOptions(route, "test") };
+  const form = route ? usageFormsFor(route, verb)[0] : undefined;
+  if (!route || !form) throw new Error(`dispatcher route registry is missing plugin ${verb}`);
+  return { usage: `${aidlcInvocation()} plugin ${form}`, options: routeOptions(route, verb) };
 }
 
 export function renderPluginTestHelp(): string {
-  const { usage, options } = pluginTestCommand();
+  const { usage, options } = pluginAuthorCommand("test");
   const out = process.stdout;
   return [
     "Check that a plugin composes cleanly into a copy of a project, which is never changed",
@@ -1879,7 +1878,7 @@ export function renderNamespaceHelp(
   options: NamespaceHelpOptions,
   summaryOverrides: ReadonlyMap<string, string> = new Map(),
 ): string {
-  const lines: string[] = [options.usage, "", options.header];
+  const lines: string[] = [`${aidlcInvocation()} ${options.usage}`, "", options.header];
   const grouped = new Map<string, string[]>();
   const summaries = new Map<string, string>();
   const sections = new Map<string, readonly HelpSection[]>();
@@ -1931,7 +1930,7 @@ function renderConfigHelp(): string {
   const route = ROUTES.find((candidate) => candidate.id === "config");
   if (!route) throw new Error("dispatcher route registry is missing engine noun config");
   return [
-    "aidlc engine config <verb> [args] [--intent <id>] [--space <name>]",
+    `${aidlcInvocation()} engine config <verb> [args] [--intent <id>] [--space <name>]`,
     "",
     "Settings for the selected piece of work:",
     ...routeForms(route).map((form) => `  ${form}`),
@@ -1944,8 +1943,8 @@ export function renderAllHelp(): string {
     renderHumanHelp().trimEnd(),
     "",
     "Hidden namespaces:",
-    "  engine  Generated harness surfaces only; not for human scripts. Run: aidlc engine --help",
-    "  system  This user's installation; unsupported interface. Run: aidlc system --help",
+    `  engine  Generated harness surfaces only; not for human scripts. Run: ${aidlcInvocation()} engine --help`,
+    `  system  This user's installation; unsupported interface. Run: ${aidlcInvocation()} system --help`,
     "",
   ].join("\n");
 }
@@ -1954,7 +1953,7 @@ function topLevelError(command: string): Action {
   return {
     type: "error",
     code: 2,
-    message: `aidlc: unknown command or noun '${command}'; try 'aidlc --help'\n`,
+    message: `aidlc: unknown command or noun '${command}'; try '${aidlcInvocation()} --help'\n`,
   };
 }
 
@@ -1989,7 +1988,7 @@ function publicCommandError(command: string): Action {
   return {
     type: "error",
     code: 2,
-    message: `aidlc: unknown command or noun '${command}'; try 'aidlc --help'\n`,
+    message: `aidlc: unknown command or noun '${command}'; try '${aidlcInvocation()} --help'\n`,
     humanMessage:
       `${errorLabel("error:", process.stderr)} unknown command '${command}'\n${
         tip ? `\n  ${tipLabel("tip:", process.stderr)} did you mean '${nearest?.candidate}'?\n` : ""
@@ -2004,7 +2003,7 @@ function nounError(noun: string, verb: string | undefined, namespace: "engine" |
   return {
     type: "error",
     code: 2,
-    message: `aidlc: ${detail} for ${namespace} noun '${noun}'; try 'aidlc ${namespace} --help'\n`,
+    message: `aidlc: ${detail} for ${namespace} noun '${noun}'; try '${aidlcInvocation()} ${namespace} --help'\n`,
   };
 }
 
@@ -2065,10 +2064,17 @@ function handleConfig(route: Route, argv: string[]): Action {
   return nounError("config", key ? `set ${key}` : "set");
 }
 
+// `plugin help`: the plugin noun's commands, as the route lists them.
+function pluginHelp(): string {
+  const rows = ROUTES.find((route) => route.custom === "plugin")?.human ?? [];
+  const width = Math.max(...rows.map((row) => row.command.length));
+  return rows.map((row) => `  ${row.command.padEnd(width)}  ${row.summary}\n`).join("");
+}
+
 function handlePlugin(argv: string[]): Action {
   const command = parseDispatcherPluginCommand(argv);
   if (command.kind === "help") {
-    return { type: "help", scope: "engine" };
+    return { type: "noun-help", message: pluginHelp() };
   }
   if (command.kind === "error") {
     return { type: "error", code: 1, message: `${command.message}\n` };
@@ -3145,16 +3151,19 @@ async function runGroupMembers(
 }
 
 // Claude Code's box for the code plan question shows each plan's lines under
-// the agent's question (planQuestionBoxInput in aidlc-plan-approval-ask.ts).
-// Any other box, and any failure, prints nothing, so the box opens as the agent
-// wrote it and is never refused.
+// the agent's question (planQuestionBoxInput in aidlc-plan-approval-ask.ts), and
+// a stage gate's box the gate's own lines (gateNoticeBoxInput). Any other box,
+// and any failure, prints nothing, so the box opens as the agent wrote it and is
+// never refused.
 async function claudePlanQuestionBox(input: string): Promise<string> {
   try {
     const payload = JSON.parse(input) as { hook_event_name?: unknown; session_id?: unknown; tool_input?: unknown };
     if (payload.hook_event_name !== "PreToolUse" || runtimeHarnessName() !== "claude") return "";
     const { resolveProjectDirFromHook } = await import("./aidlc-lib.ts");
-    const { planQuestionBoxInput } = await import("./aidlc-plan-approval-ask.ts");
-    const updatedInput = planQuestionBoxInput(resolveProjectDirFromHook(import.meta.url), payload.tool_input, payload.session_id);
+    const { gateNoticeBoxInput, planQuestionBoxInput } = await import("./aidlc-plan-approval-ask.ts");
+    const projectDir = resolveProjectDirFromHook(import.meta.url);
+    const updatedInput = planQuestionBoxInput(projectDir, payload.tool_input, payload.session_id) ??
+      gateNoticeBoxInput(projectDir, payload.tool_input, payload.session_id);
     if (updatedInput === null) return "";
     return `${JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", updatedInput } })}\n`;
   } catch {

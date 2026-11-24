@@ -239,7 +239,7 @@ describe("t-lines-said-before-they-reply: the lines the person must hear ride ch
     for (const [harness, dir] of TREES) {
       const tree = await import(join(REPO_ROOT, "dist", harness, dir, "tools", "aidlc-directive.ts"));
       expect(tree.CHANGE_NOTICES_NOTE, harness).toBe(
-        `Say each change_notices line to the person ${tree.SAY_ONCE_BEFORE_THEY_REPLY}, and add nothing about why.`,
+        `Say each notice listed beside this note to the person ${tree.SAY_ONCE_BEFORE_THEY_REPLY}, and add nothing about why.`,
       );
       expect(tree.SAY_ONCE_BEFORE_THEY_REPLY, harness).toBe(
         "once, as written (only a verb's tense may change to fit when you say it), as your own sentence with " +
@@ -463,5 +463,57 @@ describe("t-lines-said-before-they-reply: a line waiting at the person's message
     expect(JSON.stringify(step(proj, [], OTHER))).not.toContain(KEY_LINE);
     expect(pendingPersonLines(proj, OTHER).lines).not.toContain(KEY_LINE);
     expect(pendingPersonLines(proj, SESSION).lines).toContain(KEY_LINE);
+  });
+});
+
+// A hook that relays a command's output reads the waiting lines before the
+// command runs and counts them said after it, so said() keeps what was written
+// to the record in between: a line the command queued, a carry, a heard mark.
+describe("t-lines-said-before-they-reply: said() keeps what was written after the read", () => {
+  const record = (proj: string): string => `${sessionRecordPath(proj, SESSION)}.person-lines`;
+  const raw = (proj: string): { work: string; lines: Array<Record<string, unknown>>; said: string[] } =>
+    JSON.parse(readFileSync(record(proj), "utf-8"));
+  const edit = (proj: string, change: (saved: ReturnType<typeof raw>) => void): void => {
+    const saved = raw(proj);
+    change(saved);
+    writeFileSync(record(proj), `${JSON.stringify(saved)}\n`, "utf-8");
+  };
+
+  test("with nothing written since the read, the handed lines go and nothing else changes", () => {
+    const proj = project();
+    expect(addPendingPersonLines(proj, SESSION, ["First line."])).toBe(true);
+    expect(addPendingPersonLines(proj, SESSION, ["Reply line."], { forReply: true })).toBe(true);
+    const read = pendingPersonLines(proj, SESSION);
+    expect(read.lines).toEqual(["First line.", "Reply line."]);
+    read.said();
+    expect(raw(proj).lines.map((entry) => [entry.line, entry.handed])).toEqual([["Reply line.", true]]);
+  });
+
+  test("a line queued after the read, even in the same words as one it handed, stays with its time and flags", () => {
+    const proj = project();
+    expect(addPendingPersonLines(proj, SESSION, ["Same words."])).toBe(true);
+    const read = pendingPersonLines(proj, SESSION);
+    edit(proj, (saved) => {
+      saved.lines.push({ ...saved.lines[0], at: Number(saved.lines[0].at) + 1 });
+      saved.lines.push({ line: "Kept for the reply.", at: 1234, turn: saved.lines[0].turn, reply: true });
+    });
+    read.said();
+    const after = raw(proj).lines;
+    expect(after.map((entry) => entry.line)).toEqual(["Same words.", "Kept for the reply."]);
+    expect(after[1]).toEqual({ line: "Kept for the reply.", at: 1234, turn: after[1].turn, reply: true });
+  });
+
+  test("a carry and a heard mark written after the read stay as written", () => {
+    const proj = project();
+    expect(addPendingPersonLines(proj, SESSION, ["Handed line.", "Carried line."])).toBe(true);
+    const read = pendingPersonLines(proj, SESSION);
+    edit(proj, (saved) => {
+      saved.lines[1] = { ...saved.lines[1], turn: "another-turn" };
+      saved.said = ["Heard elsewhere."];
+    });
+    read.said();
+    const after = raw(proj);
+    expect(after.lines).toEqual([{ line: "Carried line.", at: after.lines[0].at, turn: "another-turn" }]);
+    expect(after.said).toEqual(["Heard elsewhere."]);
   });
 });

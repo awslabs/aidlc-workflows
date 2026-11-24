@@ -8,10 +8,9 @@ import { join } from "node:path";
 const projectDir = process.env.AIDLC_PROJECT_DIR ?? process.cwd();
 const harnessDir = process.env.AIDLC_HARNESS_DIR ?? ".claude";
 const harnessRoot = join(projectDir, harnessDir);
-// Lead with the invocation every install can run (the utility ships in the
-// harness tools dir); the standalone `aidlc` binary is optional and absent on
-// most machines today.
-const fix = `Run \`bun ${harnessDir}/tools/aidlc-utility.ts plugin-sync\` (or re-run the plugin's \`hooks/compose.ts\`).`;
+// The person's entry in the harness this check runs in: Codex's is $aidlc.
+const entry = harnessDir === ".codex" ? "$aidlc" : "/aidlc";
+const fix = `Run \`${entry} plugin sync\` (or re-run the plugin's \`hooks/compose.ts\`).`;
 
 function installed(
   relativePath: string,

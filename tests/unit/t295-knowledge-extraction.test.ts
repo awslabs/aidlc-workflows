@@ -47,6 +47,7 @@ import {
 } from "../../core/tools/aidlc-runtime-budget.ts";
 import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   closeSync,
   cpSync,
@@ -81,7 +82,10 @@ import {
   probeExtractor,
   readIndex,
   syncDocuments,
+  unreadDocuments,
+  unreadDocumentsLabel,
   WORD_DOCX_MIME,
+  writeIndex,
 } from "../../dist/claude/.claude/tools/aidlc-knowledge.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -833,6 +837,21 @@ describe("t295 Finding 4: EXTRACT_BATCH_DOC_CAP is enforced, not dead", () => {
       .toBe(0);
   });
 
+  // Sync has the same cap for brand-new documents, so the refusal names it
+  // only where some of the work is documents already in the index.
+  test("an all-new batch over the cap names no sync; one with indexed documents does", () => {
+    const fresh = scratchProject();
+    for (let i = 0; i < EXTRACT_BATCH_DOC_CAP + 1; i++) doc(fresh, `d${i}.txt`, `body ${i}\n`);
+    expect(() => onboard(fresh, SPACE, undefined, NOW)).toThrow(/a single file at a time\.$/);
+
+    const touched = scratchProject();
+    const first = doc(touched, "d0.txt", "body 0\n");
+    onboard(touched, SPACE, first, NOW);
+    writeFileSync(first, "body 0, edited\n");
+    for (let i = 1; i < EXTRACT_BATCH_DOC_CAP + 1; i++) doc(touched, `d${i}.txt`, `body ${i}\n`);
+    expect(() => onboard(touched, SPACE, undefined, NOW)).toThrow(/, or run `\/aidlc knowledge sync` instead of a pathless onboard\.$/);
+  });
+
   test("onboard accepts a batch AT exactly the cap (boundary, not off-by-one)", () => {
     const p = scratchProject();
     for (let i = 0; i < EXTRACT_BATCH_DOC_CAP; i++) doc(p, `d${i}.txt`, `body ${i}\n`);
@@ -1000,5 +1019,288 @@ describe("t295 Finding 5(c): a DOCX with no configured extractor becomes retryab
     const change = parsed.changes.find((c: { id: string }) => c.id === afterOnboard.documents[0].id);
     expect(change?.change, JSON.stringify(parsed)).toBe("retried");
     expect(change?.state).toBe("extracted");
+  });
+});
+
+// An HTML page (a spec exported from Word, Confluence or Google Docs) is read
+// by the knowledge base itself, as a Word file is: its text in lines, tables as
+// Markdown tables, in the page's own encoding. Stored as markup, its style
+// attributes and an inline image would fill the 200,000-character cap, and a
+// page that is not UTF-8 would have no text at all.
+describe("t295 an HTML page is read as its text, the way a Word file is", () => {
+  const SENTENCE = "The service records each request in the audit log, checks the caller against the access list, " +
+    "and returns a receipt within two seconds.";
+  const pad = (n: number): string => String(n).padStart(5, "0");
+
+  function page(body: string, head = ""): string {
+    return `<!DOCTYPE html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n<title>Page title</title>\n${head}</head>\n` +
+      `<body>\n${body}</body>\n</html>\n`;
+  }
+
+  // Windows-1252 bytes for text whose characters are all in that table.
+  function cp1252(text: string): Buffer {
+    const high: Record<string, number> = { "\u201c": 0x93, "\u201d": 0x94, "\u2013": 0x96, "\u20ac": 0x80 };
+    return Buffer.from([...text].map((ch) => high[ch] ?? ch.charCodeAt(0)));
+  }
+
+  function stored(p: string, name: string) {
+    const row = readIndex(p, SPACE).documents.find((entry) => entry.source.path === `documents/${name}`);
+    expect(row, name).toBeDefined();
+    const at = join(documentkbDir(p, SPACE), row!.id, "content.md");
+    return { row: row!, text: existsSync(at) ? readFileSync(at, "utf-8") : undefined };
+  }
+
+  function added(p: string, name: string, body: string | Buffer) {
+    doc(p, name, body);
+    expect(onboard(p, SPACE, undefined, NOW).refused).toBeUndefined();
+    return stored(p, name);
+  }
+
+  // What an earlier AI-DLC wrote for a page: its markup as text, or no type for a page that is not UTF-8.
+  function asBeforeTheReader(p: string, name: string, how: "markup" | "no-type"): void {
+    const index = readIndex(p, SPACE);
+    const row = index.documents.find((entry) => entry.source.path === `documents/${name}`)!;
+    const bytes = readFileSync(join(documentsDir(p, SPACE), name));
+    if (how === "markup") {
+      const markup = bytes.toString("utf-8");
+      writeFileSync(join(documentkbDir(p, SPACE), row.id, "content.md"), markup);
+      row.extraction = {
+        state: "extracted", extractor: { name: "builtin-text", version: "1" }, chars: markup.length,
+        truncated: false, source_revision: row.sha256,
+      };
+      row.content = `documentkb/${row.id}/content.md`;
+      row.content_sha256 = createHash("sha256").update(markup, "utf-8").digest("hex");
+    } else {
+      row.extraction = { state: "unsupported_type", detectedType: "application/octet-stream" };
+      delete row.content;
+      delete row.content_sha256;
+    }
+    writeIndex(p, SPACE, index);
+  }
+
+  const retried = (p: string): string[] =>
+    syncDocuments(p, SPACE, NOW).changes.filter((c) => c.change === "retried").map((c) => c.path).sort();
+
+  test("a page is text/html by its name and its opening markup; every other shape keeps its type", () => {
+    const html = Buffer.from("<html><body><p>x</p></body></html>\n");
+    expect(detectMimeType("/x/spec.html", html)).toBe("text/html");
+    expect(detectMimeType("/x/spec.htm", html)).toBe("text/html");
+    expect(detectMimeType("/x/SPEC.HTML", html)).toBe("text/html");
+    expect(detectMimeType("/x/bom.html", Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from("\r\n  <!DOCTYPE html>")])))
+      .toBe("text/html");
+    expect(detectMimeType("/x/word.htm", cp1252("<html><body>\u201cquoted\u201d</body></html>"))).toBe("text/html");
+    expect(detectMimeType("/x/notes.html", Buffer.from("Release notes\n\nLine one.\n"))).toBe("text/plain");
+    expect(detectMimeType("/x/notes.md", Buffer.from("<div>Keep <b>this</b></div>\n"))).toBe("text/markdown");
+    expect(detectMimeType("/x/notes.txt", html)).toBe("text/plain");
+    expect(detectMimeType("/x/utf16.html", Buffer.from("<\u0000h\u0000"))).toBe("application/octet-stream");
+  });
+
+  test("a long page of styled paragraphs keeps 200,000 characters of its text, not of its markup", () => {
+    const p = scratchProject();
+    const paras = Array.from({ length: 12_000 }, (_, i) =>
+      `<p style="margin:0in;font-size:11pt;font-family:&quot;Calibri&quot;,sans-serif">T${pad(i + 1)} ${SENTENCE}</p>\n`);
+    const { row, text } = added(p, "spec-text.html", page(`<h1>Service specification</h1>\n${paras.join("")}`,
+      "<style>\np { margin: 0; }\n</style>\n"));
+    expect(row.extraction).toMatchObject({
+      state: "extracted", extractor: { name: "builtin-html", version: "1" }, chars: EXTRACT_OUTPUT_CHAR_CAP, truncated: true,
+    });
+    expect(text!.startsWith(`Service specification\nT00001 ${SENTENCE}\nT00002 `)).toBe(true);
+    expect(text).not.toMatch(/<\/?[a-z!]/i);
+    expect(text).not.toContain("margin");
+    // Stored as markup, the cap ends near paragraph 880; stored as text, well past it.
+    expect(text).toContain(`T01300 ${SENTENCE}`);
+  });
+
+  test("a page whose inline image comes first keeps every paragraph and none of the image", () => {
+    const p = scratchProject();
+    const image = Buffer.alloc(3_000_000, 0x5a).toString("base64");
+    const paras = Array.from({ length: 1_000 }, (_, i) => `<p>I${pad(i + 1)} ${SENTENCE}</p>\n`);
+    const { row, text } = added(p, "spec-images.html",
+      page(`<p><img src="data:image/png;base64,${image}" alt="Context diagram"></p>\n${paras.join("")}`));
+    expect(row.extraction).toMatchObject({ state: "extracted", truncated: false });
+    expect(text).toContain(`I00001 ${SENTENCE}`);
+    expect(text).toContain(`I01000 ${SENTENCE}`);
+    expect(text).not.toMatch(/[A-Za-z0-9+/]{200,}/);
+    expect(text).not.toContain("Context diagram");
+  });
+
+  test("a Word page saved in Windows-1252 is read in its declared charset", () => {
+    const p = scratchProject();
+    const word = cp1252(
+      `<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns="http://www.w3.org/TR/REC-html40">\n<head>\n` +
+        `<meta http-equiv=Content-Type content="text/html; charset=windows-1252">\n<title>Pricing rules</title>\n` +
+        `<!--[if gte mso 9]><xml><o:DocumentProperties><o:Author>Someone</o:Author></o:DocumentProperties></xml><![endif]-->\n` +
+        `<style>\n<!--\n p.MsoNormal {margin:0in;}\n-->\n</style>\n</head>\n<body lang=EN-US>\n<div class=WordSection1>\n` +
+        `<p class=MsoNormal>W00001 The \u201cstandard\u201d caf\u00e9 price is \u20ac4 \u2013 per cup.<o:p></o:p></p>\n` +
+        `<p class=MsoNormal><o:p>&nbsp;</o:p></p>\n</div>\n</body>\n</html>\n`,
+    );
+    const { row, text } = added(p, "spec-cp1252.html", word);
+    expect(row.extraction.state).toBe("extracted");
+    expect(text).toBe("W00001 The \u201cstandard\u201d caf\u00e9 price is \u20ac4 \u2013 per cup.");
+  });
+
+  test("a charset declared deep in the head is read; an undeclared page that is not UTF-8 is read as Windows-1252", () => {
+    const p = scratchProject();
+    const cyrillic = Buffer.concat([
+      Buffer.from(`<html><head><!-- ${"x".repeat(6_000)} --><meta charset="windows-1251"></head><body><p>`),
+      Buffer.from([0xcf, 0xf0, 0xe8, 0xe2, 0xe5, 0xf2]),
+      Buffer.from("</p></body></html>"),
+    ]);
+    expect(added(p, "ru.html", cyrillic).text).toBe("\u041f\u0440\u0438\u0432\u0435\u0442");
+    expect(added(p, "plain-1252.htm", cp1252("<p>\u201cyes\u201d \u2013 caf\u00e9</p>")).text)
+      .toBe("\u201cyes\u201d \u2013 caf\u00e9");
+  });
+
+  test("a small .htm is its lines; the title is not one of them", () => {
+    const p = scratchProject();
+    const { row, text } = added(p, "small.htm",
+      "<html><head><title>Old title</title></head><body><h2>Glossary</h2><p>A <b>tenant</b> is one customer account.</p></body></html>\n");
+    expect(row.extraction.extractor).toEqual({ name: "builtin-html", version: "1" });
+    expect(text).toBe("Glossary\nA tenant is one customer account.");
+  });
+
+  test("CRLF and source line wraps read as one line; pre keeps its lines and its blank line", () => {
+    const p = scratchProject();
+    const { text } = added(p, "crlf.html",
+      "<html>\r\n<body>\r\n<p>First line\r\nwraps here.</p>\r\n<p>Second paragraph.</p>\r\n" +
+        "<pre>\r\nset -e\r\n\r\n  echo done\r\n</pre>\r\n</body>\r\n</html>\r\n");
+    expect(text).toBe("First line wraps here.\nSecond paragraph.\nset -e\n\n  echo done");
+  });
+
+  test("tables are the Word reader's Markdown tables; hidden text is gone; references decode; Markdown stays as written", () => {
+    const p = scratchProject();
+    const { text } = added(p, "rules.html", page(
+      "<table><tr><th>A</th><th>B</th></tr><tr><td rowspan=2>1</td><td>2 | x</td></tr><tr><td>y</td></tr></table>\n" +
+        "<script>var hidden = 'SCRIPT-TEXT';</script><noscript><p>NOSCRIPT-TEXT</p></noscript>" +
+        "<template><p>TEMPLATE-TEXT</p></template><iframe>IFRAME-TEXT</iframe>\n" +
+        "<p>before</p><svg><style/><text>Client</text><text>Gateway</text></svg><p>after</p>\n" +
+        "<p>&amp; &lt;tag&gt; a&nbsp;b &rsquo;s &le; 5 &rarr; next &#8212; &#x2013; &#150; &zzz; &amp ;</p>\n" +
+        "<p>*stars* _under_ [a link](https://example.com/x) `tick` \\escaped # hash</p>\n",
+      "<style>p { color: red; }</style>",
+    ));
+    expect(text).toBe([
+      "| A | B |",
+      "| --- | --- |",
+      "| 1 | 2 \\| x |",
+      "|  | y |",
+      "",
+      "before",
+      "Client",
+      "Gateway",
+      "after",
+      "& <tag> a b \u2019s \u2264 5 \u2192 next \u2014 \u2013 \u2013 &zzz; &amp ;",
+      "*stars* _under_ [a link](https://example.com/x) `tick` \\escaped # hash",
+    ].join("\n"));
+  });
+
+  test("a page with no text to read, an image or a page a script draws, is no_extractable_text", () => {
+    const p = scratchProject();
+    const image = added(p, "diagram.html", page('<p><img src="data:image/png;base64,iVBORw0KGgo=" alt="Diagram"></p>\n'));
+    expect(image.row.extraction).toEqual({
+      state: "no_extractable_text", extractor: { name: "builtin-html", version: "1" }, source_revision: image.row.sha256,
+    });
+    expect(image.text).toBeUndefined();
+    const app = added(p, "app.html", page(
+      '<noscript>You need to enable JavaScript to run this app.</noscript><div id="root"></div>\n' +
+        '<script>window.__DATA__ = {"endpoints": ["/a", "/b"]};</script>\n'));
+    expect(app.row.extraction.state).toBe("no_extractable_text");
+  });
+
+  test("a page added before is read on the next sync, once; a plain-text .html and a failed page are left", () => {
+    const p = scratchProject();
+    doc(p, "markup.html", page(`<p>M00001 ${SENTENCE}</p>\n`));
+    doc(p, "word.htm", cp1252("<html><body><p>\u201cW00001\u201d</p></body></html>"));
+    doc(p, "notes.html", "Release notes\n\nLine one.\n");
+    doc(p, "broken.html", page("<p>B00001</p>\n"));
+    expect(onboard(p, SPACE, undefined, NOW).refused).toBeUndefined();
+    asBeforeTheReader(p, "markup.html", "markup");
+    asBeforeTheReader(p, "word.htm", "no-type");
+    const index = readIndex(p, SPACE);
+    const broken = index.documents.find((entry) => entry.source.path === "documents/broken.html")!;
+    broken.extraction = {
+      state: "extraction_failed", extractor: { name: "builtin-html", version: "1" },
+      reason: "AI-DLC could not read it as an HTML file", detectedType: "text/html",
+    };
+    delete broken.content;
+    delete broken.content_sha256;
+    writeIndex(p, SPACE, index);
+    // Before the sync, the page that had no type is named as one the next sync reads, not as one with no reader.
+    const before = unreadDocuments(p, SPACE).find((file) => file.path === "documents/word.htm");
+    expect(before?.reason).toBe("office");
+    expect(unreadDocumentsLabel(p, SPACE, [before!])).toContain(
+      '"word.htm" was added before AI-DLC could read Word, Excel and HTML files.');
+    expect(retried(p)).toEqual(["documents/markup.html", "documents/word.htm"]);
+    expect(stored(p, "markup.html").text).toBe(`M00001 ${SENTENCE}`);
+    expect(stored(p, "word.htm").text).toBe("\u201cW00001\u201d");
+    expect(stored(p, "notes.html").row.extraction.extractor).toEqual({ name: "builtin-text", version: "1" });
+    expect(stored(p, "notes.html").text).toBe("Release notes\n\nLine one.\n");
+    expect(retried(p)).toEqual([]);
+    expect(unreadDocuments(p, SPACE).map((file) => file.path)).toEqual(["documents/broken.html"]);
+  });
+
+  test("a page added before that is over the per-document cap is named as today, and sync goes on", () => {
+    const p = scratchProject();
+    const abs = doc(p, "huge.html", page("<p>H00001</p>\n"));
+    expect(onboard(p, SPACE, undefined, NOW).refused).toBeUndefined();
+    asBeforeTheReader(p, "huge.html", "no-type");
+    const fd = openSync(abs, "r+");
+    ftruncateSync(fd, EXTRACT_INPUT_BYTE_CAP + 1);
+    closeSync(fd);
+    expect(unreadDocuments(p, SPACE)).toEqual([{ path: "documents/huge.html", reason: "no-reader" }]);
+    expect(() => syncDocuments(p, SPACE, NOW)).not.toThrow();
+  });
+
+  test("more pages added before than one sync reads: each sync reads what fits, and none refuses", () => {
+    const p = scratchProject();
+    const names = Array.from({ length: EXTRACT_BATCH_DOC_CAP + 2 }, (_, i) => `page-${pad(i + 1)}.html`);
+    for (const [at, name] of names.entries()) {
+      doc(p, name, page(`<p>P${pad(at + 1)}</p>\n`));
+      expect(onboard(p, SPACE, join(documentsDir(p, SPACE), name), NOW).refused).toBeUndefined();
+    }
+    for (const name of names) asBeforeTheReader(p, name, "markup");
+    // New files share the run: they are the person's work, and the pages read again take the room left.
+    for (let i = 0; i < 5; i++) doc(p, `new-${i}.md`, `new ${i}\n`);
+    const first = syncDocuments(p, SPACE, NOW).changes;
+    expect(first.filter((c) => c.change === "new").length).toBe(5);
+    expect(first.filter((c) => c.change === "retried").length).toBe(EXTRACT_BATCH_DOC_CAP - 5);
+    expect(retried(p).length).toBe(7);
+    expect(retried(p)).toEqual([]);
+    expect(names.every((name) => stored(p, name).row.extraction.extractor?.name === "builtin-html")).toBe(true);
+  });
+});
+
+describe("t295 a team's own text/html extractor wins over the built-in HTML reader", () => {
+  const REPO = join(import.meta.dir, "..", "..");
+  let scratch = "";
+
+  afterEach(() => {
+    if (scratch) rmSync(scratch, { recursive: true, force: true });
+    scratch = "";
+  });
+
+  test("the page goes to the configured extractor", () => {
+    scratch = mkdtempSync(join(tmpdir(), "t295-html-"));
+    cpSync(join(REPO, "dist", "claude"), join(scratch, "dist", "claude"), { recursive: true });
+    const reader = join(scratch, "read-html.ts");
+    writeFileSync(reader, 'process.stdout.write("FROM THE TEAM EXTRACTOR\\n");\n');
+    const harness = join(scratch, "dist", "claude", ".claude", "tools", "data", "harness.json");
+    const data = JSON.parse(readFileSync(harness, "utf-8")) as Record<string, unknown>;
+    data.documentExtractors = { "text/html": { argv: [process.execPath, reader, "$IN"] } };
+    writeFileSync(harness, JSON.stringify(data));
+    const projectDir = join(scratch, "project");
+    mkdirSync(documentsDir(projectDir, SPACE), { recursive: true });
+    writeFileSync(join(documentsDir(projectDir, SPACE), "spec.html"), "<html><body><p>Built-in text</p></body></html>\n");
+    const r = spawnSync(process.execPath, [
+      join(scratch, "dist", "claude", ".claude", "tools", "aidlc-knowledge.ts"), "onboard", "--project-dir", projectDir, "--json",
+    ], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      encoding: "utf-8",
+      env: { ...process.env, AIDLC_HARNESS_DIR: ".claude", AIDLC_RUNTIME_HARNESS_ROOT: join(scratch, "dist", "claude", ".claude") },
+    });
+    expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
+    const row = readIndex(projectDir, SPACE).documents[0];
+    expect(row.extraction.state).toBe("extracted");
+    expect(row.extraction.extractor?.name).toBe(process.execPath);
+    expect(readFileSync(join(documentkbDir(projectDir, SPACE), row.id, "content.md"), "utf-8")).toBe("FROM THE TEAM EXTRACTOR\n");
   });
 });

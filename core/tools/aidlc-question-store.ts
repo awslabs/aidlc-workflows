@@ -76,8 +76,10 @@ export interface StoredQuestion {
   answeredBy?: string;
   /**
    * For a new-work request the person replaced with a newer one while its plan
-   * question waited and nothing had started: the newer request. It is no longer
-   * the plan question that waits, and its own commands still answer it.
+   * question waited and nothing had started, a plan question asked before a
+   * request whose answer then started work (retireRequest), or a routing
+   * question their words were passed on as a request beside: the newer request.
+   * It is no longer the question that waits, and its own commands still answer it.
    */
   replacedBy?: string;
   /**
@@ -418,12 +420,14 @@ export function questionsFromMessage(projectDir: string, messageId: string): Sto
  * With `routing`, a routing question counts too: words typed with a description
  * beside open work answer the routing question that description becomes. With
  * `shown`, a request never put to the person does not (neverPutToThePerson).
+ * With `waiting`, a copy replaced by a request that has started work does not:
+ * that work overtook it.
  */
 export function firstFrontQuestionSince(
   projectDir: string,
   since: string,
   withinMs: number,
-  options: { routing?: boolean; shown?: boolean } = {},
+  options: { routing?: boolean; shown?: boolean; waiting?: boolean } = {},
 ): string | null {
   const from = Date.parse(since);
   if (Number.isNaN(from)) return null;
@@ -442,6 +446,8 @@ export function firstFrontQuestionSince(
     const at = Date.parse(question?.createdAt ?? "");
     if (question === null || (question.origin === "routing" && !options.routing) ||
       (options.shown && neverPutToThePerson(question)) ||
+      (options.waiting && question.replacedBy !== undefined &&
+        startedWorkUses(projectDir, startedRequestFor(projectDir, question.replacedBy))) ||
       Number.isNaN(at) || at < from || at - from > withinMs) continue;
     if (first === null || at < first.at) first = { id, at };
   }
@@ -795,19 +801,42 @@ export function takeRestartRequest(projectDir: string, id: string): "taken" | "r
  * routing question beside it) are marked answered by it. None of them is open
  * any more (one left open would meet the person's next words as a question
  * they have not answered, about work already built), and a repeated answer by
- * any of them still finds that work.
+ * any of them still finds that work. Every other plan question asked before
+ * this request, and still unanswered, has been overtaken by the work it
+ * starts: it is marked replaced by it, so it waits no more, and its own
+ * commands still answer it. Where question-retention-days may have removed
+ * this request's first copy, or its own copy cannot be read, nothing tells
+ * which questions came before it, and none is marked.
  */
 export function retireRequest(projectDir: string, id: string): void {
   if (!QUESTION_ID.test(id)) return;
-  const root = readStoredQuestion(projectDir, id)?.composedFrom ?? id;
+  const own = readStoredQuestion(projectDir, id);
+  const root = own?.composedFrom ?? id;
   const chain = new Set([root]);
+  // The request was asked when its first copy was, or when its own was where that first copy is gone by design (a
+  // composition entry once its description is approved).
+  const first = root === id ? own : readStoredQuestion(projectDir, root);
+  const asked = own === null || (first === null && retentionDays(projectDir) !== null)
+    ? Number.NaN
+    : Date.parse((first ?? own).createdAt);
+  const overtaken: StoredQuestion[] = [];
   try {
     for (const name of readdirSync(recordFileTargetOrThrow(projectDir, questionRel(projectDir)))) {
       const other = name.endsWith(".json") ? name.slice(0, -".json".length) : "";
-      if (QUESTION_ID.test(other) && readStoredQuestion(projectDir, other)?.composedFrom === root) chain.add(other);
+      const kept = QUESTION_ID.test(other) ? readStoredQuestion(projectDir, other) : null;
+      if (kept?.composedFrom === root) chain.add(other);
+      else if (kept !== null && other !== root && kept.origin !== "routing" && kept.answeredBy === undefined &&
+        Date.parse(kept.createdAt) < asked) overtaken.push(kept);
     }
   } catch {
     // No question directory: nothing derived is left to mark.
+  }
+  for (const kept of overtaken) {
+    try {
+      writeRecordFileNoFollow(projectDir, questionRel(projectDir, kept.id), `${JSON.stringify({ ...kept, replacedBy: id })}\n`);
+    } catch {
+      // Best effort: the copy stays as it was.
+    }
   }
   chain.delete(id);
   for (const member of chain) {

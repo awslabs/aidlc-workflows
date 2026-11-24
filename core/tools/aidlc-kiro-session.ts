@@ -37,7 +37,9 @@ export type KiroModelTag = "preview" | "internal";
 export type KiroModel = { id: string; rate: number | null; tag: KiroModelTag | null };
 
 export type KiroModelList =
-  | { ok: true; models: KiroModel[] }
+  // ids: every model_id Kiro listed, `auto` and ids `models` leaves out
+  // included; read for membership only, never printed or passed to kiro-cli.
+  | { ok: true; models: KiroModel[]; ids: string[] }
   | { ok: false; reason: string };
 
 export type KiroPersonalSession =
@@ -175,8 +177,10 @@ export function parseKiroModelList(raw: string): KiroModelList {
   const rows = (parsed as { models?: unknown })?.models;
   if (!Array.isArray(rows)) return { ok: false, reason: "Kiro's model list was not readable" };
   const models: KiroModel[] = [];
+  const ids: string[] = [];
   for (const row of rows) {
     const id = (row as { model_id?: unknown })?.model_id;
+    if (typeof id === "string") ids.push(id);
     // A model id is printed and passed to kiro-cli, so only a plain one is kept.
     if (typeof id !== "string" || id === "auto" || !isPlainKiroId(id)) continue;
     const rate = (row as { rate_multiplier?: unknown }).rate_multiplier;
@@ -187,7 +191,7 @@ export function parseKiroModelList(raw: string): KiroModelList {
     });
   }
   return models.length > 0
-    ? { ok: true, models }
+    ? { ok: true, models, ids }
     : { ok: false, reason: "Kiro listed no models for this account" };
 }
 
@@ -810,4 +814,68 @@ export async function kiroSessionDoctorFindings(input: {
     }
   }
   return findings;
+}
+
+// --- agent models on Kiro's row ---------------------------------------------
+
+// Kiro runs an agent whose own model the account does not offer on the chat's
+// model, keeping the agent's effort, and says nothing (measured on Kiro CLI
+// 3.3.0 and Kiro IDE 1.4.178). `config models`, its --check and doctor compare
+// the agent models with Kiro CLI's list and say so; the check never stops a
+// run, and a list that cannot be read is said to be unchecked.
+export type KiroAgentModel = { agent: string; model: string };
+
+export type KiroAgentModelCheck =
+  | { checked: true; notOffered: KiroAgentModel[] }
+  | { checked: false; reason: string };
+
+const KIRO_AGENT_MODEL_FALLBACK = "Kiro runs an agent whose model it does not offer on your chat's model";
+
+/** One list read for every agent model given; callers pass at least one. */
+export function checkKiroAgentModels(
+  models: readonly KiroAgentModel[],
+  env: NodeJS.ProcessEnv = process.env,
+): KiroAgentModelCheck {
+  const cli = kiroCliPath(env);
+  if (!cli) return { checked: false, reason: "kiro-cli not found" };
+  const list = listKiroModels(cli, env, DOCTOR_TIMEOUT_MS);
+  if (!list.ok) return { checked: false, reason: list.reason };
+  // An agent on `auto` follows Kiro's own pick, which is always offered.
+  const offered = new Set(["auto", ...list.ids]);
+  return { checked: true, notOffered: models.filter((item) => !offered.has(item.model)) };
+}
+
+function shownAgentModel(item: KiroAgentModel): string {
+  return `${item.agent}'s model ${shownKiroId(item.model)}`;
+}
+
+/** The lines `config models` and its --check print for a check: none when every model is listed. */
+export function kiroAgentModelLines(models: readonly KiroAgentModel[], check: KiroAgentModelCheck): string[] {
+  if (!check.checked) {
+    return [
+      `Could not check ${models.map(shownAgentModel).join(", ")} against Kiro CLI's model list (${check.reason}); ${KIRO_AGENT_MODEL_FALLBACK}.`,
+    ];
+  }
+  return check.notOffered.map((item) =>
+    `${shownAgentModel(item)} is not in Kiro CLI's model list (\`kiro-cli chat --list-models\`); ${KIRO_AGENT_MODEL_FALLBACK}.`
+  );
+}
+
+/** Doctor's rows for the agent models Kiro's row's agent files carry. */
+export function kiroAgentModelDoctorFindings(
+  models: readonly KiroAgentModel[],
+  modelsCommand: string,
+  env: NodeJS.ProcessEnv = process.env,
+): KiroSessionFinding[] {
+  if (models.length === 0) return [];
+  const check = checkKiroAgentModels(models, env);
+  if (!check.checked) {
+    return [{ pass: true, label: `Agent models: not checked against Kiro CLI's model list (${check.reason})` }];
+  }
+  if (check.notOffered.length === 0) return [{ pass: true, label: "Agent models: in Kiro CLI's model list" }];
+  return check.notOffered.map((item) => ({
+    pass: false,
+    label: `Agent ${shownAgentModel(item)} is not in Kiro CLI's model list; ${KIRO_AGENT_MODEL_FALLBACK}`,
+    fix: `run \`${modelsCommand} --agent ${item.agent} --model <id>\` with a model from \`kiro-cli chat --list-models\`; \`${modelsCommand} --show\` shows where its model is set`,
+  }));
 }

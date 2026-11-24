@@ -304,14 +304,12 @@ means the developer and the architect run again.
 
 ### Step 3: Architect Synthesis
 
-**Run this step only when `aidlc-architect-agent` is in `directive.pipeline.links`.**
 When the developer works alone (collaborators off, so the links are just the
 developer lead), do NOT dispatch an architect. Instead, the developer lead
 must itself produce the complete 9-artifact
 candidate described in this step: dispatch the developer with a brief that
 covers both the Step 2 scan AND this step's synthesis spec (same write-behavior
-rules, same staging-directory contract below), then mint only the developer
-link and continue to Step 4. The rest of this step is the full-roster path.
+rules, same staging-directory contract below).
 
 Delegate to Task tool with aidlc-architect-agent:
 - subagent_type="aidlc-architect-agent"
@@ -524,7 +522,7 @@ Use stage-protocol.md completion template:
   fingerprint covers, what would make it out of date): the person has nothing
   to do about it.
 - Review path: `aidlc/spaces/<active-space>/codekb/<repo>/` for each repo in the set
-- Structured approval question with options: Approve (continue to Requirements Analysis) / Request Changes. If any repo returned NARROWER, the Approve option's description must say which stores now have narrower verified coverage (e.g. "Accept the narrower verified coverage for <repos>; continue to Requirements Analysis").
+- Structured approval question with options: Approve / Request Changes. If any repo returned NARROWER, the Approve option's description must say which stores now have narrower verified coverage (e.g. "Accept the narrower verified coverage for <repos>").
 
 ## Sensors
 

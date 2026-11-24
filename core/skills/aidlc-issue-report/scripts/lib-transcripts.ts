@@ -971,32 +971,13 @@ function kiroIdeApprovalMode(j: KiroSession): string | undefined {
   return typeof j.autopilot === "boolean" ? `autopilot ${j.autopilot ? "on" : "off"}` : undefined;
 }
 
-// Whether Kiro CLI's permission files list the `approve-for-me` preset under `policies:` now: the workspace's
-// (~/.kiro/workspace-roots/<the sessions folder's name>/, where Kiro CLI's /permissions writes it) or the person's own
-// (~/.kiro/settings/). null when a file is there but cannot be read and none lists it. Only this yes or no leaves the
-// reader: nothing of the files' contents goes into the report.
-function kiroCliApproveForMe(workspaces: Set<string>): boolean | null {
-  const dirs = [...[...workspaces].map((w) => join(kiroHome(), "workspace-roots", w)), join(kiroHome(), "settings")];
-  let unreadable = false;
-  for (const dir of dirs) {
-    for (const file of ["permissions.yaml", "permissions.json"]) {
-      const path = join(dir, file);
-      if (!existsSync(path)) continue;
-      let policies: unknown;
-      try {
-        const text = readFileSync(path, "utf-8");
-        policies = ((file.endsWith(".json") ? JSON.parse(text) : Bun.YAML.parse(text)) as { policies?: unknown } | null)?.policies;
-      } catch {
-        unreadable = true;
-        continue;
-      }
-      if (Array.isArray(policies) && policies.includes("approve-for-me")) return true;
-    }
-  }
-  return unreadable ? null : false;
-}
+// Whether Kiro CLI's permission files in these folders list the `approve-for-me` preset under `policies:` now: true,
+// false, null when a file there cannot be read and none lists it, or undefined when the reader gave no such answer.
+// AI-DLC's own reader (kiroPoliciesApproveForMe in its aidlc-kiro-chat-record.ts), taken from the install
+// (lib-project.ts importKiroPolicyReader); only this answer leaves it: nothing of the files' contents goes into the report.
+export type KiroPolicyReader = (dirs: string[]) => boolean | null | undefined;
 
-export function kiroV3(project: string, since: number, until: number, local: Local): Summary | null {
+export function kiroV3(project: string, since: number, until: number, local: Local, kiroPolicies?: KiroPolicyReader): Summary | null {
   const root = join(kiroHome(), "sessions");
   if (!existsSync(root)) return null;
   const ws16 = createHash("sha256").update(resolve(project)).digest("hex").slice(0, 16);
@@ -1206,9 +1187,14 @@ export function kiroV3(project: string, since: number, until: number, local: Loc
   s.notes.push(`Kiro surface per session: ${cliIds.size} Kiro CLI, ${ideCount} Kiro IDE (told apart by the input history Kiro CLI keeps per session in the cli folder of its sessions folder).`);
   if (cliWorkspaces.size) {
     s.notes.push("Kiro CLI's session record does not say which approval policy the session ran with (ask for approval or approve for me), so the run's approval mode on Kiro CLI is not known.");
-    const listed = kiroCliApproveForMe(cliWorkspaces);
+    // The workspace's folder (~/.kiro/workspace-roots/<the sessions folder's name>/, where Kiro CLI's /permissions
+    // writes it) and the person's own (~/.kiro/settings/).
+    const dirs = [...[...cliWorkspaces].map((w) => join(kiroHome(), "workspace-roots", w)), join(kiroHome(), "settings")];
+    const listed = kiroPolicies?.(dirs);
     s.notes.push(
-      listed === null
+      listed === undefined
+        ? "When this report was made, the AI-DLC installed here gave no answer on whether Kiro CLI's permission files for this project list the approve-for-me policy, so its approval policy now is not known either."
+        : listed === null
         ? "When this report was made, Kiro CLI's permission files for this project could not be read, so its approval policy now is not known either."
         : listed
           ? "When this report was made, Kiro CLI's permission files for this project listed the approve-for-me policy: a setting now, which the run may not have had."

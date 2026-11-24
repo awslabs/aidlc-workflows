@@ -98,7 +98,7 @@ const HARNESSES: Harness[] = [
     dir: ".kiro",
     lines: () => [
       "In Kiro CLI, quit Kiro and start `kiro-cli --v3` again in this folder (if Kiro asks whether you trust this workspace and you know what is in this folder, choose 'Trust, continue'), then type /aidlc to carry on. If you " +
-        "drive Kiro from an ACP client, the Kiro IDE guide names what that client must send.",
+        "drive Kiro from an ACP client, the AI-DLC guide for Kiro names what that client must send.",
     ],
   },
 ];
@@ -1148,6 +1148,81 @@ describe("a next stopped inside a workflow is named in the restart line and runs
     beat(bare, "record-human-turn");
     expect(JSON.stringify(next(bare, OPENCODE))).toContain(REQUEST);
     expect(ran(next(bare, OPENCODE, {}, ["--request", bareId]))).toBe(true);
+  });
+});
+
+// AI-DLC's first command no longer carries the person's words (`next --entry`):
+// the engine reads their typed line from its own record, and with the hooks off
+// nothing kept it. The first command has the agent hand their words over in the
+// request file; that command is the one the stop keeps, so the restart line
+// names it by its id and the new chat carries on with their words.
+describe("with the hooks off, the first command hands the request file and the restart carries on with it", () => {
+  const CLAUDE = HARNESSES[0];
+  const REQUEST = 'Fix the bug where formatPrice(0) returns an empty string instead of "$0.00"';
+  const FILE = "aidlc/.aidlc-request-text/request.txt";
+  const idIn = (directive: Printed): string => (directive.message ?? "").match(/ --request ([0-9a-f]{8})\b/)?.[1] ?? "";
+
+  for (const work of ["fresh", "over work in hand"] as const) {
+    test(`claude, ${work}`, () => {
+      const proj = installed(CLAUDE);
+      if (work === "over work in hand") intentCreate(proj, CLAUDE);
+      const step = next(proj, CLAUDE, {}, ["--entry"]);
+      expect(step.kind, JSON.stringify(step)).toBe("print");
+      expect(step.message ?? "").toStartWith("AI-DLC has no copy of what the person typed in this chat.");
+      expect(isStop(step)).toBe(false);
+      mkdirSync(join(proj, "aidlc", ".aidlc-request-text"), { recursive: true });
+      writeFileSync(join(proj, ...FILE.split("/")), REQUEST, "utf-8");
+      const stopped = next(proj, CLAUDE, {}, ["--request-file", FILE]);
+      expect(isStop(stopped), JSON.stringify(stopped)).toBe(true);
+      const id = idIn(stopped);
+      expect(stopped.message ?? "").toContain(`then type /aidlc --request ${id}.`);
+      expect(stopped.message ?? "").not.toContain("formatPrice");
+      beat(proj, work === "fresh" ? "record-human-turn" : "reviewer-scope");
+      const picked = next(proj, CLAUDE, {}, ["--request", id]);
+      expect(JSON.stringify(picked)).toContain("formatPrice(0) returns an empty string");
+    });
+  }
+
+  // The restart line names the kept request by its id; typed in the new chat, the first command runs it. Over work in
+  // hand only the id carries it (before any work a bare next finds it too).
+  test("claude, over work in hand, the restart line typed in the new chat: the first command carries on with their request", () => {
+    const proj = installed(CLAUDE);
+    intentCreate(proj, CLAUDE);
+    expect(next(proj, CLAUDE, {}, ["--entry"]).message ?? "").toStartWith("AI-DLC has no copy of what the person typed in this chat.");
+    mkdirSync(join(proj, "aidlc", ".aidlc-request-text"), { recursive: true });
+    writeFileSync(join(proj, ...FILE.split("/")), REQUEST, "utf-8");
+    const id = idIn(next(proj, CLAUDE, {}, ["--request-file", FILE]));
+    expect(id).toMatch(/^[0-9a-f]{8}$/);
+    const typed = run(
+      proj,
+      [join(proj, ".claude", "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
+      attendedEnv({ CLAUDE_PROJECT_DIR: proj }),
+      JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: SESSION, prompt: `/aidlc --request ${id}` }),
+    );
+    expect(typed.code, typed.stderr).toBe(0);
+    const picked = next(proj, CLAUDE, { AIDLC_SESSION_OVERRIDE: SESSION }, ["--entry"]);
+    expect(picked.message ?? "", JSON.stringify(picked).slice(0, 300)).toStartWith("The person's words, typed before the restart and kept by AI-DLC");
+    expect(JSON.stringify(picked)).toContain("formatPrice(0) returns an empty string");
+  });
+
+  // Their line on record does not lift the stop, which comes before the record is read: the first command still
+  // hands the request file, so the restart keeps their words rather than naming a bare /aidlc.
+  test("claude, their /aidlc line on record and no heartbeat since", () => {
+    const proj = installed(CLAUDE);
+    const typed = run(
+      proj,
+      [join(proj, ".claude", "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
+      attendedEnv({ CLAUDE_PROJECT_DIR: proj }),
+      JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: SESSION, prompt: `/aidlc ${REQUEST}` }),
+    );
+    expect(typed.code, typed.stderr).toBe(0);
+    const health = hooksHealthDir(proj);
+    for (const name of readdirSync(health)) unlinkSync(join(health, name));
+    const chat = { AIDLC_SESSION_OVERRIDE: SESSION };
+    expect(isStop(next(proj, CLAUDE, chat)), "the hooks are off for the bare next").toBe(true);
+    const step = next(proj, CLAUDE, chat, ["--entry"]);
+    expect(step.kind, JSON.stringify(step)).toBe("print");
+    expect(step.message ?? "").toStartWith("AI-DLC has no copy of what the person typed in this chat.");
   });
 });
 

@@ -40,7 +40,7 @@ This is the same AI-DLC core that ships to every harness: the same ordered steps
 - **MCP servers**: none ship (configure your own in \`.cursor/mcp.json\` if needed).
 - A workflow's \`aidlc/\` workspace tree is harness-neutral: a project can move between harness installs (supported but untested — keep the trees in sync via the framework's packaging if you do this).
 
-The Cursor-specific guide (install, what differs, verification) is \`docs/guide/harnesses/cursor.md\`.
+The Cursor-specific guide (install, what differs, verification) is https://awslabs.github.io/aidlc-workflows/guide/harnesses/cursor/.
 `,
 
     sections_after_resumption: "",

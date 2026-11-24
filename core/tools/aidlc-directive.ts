@@ -34,7 +34,13 @@ import {
   guardOperationMatchesRemedy,
   isGuardRecoveryOperation,
 } from "./aidlc-guard-operation.ts";
-import { readsAlikeInDoubleQuotes } from "./aidlc-runtime-paths.ts";
+import {
+  aidlcToolInvocation,
+  quoteCommandArgument,
+  readsAlikeInDoubleQuotes,
+  runtimeProjectDir,
+} from "./aidlc-runtime-paths.ts";
+import { briefHandedByTool } from "./aidlc-testing-posture.ts";
 
 // --- Public types ---
 
@@ -800,6 +806,15 @@ export interface TeamHandoverAskDirective extends AskDirectiveBase {
   unit?: string;
 }
 
+// The work selected was set up with a newer AI-DLC than this build reads, on an
+// install that updates itself: update and carry on, or not now. Each choice is
+// one complete command; neither has an id on the record.
+export interface AiDlcUpdateAskDirective extends AskDirectiveBase {
+  ask_type: "ai-dlc-update";
+  response_route: "command";
+  choices: AskChoice[];
+}
+
 export interface NewWorkRoutingAskDirective extends AskDirectiveBase {
   ask_type: "new-work-routing";
   response_route: "next";
@@ -909,6 +924,7 @@ export type AskDirective =
   | UnitsReposAskDirective
   | UnitPlanChangeAskDirective
   | TeamHandoverAskDirective
+  | AiDlcUpdateAskDirective
   | NewWorkRoutingAskDirective
   | UnitClaimAskDirective
   | LegacyPlanApprovalRecoveryAskDirective
@@ -1286,9 +1302,9 @@ const KNOWN_FIELDS_BY_KIND: Readonly<Record<DirectiveKind, readonly string[]>> =
 
 // The person's yes to the warning's redo question reopens the stage it names.
 export function stageValidityNote(invocation: string, stage: string | null): string {
-  return "Say stage_validity.warning to the person word for word, as your own sentence with nothing in front of " +
-    "it, if you have not said it in this chat yet, then carry on with this step; it is about their own change, so " +
-    "never say who made it or call it stray or a mistake." +
+  return "Say the warning beside this note about their finished stages to the person word for word, as your own " +
+    "sentence with nothing in front of it, if you have not said it in this chat yet, then carry on with this step; " +
+    "it is about their own change, so never say who made it or call it stray or a mistake." +
     (stage ? ` If their next reply says yes to it, run \`${invocation} next --stage ${stage}\` and follow the step ` +
       "it returns." : "");
 }
@@ -1301,8 +1317,10 @@ export const SAY_ONCE_BEFORE_THEY_REPLY =
   "once, as written (only a verb's tense may change to fit when you say it), as your own sentence with nothing in " +
   "front of it, in the last message you write before they reply (when you end your turn with a question, the text " +
   "you write just before it)";
+// The rest of that order for the lines a step carries for the person.
+export const ADD_NOTHING_ABOUT_WHY = "and add nothing about why";
 export const CHANGE_NOTICES_NOTE =
-  `Say each change_notices line to the person ${SAY_ONCE_BEFORE_THEY_REPLY}, and add nothing about why.`;
+  `Say each notice listed beside this note to the person ${SAY_ONCE_BEFORE_THEY_REPLY}, ${ADD_NOTHING_ABOUT_WHY}.`;
 
 // Every question the engine asks: whose it is, and what a pick does. A choice's
 // command answers the question; a routing command returns the next step, a
@@ -1616,11 +1634,25 @@ export function inputsNote(paths: readonly string[]): string {
 // Code Generation: the engine asks for Plan Approval itself (a plan-approval
 // ask), so a stage step only ever says whether to plan or to build. The `next`
 // it names is an isolated run's own when the plan state carries one.
+// How the developer of a one-target build gets its brief on this install: a
+// tool hands it over as it starts, or the conductor's message starts with it.
+export function developerBriefSentence(unit: string | null, projectDir = runtimeProjectDir()): string {
+  if (briefHandedByTool(projectDir)) {
+    return "The developer gets the plan and its test instructions from AI-DLC as it starts: leave them out of its " +
+      "message and do not retell them.";
+  }
+  const target = unit === null ? "--stage-level" : `--unit ${quoteCommandArgument(unit)}`;
+  return `Start the developer's message with the output of \`${aidlcToolInvocation("testing-posture")} brief ${target}\`, ` +
+    "word for word: it carries the plan and its test instructions.";
+}
+
 export function planNote(
   plan: { status: string; skipped?: true; notice?: string; next?: string },
   invocation: string,
+  brief?: string,
 ): string {
   const next = plan.next ?? `${invocation} next`;
+  const handOver = brief === undefined ? "" : ` ${brief}`;
   switch (plan.status) {
     case "plan":
       return "Write this plan and its test instructions (Code Generation Steps 1 and 2), then run `" + next +
@@ -1633,9 +1665,9 @@ export function planNote(
     default:
       return plan.skipped === true
         ? `Say to the person first: ${plan.notice ?? "Plan approval is off for this piece of work."} Then build from ` +
-          "the plan as it is (Code Generation Step 4) without asking for approval, and report."
+          `the plan as it is (Code Generation Step 4) without asking for approval, and report.${handOver}`
         : "The plan is approved: build it as it is (Code Generation Step 4), then report; never rewrite an approved " +
-          "plan unless the person asks.";
+          `plan unless the person asks.${handOver}`;
   }
 }
 
@@ -1905,7 +1937,11 @@ export function withAgentNotes<T extends object>(
         : [];
       if (gaps.length > 0) notes.inputs_note = inputsNote(gaps);
       if (isPlainObject(d.plan_approval) && typeof d.plan_approval.status === "string") {
-        notes.plan_note = planNote(d.plan_approval as { status: string; skipped?: true; notice?: string; next?: string }, invocation);
+        notes.plan_note = planNote(
+          d.plan_approval as { status: string; skipped?: true; notice?: string; next?: string },
+          invocation,
+          d.stage === "code-generation" ? developerBriefSentence(typeof d.unit === "string" ? d.unit : null) : undefined,
+        );
       }
     }
     const dispatched = d.mode === "subagent" || d.mode === "pipeline" || d.mode === "mob" || "wave" in d;
@@ -2119,7 +2155,8 @@ export function validateDirective(obj: unknown): ValidationResult {
         kind,
         errors,
         o.ask_type === "scope-confirm" || o.ask_type === "construction-staffing" || o.ask_type === "repo-scope" ||
-          o.ask_type === "units-repos" || o.ask_type === "unit-plan-change" || o.ask_type === "team-handover",
+          o.ask_type === "units-repos" || o.ask_type === "unit-plan-change" || o.ask_type === "team-handover" ||
+          o.ask_type === "ai-dlc-update",
       );
       checkOptionalString(o, "recovery_choice", kind, errors);
       checkOptionalString(o, "existing_code_command", kind, errors);
@@ -2142,10 +2179,11 @@ export function validateDirective(obj: unknown): ValidationResult {
           "units-repos",
           "unit-plan-change",
           "team-handover",
+          "ai-dlc-update",
         ].includes(o.ask_type)
       ) {
         errors.push(
-          `${kind}: ask_type must be one of scope-confirm | compose-offer | intent-pick | unit-paused | new-work-routing | unit-claim | legacy-plan-approval-recovery | guard-recovery | plan-approval | project-type | construction-staffing | repo-scope | units-repos | unit-plan-change | team-handover, got ${String(o.ask_type)}`,
+          `${kind}: ask_type must be one of scope-confirm | compose-offer | intent-pick | unit-paused | new-work-routing | unit-claim | legacy-plan-approval-recovery | guard-recovery | plan-approval | project-type | construction-staffing | repo-scope | units-repos | unit-plan-change | team-handover | ai-dlc-update, got ${String(o.ask_type)}`,
         );
       }
       if ("plan_approval" in o && o.ask_type !== "plan-approval") {
@@ -2278,6 +2316,11 @@ export function validateDirective(obj: unknown): ValidationResult {
         }
         checkOptionalString(o, "unit", kind, errors);
         rejectUnexpected("team-handover", { handovers: true, unit: true });
+      } else if (o.ask_type === "ai-dlc-update") {
+        if (o.response_route !== "command") {
+          errors.push(`${kind}: ai-dlc-update response_route must be "command"`);
+        }
+        rejectUnexpected("ai-dlc-update", {});
       } else if (o.ask_type === "unit-plan-change") {
         if (o.response_route !== "command") {
           errors.push(`${kind}: unit-plan-change response_route must be "command"`);

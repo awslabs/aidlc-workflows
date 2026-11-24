@@ -713,7 +713,6 @@ describe("t252 Kiro native release allowlist", () => {
         "aidlc engine orchestrate next",
         "aidlc doctor",
         "aidlc --doctor",
-        "aidlc status",
         "aidlc --status",
         "aidlc version",
         "aidlc --version",

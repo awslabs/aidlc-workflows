@@ -51,6 +51,7 @@
 // redirections and operands of common mutation commands; read-only shell calls
 // do not produce targets and remain untouched.
 
+import { readFileSync } from "node:fs";
 import {
   hookOutsideGate,
   enterHookWorkflow,
@@ -79,8 +80,8 @@ import {
   parseCheckboxes,
   reviewedArtifactUnit,
   readAllAuditShards,
-  readStateFile,
   recordHookDrop,
+  stateFilePath,
   recoveryGuidance,
   resolveReviewClass,
   resolveProjectFlag,
@@ -99,6 +100,7 @@ export {
   shellCommandAltersExecutableResolution,
   shellCommandInvocationDetails,
   shellCommandInvocations,
+  shellCommandVariables,
   shellPatchTargets,
   shellWriteTargets,
   unseenPatch,
@@ -277,7 +279,19 @@ async function checkFreeze(input: string, projectDir: string): Promise<number> {
   let blockedReceipts: FreshReviewReceipts | null = null;
   let blockedStage: StageEntry | null = null;
   try {
-    const content = readStateFile(projectDir);
+    // Commands that run before any intent (plugin select, knowledge onboard)
+    // write the space's audit ledger without a state file. With no state the
+    // freeze window cannot be read, so the write is allowed and the normal
+    // absence is not reported as a hook failure; any other error resolving or
+    // reading the state is.
+    const statePath = stateFilePath(projectDir);
+    let content: string;
+    try {
+      content = readFileSync(statePath, "utf-8");
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === "ENOENT") return 0;
+      throw e;
+    }
     stateContent = content;
     // Only NOT-completed reviewer-bearing stages can hold a receipt the gate
     // still depends on. Completed ([x]) and skipped stages are excluded: their

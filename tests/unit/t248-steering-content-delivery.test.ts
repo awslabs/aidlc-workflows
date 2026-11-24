@@ -448,7 +448,8 @@ function addTeamInceptionRule(proj: string): string {
 // The persona text the harness actually loads. A Codex persona is the
 // `developer_instructions` string of its TOML role file, read through the
 // parser (the emitter escapes backslashes and quote runs in the raw bytes);
-// every other harness loads the Markdown file as it is.
+// every other harness loads the Markdown file as it is. opencode and Copilot
+// dispatch a reviewer from their own agent folder, not the engine's copy.
 function reviewerExecutionSurface(
   harness: (typeof HARNESS_MATRIX)[number],
   reviewer: (typeof REVIEWER_AGENTS)[number],
@@ -460,6 +461,9 @@ function reviewerExecutionSurface(
   }
   if (harness.name === "opencode") {
     return readFileSync(join(harness.distRoot, ".opencode", "agents", `${reviewer}.md`), "utf-8");
+  }
+  if (harness.name === "copilot") {
+    return readFileSync(join(harness.distRoot, ".github", "agents", `${reviewer}.md`), "utf-8");
   }
   return readFileSync(join(harness.engineRoot, "agents", `${reviewer}.md`), "utf-8");
 }

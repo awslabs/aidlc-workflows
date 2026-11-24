@@ -109,8 +109,7 @@ first non-empty, non-conflicting section:
    project SKIPs practices-discovery).
 
 This topic selection does not erase broader rules: the runtime still loads all
-applicable layers. A narrower statement that contradicts broader policy is an
-admission error, not an override.
+applicable layers.
 
 Hardcoded defaults are:
 

@@ -67,6 +67,7 @@ import {
 import { aidlcDispatcherInvocation, entrySkillInvocation } from "./aidlc-runtime-paths.ts";
 import { phaseReviewRole } from "./aidlc-review-granularity.ts";
 import {
+  checkpointGateStages,
   constructionCheckpointKind,
   resolveConstructionCheckpoint,
 } from "./aidlc-construction-checkpoints.js";
@@ -1399,6 +1400,34 @@ function reviewedBefore(
   return review !== undefined && attemptEventDefinitelyBefore(review.event, row);
 }
 
+// Whether the stage lists an open finding the one answer for several stages
+// never saw open: open now, and not open on the list each Unit's review held when
+// the gate that answer came at opened (`opened`), that gate's brief listing every
+// covered stage's open findings; or raised in severity since, the engine's rule
+// for asking again. One shown as fixed that applies again since was not shown open.
+export function findingNeverShown(
+  projectDir: string,
+  stage: ReviewFingerprintStage,
+  opened: AuditShardEvent,
+): boolean {
+  const raised = (now: string, then: string): boolean => {
+    const [a, b] = [findingSeverityRank(now), findingSeverityRank(then)];
+    return a !== null && b !== null ? a > b : now !== then;
+  };
+  return readReviewArtifactContexts(projectDir, stage).some((context) => {
+    const before = pairedReviews(projectDir, stage, context.unit)
+      .filter((pair) => attemptEventDefinitelyBefore(pair.event, opened)).at(-1);
+    const shown = (before ? reviewRecordDerivedFindings(before.record, context.artifact) ?? [] : []).filter(findingIsOpen);
+    return context.findings.some((finding) =>
+      findingIsOpen(finding) &&
+      !shown.some((was) =>
+        was.artifact === finding.artifact && was.id === finding.id && was.fingerprint === finding.fingerprint &&
+        !raised(finding.severity, was.severity)
+      )
+    );
+  });
+}
+
 // The Unit's own latest approval of a stage: its checkpoint or team gate, or
 // the swarm batch it was in.
 function latestUnitApproval(
@@ -1519,15 +1548,51 @@ function fixRequestedKeys(
     );
   }
   const findings = gateFindings(reviewed);
-  return new Set(specs.map((raw) => {
-    const { finding } = selectGateFinding(findings, raw, "fix").selected;
-    if (!findingIsOpen(finding)) {
-      throw new Error(
-        `Cannot ask a fix for ${finding.artifact}#${finding.id}: current status is ${finding.status}.`,
-      );
+  return new Set(specs.map((raw) => dispositionKey(fixableFinding(findings, raw))));
+}
+
+// The open finding a --fix-finding names among a gate's findings.
+function fixableFinding(findings: readonly GateFinding[], raw: string): ReviewFinding {
+  const { finding } = selectGateFinding(findings, raw, "fix").selected;
+  if (!findingIsOpen(finding)) {
+    throw new Error(
+      `Cannot ask a fix for ${finding.artifact}#${finding.id}: current status is ${finding.status}.`,
+    );
+  }
+  return finding;
+}
+
+// Which of the stages one answer approves (`slugs`, the first stage's own
+// first) each --fix-finding names, read before anything is approved. One the
+// first stage's own findings select is its own, as at any gate; any other is
+// read over every listed stage's findings at once, so one that names two, a
+// closed one, or none is refused here, before any approval, in the words the
+// approval itself uses.
+export function fixFindingsByStage(
+  projectDir: string,
+  slugs: readonly string[],
+  specs: readonly string[],
+): Map<string, string[]> {
+  const listed = slugs.flatMap((slug) => {
+    const stage = findStageBySlug(slug);
+    return stage === undefined ? [] : gateFindings(reviewedContexts(projectDir, stage, [undefined])).map((found) => ({ slug, found }));
+  });
+  const own = listed.filter(({ slug }) => slug === slugs[0]).map(({ found }) => found);
+  const byStage = new Map<string, string[]>(slugs.map((slug) => [slug, []]));
+  for (const spec of specs) {
+    let owner = slugs[0];
+    try {
+      selectGateFinding(own, spec, "fix");
+    } catch {
+      const finding = fixableFinding(listed.map(({ found }) => found), spec);
+      owner = listed.find(({ found }) => found.finding === finding)?.slug ?? owner;
+      // Passed on whole, so that stage's approval reads it as this finding only.
+      byStage.get(owner)?.push(`${finding.artifact}#${finding.id}`);
+      continue;
     }
-    return dispositionKey(finding);
-  }));
+    byStage.get(owner)?.push(spec);
+  }
+  return byStage;
 }
 
 // What an approval records for each open finding: `Accepted risk` when the
@@ -1656,10 +1721,9 @@ const DECIDE_ONE_WAYS = ["approve and ask for {it} to be fixed", "reject {it} as
 // it records as `Changed after review` is not named), and DECIDE_ONE_WAYS.
 // Each Unit's and each stage's review numbers from R-01, so when the findings
 // named span Units or stages each is labelled with its own. Null when none is
-// named, when Construction approves the gate on its own, or when a stage the
-// one approval covers after this one (approvesTogetherStages) has open
-// findings it accepts too: a fix asked reaches only this stage's, so the line
-// could not name all it accepts. At a team Unit's end-of-Unit gate (`unitGate`)
+// named, or when Construction approves the gate on its own. With the stages the
+// one approval covers after this one (approvesTogetherStages) it names theirs
+// too, each by its stage. At a team Unit's end-of-Unit gate (`unitGate`)
 // it names what that Unit's one Approve records over every stage it decides,
 // the same call the approval makes, labelled by stage when the gate shows
 // open findings on more than one (`labelStages`).
@@ -1671,25 +1735,24 @@ function approveAcceptsLine(
   const acceptedRisk = (of: ReviewDispositionStages, unit?: string): ApprovalDecision[] =>
     approvalDecisions(projectDir, of, unit, "person", [])
       .filter(({ disposition }) => disposition.status === "Accepted risk");
+  let followers: StageEntry[] = [];
   if (unitGate === undefined) {
     try {
       const state = readFileSync(stateFilePath(projectDir), "utf-8");
       if (isAutonomousConstructionGate(state, stage, projectDir)) return null;
-      const followers = (approvesTogetherStages(state, stage.slug) ?? []).slice(1);
-      if (followers.some((slug) => {
-        const follower = findStageBySlug(slug);
-        return follower !== undefined && follower.reviewer !== undefined && acceptedRisk(follower).length > 0;
-      })) return null;
     } catch {
       // No state to read: nothing is approving on its own or with this stage.
     }
+    followers = togetherFollowers(projectDir, stage).filter((follower) => follower.reviewer !== undefined);
   }
+  const later = followers.flatMap((follower) => acceptedRisk(follower));
   const accepted = unitGate === undefined
-    ? acceptedRisk(gateDispositionStages(projectDir, stage))
+    ? [...acceptedRisk(gateDispositionStages(projectDir, stage)), ...later]
     : acceptedRisk(unitGate.stages, unitGate.unit);
   if (accepted.length === 0) return null;
   const byUnit = new Set(accepted.map(({ unit }) => unit)).size > 1;
-  const byStage = unitGate?.labelStages === true || new Set(accepted.map(({ stage: of }) => of.slug)).size > 1;
+  const byStage = unitGate?.labelStages === true || later.length > 0 ||
+    new Set(accepted.map(({ stage: of }) => of.slug)).size > 1;
   const label = ({ finding, stage: of, unit }: ApprovalDecision): string =>
     [
       ...(byStage ? [findStageBySlug(of.slug)?.name ?? of.slug] : []),
@@ -1699,7 +1762,10 @@ function approveAcceptsLine(
   const named = accepted.map((decision) => `${label(decision)} (${findingGist(decision.finding.finding)})`);
   const one = named.length === 1;
   const list = one ? named[0] : `${named.slice(0, -1).join(", ")} and ${named.at(-1)}`;
-  const ways = DECIDE_ONE_WAYS.map((way) => way.replace("{it}", one ? "it" : "one"));
+  // A rejection is a change request at this stage's gate, which reaches only
+  // this stage's findings; a fix asked as they approve reaches each listed stage's.
+  const ways = (later.length > 0 ? DECIDE_ONE_WAYS.slice(0, 1) : DECIDE_ONE_WAYS)
+    .map((way) => way.replace("{it}", one ? "it" : "one"));
   const also = ways.length === 1 ? ways[0] : `${ways.slice(0, -1).join(", ")}, or ${ways.at(-1)}`;
   return `Approve accepts the open review finding${one ? "" : "s"} ${list} as risk; you can also ${also}.`;
 }
@@ -1709,29 +1775,58 @@ function approveAcceptsLine(
 // findings its approval accepts. A team Unit's end-of-Unit Approve decides
 // every stage of the Unit's walk (`endOfUnit`), so its gate shows each earlier
 // stage's review with an open finding, or that did not finish (`earlier`),
-// ahead of this stage's own, read as the approval reads them.
+// ahead of this stage's own, read as the approval reads them. So does the
+// Construction checkpoint of a Unit worked alone, at its walk's last stage
+// (`atCheckpoint`): its approval decides the stages unitOwnApproval names.
 function gateReviewScope(
   projectDir: string,
   stage: ReviewFingerprintStage,
   unit: string | undefined,
-): { contextUnit: string | undefined; endOfUnit: StageEntry[] | null; earlier: ReviewedContext[]; phaseCovered: ReviewedContext[] } {
-  const contextUnit = stage.for_each === "unit-of-work" && !(unit && unitOwnApproval(projectDir, unit))
-    ? undefined
-    : unit;
-  const endOfUnit = contextUnit === undefined ? null : endOfUnitGateStages(projectDir, stage);
+): {
+  contextUnit: string | undefined;
+  endOfUnit: StageEntry[] | null;
+  earlier: ReviewedContext[];
+  atCheckpoint: boolean;
+  together: ReviewedContext[];
+  phaseCovered: ReviewedContext[];
+} {
+  const own = stage.for_each === "unit-of-work" && unit ? unitOwnApproval(projectDir, unit) : null;
+  const contextUnit = stage.for_each === "unit-of-work" && own === null ? undefined : unit;
+  const checkpoint = Array.isArray(own) && own.at(-1) === stage.slug
+    ? own.flatMap((slug) => findStageBySlug(slug) ?? [])
+    : null;
+  const endOfUnit = contextUnit === undefined ? null : endOfUnitGateStages(projectDir, stage) ?? checkpoint;
+  const openOrUnfinished = ({ context }: ReviewedContext): boolean =>
+    context.incompleteReview === true || context.findings.some(findingIsOpen);
   // Phase granularity: the anchor's gate decides over the grouped pass, so
-  // every covered stage's review shows ahead of this stage's own — named per
-  // stage, clean reviews included — and the accepts line counts them too
+  // every covered stage's review shows ahead of this stage's own, named per
+  // stage, clean reviews included, and the accepts line counts them too
   // (stage-protocol-reviewer §12a, phase review).
   const phaseCovered = contextUnit !== undefined ? [] : phaseCoveredContexts(projectDir, stage);
   const earlier = [
     ...phaseCovered,
     ...(endOfUnit === null
       ? []
-      : reviewedContexts(projectDir, endOfUnit.slice(0, -1), [contextUnit], true)
-        .filter(({ context }) => context.incompleteReview === true || context.findings.some(findingIsOpen))),
+      : reviewedContexts(projectDir, endOfUnit.slice(0, -1), [contextUnit], true).filter(openOrUnfinished)),
   ];
-  return { contextUnit, endOfUnit, earlier, phaseCovered };
+  // The later stages this gate's one answer approves too (approvesTogetherStages):
+  // each one's review with an open finding, or that did not finish, so the person
+  // sees before that answer what it accepts.
+  const together = contextUnit === undefined
+    ? reviewedContexts(projectDir, togetherFollowers(projectDir, stage), [undefined], true).filter(openOrUnfinished)
+    : [];
+  return {
+    contextUnit, endOfUnit, earlier, atCheckpoint: endOfUnit !== null && endOfUnit === checkpoint, together, phaseCovered,
+  };
+}
+
+function togetherFollowers(projectDir: string, stage: ReviewFingerprintStage): StageEntry[] {
+  try {
+    const state = readFileSync(stateFilePath(projectDir), "utf-8");
+    return (approvesTogetherStages(state, stage.slug) ?? []).slice(1).flatMap((slug) => findStageBySlug(slug) ?? []);
+  } catch {
+    return [];
+  }
 }
 
 // The #2099 line for the gate the brief with the same `unit` opens: a stage's
@@ -1746,9 +1841,10 @@ export function gateApproveAcceptsLine(
   unit?: string,
   scope?: ReturnType<typeof gateReviewScope>,
 ): string | null {
-  const { contextUnit, endOfUnit, earlier } = scope ?? gateReviewScope(projectDir, stage, unit);
+  const { contextUnit, endOfUnit, earlier, atCheckpoint } = scope ?? gateReviewScope(projectDir, stage, unit);
   if (contextUnit === undefined) return approveAcceptsLine(projectDir, stage);
-  if (endOfUnit === null) return null;
+  // A checkpoint's own step says no such line; its brief's Approve option says what it records.
+  if (endOfUnit === null || atCheckpoint) return null;
   const ownOpen = readReviewArtifactContexts(projectDir, stage, contextUnit, true)
     .some((context) => context.incompleteReview === true || context.findings.some(findingIsOpen));
   const openStages = new Set([...earlier.map(({ stage: of }) => of.slug), ...(ownOpen ? [stage.slug] : [])]);
@@ -1854,6 +1950,39 @@ function selectGateFinding(
   return { spec, selected };
 }
 
+// A rejection asked at the one question for several stages that names a later
+// listed stage's open finding: its change request is this stage's and cannot
+// decide it, but the question's brief showed it, so the refusal says the two ways
+// that answer decides it (as the gate's line does) and nothing untrue. The question
+// stays open: the state tool hands it to the agent as a decision not made.
+export class LaterStageFindingRejection extends Error {}
+
+function laterStageRejection(
+  projectDir: string,
+  stage: ReviewFingerprintStage,
+  raw: string,
+  own: readonly GateFinding[],
+): void {
+  const later = reviewedContexts(projectDir, togetherFollowers(projectDir, stage), [undefined]);
+  // Read with this gate's own findings, so a selector that names two of them
+  // keeps the refusal it has.
+  let finding: ReviewFinding;
+  try {
+    finding = selectGateFinding([...own, ...gateFindings(later)], raw, "reject").selected.finding;
+  } catch {
+    return;
+  }
+  if (!findingIsOpen(finding)) return;
+  const of = later.find(({ context }) => context.findings.includes(finding))?.stage;
+  const name = (of === undefined ? undefined : findStageBySlug(of.slug)?.name) ?? "a later stage";
+  const { artifact, id } = parseFindingDispositionSpec(raw, "reject");
+  throw new LaterStageFindingRejection(
+    `Cannot reject ${artifact ? `${artifact}#${id}` : id}: it is a finding of ${name}, which this question's one ` +
+      `approval decides with the rest. An approval accepts it as risk; to have it fixed, pass --fix-finding ` +
+      `${JSON.stringify(`${finding.artifact}#${finding.id}`)} on the approval instead. Nothing was recorded.`,
+  );
+}
+
 export function rejectedFindingDispositionField(
   projectDir: string,
   stages: ReviewDispositionStages,
@@ -1874,7 +2003,14 @@ export function rejectedFindingDispositionField(
   }
   const scopes = units === undefined || typeof units === "string" ? [units] : units;
   const findings = gateFindings(reviewedContexts(projectDir, stageList, scopes));
-  const rejected = specs.map((raw) => selectGateFinding(findings, raw, "reject"));
+  const rejected = specs.map((raw) => {
+    try {
+      return selectGateFinding(findings, raw, "reject");
+    } catch (e) {
+      if (stageList.length === 1 && units === undefined) laterStageRejection(projectDir, stageList[0], raw, findings);
+      throw e;
+    }
+  });
   const reopened = reopenSpecs.map((raw) => selectGateFinding(findings, raw, "reopen"));
   const duplicate = (finding: { artifact: string; id: string }): never => {
     throw new Error(
@@ -2508,21 +2644,31 @@ export function acceptedReviewChanges(
   return accepted;
 }
 
-// Whether the approval a per-Unit stage's brief comes before is the Unit's own:
-// its team gate, or its Construction checkpoint before the person approves it.
-// The stage's one final gate covers every Unit, so a Unit named there is only
-// the execution cursor. Unreadable state is that final gate.
-function unitOwnApproval(projectDir: string, unit: string): boolean {
+// The approval a per-Unit stage's brief comes before, when it is the Unit's
+// own: its team gate ("team"), or its Construction checkpoint before the person
+// approves it, given as the stages that approval decides (checkpointGateStages,
+// the same snapshot the approval reads, so the brief and the record share one
+// list). The walk asks a Unit at its own checkpoint only as the skeleton or in
+// a Unit-by-Unit walk, as constructionCheckpointGaps reads it; any other Unit's
+// stages are decided at their own gates or its swarm batch's, so it gets no
+// stages (an empty list) and its brief shows its own review alone. The stage's
+// one final gate covers every Unit, so a Unit named there is only the execution
+// cursor (null). Unreadable state is that final gate.
+function unitOwnApproval(projectDir: string, unit: string): "team" | string[] | null {
   try {
     const state = readFileSync(stateFilePath(projectDir), "utf-8");
-    if (isTeamUnitOwnership(state)) return true;
-    if (!constructionCheckpointsApply(state)) return false;
+    if (isTeamUnitOwnership(state)) return "team";
+    if (!constructionCheckpointsApply(state)) return null;
     const dag = resolveBoltDag(projectDir);
-    if (dag.state !== "ok" || !dag.units.includes(unit)) return false;
+    if (dag.state !== "ok" || !dag.units.includes(unit)) return null;
     const kind = constructionCheckpointKind(state, unit, dag.units);
-    return !resolveConstructionCheckpoint(projectDir, unit, kind, state).approved;
+    const checkpoint = resolveConstructionCheckpoint(projectDir, unit, kind, state);
+    if (checkpoint.approved) return null;
+    return kind === "skeleton" || getField(state, "Construction Iteration") === "unit-major"
+      ? checkpointGateStages(checkpoint, state)
+      : [];
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -2543,7 +2689,7 @@ export function renderReviewBrief(
   fallbackFinding?: string,
 ): string {
   const gateScope = gateReviewScope(projectDir, stage, unit);
-  const { contextUnit, earlier, phaseCovered } = gateScope;
+  const { contextUnit, earlier, together, phaseCovered } = gateScope;
   // An open finding on work kept after its review (relaxed or off) shows as
   // Approve records it. The change itself was said once, as change_notices,
   // when it was recorded, so the brief does not say it again. Marked before the
@@ -2604,7 +2750,8 @@ export function renderReviewBrief(
       findings: [finding],
     }];
   }
-  const shown = [...earlierContexts, ...contexts];
+  const togetherContexts = together.map(marked).map(withUnfinished(unfinishedReviewFinding()));
+  const shown = [...earlierContexts, ...contexts, ...togetherContexts];
   const findings = shown.flatMap((context) => context.findings);
   const open = findings.filter(findingIsOpen);
   const reviewerResolved = shown.reduce(
@@ -2632,9 +2779,10 @@ export function renderReviewBrief(
   // No "why now" label: which pass this is changes nothing the person decides,
   // and the record keeps it (the review rows' iteration and who asked). The
   // reason still selects the stale lines below.
-  const earlierNames = [...new Set(earlier.map(({ stage: of }) => findStageBySlug(of.slug)?.name ?? of.slug))];
+  const nameOf = ({ stage: of }: ReviewedContext): string => findStageBySlug(of.slug)?.name ?? of.slug;
+  const names = [...new Set([...earlier.map(nameOf), stage.name, ...together.map(nameOf)])];
   const lines = [
-    earlierNames.length === 0 ? `**Stage:** ${stage.name}` : `**Stages:** ${[...earlierNames, stage.name].join(", ")}`,
+    names.length === 1 ? `**Stage:** ${stage.name}` : `**Stages:** ${names.join(", ")}`,
     `**Review outcome:** ${outcome}`,
   ];
   if (reason === "stale") {

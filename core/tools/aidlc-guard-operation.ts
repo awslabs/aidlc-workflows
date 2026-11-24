@@ -1,9 +1,19 @@
 import { isSwitchableGuardFence, type SwitchableGuardFence } from "./aidlc-guard-fences.ts";
 import {
   aidlcInvocation,
+  aidlcToolInvocation,
   quoteCommandArgument,
   runtimeHarnessDir,
 } from "./aidlc-runtime-paths.ts";
+
+// The step a Construction policy refusal names. Built when said, so it names
+// the state tool of the tree the refusal runs in.
+export function constructionPolicyRecovery(): string {
+  return `When the person asks for this Construction change, run ${aidlcToolInvocation("state")} set-construction-checkpoints, ` +
+    "set-construction-execution, or set-construction-iteration with the value they asked for and --message <id>, " +
+    "the id of the message they asked in, then say its notice line to them. Do not ask them to confirm it, and " +
+    "never change it on your own.";
+}
 
 // These are domain operations, not shell programs. Owning commands retain their
 // own checks; rendering an operation does not authenticate human selection.
@@ -449,10 +459,12 @@ export const GUARD_REMEDY_WORDING = {
   "record-unit-completion": (c) =>
     c.code === "UNIT_COMPLETION_MISSING"
       ? {
-          label: "Mark this Unit finished",
+          // It records one stage's completion for the Unit, never the Unit's:
+          // its other stages are left as they are.
+          label: `Mark ${c.stage} done`,
           description:
-            `The documents for ${c.unit ?? "this Unit"} are already in place. I'll record that it ` +
-            "is finished and bring it to you for approval.",
+            `The ${c.stage} documents for ${c.unit ?? "this Unit"} are already in place. I'll record ` +
+            `${c.stage} as done for it and bring it to you for approval.`,
         }
       : {
           label: "Finish with the review it has",

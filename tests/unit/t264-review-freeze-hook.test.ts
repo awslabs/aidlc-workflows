@@ -59,6 +59,7 @@ import {
   shellCommandAltersExecutableResolution,
   shellCommandInvocationDetails,
   shellCommandInvocations,
+  shellCommandVariables,
   writeTargets,
 } from "../../dist/claude/.claude/hooks/aidlc-review-freeze.ts";
 import {
@@ -237,6 +238,18 @@ test("inspection marks altered executable lookup and data-driven mutations", () 
       launchers: ["env"],
     },
   ]);
+  // The variables a command is handed on its own command line, bare or through
+  // env, command by command; a word after the command is an argument.
+  expect(
+    shellCommandVariables("A=1 B=2 rg TODO | env C=3 sort; cat D=4; E=5 command git diff").map(
+      ({ invocation, variables }) => [invocation.name, variables],
+    ),
+  ).toEqual([
+    ["rg", ["A", "B"]],
+    ["sort", ["C"]],
+    ["git", ["E"]],
+  ]);
+  expect(shellCommandVariables("rg TODO src")).toEqual([]);
   expect(shellCommandInvocationDetails("xargs rm -rf")).toEqual([
     {
       name: "rm",
@@ -1231,6 +1244,32 @@ describe("t264 (b) shipped-hook lifecycle over a real ledger", () => {
     expect(
       runHook(p, writePayload(raArtifact(p)), { AIDLC_DISABLE_REVIEW_FREEZE_HOOK: "1" }).code,
     ).toBe(0);
+  });
+
+  test("no state file: writes after a command that runs before any intent allow and log no hook failure", () => {
+    // knowledge onboard (like plugin select) writes the space's audit ledger
+    // before any intent exists, so the ledger gate passes and there is no state.
+    const p = createTestProject();
+    tempDirs.push(p);
+    writeFileSync(join(p, "api.md"), "# Team API rules\n\nUse REST.\n");
+    const onboard = spawnSync(BUN, [join(DIST_CLAUDE, "tools", "aidlc.ts"), "engine", "knowledge", "onboard", "api.md"], {
+      cwd: p,
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      env: { ...process.env, CLAUDE_PROJECT_DIR: p },
+      encoding: "utf-8",
+    });
+    expect(onboard.status ?? -1, `${onboard.stdout}${onboard.stderr}`).toBe(0);
+    expect(readAllAuditShards(p)).not.toBe("");
+    const records = () => readdirSync(join(p, "aidlc"), { recursive: true }).map(String);
+    expect(records().filter((path) => basename(path) === "aidlc-state.md")).toEqual([]);
+
+    for (const payload of [
+      { ...writePayload(join(p, "notes.md")), cwd: p },
+      { hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: "rm api.md" }, cwd: p },
+    ]) {
+      expect(runHook(p, payload)).toEqual({ code: 0, stderr: "" });
+    }
+    expect(records().filter((path) => basename(path) === "review-freeze.drops")).toEqual([]);
   });
 
   test("a completed stage's artifacts are not frozen (state checkbox filter)", () => {

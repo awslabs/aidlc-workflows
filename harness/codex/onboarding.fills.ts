@@ -56,7 +56,7 @@ This is the same AI-DLC core that ships to every harness, rendered onto Codex CL
 - **Session lifecycle**: Codex has no SessionEnd event (an unclosed session is reconciled as an inferred \`SESSION_ENDED\` at the next start); after compaction, Codex emits SessionStart with \`source=compact\`, which re-injects the workflow mission before the first post-compaction continuation (the reason Codex >= 0.145.0 is required).
 - **The AIDLC method** (the layered practice files \`org.md\`, \`team.md\`, \`project.md\`, and the per-phase \`phases/<phase>.md\`) lives once at the workspace root under \`aidlc/spaces/<active-space>/memory/\`, the single hand-editable source of truth, identical on every harness, NOT a per-harness copy. Codex has no ambient include for it: the engine reads the active space's files and hands each step its rules, and Codex auto-merges the root \`AGENTS.md\`. Edit the method there, never under \`.codex/\`. (\`.codex/rules/default.rules\` remains Codex's native Starlark permission-rules file, distinct from the AIDLC method, and the two must not collide.)
 
-The Codex-specific guide (prerequisites, trust pre-seed, provider config, the git-repo requirement) is \`docs/guide/harnesses/codex-cli.md\`.
+The Codex-specific guide (prerequisites, trust pre-seed, provider config, the git-repo requirement) is https://awslabs.github.io/aidlc-workflows/guide/harnesses/codex-cli/.
 `,
 
     sections_after_resumption: "",

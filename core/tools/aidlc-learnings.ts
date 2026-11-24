@@ -1178,18 +1178,9 @@ function handlePersist(args: string[], projectDir: string): void {
       };
     }, pinnedIntent, pinnedSpace);
   } catch (e) {
-    // Lock-acquire failure (or any in-lock throw) — name the lock path +
-    // manual remedy so a hard-killed predecessor's orphaned lock is
-    // recoverable by hand (plan §0.19b).
-    const msg = errorMessage(e);
-    if (/Failed to acquire audit lock/.test(msg)) {
-      fail(
-        `${msg}. The audit lock dir may be orphaned by a hard-killed run; ` +
-          `remove it manually (look under the system temp dir for the aidlc audit lock) and retry.`,
-        1
-      );
-    }
-    fail(`persist failed: ${msg}`, 1);
+    // A dead holder's lock is reclaimed on acquire, so a lock that held out
+    // belongs to a live command; nothing here says to remove it.
+    fail(`persist failed: ${errorMessage(e)}`, 1);
   }
 
   const notes: string[] = [];

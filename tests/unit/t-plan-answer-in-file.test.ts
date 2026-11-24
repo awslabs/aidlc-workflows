@@ -7,7 +7,8 @@
 // and strict, and check that:
 //
 //   - an answer the person wrote in the file is still there when `next` shows
-//     the question again (nothing they wrote is thrown away);
+//     the question again, also when another line of the file changed (nothing
+//     they wrote is thrown away), and never carried onto another question;
 //   - when they say they are done, in whatever words, no tool reads the file:
 //     the agent reads the line and records the choice it says, and the next
 //     `next` builds (or revises), the person's words beside the record;
@@ -19,8 +20,8 @@
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import {
   AIDLC_SRC,
   cleanupTestProject,
@@ -32,6 +33,7 @@ import {
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
+import { planApprovalRuntimeFile } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { renderTestingContract, resolveTestingPosture } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 
 setDefaultTimeout(120_000);
@@ -151,6 +153,17 @@ function answerLine(proj: string): string {
   return /^\[Answer\]:.*$/m.exec(readFileSync(questionsPath(proj), "utf-8"))?.[0] ?? "(none)";
 }
 
+/** The next `next` leaves the questions file alone: the same bytes, not written again. */
+function nextLeavesFileAlone(proj: string): void {
+  const path = questionsPath(proj);
+  const bytes = readFileSync(path, "utf-8");
+  const earlier = new Date("2001-01-01T00:00:00Z");
+  utimesSync(path, earlier, earlier);
+  expect(next(proj).kind).toBe("ask");
+  expect(readFileSync(path, "utf-8")).toBe(bytes);
+  expect(statSync(path).mtimeMs).toBe(earlier.getTime());
+}
+
 function askFor(proj: string): Emitted {
   writePlan(proj);
   const directive = next(proj);
@@ -184,6 +197,137 @@ describe("an answer written in the Plan Approval questions file", () => {
     expect(next(proj).kind).toBe("ask");
     expect(answerLine(proj)).toBe("[Answer]: Approve Plan");
     expect(auditText(proj)).not.toContain("**Event**: PLAN_APPROVAL_RECORDED");
+  });
+
+  // A source file saved while the question waits moves the file's Planned
+  // Source line, so the file is written again; the same question stands, so
+  // their answer comes with it, and it is read as theirs.
+  test("stays when another line of the file changes while the same question stands", () => {
+    const proj = project();
+    askFor(proj);
+    writeAnswer(proj, "Approve Plan, the slug rules look right");
+    const before = readFileSync(questionsPath(proj), "utf-8");
+    writeFileSync(join(proj, "src", "base.ts"), "export const base = false;\n", "utf-8");
+    expect(next(proj).kind).toBe("ask");
+    expect(readFileSync(questionsPath(proj), "utf-8")).not.toBe(before);
+    expect(answerLine(proj)).toBe("[Answer]: Approve Plan, the slug rules look right");
+    nextLeavesFileAlone(proj);
+    reply(proj, "done");
+    expect(answer(proj, "Approve Plan").code).toBe(0);
+    expect(rows(proj, "PLAN_APPROVAL_RECORDED").at(-1))
+      .toContain("**Answer Line In File**: Approve Plan, the slug rules look right");
+  });
+
+  test("stays in a file saved with Windows line endings", () => {
+    const proj = project();
+    askFor(proj);
+    writeAnswer(proj, "Approve Plan");
+    const path = questionsPath(proj);
+    writeFileSync(path, readFileSync(path, "utf-8").replace(/\n/g, "\r\n"), "utf-8");
+    expect(next(proj).kind).toBe("ask");
+    expect(answerLine(proj)).toBe("[Answer]: Approve Plan");
+  });
+
+  // The file ends with the `[Answer]:` line, so what they wrote under it is
+  // theirs too, and comes whole: never an approval cut from its condition.
+  test("keeps what they wrote under the line", () => {
+    for (const written of ["[Answer]: Approve Plan\nbut drop step 3\n", "[Answer]:\nApprove Plan, it looks right\n"]) {
+      const proj = project();
+      askFor(proj);
+      const path = questionsPath(proj);
+      writeFileSync(path, readFileSync(path, "utf-8").replace(/^\[Answer\]:\n$/m, written), "utf-8");
+      const before = readFileSync(path, "utf-8");
+      expect(before.endsWith(written)).toBe(true);
+      writeFileSync(join(proj, "src", "base.ts"), "export const base = false;\n", "utf-8");
+      expect(next(proj).kind).toBe("ask");
+      const after = readFileSync(path, "utf-8");
+      expect(after).not.toBe(before);
+      expect(after.endsWith(`\n\n${written}`), after).toBe(true);
+      nextLeavesFileAlone(proj);
+    }
+  });
+
+  // Any words they write are theirs, the words the engine uses for a plan built
+  // without asking included; only that record itself holds no answer of theirs.
+  test("keeps their own words Plan approval off, and never carries the record of a plan built without asking", () => {
+    const quoted = "Approve Plan, not AI-DLC built this plan without asking because plan approval is off for this";
+    for (const words of ["Plan approval off", quoted]) {
+      const theirs = project();
+      askFor(theirs);
+      writeAnswer(theirs, words);
+      const before = readFileSync(questionsPath(theirs), "utf-8");
+      writeFileSync(join(theirs, "src", "base.ts"), "export const base = false;\n", "utf-8");
+      expect(next(theirs).kind).toBe("ask");
+      expect(readFileSync(questionsPath(theirs), "utf-8")).not.toBe(before);
+      expect(answerLine(theirs)).toBe(`[Answer]: ${words}`);
+    }
+    const record = project();
+    askFor(record);
+    const path = questionsPath(record);
+    const asked = readFileSync(path, "utf-8");
+    writeFileSync(path, asked
+      .replace(/^AI-DLC writes this file when it asks you[^\n]*\n[^\n]*\n/m,
+        "AI-DLC built this plan without asking because plan approval is off for this\n" +
+          "piece of work. This file is the record and asks nothing; to look at a plan\nbefore it is built, ask in chat.\n")
+      .replace(/^\[Answer\]:$/m, "[Answer]: Plan approval off"), "utf-8");
+    expect(readFileSync(path, "utf-8")).toContain("AI-DLC built this plan without asking");
+    expect(answerLine(record)).toBe("[Answer]: Plan approval off");
+    writeFileSync(join(record, "src", "base.ts"), "export const base = false;\n", "utf-8");
+    expect(next(record).kind).toBe("ask");
+    expect(readFileSync(path, "utf-8")).toContain("AI-DLC writes this file when it asks you");
+    expect(answerLine(record)).toBe("[Answer]:");
+  });
+
+  // An answer is for the plan its file shows: a changed plan is a new question.
+  test("is not carried onto a question about a changed plan", () => {
+    const proj = project();
+    askFor(proj);
+    writeAnswer(proj, "Approve Plan");
+    const fingerprint = () => /^\[Approval Fingerprint\]: (\S+)$/m.exec(readFileSync(questionsPath(proj), "utf-8"))?.[1];
+    const asked = fingerprint();
+    const plan = join(stageDir(proj), "code-generation-plan.md");
+    writeFileSync(plan, readFileSync(plan, "utf-8").replace("slugify for titles", "slugify for titles and tags"), "utf-8");
+    expect(next(proj).ask_type).toBe("plan-approval");
+    expect(fingerprint()).not.toBe(asked);
+    expect(answerLine(proj)).toBe("[Answer]:");
+  });
+
+  test("is not carried when the question's words changed", () => {
+    const proj = project();
+    askFor(proj);
+    writeAnswer(proj, "Approve Plan");
+    const dir = dirname(planApprovalRuntimeFile(proj, "probe"));
+    for (const name of readdirSync(dir).filter((entry) => entry.startsWith("ask-"))) {
+      const record = JSON.parse(readFileSync(join(dir, name), "utf-8"));
+      writeFileSync(join(dir, name), JSON.stringify({ ...record, question: "Approve the earlier plan?" }), "utf-8");
+    }
+    writeFileSync(join(proj, "src", "base.ts"), "export const base = false;\n", "utf-8");
+    expect(next(proj).ask_type).toBe("plan-approval");
+    expect(answerLine(proj)).toBe("[Answer]:");
+  });
+
+  test("is not carried from a file that names another plan", () => {
+    const proj = project();
+    askFor(proj);
+    writeAnswer(proj, "Approve Plan");
+    const path = questionsPath(proj);
+    writeFileSync(path, readFileSync(path, "utf-8")
+      .replace(/^\[Approval Fingerprint\]: \S+$/m, `[Approval Fingerprint]: sha256:v3:${"0".repeat(64)}`), "utf-8");
+    expect(next(proj).ask_type).toBe("plan-approval");
+    expect(answerLine(proj)).toBe("[Answer]:");
+  });
+
+  // A clone keeps no record of the question, so nothing says it was asked
+  // there: the file is written fresh, as it always was.
+  test("is not carried in a clone with no record of the question", () => {
+    const proj = project();
+    askFor(proj);
+    writeAnswer(proj, "Approve Plan");
+    const dir = dirname(planApprovalRuntimeFile(proj, "probe"));
+    for (const name of readdirSync(dir).filter((entry) => entry.startsWith("ask-"))) rmSync(join(dir, name));
+    writeFileSync(join(proj, "src", "base.ts"), "export const base = false;\n", "utf-8");
+    expect(next(proj).ask_type).toBe("plan-approval");
+    expect(answerLine(proj)).toBe("[Answer]:");
   });
 
   for (const policy of ["off", "strict"] as const) {

@@ -53,9 +53,7 @@ The conductor's Routing section defines the loading rules:
   event is detected mid-stage. This keeps error recovery and change handling
   out of context for normal forward-progress stages.
 - **`stage-protocol-governance.md`**: load at phase boundaries
-  (1.7->2.1, 2.9->3.1, 3.7->4.1) to run the Phase Boundary Verification
-  traceability check. This limits governance overhead to the points where it
-  is needed.
+  (1.7->2.1, 2.9->3.1, 3.7->4.1).
 - **`stage-protocol-learnings.md`**: load only when `protocol_modules` includes `learnings`. With `ceremony.learnings: off`, keep no diary and skip the entire ritual.
 - **`stage-protocol-reviewer.md`**: load when `protocol_modules` includes
   `reviewer`, or when the directive carries a reviewer. **`stage-protocol-reviewer-unit.md`**
@@ -180,7 +178,15 @@ the learnings question just before the gate; the refusal and the step for
 their reply at an open gate list the ids). A message sent by the time the
 outputs the gate shows were last written on this clone (every output of each
 stage it approves, optional ones included, the questions file aside) is no
-approval of them: it is neither listed nor taken. It records the person's words: every
+approval of them: it is neither listed nor taken.
+A named reply that is the person's latest turn on this clone, sent after the
+gate's latest showing, is read against the outputs as written before it: what
+the agent writes after it, before their next message, does not move it, as an
+approval's own edits after it stand (`STAGE_OUTPUT_AMENDED`). The rule above
+holds instead when a review of the stage recorded after that reply is not READY
+or has a finding the person has not seen (New or Unresolved), and at a team
+Unit's gate: the gate is shown again.
+The engine records the person's words: every
 reply of theirs in that chat since then, except one an answer on record already
 names unless it is the latest, as the message record keeps them, on
 `GATE_APPROVED` as `Person Reply` and on `GATE_REJECTED` as the feedback, with
@@ -410,13 +416,13 @@ follow-up instead of reopening the whole question.
 ### Tri-Mode System
 
 **Step 1: Create the questions file** in the appropriate `<record>/`
-directory using `[Answer]:` tag format with options A-E (A-D on Claude Code:
+directory using `[Answer]:` tag format with options A-E (A-D on Claude Code, A-C on Codex:
 the letters come from the harness manifest's `questionOptions`). Every ordinary
 question must end with `X. Other (please specify)`. The dedicated Consolidated
 Summary Confirmation is the sole exception: its **Looks correct / Request
 changes** options are unlettered. All `[Answer]:` tags start blank.
 Multi-select questions add "(select all that apply)" to the question text;
-answer format: `[Answer]: A, B, E`.
+answer format: `[Answer]: A, C`.
 
 The agent groups a fresh file's questions by who would answer them: each
 heading names the trade whose decision it is after its number
@@ -576,7 +582,7 @@ proceeding.
 | Condition | Action |
 |-----------|--------|
 | Blank or underscore-only `[Answer]:` | List unanswered, ask user to complete |
-| Answer not matching options (A-E or A-D, X) and not clear free-text | Ask user to clarify |
+| Answer not matching options (A-E, A-D or A-C, X) and not clear free-text | Ask user to clarify |
 | Ambiguous ("maybe B", "either A or C") | Ask user to commit to single choice |
 
 **Contradiction detection** -- cross-check full answer set for:
@@ -608,7 +614,11 @@ ask targeted follow-up. Do NOT proceed until resolved.
   after the flag are the agent's own (`Conductor Summary`) and claim nothing;
   no quote is compared. With no message named (by the flag, or by the question
   it answers when that question was logged naming one), the answer is recorded
-  as the agent's own, with no claim that the person left it. The agent then
+  only on a reply of theirs sent after that question was logged (the row names
+  it when it came in this chat), outside autonomous Construction and the human
+  presence off switch; with none, the engine refuses it, names the
+  messages of theirs it could stand on (ids and times), and otherwise says to
+  ask them. The agent then
   says one line: "You left <the question> to me, so I chose <the choice>. Say if you
   want something else."
   (for several questions, "You left <Stage>'s <N> questions to me, so I chose
@@ -798,11 +808,12 @@ dynamic per workflow position.
    instead of `rules_content`, the chat already holds the bundle and the
    directive does not repeat it: paste nothing for the rules and name
    `directive.stage_file` in the brief, because every harness that sends
-   `rules_held` gives them to its registered agents itself (on Codex and
-   opencode the rule-delivery hook appends the exact bundle of the stage that
-   path names; on Claude Code it gives the agent the current stage's bundle
-   as the agent starts; Kiro CLI preloads it through `resources`; on Kiro
-   IDE, and Kiro CLI v3 running the same tree, the always-included
+   `rules_held` gives them to its registered agents itself (on Codex the
+   rule-delivery hook appends the exact bundle of the stage that path names;
+   on Claude Code it gives the agent the current stage's bundle as the agent
+   starts; Kiro CLI preloads it through `resources` and opencode through its
+   `instructions` list; on Kiro IDE, and Kiro CLI v3 running the same tree,
+   the always-included
    active-memory steering carries its text). Every brief still carries
    `directive.ceremony`, `directive.protocol_modules`, and the diary discipline
    verbatim. An unloadable required rule blocks dispatch with repair guidance.
@@ -1267,9 +1278,13 @@ change. See
    as a refused completion. It returns `reviewed_at` too, the UTC time this
    review is dated: the dispatch brief carries it as `Date for this review:`
    and the reviewer writes its `**Date:**` line from the brief, so no reviewer
-   runs a command of its own for the time. On a stage that builds in the
+   runs a command of its own for the time. Its `agent_note` gives first the
+   line the brief carries word for word that names the review file and says
+   its folder already exists (`Your review file is <reviewFile> (its folder
+   already exists).`): the request made that folder, so the review is one
+   plain file write. On a stage that builds in the
    workspace, when another open piece of work in this checkout claims files in
-   its Units' source manifests, its `agent_note` gives the line the brief
+   its Units' source manifests, its `agent_note` gives one more line the brief
    carries word for word: those files are that work's, not this work's to
    review (the same set `other_work_note` names to the build). On Code
    Generation, when the plan the person approved changed after that approval
@@ -1352,16 +1367,26 @@ change. See
    `awaiting-approval` or `revised` report's reply, or `next` showing it again)
    carries that line in its `change_notices`, said just before the approval
    question, so the brief does not print it; the brief kept for the gate holds
-   it after the brief. A Unit's Construction checkpoint, a
-   per-stage team Unit gate, and a gate whose one approval also covers later
-   stages with open findings of their own, show no such line. The final gate of a per-Unit stage renders every Unit
+   it after the brief. A Unit's Construction checkpoint and a
+   per-stage team Unit gate show no such line. At the one question whose
+   approval also covers later stages (Unit by Unit with Unit checkpoints off),
+   the brief shows each later stage's review with an open finding or that did
+   not finish, after the stage's own, and the line names what that one Approve
+   accepts; when it names a later stage's finding, each finding is labelled by
+   its stage and the line offers the fix asked as they approve (`--fix-finding`
+   goes with the stage whose finding it names) and not a rejection, which that
+   question's change request cannot make for a later stage. The final gate of a per-Unit stage renders every Unit
    covered by that single approval. A Unit's own approval (its Construction
    checkpoint or team Unit gate) passes `--unit "<unit>"` and shows only that
    Unit's review; at a team Unit's end-of-Unit gate that is every gated stage's
    review with an open finding or that did not finish, ahead of the last
    stage's own, with the line naming what its one Approve accepts
    (`teamUnitGateStages` gives both the brief and the approval the same
-   stages), and the line after Approve names each review that did not finish. Reviewer dispatch context is always Unit-filtered.
+   stages), and the line after Approve names each review that did not finish.
+   So does the Construction checkpoint of a Unit worked alone Unit by Unit, or of
+   the skeleton, whose one approval decides its whole walk
+   (`checkpointGateStages` gives both the brief and the approval the same
+   stages); there the brief's Approve option says what it accepts. Reviewer dispatch context is always Unit-filtered.
    On `adversarial`: READY → run the learnings ritual only when its module is listed, then proceed to the gate.
    NOT-READY with iterations remaining below `reviewer_max_iterations` (default
    2) → the lead agent re-runs to address the findings and the reviewer
@@ -1549,23 +1574,7 @@ outputs are sufficient and consistent for the next phase.
 *(`stage-protocol-governance.md` Section 13 — distinct from the Learnings
 Ritual, which is `stage-protocol-learnings.md` Section 13)*
 
-### Triggers
-
-- After last stage of each phase is approved
-- Before first stage of next phase begins
-- On demand, when the person asks for it (`/aidlc --status` only reports and
-  runs no check)
-
-### Process
-
-1. Read methodology from `.claude/knowledge/aidlc-shared/verification.md`
-2. Run phase-specific traceability checks
-3. Write results to `<record>/verification/phase-check-<phase>.md`, the name the
-   phase-ending stages and `verification.md` use (the governance protocol module
-   still calls it `[phase-boundary]-verification.md`)
-4. If failed: present issues (missing links, orphaned artifacts,
-   inconsistencies) before proceeding
-5. `PHASE_VERIFIED` is emitted by the engine at the phase boundary; do not append it
+`PHASE_VERIFIED` is emitted by the engine at the phase boundary; do not append it
 
 ### Per-Phase Checks
 

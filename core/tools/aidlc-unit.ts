@@ -12,6 +12,7 @@ import {
   readdirSync,
   readFileSync,
   realpathSync,
+  rmdirSync,
   rmSync,
   unlinkSync,
   writeFileSync,
@@ -103,7 +104,10 @@ import {
   UNIT_MERGE_DIR,
   type UnitScopeStamp,
   unitGateStatus,
+  unitLifecycleRunFloorForProject,
   unitLifecycleSnapshot,
+  unitScopedLifecycleFloors,
+  unitSkippedUnits,
   unitDependencyPath,
   unitMergedReceipts,
   unitMergeTransactions,
@@ -122,12 +126,15 @@ import {
   sourceClaimCovers,
   sourcePathKey,
   type SourceClaimModel,
+  classifyStateVersion,
 } from "./aidlc-lib.js";
+import { newerStateStep } from "./aidlc-state-upgrade.ts";
 import {
   planApprovalPromptSha256,
   parseTestingContract,
   recordedApprovalFingerprint,
   resolveTestingPosture,
+  testingContractCurrent,
 } from "./aidlc-testing-posture.ts";
 import { beforePerUnitBlock, memoryDirFor } from "./aidlc-graph.ts";
 import { planMadeElsewhere } from "./aidlc-record-core.ts";
@@ -141,8 +148,16 @@ import {
 } from "./aidlc-runtime-paths.ts";
 import { readRequestFile } from "./aidlc-log.ts";
 import { withoutLearnedDate } from "./aidlc-learned-date.ts";
+import {
+  CLAIM_FILE,
+  claimBlobAt,
+  claimPlaces,
+  claimPrefixOf,
+  isClaimTreeFile,
+  readClaimAt,
+  unitResultRootOf,
+} from "./aidlc-unit-holders.ts";
 
-const CLAIM_FILE = ".aidlc-unit-claim.json";
 const ZERO_OID = "0000000000000000000000000000000000000000";
 
 interface GitResult {
@@ -202,6 +217,13 @@ function localGit(
 
 function fail(message: string): never {
   throw new Error(message);
+}
+
+// Work a newer AI-DLC wrote is never claimed or released from here: the person
+// hears the step that carries it on (newerStateStep), before anything is written.
+function refuseNewerWork(projectDir: string, state: string): void {
+  const verdict = classifyStateVersion(state);
+  if (verdict.kind === "future") fail(newerStateStep(projectDir, verdict.version));
 }
 
 export interface UnitClaimPayload {
@@ -515,14 +537,11 @@ function refTip(
 function readPayload(
   projectDir: string,
   oid: string,
-  options: { localOnly?: boolean } = {},
 ): UnitClaimPayload | null {
-  const shown = options.localOnly
-    ? localGit(projectDir, ["show", `${oid}:${CLAIM_FILE}`, "--"])
-    : git(projectDir, ["show", `${oid}:${CLAIM_FILE}`, "--"]);
-  if (!shown.ok) return null;
+  const shown = readClaimAt(projectDir, oid, claimPrefixOf(projectDir));
+  if (!shown) return null;
   try {
-    const parsed = JSON.parse(shown.stdout) as UnitClaimPayload;
+    const parsed = JSON.parse(shown.text) as UnitClaimPayload;
     if (
       parsed.version !== 1 ||
       (parsed.status !== "claimed" && parsed.status !== "released") ||
@@ -560,12 +579,8 @@ function ensureObject(
 ): void {
   const hasCommit = (): boolean =>
     localGit(projectDir, ["cat-file", "-e", `${oid}^{commit}`]).ok;
-  const payloadBlob = (): string | null => {
-    const found = localGit(projectDir, ["rev-parse", `${oid}:${CLAIM_FILE}`]);
-    return found.ok && /^[0-9a-f]{40}$/.test(found.stdout.trim())
-      ? found.stdout.trim()
-      : null;
-  };
+  const payloadBlob = (): string | null =>
+    claimBlobAt(projectDir, oid, claimPrefixOf(projectDir))?.blob ?? null;
   const hasBlob = (blob: string | null): boolean =>
     blob !== null && localGit(projectDir, ["cat-file", "-e", blob]).ok;
   let blob = payloadBlob();
@@ -620,7 +635,7 @@ function currentClaim(
   const oid = refTip(projectDir, remote, ref);
   if (!oid) return null;
   ensureObject(projectDir, remote, oid, ref);
-  const payload = readPayload(projectDir, oid, { localOnly: true });
+  const payload = readPayload(projectDir, oid);
   if (!payload) fail(`Unit claim registry payload is invalid at ${ref}.`);
   return {
     unit: payload.unit,
@@ -639,12 +654,14 @@ const NO_GIT_IDENTITY =
   /identity unknown|Please tell me who you are|auto-detect email|no (?:email|name) was given/i;
 
 // Builds a tree equal to `baseTreeOid` but with `path` replaced (or added) by
-// `content`, via a scratch index so the real worktree/index is untouched.
+// `content` and each of `dropped` left out, via a scratch index so the real
+// worktree/index is untouched. Paths are from the repository's top.
 function writeTreeWithBlob(
   projectDir: string,
   baseTreeOid: string,
   path: string,
   content: string,
+  dropped: string[] = [],
 ): string {
   const scratch = mkdtempSync(join(tmpdir(), "aidlc-unit-tree-"));
   const index = join(scratch, "index");
@@ -664,12 +681,46 @@ function writeTreeWithBlob(
       env,
     );
     if (!update.ok) fail(`git update-index failed: ${update.stderr.trim()}`);
+    if (dropped.length > 0) {
+      // Mode 0 removes an entry, and a path the index lacks is a no-op.
+      const zero = "0".repeat((blob.stdout ?? "").trim().length);
+      const removed = git(
+        projectDir,
+        ["update-index", "--index-info"],
+        env,
+        dropped.map((gone) => `0 ${zero}\t${gone}\n`).join(""),
+      );
+      if (!removed.ok) fail(`git update-index failed: ${removed.stderr.trim()}`);
+    }
     const tree = git(projectDir, ["write-tree"], env);
     if (!tree.ok) fail(`git write-tree failed: ${tree.stderr.trim()}`);
     return tree.stdout.trim();
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }
+}
+
+// A claim keeps the place its file started in, so a team whose members run
+// different releases works one claim: the place in the claim commit it builds
+// on, when that is a claim of the same Unit of the intent. A claim that starts
+// here (built on the integration branch) takes the last place, which every
+// release reads.
+function claimPlaceFor(
+  projectDir: string,
+  parentOid: string,
+  payload: UnitClaimPayload,
+): string {
+  const prefix = claimPrefixOf(projectDir);
+  const parent = readClaimAt(projectDir, parentOid, prefix);
+  if (parent) {
+    try {
+      const read = JSON.parse(parent.text) as Partial<UnitClaimPayload>;
+      if (read.unit === payload.unit && read.intent_uuid === payload.intent_uuid) return parent.place;
+    } catch {
+      // Not a claim: the place a claim starts in.
+    }
+  }
+  return claimPlaces(prefix).at(-1) as string;
 }
 
 function createClaimCommit(
@@ -679,11 +730,13 @@ function createClaimCommit(
   sourceTreeOid?: string,
   additionalParentOid?: string,
 ): string {
+  const place = claimPlaceFor(projectDir, parentOid, payload);
   const tree = writeTreeWithBlob(
     projectDir,
     sourceTreeOid ?? parentOid,
-    CLAIM_FILE,
+    place,
     `${JSON.stringify(payload, null, 2)}\n`,
+    claimPlaces(claimPrefixOf(projectDir)).filter((other) => other !== place),
   );
   return commitAsPerson(
     projectDir,
@@ -1033,7 +1086,7 @@ function cachedClaimsForIdentity(
     ) {
       continue;
     }
-    const payload = readPayload(projectDir, oid, { localOnly: true });
+    const payload = readPayload(projectDir, oid);
     if (!payload || payload.intent_uuid !== identity.intentUuid) {
       throw new Error(
         `Local Unit claim registry payload is unavailable or invalid at ${ref}; ` +
@@ -1641,6 +1694,12 @@ function outsideUnitTreePaths(violations: string[]): string[] {
     .map((violation) => violation.slice(0, -OUTSIDE_UNIT_SUFFIX.length));
 }
 
+// Where a step from main sends the Unit's owner: pin and land run in a
+// checkout that holds no claim.
+function claimedCheckout(owner: string, unit: string): string {
+  return `the checkout where ${owner} claimed ${unit} (not this one)`;
+}
+
 // The one text publish, pin and land give for a record outside the Unit's
 // tree, so the three cannot drift apart. It starts mid-sentence: publish puts
 // it after "Pin will refuse this candidate:", pin and land after their refusal.
@@ -1649,7 +1708,7 @@ function outsideUnitTreePaths(violations: string[]): string[] {
 function outsideUnitTreeNextStep(unit: string, integrationRef: string, owner?: string): string {
   const where = owner === undefined
     ? "Take these out of this branch"
-    : `In the checkout where ${owner} claimed ${unit} (not this one), take these out of its branch`;
+    : `In ${claimedCheckout(owner, unit)}, take these out of its branch`;
   return "a claimed Unit lands only " +
     `construction/${unit}/ and its own audit shard, and a shared record (an Inception artifact ` +
     `such as contract-summary.md, or a stage-level file) is changed on main. ${where} ` +
@@ -1748,7 +1807,7 @@ function candidateBoundary(
   const keptRules = new Set(KEPT_RULE_SCOPES.map((scope) => keptRuleFile(space, scope)));
   const outsideUnitRecordPaths: string[] = [];
   for (const path of changedPaths) {
-    if (isEngineMergeMetadata(projectDir, path, recordPrefix)) continue;
+    if (leftOffMain(projectDir, path, recordPrefix)) continue;
     const pathKey = path.toLowerCase();
     const reviewMarkerIndex = path.indexOf(reviewUnitMarker);
     if (reviewMarkerIndex !== -1) {
@@ -1942,17 +2001,21 @@ function candidateEvidence(
   // rows, as the commit this evidence is read against holds them, with the
   // transported rows on top. Transported rows alone hold no WORKFLOW_STARTED,
   // so every real receipt would miss the floor; a file in this checkout that
-  // was never committed does not move it.
+  // was never committed does not move it. A gate sent back is a floor boundary
+  // too, numbered among every send-back of its stages, so main's send-backs
+  // stay (earlier attempts' too); the candidate's own shard is read only with
+  // the transported rows, also where main already holds it (a land resumed
+  // after its merge commit), so its send-backs count once.
   const mainShards = gitOutput(
     projectDir,
     ["ls-tree", "--name-only", liveIntegrationOid, "--", `${recordPrefix}/audit/`],
     "Cannot list the integration audit shards",
   )
     .split(/\r?\n/)
-    .filter((path) => isActiveIntentAuditPath(path, recordPrefix));
+    .filter((path) => isActiveIntentAuditPath(path, recordPrefix) && !changedAudit.includes(path));
   const floorRows = candidateAuditEvents(projectDir, liveIntegrationOid, mainShards).filter((row) =>
-    !TRANSPORTED_ATTEMPT_EVENTS.has(row.event) &&
-    !TRANSPORTED_DATA_EVENTS.has(row.event)
+    row.event === "GATE_REJECTED" ||
+    (!TRANSPORTED_ATTEMPT_EVENTS.has(row.event) && !TRANSPORTED_DATA_EVENTS.has(row.event))
   );
   const snapshotRows = [...floorRows, ...authorityRows];
   const snapshots = new Map(stages.map((stage) => [
@@ -2084,7 +2147,7 @@ function candidateEvidence(
     if (
       fingerprint &&
       instructions.trim().length > 0 &&
-      embedded?.contract_sha256 === currentContract.contract_sha256 &&
+      testingContractCurrent(projectDir, embedded, currentContract) &&
       approvalEvent &&
       auditBlockField(approvalEvent.block, "Details") ===
         (approvalEvent.event === "PLAN_APPROVAL_SKIPPED" ? "Plan approval off" : "Approve Plan") &&
@@ -2147,8 +2210,8 @@ function candidateEvidence(
   const reviewStep = unreviewed.length === 0
     ? ""
     : `${namesInProse(unreviewed)} ${unreviewed.length === 1 ? "has" : "have"} no review that stands for ` +
-      `${unreviewed.length === 1 ? "it" : "them"} as published: in the checkout where ${claim.owner} claimed ` +
-      `${claim.unit} (not this one), have ${unreviewed.length === 1 ? "it" : "them"} reviewed again, then publish ` +
+      `${unreviewed.length === 1 ? "it" : "them"} as published: in ${claimedCheckout(claim.owner, claim.unit)}, ` +
+      `have ${unreviewed.length === 1 ? "it" : "them"} reviewed again, then publish ` +
       `${claim.unit} again.`;
   if (incomplete.length > 0 || reviewStep) {
     fail(
@@ -2387,9 +2450,7 @@ function pinnedClaimFromTransaction(
   projectDir: string,
   transaction: UnitMergeTransaction,
 ): UnitClaimView {
-  const payload = readPayload(projectDir, transaction.pinned_oid, {
-    localOnly: true,
-  });
+  const payload = readPayload(projectDir, transaction.pinned_oid);
   if (
     payload?.status !== "claimed" ||
     payload.unit !== transaction.unit ||
@@ -2455,7 +2516,7 @@ function currentPinnedClaim(
     ) {
       fail(
         `Unit "${transaction.unit}" was released after its merge commit landed. ` +
-          `Inspect the landed commit, then recover explicitly with aidlc unit land ${transaction.unit} ` +
+          `Inspect the landed commit, then recover explicitly with ${aidlcInvocation()} unit land ${transaction.unit} ` +
           "--accept-released-attempt --user-input '<human acknowledgment>'.",
       );
     }
@@ -2485,7 +2546,7 @@ function currentPinnedClaim(
     current.payload.candidate_tree_oid !== transaction.candidate_tree_oid
   ) {
     fail(
-      `Unit "${transaction.unit}" claim ref moved or changed attempt after pin; run aidlc-unit pin ${transaction.unit} again.`,
+      `Unit "${transaction.unit}" claim ref moved or changed attempt after pin; run ${aidlcInvocation()} unit pin ${transaction.unit} again.`,
     );
   }
   return { claim: current };
@@ -2708,7 +2769,7 @@ function pinUnit(args: string[], projectDir?: string): void {
   ) {
     if (!approvalOutlivedByRepublish(pd, inFlight, claim)) {
       fail(
-        `Unit "${unit}" already has a ${inFlight.status} merge transaction; recover it with aidlc unit land ${unit} instead of re-pinning.`,
+        `Unit "${unit}" already has a ${inFlight.status} merge transaction; recover it with ${aidlcInvocation()} unit land ${unit} instead of re-pinning.`,
       );
     }
     superseded = inFlight;
@@ -2727,6 +2788,15 @@ function pinUnit(args: string[], projectDir?: string): void {
     claim.payload.base_oid,
     integration.oid,
   );
+  // The merge question is asked only for a candidate that lands on main as it
+  // stands; land still refuses a conflict a Unit landed after this pin brings.
+  const conflicts = trialMergeConflicts(pd, "HEAD", claim.oid) ?? [];
+  if (conflicts.length > 0) {
+    fail(
+      `${sourceConflictsRefusal(unit, conflicts)} Nothing was pinned. ` +
+        sourceConflictsNextStep(pd, unit, claim.owner, integration.ref),
+    );
+  }
   const mainBefore = gitOutput(pd, ["rev-parse", "HEAD"], "Cannot resolve main HEAD");
   const transaction: UnitMergeTransaction = {
     version: 1,
@@ -2837,7 +2907,7 @@ function gateUnitMerge(args: string[], projectDir?: string): void {
     liveIntegration.oid,
   );
   if (JSON.stringify(evidence) !== JSON.stringify(transaction.evidence)) {
-    fail(`Unit "${unit}" pinned evidence journal changed; run aidlc-unit pin ${unit} again.`);
+    fail(`Unit "${unit}" pinned evidence journal changed; run ${aidlcInvocation()} unit pin ${unit} again.`);
   }
   if (transaction.evidence.merge_held) {
     fail(
@@ -2932,6 +3002,20 @@ function isEngineMergeMetadata(
     `${recordPrefix}/aidlc-state.md`,
     `${recordPrefix}/runtime-graph.json`,
   ]).has(path);
+}
+
+// What a landing never merges onto main: AI-DLC's engine metadata, and a
+// claim's file and a Unit's results at any of their places. The metadata
+// checkpoint reads isEngineMergeMetadata alone, so it never commits a claim
+// file in the project's aidlc/ folder or a Unit result a checkout happens to
+// hold.
+function leftOffMain(
+  projectDir: string,
+  path: string,
+  recordPrefix = relativeRecordDir(projectDir),
+): boolean {
+  return isEngineMergeMetadata(projectDir, path, recordPrefix) ||
+    isClaimTreeFile(claimPrefixOf(projectDir), path);
 }
 
 // A review record the candidate carries for pin (withClaimReviewRecords) that
@@ -3094,6 +3178,39 @@ function conflictFiles(projectDir: string): string[] {
     : [];
 }
 
+// The files landing `candidateOid` on `targetOid` would leave in conflict,
+// from a merge git makes of the objects alone (merge-tree --write-tree), so no
+// checkout, index or ref moves. The engine's own metadata is left out, as land
+// leaves it out. Null when this git cannot make one (before 2.38).
+function trialMergeConflicts(projectDir: string, targetOid: string, candidateOid: string): string[] | null {
+  const merged = localGit(projectDir, [
+    "merge-tree", "--write-tree", "--name-only", "--no-messages", "-z", targetOid, candidateOid,
+  ]);
+  if (merged.ok) return [];
+  if (merged.code !== 1) return null;
+  const paths = merged.stdout.split("\0").slice(1).filter(Boolean);
+  return [...new Set(paths)].filter((path) => !isEngineMergeMetadata(projectDir, path));
+}
+
+function sourceConflictsRefusal(unit: string, conflicts: string[]): string {
+  return `Unit "${unit}" source conflicts: ${conflicts.join(", ")}.`;
+}
+
+// What the Unit's owner does about a conflict pin or land found with main as
+// this checkout holds it. The owner merges the integration branch, so when
+// main here is ahead of it (a landing the lead has not pushed yet), main goes
+// there first; otherwise the owner's merge brings nothing and pin refuses again.
+function sourceConflictsNextStep(projectDir: string, unit: string, owner: string, integrationRef: string): string {
+  const ref = integrationRef.replace(/^refs\/(remotes|heads)\//, "");
+  const remote = /^refs\/remotes\/([^/]+)\/(.+)$/.exec(integrationRef);
+  const push = remote && !localGit(projectDir, ["merge-base", "--is-ancestor", "HEAD", integrationRef]).ok
+    ? `Main here has commits ${ref} does not have yet, and the merge was tried with main here: push main ` +
+      `first (${aidlcInvocation()} unit share, or git push ${remote[1]} HEAD:${remote[2]}). Then, in`
+    : "In";
+  return `${push} ${claimedCheckout(owner, unit)}, merge ${ref}, resolve these files and publish ${unit} again; ` +
+    "then pin it again here.";
+}
+
 function checkpointMainMetadata(
   projectDir: string,
   message: string,
@@ -3152,8 +3269,9 @@ function restoreMainMetadata(
   paths: string[],
 ): void {
   const recordPrefix = relativeRecordDir(projectDir);
+  const prefix = claimPrefixOf(projectDir);
   for (const path of paths.filter((path) =>
-    isEngineMergeMetadata(projectDir, path, recordPrefix)
+    leftOffMain(projectDir, path, recordPrefix)
   )) {
     if (gitPathExistsAt(projectDir, "HEAD", path)) {
       const restored = git(projectDir, ["checkout", "HEAD", "--", path]);
@@ -3166,6 +3284,16 @@ function restoreMainMetadata(
         unlinkSync(join(projectDir, path));
       } catch {
         // Candidate-only metadata may already be absent.
+      }
+      // The result folders the merge made and this emptied go with it, up
+      // to the result folder itself; a folder still holding a file stays.
+      const root = unitResultRootOf(prefix, path);
+      for (let dir = dirname(path); root !== null && `${dir}/`.startsWith(root); dir = dirname(dir)) {
+        try {
+          rmdirSync(join(projectDir, dir));
+        } catch {
+          break;
+        }
       }
     }
   }
@@ -3281,7 +3409,7 @@ function inspectLandedTree(
     isCarriedReviewRecord(projectDir, path, recordPrefix, mainParent);
   const allowedCommitChanges = new Set(
     candidatePaths.filter((path) =>
-      !isEngineMergeMetadata(projectDir, path, recordPrefix) && !carriedOnly(path)
+      !leftOffMain(projectDir, path, recordPrefix) && !carriedOnly(path)
     ),
   );
   const actualCommitChanges = gitOutput(
@@ -3296,7 +3424,7 @@ function inspectLandedTree(
   const objectMismatches: CandidateExactDetails["object_mismatches"] = [];
   for (const path of candidatePaths) {
     const actual = gitObjectAt(projectDir, treeish, path);
-    const expectedTreeish = isEngineMergeMetadata(projectDir, path, recordPrefix) || carriedOnly(path)
+    const expectedTreeish = leftOffMain(projectDir, path, recordPrefix) || carriedOnly(path)
       ? mainParent
       : transaction.pinned_oid;
     const expected = gitObjectAt(projectDir, expectedTreeish, path);
@@ -3338,7 +3466,6 @@ function assertLandCandidateBoundary(
     transaction.audit_shard,
   );
   if (boundary.violations.length > 0) {
-    const remote = repositoryRemote(projectDir);
     fail(
       refuseWithNextStep(
         `Unit "${transaction.unit}" landing violates claimed Unit ownership at: ${
@@ -3346,13 +3473,17 @@ function assertLandCandidateBoundary(
         }.`,
         boundary.violations,
         transaction.unit,
-        remote
-          ? `refs/remotes/${remote}/${transaction.integration_branch}`
-          : transaction.integration_branch,
+        landIntegrationRef(projectDir, transaction),
         transaction.owner,
       ),
     );
   }
+}
+
+// The integration branch a landing's next step names, as publish names it.
+function landIntegrationRef(projectDir: string, transaction: UnitMergeTransaction): string {
+  const remote = repositoryRemote(projectDir);
+  return remote ? `refs/remotes/${remote}/${transaction.integration_branch}` : transaction.integration_branch;
 }
 
 function validateLandedMerge(
@@ -3613,7 +3744,7 @@ function landGit(
       if (!dropped.ok) fail(`Failed to leave the review record ${path} out of the merge: ${dropped.stderr.trim()}.`);
     }
     const conflicts = conflictFiles(projectDir).filter(
-      (path) => !isEngineMergeMetadata(projectDir, path),
+      (path) => !leftOffMain(projectDir, path),
     );
     if (conflicts.length > 0) {
       git(projectDir, ["merge", "--abort"]);
@@ -3622,7 +3753,10 @@ function landGit(
         ...working,
         conflict_files: conflicts,
       });
-      fail(`Unit "${transaction.unit}" source conflicts: ${conflicts.join(", ")}.`);
+      fail(
+        `${sourceConflictsRefusal(transaction.unit, conflicts)} ` +
+          sourceConflictsNextStep(projectDir, transaction.unit, transaction.owner, landIntegrationRef(projectDir, transaction)),
+      );
     }
     if (!merged.ok && !git(projectDir, ["rev-parse", "-q", "--verify", "MERGE_HEAD"]).ok) {
       working = rollbackMetadataCheckpoint(projectDir, working);
@@ -3980,7 +4114,7 @@ function landUnit(args: string[], projectDir?: string): void {
     if (JSON.stringify(liveEvidence) !== JSON.stringify(transaction.evidence)) {
       fail(
         `Unit "${unit}" live integration evidence changed after merge approval; ` +
-          `run aidlc unit pin ${unit} again and obtain a new merge gate.`,
+          `run ${aidlcInvocation()} unit pin ${unit} again and obtain a new merge gate.`,
       );
     }
     transaction = landGit(pd, transaction, target);
@@ -4003,7 +4137,7 @@ function landUnit(args: string[], projectDir?: string): void {
     if (skipped) {
       fail(
         `Unit "${unit}" is merged into main at ${transaction.git_commit_oid}, but not recorded yet: ${skipped}. ` +
-          `Run aidlc unit land ${unit} again once main is back on ${transaction.evidence.stages_expected[0]}.`,
+          `Run ${aidlcInvocation()} unit land ${unit} again once main is back on ${transaction.evidence.stages_expected[0]}.`,
       );
     }
     const liveState = readStateFile(pd);
@@ -4310,7 +4444,7 @@ function adoptUnit(args: string[], projectDir?: string): void {
   if (head !== claim.oid) {
     fail(`Unit adoption requires HEAD at live claim OID ${claim.oid}.`);
   }
-  const checkedOut = readPayload(pd, head, { localOnly: true });
+  const checkedOut = readPayload(pd, head);
   if (
     !checkedOut ||
     checkedOut.nonce !== claim.nonce ||
@@ -4380,6 +4514,7 @@ function claimUnit(args: string[], projectDir?: string): void {
     spend = read.spend;
   }
   const state = readStateFile(pd);
+  refuseNewerWork(pd, state);
   if (!isTeamUnitOwnership(state)) fail("Unit claims require Unit Ownership: team.");
   const identity = activeIdentity(pd);
   validateClaimRefUnit(identity.intentId8, unit);
@@ -4451,6 +4586,7 @@ function claimUnit(args: string[], projectDir?: string): void {
     current?.status === "released"
       ? current.generation
       : (current?.generation ?? 0) + 1;
+  const skippedOnMain = stepsSkippedOnMain(pd, state, unit);
   const nonce = randomUUID();
   const owner = claimOwnerLabel(pd, team);
   // Pin takes exactly one newly added team shard (candidateBoundary). A
@@ -4524,9 +4660,74 @@ function claimUnit(args: string[], projectDir?: string): void {
   if (recordPrefix && auditShard !== ownShard) {
     moveClaimTurnRows(pd, `${recordPrefix}/audit/${ownShard}`, `${recordPrefix}/${ENGINE_DIR}/audit/${auditShard}`, integration.oid);
   }
+  const carryWarning = carrySkipsIntoClaim(pd, state, unit, generation, skippedOnMain);
   spend();
-  const warning = [planWarning, walkedWarning].filter((line): line is string => !!line).join(" ");
+  const warning = [planWarning, walkedWarning, carryWarning].filter((line): line is string => !!line).join(" ");
   console.log(JSON.stringify({ claimed: true, ...stamp, ...(warning ? { warning } : {}) }));
+}
+
+// The Unit's steps skipped on main before any team took it: the person's skip
+// with no Unit named reaches every Unit, and main records it with no attempt.
+// Read before the claim scopes this checkout, from main's own rows for the
+// Unit; an earlier attempt's rows (stamped with its generation) are that
+// attempt's, not main's.
+function stepsSkippedOnMain(projectDir: string, state: string, unit: string): Map<string, MainSkip> {
+  const rows = readAuditShardEvents(projectDir).filter((row) =>
+    auditBlockField(row.block, "Unit") !== unit || auditBlockField(row.block, "Attempt Generation") === null
+  );
+  const skipped = new Map<string, MainSkip>();
+  for (const slug of unitMajorConstructionStageSlugs(getField(state, "Scope") ?? "", state, true)) {
+    const reason = unitSkippedUnits(projectDir, slug, rows, state).get(unit);
+    if (reason === undefined) continue;
+    // Who skipped it is main's row's to say, never the claimer's.
+    const row = rows.filter((r) => r.event === "UNIT_SKIPPED" && auditBlockField(r.block, "Unit") === unit &&
+      auditBlockField(r.block, "Stage") === slug).sort((a, b) => a.timestamp.localeCompare(b.timestamp)).at(-1);
+    const name = row ? auditBlockField(row.block, "Git Name") : null;
+    skipped.set(slug, { reason, gitName: name === null ? {} : { "Git Name": name } });
+  }
+  return skipped;
+}
+
+type MainSkip = { reason: string; gitName: Record<string, string> };
+
+// The UNIT_SKIPPED row, for its two writers: the state tool's skip of one
+// Unit's step and the claim's record of a skip main made before it. The
+// caller gives the attempt and the git name of the person who skipped.
+export function unitSkippedFields(
+  projectDir: string, slug: string, unit: string, reason: string, unitScoped: boolean,
+  attempt: Record<string, string>, gitName: Record<string, string>,
+): Record<string, string> {
+  const floor = unitLifecycleRunFloorForProject(projectDir, slug, true, unit, undefined, unitScoped);
+  return { Stage: slug, Unit: unit, Reason: reason, "Run floor": floor, ...attempt, ...gitName };
+}
+
+// A claimed checkout reads only its own attempt's rows, so main's skip would
+// not reach it and the step would be handed out again. The claim records each
+// such skip for its attempt, at the floor main's row was read against, so the
+// Unit's walk passes the step and publish and the merge question read it as
+// skipped. The claim already holds, so a skip that cannot be written is said
+// once with its way back rather than undoing the claim.
+function carrySkipsIntoClaim(
+  projectDir: string,
+  state: string,
+  unit: string,
+  generation: number,
+  skipped: ReadonlyMap<string, MainSkip>,
+): string | null {
+  const lost: string[] = [];
+  const unitScoped = unitScopedLifecycleFloors(state);
+  for (const [slug, { reason, gitName }] of skipped) {
+    try {
+      const attempt = { "Attempt Generation": String(generation) };
+      appendAuditEntry("UNIT_SKIPPED", unitSkippedFields(projectDir, slug, unit, reason, unitScoped, attempt, gitName), projectDir);
+    } catch {
+      // The stage as the merge question names it (skippedStepsLine).
+      lost.push(loadStageGraphAll().find((entry) => entry.slug === slug)?.name || slug);
+    }
+  }
+  return lost.length === 0 ? null
+    : `The skip of ${lost.join(", ")} recorded on main did not reach this claim; skip ${lost.length === 1 ? "it" : "them"} ` +
+      `again here when Unit "${unit}" reaches ${lost.length === 1 ? "it" : "them"}.`;
 }
 
 // A checkout whose own shard main already holds claims into a shard of the
@@ -4556,6 +4757,7 @@ function releaseUnit(args: string[], projectDir?: string): void {
   const unitError = validateUnitName(unit);
   if (unitError) fail(unitError);
   const pd = resolveProjectDir(projectDir);
+  refuseNewerWork(pd, readStateFile(pd));
   if (readApplicableTeamUnitScopeStamp(pd)) {
     fail("release must run from an unscoped checkout.");
   }
@@ -5037,14 +5239,28 @@ export function skeletonHeldBackOnShare(projectDir: string): string | null {
   }
 }
 
+// Taking, publishing, pinning and landing a Unit read and write the
+// repository's trees at its top, with the record's paths from the project, so
+// a project in a folder below the top cannot hand Units to teams yet. The line
+// that says so; null at the top.
+export function belowRepoTop(projectDir: string): string | null {
+  const prefix = git(projectDir, ["rev-parse", "--show-prefix"]);
+  const folder = prefix.ok ? prefix.stdout.trim().replace(/\/$/, "") : "";
+  if (folder === "") return null;
+  const top = git(projectDir, ["rev-parse", "--show-toplevel"]).stdout.trim();
+  return `Team work needs this project at the top of its git repository; it sits in ${folder} of ${top}.`;
+}
+
 // Whether a share can run here: team work, a checkout holding no Unit claim, a
-// remote, and HEAD on the integration branch. Null when it can; the reason
+// project at its repository's top, a remote, and HEAD on the integration branch. Null when it can; the reason
 // otherwise. The share offer is put only where this is null.
 export function shareBlocker(projectDir: string): string | null {
   const pd = resolveProjectDir(projectDir);
   try {
     if (readApplicableTeamUnitScopeStamp(pd)) return "This checkout holds a Unit claim; share main from a checkout that holds none.";
     if (!isTeamUnitOwnership(readStateFile(pd))) return "Sharing main is for work that several teams build.";
+    const below = belowRepoTop(pd);
+    if (below !== null) return below;
     if (!repositoryRemote(pd)) return "This repository has no remote to share main with. Add one (git remote add origin <url>), then share again.";
     // The branch is read from the Way of Working words first, by the share's own step.
     if (integrationBranchToRead(pd) !== null) return null;
@@ -5193,7 +5409,7 @@ export function publishedAtHead(projectDir: string): boolean {
   try {
     const stamp = readApplicableTeamUnitScopeStamp(pd);
     if (!stamp?.claim_oid) return false;
-    const payload = readPayload(pd, stamp.claim_oid, { localOnly: true });
+    const payload = readPayload(pd, stamp.claim_oid);
     const head = localGit(pd, ["rev-parse", "HEAD"]);
     return payload?.candidate_head_oid !== undefined && head.ok && payload.candidate_head_oid === head.stdout.trim();
   } catch {
@@ -5278,7 +5494,7 @@ export function main(argv: string[]): void {
       console.log(JSON.stringify({ ...overview, claims: Object.fromEntries(overview.claims) }, null, 2));
     } else {
       fail(
-        "Usage: aidlc-unit <adopt|claim|release|participate|share|publish|pin|gate|land|merge-status|status> ...",
+        `Usage: ${aidlcInvocation()} unit <adopt|claim|release|participate|share|publish|pin|gate|land|merge-status|status> ...`,
       );
     }
   } catch (error) {

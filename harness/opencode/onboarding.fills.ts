@@ -37,7 +37,7 @@ This is the same AI-DLC core that ships to every harness: the same ordered steps
 - **MCP servers**: none ship (configure your own under \`mcp:\` in \`opencode.json\` if needed).
 - A workflow's \`aidlc/\` workspace tree is harness-neutral: a project can move between harness installs (supported but untested — keep the trees in sync via the framework's packaging if you do this).
 
-The opencode-specific guide (install, what differs, verification) is \`docs/guide/harnesses/opencode.md\`.
+The opencode-specific guide (install, what differs, verification) is https://awslabs.github.io/aidlc-workflows/guide/harnesses/opencode/.
 `,
 
     sections_after_resumption: "",
