@@ -1237,6 +1237,48 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
       expect(existsSync(join(proj, ".aidlc", "restored"))).toBe(false);
     });
 
+    // A word with its flag name dropped (`--parked`, `--older-than`) would
+    // otherwise leave purge on "all" and restore on "the newest". The word is
+    // read back as typed, a Windows folder's backslashes included.
+    const refusalOf = (out: string): string => JSON.parse(out.slice(out.indexOf('{"error"')).split("\n")[0]).error;
+
+    test("purge refuses a word it does not read, naming itself and its flags, before deleting any ref", () => {
+      const proj = setupLifecycleProject();
+      const slug = "stray-word";
+      gitInitMain(proj);
+      for (const stamp of ["20000101T000000Z", "20990101T000000Z"]) {
+        const parked = `${parkedRefPrefix(fixtureIntentId8(proj), slug)}${stamp}`;
+        expect(git(proj, "update-ref", `${parked}/head`, "HEAD").status).toBe(0);
+        recordParkedAttempt(proj, slug, parked);
+      }
+      const refs = () => git(proj, "for-each-ref", "--format=%(refname)%09%(objectname)", parkedRefPrefix(fixtureIntentId8(proj), slug)).stdout;
+      const before = refs();
+      for (const word of ["20000101T000000Z", "30", "C:\\work\\shop"]) {
+        const refused = runWorktree(proj, "purge", "--slug", slug, word);
+        expect(refs(), refused.out).toBe(before);
+        expect(refused.status, refused.out).toBe(1);
+        expect(refusalOf(refused.out)).toBe(
+          `worktree purge does not take "${word}". Valid flags: --slug, --parked, --older-than, --repo, --intent, --space, --project-dir`,
+        );
+      }
+    });
+
+    test("restore refuses a word it does not read before checking anything out", () => {
+      const proj = setupLifecycleProject();
+      const slug = "stray-restore";
+      gitInitMain(proj);
+      const parked = `${parkedRefPrefix(fixtureIntentId8(proj), slug)}20260101T000000Z`;
+      expect(git(proj, "update-ref", `${parked}/head`, "HEAD").status).toBe(0);
+      recordParkedAttempt(proj, slug, parked);
+      const refused = runWorktree(proj, "restore", "--slug", slug, "20260101T000000Z");
+      expect(refused.status, refused.out).toBe(1);
+      expect(refusalOf(refused.out)).toBe(
+        'worktree restore does not take "20260101T000000Z". Valid flags: --slug, --parked, --raw, --repo, --intent, --space, --project-dir',
+      );
+      expect(existsSync(join(proj, ".aidlc", "restored"))).toBe(false);
+      expect(git(proj, "for-each-ref", "--format=%(refname)", "refs/heads/restore/").stdout).toBe("");
+    });
+
     test("an exact parked stamp selects its repository before slug ambiguity", () => {
       const proj = setupLifecycleProject();
       gitInitMain(proj);
