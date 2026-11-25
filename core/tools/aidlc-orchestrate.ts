@@ -11889,8 +11889,11 @@ function entryLine(pd: string, selection: WorkflowSelection, unjoined: boolean):
 // whole words, or a line naming a request (`main`'s, so one message is read).
 function namedMessageWords(pd: string, id: string): string | null {
   const message = readMessage(pd, id);
-  const whole = message === null ? null : wholeMessageText(pd, message);
-  if (message === null || message.words === null || (message.cut === true && whole === null)) return null;
+  if (message === null || message.words === null) return null;
+  const whole = wholeMessageText(pd, message);
+  // A box answer is marked cut for a long question too; the hook cuts its words only at MESSAGE_TEXT_MAX_CHARS.
+  const wordsCut = message.source === "picker" ? personsWordsText(message.words).length >= MESSAGE_TEXT_MAX_CHARS : whole === null;
+  if (message.cut === true && wordsCut) return null;
   const typed = message.source === "prompt" ? typedEntryWords(personsWordsText(whole ?? message.text)) : null;
   if (typed === null) return personsWordsText(whole ?? message.words).trim();
   const own = parseNextFlags(splitKiroCommandArgs(typed));

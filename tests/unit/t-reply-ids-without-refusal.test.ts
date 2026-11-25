@@ -365,18 +365,32 @@ describe("t-reply-ids-without-refusal: the line's id handed to next as a request
     expect(over.step.directive).toMatchObject({ kind: "error", message: GONE });
   });
 
-  test("a question-box answer's id hands on the words it carried", async () => {
+  // A box whose question runs past what the record keeps of it is marked cut too; its answer is still whole.
+  for (const question of [QUESTION, `${QUESTION} ${"Some context about the choice. ".repeat(80)}`]) {
+    test(`a question-box answer's id hands on the words it carried (a ${question.length}-character question)`, async () => {
+      const item = {
+        question: "stage-question", input: "PostgreSQL",
+        picker: { question, options: ["PostgreSQL", "SQLite", "Other"], answer: "PostgreSQL" },
+      } as unknown as AnswersItem;
+      const proj = await at("stage-question");
+      const id = await kept(proj, () => pick(proj, item, "claude"));
+      const step = await next(proj, ["--request", id]);
+      expect(step.out).not.toContain(GONE);
+      const twin = await at("stage-question");
+      await pick(twin, item, "claude");
+      expect(shape(proj, step)).toBe(shape(twin, await next(twin, ["PostgreSQL"])));
+    });
+  }
+
+  test("a question-box answer cut past what the record keeps of it says the question is gone", async () => {
+    const answer = "PostgreSQL, because ".repeat(450);
     const item = {
-      question: "stage-question", input: "PostgreSQL",
-      picker: { question: QUESTION, options: ["PostgreSQL", "SQLite", "Other"], answer: "PostgreSQL" },
+      question: "stage-question", input: answer,
+      picker: { question: QUESTION, options: ["PostgreSQL", "SQLite", "Other"], answer },
     } as unknown as AnswersItem;
     const proj = await at("stage-question");
     const id = await kept(proj, () => pick(proj, item, "claude"));
-    const step = await next(proj, ["--request", id]);
-    expect(step.out).not.toContain(GONE);
-    const twin = await at("stage-question");
-    await pick(twin, item, "claude");
-    expect(shape(proj, step)).toBe(shape(twin, await next(twin, ["PostgreSQL"])));
+    expect((await next(proj, ["--request", id])).directive).toMatchObject({ kind: "error", message: GONE });
   });
 
   test("the agent's own flags beside the id give way to the message's words", async () => {
