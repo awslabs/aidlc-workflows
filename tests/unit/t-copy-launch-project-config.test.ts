@@ -283,3 +283,59 @@ describe("t-copy-launch-project-config: a copy install's own launches keep the p
     expect(preloadRows(doctorChecks(project, "bun .claude/tools/aidlc.ts doctor"))).toEqual([]);
   });
 });
+
+describe("t-copy-launch-project-config: every copy allowlist pre-approves the new shape, and only it", () => {
+  const prefix = (dir: string) => `bun --config=${dir}/tools/${COPY_LAUNCH_CONFIG} --no-env-file `;
+  const json = (harness: string, file: string) => JSON.parse(readFileSync(join(REPO_ROOT, "dist", harness, file), "utf-8"));
+
+  test("Claude Code and Cursor: every bun entry names the launch with its two options", () => {
+    const claude = (json("claude", ".claude/settings.json").permissions.allow as string[]).filter((entry) => entry.startsWith("Bash(bun "));
+    const cursor = (json("cursor", ".cursor/cli.json").permissions.allow as string[]).filter((entry) => entry.startsWith("Shell(bun"));
+    expect(claude.length).toBeGreaterThan(50);
+    expect(cursor.length).toBeGreaterThan(50);
+    expect(claude.filter((entry) => !entry.startsWith(`Bash(${prefix(".claude")}.claude/tools/`))).toEqual([]);
+    expect(cursor.filter((entry) => !entry.startsWith(`Shell(bun:${prefix(".cursor").slice("bun ".length)}.cursor/tools/`))).toEqual([]);
+  });
+
+  test("Kiro CLI: the engine rule matches the new spelling whole, and no rule matches today's", () => {
+    const allowed = json("kiro", ".kiro/agents/aidlc.json").toolsSettings.execute_bash.allowedCommands as string[];
+    const matches = (command: string) => allowed.filter((rule) => new RegExp(`^(?:${rule})$`).test(command));
+    expect(matches(`${prefix(".kiro")}.kiro/tools/aidlc.ts engine orchestrate next`).length).toBeGreaterThan(0);
+    expect(matches("bun .kiro/tools/aidlc.ts engine orchestrate next")).toEqual([]);
+  });
+
+  test("Kiro IDE: every shell rule naming AI-DLC's tools names the new spelling", () => {
+    const dir = join(REPO_ROOT, "dist", "kiro-ide", ".kiro", "agents");
+    const lines = readdirSync(dir).filter((name) => name.endsWith(".md"))
+      .flatMap((name) => readFileSync(join(dir, name), "utf-8").split("\n"))
+      .filter((line) => /^\s+- "bun \S*\.kiro\/tools\//.test(line) || /^\s+- "bun --config=/.test(line));
+    expect(lines.length).toBeGreaterThan(50);
+    expect(lines.filter((line) => !line.includes(`"${prefix(".kiro")}.kiro/tools/`))).toEqual([]);
+  });
+
+  test("opencode: the bun allow names the new spelling only", () => {
+    const bash = json("opencode", "opencode.json").permission.bash as Record<string, string>;
+    expect(bash[`${prefix(".aidlc")}.aidlc/tools/*`]).toBe("allow");
+    expect(bash["bun .aidlc/tools/*"]).toBeUndefined();
+  });
+
+  const codexOnPath = spawnSync("codex", ["--version"], { encoding: "utf-8" }).status === 0;
+  test.skipIf(!codexOnPath)("Codex's own evaluator allows the new spelling and not today's", () => {
+    const rules = join(REPO_ROOT, "dist", "codex", ".codex", "rules", "default.rules");
+    // Codex makes a tmp folder in its home even for this check: a scratch one, never the person's.
+    const codexHome = createTestProject();
+    projects.push(codexHome);
+    const decision = (argv: string[]) => {
+      const res = spawnSync("codex", ["execpolicy", "check", "--rules", rules, "--", ...argv], {
+        encoding: "utf-8",
+        env: { ...process.env, CODEX_HOME: codexHome },
+      });
+      return (JSON.parse(res.stdout) as { decision?: string }).decision ?? "none";
+    };
+    const flagged = prefix(".codex").trim().split(" ");
+    expect(decision([...flagged, ".codex/tools/aidlc.ts", "engine", "orchestrate", "next"])).toBe("allow");
+    expect(decision([...flagged, ".codex/tools/aidlc-worktree.ts", "merge", "--slug", "u1"])).toBe("allow");
+    expect(decision(["bun", ".codex/tools/aidlc.ts", "engine", "orchestrate", "next"])).not.toBe("allow");
+    expect(decision(["bun", "--config=other.toml", "--no-env-file", ".codex/tools/aidlc.ts", "engine", "orchestrate", "next"])).not.toBe("allow");
+  });
+});
