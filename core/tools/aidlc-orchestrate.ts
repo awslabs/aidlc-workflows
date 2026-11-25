@@ -8577,10 +8577,9 @@ function nextArgsNameOnlyAPlan(args: string[]): string | null {
 // whole text beside it): `next` reads that line from AI-DLC's own copy
 // (takePersonsOwnLine), so the agent runs `next` with nothing after it and
 // does not type tens of thousands of characters again, often past what one
-// command line can carry. It opens with the words of Kiro IDE's adapter's
-// first-step line (firstStepLine, Kiro IDE and Kiro CLI on its V3 engine),
-// which names `next --entry` for every `/aidlc` line; a test holds the two to
-// those words. "" for any other line: words that
+// command line can carry. It opens with the words of the Kiro adapters'
+// first-step lines (Kiro IDE and Kiro CLI on both engines), which name
+// `next --entry`; a test holds them to those words. "" for any other line: words that
 // are not words alone (nextArgsAreOnlyWords), or that hold a flag-shaped
 // token `next` does not take, which a bare `next` hands back for the agent to
 // send again behind `--`; a record with no whole copy; no chat, whose `next`
@@ -14277,7 +14276,7 @@ function cutMessageStep(shape: ParsedFlags, message: StoredMessage, reply: boole
   );
 }
 
-// AI-DLC's first command (`next --entry`, step 1 of the Claude Code, Codex and Kiro IDE skills)
+// AI-DLC's first command (`next --entry`, step 1 of the Claude Code, Codex and Kiro skills)
 // carries none of the person's words: the bare `next` reads the words of their
 // typed line from the record (takePersonsOwnLine), and a line of tokens alone
 // runs as the command before this is asked (entryTokens). A shortcut's line

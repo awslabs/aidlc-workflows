@@ -8,14 +8,12 @@
 //     (read-only flag / workspace verb) stamps aidlc/.aidlc-engine/sessions/kiro-readonly-latch
 //     {turn,flag,source,ts} + writes the dispatch relay to stdout.
 //     Unambiguous compose/routing invocations are pre-dispatched with the exact
-//     argv and their directive is injected; ambiguous freeform invocations
-//     stamp the exact argv in aidlc/.aidlc-engine/sessions/.kiro-cli-forwarding-latch.json.
+//     argv and their directive is injected; any other invocation gets the
+//     skill's first command, `next --entry`, which carries none of the typed words.
 //   pretool-block (preToolUse) — the hard floor: a TRULY BARE advancing
 //     `aidlc engine orchestrate next` while the latch is fresh-for-this-turn
 //     (latch.turn === counter) → exit 2 (Kiro BLOCK). Any deliberate move
-//     (advancing flag), a stale latch, or no latch at all → exit 0 (inert). A
-//     fresh forwarding latch rejects changed/dropped first-next arguments and
-//     is consumed only by an exact shell-normalized match.
+//     (advancing flag), a stale latch, or no latch at all → exit 0 (inert).
 //
 // covers: file:harness/kiro/hooks/aidlc-kiro-adapter.ts
 // covers: function:stripOrchestratorLauncherOptions
@@ -25,7 +23,7 @@
 // <cwd>/aidlc/ and signals Kiro purely via stdout + exit code. In-process
 // testing would bypass the exact surface being contracted. No live LLM: the
 // verb-intercept args are recovered deterministically from either the expanded
-// prompt body's `aidlc engine orchestrate next <ARGS>` forwarding anchor or a raw
+// prompt body's typed line (`<aidlc-typed><ARGS></aidlc-typed>`) or a raw
 // leading `/aidlc` prompt, and pretool-block reads only the counter/latch files
 // we seed.
 
@@ -105,12 +103,13 @@ function relayedOutput(stdout: string): string | undefined {
   return stdout.match(/--- OUTPUT ([0-9A-F]{16}) ---\n([\s\S]*?)\n--- END OUTPUT \1 ---/)?.[2];
 }
 
-// Build an expanded-prompt body carrying the forwarding-loop anchor the seam
-// recovers args from: `… aidlc engine orchestrate next <ARGS>` inside a backtick
-// code span (exactly what Kiro substitutes $ARGUMENTS into).
+// Build an expanded-prompt body carrying the typed line the seam recovers args
+// from (exactly where the aidlc skill has Kiro substitute $ARGUMENTS), and the
+// skill's first command, which carries none of them.
 function promptWithNext(args: string): string {
-  return `Step 1: run \`aidlc engine orchestrate next ${args}\` and relay the output.`;
+  return `What they typed after \`/aidlc\`, which AI-DLC keeps on record and which goes on no command: <aidlc-typed>${args}</aidlc-typed>\nStep 1: run \`aidlc engine orchestrate next --entry\` and relay the output.`;
 }
+const ENTRY_STEP = "engine orchestrate next --entry` now and do only what it prints.";
 
 const counterPath = (dir: string) => join(dir, "aidlc", ".aidlc-engine", "sessions", "kiro-turn-counter");
 const latchPath = (dir: string) => join(dir, "aidlc", ".aidlc-engine", "sessions", "kiro-readonly-latch");
@@ -369,55 +368,21 @@ describe("t180 verb-intercept turn-clock + read-only/nav latch", () => {
     }
   });
 
-  test("3: non-terminal freeform input stamps a turn-bound forwarding latch", () => {
-    const dir = scratchProject();
-    try {
-      const raw = "build an auth service";
-      const r = runAdapter(dir, "verb-intercept", {
-        prompt: promptWithNext(raw),
-        cwd: dir,
-      });
-      expect(r.code).toBe(0);
-      expect(r.stdout).toContain("Your first tool call is exactly the call below");
-      expect(r.stdout).toContain(
-        `bun .kiro/tools/aidlc.ts engine orchestrate next ${raw}`,
-      );
-      expect(existsSync(counterPath(dir))).toBe(true);
-      expect(readFileSync(counterPath(dir), "utf-8").trim()).toBe("1");
-      expect(existsSync(latchPath(dir))).toBe(false);
-      const forwarding = JSON.parse(
-        readFileSync(forwardingPath(dir), "utf-8"),
-      ) as { turn?: number; raw?: string; args?: string[] };
-      expect(forwarding.turn).toBe(1);
-      expect(forwarding.raw).toBe(raw);
-      expect(forwarding.args).toEqual(["build", "an", "auth", "service"]);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  test("3a: raw non-terminal freeform input preserves the exact forwarding argv", () => {
-    const dir = scratchProject();
-    try {
-      const raw = "add a login page";
-      const r = runAdapter(dir, "verb-intercept", {
-        prompt: `/aidlc ${raw}`,
-        cwd: dir,
-      });
-      expect(r.code).toBe(0);
-      expect(r.stdout).toContain("Your first tool call is exactly the call below");
-      expect(r.stdout).toContain(
-        `bun .kiro/tools/aidlc.ts engine orchestrate next ${raw}`,
-      );
-      expect(existsSync(latchPath(dir))).toBe(false);
-      const forwarding = JSON.parse(
-        readFileSync(forwardingPath(dir), "utf-8"),
-      ) as { turn?: number; raw?: string; args?: string[] };
-      expect(forwarding.turn).toBe(1);
-      expect(forwarding.raw).toBe(raw);
-      expect(forwarding.args).toEqual(["add", "a", "login", "page"]);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
+  test("3: non-terminal freeform input gets the skill's next --entry, with no call held for it", () => {
+    for (const prompt of [promptWithNext("build an auth service"), "/aidlc add a login page"]) {
+      const dir = scratchProject();
+      try {
+        const r = runAdapter(dir, "verb-intercept", { prompt, cwd: dir });
+        expect(r.code, prompt).toBe(0);
+        expect(r.stdout, prompt).toContain(ENTRY_STEP);
+        expect(r.stdout, prompt).not.toContain("auth service");
+        expect(r.stdout, prompt).not.toContain("login page");
+        expect(readFileSync(counterPath(dir), "utf-8").trim(), prompt).toBe("1");
+        expect(existsSync(latchPath(dir)), prompt).toBe(false);
+        expect(existsSync(forwardingPath(dir)), prompt).toBe(false);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
     }
   });
 
@@ -472,23 +437,17 @@ describe("t180 verb-intercept turn-clock + read-only/nav latch", () => {
     }
   });
 
-  test("3c: positional scope input stamps the complete forwarding vector", () => {
+  test("3c: a plan's name before the request gets the skill's next --entry too", () => {
     const dir = scratchProject();
     try {
-      const raw = 'bugfix "Fix duplicate todos"';
       const r = runAdapter(dir, "verb-intercept", {
-        prompt: promptWithNext(raw),
+        prompt: promptWithNext('bugfix "Fix duplicate todos"'),
         cwd: dir,
       });
       expect(r.code).toBe(0);
-      expect(r.stdout).toContain("Your first tool call is exactly the call below");
-      const forwarding = JSON.parse(
-        readFileSync(forwardingPath(dir), "utf-8"),
-      ) as { turn?: number; raw?: string; args?: string[] };
-      expect(forwarding.turn).toBe(1);
-      // sh keeps the typed text; PowerShell gets the same words in its own single-quoted form.
-      expect(forwarding.raw).toBe(process.platform === "win32" ? "bugfix 'Fix duplicate todos'" : raw);
-      expect(forwarding.args).toEqual(["bugfix", "Fix duplicate todos"]);
+      expect(r.stdout).toContain(ENTRY_STEP);
+      expect(r.stdout).not.toContain("duplicate todos");
+      expect(existsSync(forwardingPath(dir))).toBe(false);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -535,7 +494,7 @@ describe("t180 verb-intercept turn-clock + read-only/nav latch", () => {
     }
   });
 
-  test("3f: explicit single-stage flags retain exact tool forwarding", () => {
+  test("3f: explicit single-stage flags are left to the skill's next --entry", () => {
     const dir = scratchProject();
     try {
       const r = runAdapter(dir, "verb-intercept", {
@@ -545,12 +504,9 @@ describe("t180 verb-intercept turn-clock + read-only/nav latch", () => {
         cwd: dir,
       });
       expect(r.code).toBe(0);
-      expect(r.stdout).toContain("Your first tool call is exactly the call below");
-      expect(r.stdout).toContain("next --scope poc --stage requirements-analysis --single");
+      expect(r.stdout).toContain(ENTRY_STEP);
       expect(r.stdout).not.toContain("--- DIRECTIVE ---");
-      const forwarding = JSON.parse(readFileSync(forwardingPath(dir), "utf-8"));
-      expect(forwarding.args).toEqual(["--scope", "poc", "--stage", "requirements-analysis", "--single"]);
-      expect(forwarding.turn).toBe(1);
+      expect(existsSync(forwardingPath(dir))).toBe(false);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -582,12 +538,9 @@ describe("t180 verb-intercept turn-clock + read-only/nav latch", () => {
         { AIDLC_COMPILED_EXECUTABLE: executable, AIDLC_COMPILED_NEXT_MARKER: marker },
       );
       expect(r.code).toBe(0);
-      expect(r.stdout).toContain("Your first tool call is exactly the call below");
-      expect(r.stdout).toContain("next --stage reverse-engineering --single");
+      expect(r.stdout).toContain(ENTRY_STEP);
       expect(existsSync(marker)).toBe(false);
-      const forwarding = JSON.parse(readFileSync(forwardingPath(dir), "utf-8"));
-      expect(forwarding.args).toEqual(["--stage", "reverse-engineering", "--single"]);
-      expect(forwarding.turn).toBe(1);
+      expect(existsSync(forwardingPath(dir))).toBe(false);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -715,7 +668,7 @@ describe("t180 pretool-block roll-forward backstop (exit-code contract)", () => 
     }
   });
 
-  test("8: same-turn forwarding latch rejects a bare first next", () => {
+  test("8: a forwarding latch an earlier release left for this turn refuses no first next", () => {
     const dir = scratchProject();
     try {
       seedForwarding(
@@ -724,58 +677,10 @@ describe("t180 pretool-block roll-forward backstop (exit-code contract)", () => 
         '--scope feature "build auth across both repos"',
         ["--scope", "feature", "build auth across both repos"],
       );
-      const r = runAdapter(dir, "guard-tool-call", {
-        tool_input: { command: BARE_NEXT },
-        cwd: dir,
-      });
-      expect(r.code).toBe(2);
-      expect(existsSync(forwardingPath(dir))).toBe(true);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  test("9: exact first next consumes the forwarding latch", () => {
-    const dir = scratchProject();
-    try {
-      const raw = '--scope feature "build auth across both repos"';
-      seedForwarding(
-        dir,
-        4,
-        raw,
-        ["--scope", "feature", "build auth across both repos"],
-      );
-      const r = runAdapter(dir, "guard-tool-call", {
-        tool_input: { command: `${BARE_NEXT} ${raw}` },
-        cwd: dir,
-      });
-      expect(r.code).toBe(0);
-      expect(existsSync(forwardingPath(dir))).toBe(false);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  test("10: shell escaping normalizes before forwarding comparison", () => {
-    const dir = scratchProject();
-    try {
-      const raw =
-        '--scope poc "answer the question; continue without waiting"';
-      seedForwarding(
-        dir,
-        4,
-        raw,
-        ["--scope", "poc", "answer the question; continue without waiting"],
-      );
-      const r = runAdapter(dir, "guard-tool-call", {
-        tool_input: {
-          command:
-            `${BARE_NEXT} --scope poc answer\\ the\\ question\\;\\ continue\\ without\\ waiting`,
-        },
-        cwd: dir,
-      });
-      expect(r.code).toBe(0);
-      expect(existsSync(forwardingPath(dir))).toBe(false);
+      for (const command of [BARE_NEXT, `${BARE_NEXT} --entry`]) {
+        const r = runAdapter(dir, "guard-tool-call", { tool_input: { command }, cwd: dir });
+        expect(r.code, command).toBe(0);
+      }
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
