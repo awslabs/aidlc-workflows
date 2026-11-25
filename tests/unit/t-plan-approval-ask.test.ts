@@ -67,7 +67,9 @@
 //     person's edit, over a plan sent back, over a heading or plan step, into a
 //     plan that is not UTF-8 text, or from the Stop hook's read-only probe.
 //   - after a git pull, the files a teammate's commit brought are not named as
-//     already changed, nor a checkout's files as its own remote branch holds them.
+//     already changed, nor a checkout's files as its own remote branch holds them;
+//     after a submodule update, nor a submodule's files as the commit that branch
+//     records for it holds them, while the build's own change inside it still is.
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -5864,5 +5866,124 @@ describe("the plan question after a git pull", () => {
     expect(alreadyChanged(askFor(proj))).toEqual([]);
     gitIn(proj, ["submodule", "update", "-q", "--init"]);
     expect(alreadyChanged(next(proj))).toEqual([]);
+  });
+
+  test("a file the build deletes inside a submodule that took the place of web/, pulled and updated, is named", () => {
+    const { proj, mate } = teamProject();
+    const parent = mkdtempSync(join(tmpdir(), "plan-gate-submodule-"));
+    created.push(parent);
+    const web = join(parent, "shop-web");
+    mkdirSync(web, { recursive: true });
+    const webRemote = published(web, { "app.js": "render();\n", "index.html": "<html></html>\n", "styles.css": "body {}\n" });
+    gitIn(mate, ["rm", "-q", "-r", "--", "web"]);
+    gitIn(mate, ["submodule", "add", "-q", webRemote, "web"]);
+    gitIn(mate, ["commit", "-qm", "web as a submodule"]);
+    gitIn(mate, ["push", "-q"]);
+    gitIn(proj, ["pull", "-q", "--no-rebase"]);
+    gitIn(proj, ["submodule", "update", "-q", "--init"]);
+    rmSync(join(proj, "web", "app.js"));
+    expect(alreadyChanged(askFor(proj))).toEqual(["Already changed before you approved: web/app.js."]);
+  });
+
+  test("a teammate's submodule in place of web/ without one of its files, pulled and updated, is not named", () => {
+    const { proj, mate } = teamProject();
+    const parent = mkdtempSync(join(tmpdir(), "plan-gate-submodule-"));
+    created.push(parent);
+    const web = join(parent, "shop-web");
+    mkdirSync(web, { recursive: true });
+    const webRemote = published(web, { "app.js": "render();\n", "index.html": "<html></html>\n" });
+    gitIn(mate, ["rm", "-q", "-r", "--", "web"]);
+    gitIn(mate, ["submodule", "add", "-q", webRemote, "web"]);
+    gitIn(mate, ["commit", "-qm", "web as a submodule"]);
+    gitIn(mate, ["push", "-q"]);
+    gitIn(proj, ["pull", "-q", "--no-rebase"]);
+    gitIn(proj, ["submodule", "update", "-q", "--init"]);
+    expect(alreadyChanged(askFor(proj))).toEqual([]);
+  });
+
+  // The shop keeps web as a submodule with its own team remote; a teammate's clone has it checked out.
+  function submoduleProject(checkedOut = true): { proj: string; mate: string } {
+    const proj = project();
+    const parent = mkdtempSync(join(tmpdir(), "plan-gate-submodule-"));
+    created.push(parent);
+    const web = join(parent, "shop-web");
+    mkdirSync(web, { recursive: true });
+    const webRemote = published(web, { "app.js": "render();\n", "index.html": "<html></html>\n", "README.md": "# web\n" });
+    writeFiles(proj, { "README.md": "# shop\n" });
+    gitIn(proj, ["init", "-q"]);
+    gitIn(proj, ["submodule", "add", "-q", webRemote, "web"]);
+    gitIn(proj, ["add", "--", "README.md"]);
+    gitIn(proj, ["commit", "-qm", "the shop"]);
+    const remote = `${proj}-origin.git`;
+    created.push(remote);
+    gitIn(proj, ["init", "-q", "--bare", remote]);
+    gitIn(proj, ["remote", "add", "origin", remote]);
+    gitIn(proj, ["push", "-q", "-u", "origin", "HEAD"]);
+    const mate = teammate(proj, remote);
+    gitIn(mate, ["submodule", "update", "-q", "--init"]);
+    if (!checkedOut) gitIn(proj, ["submodule", "deinit", "-q", "-f", "--", "web"]);
+    const baseline = writeBaselineSourceSnapshot(proj, "code-generation", workspaceSourceListing(proj)!);
+    appendAuditEntry("STAGE_STARTED", { Stage: "code-generation", "Source Baseline": baseline }, proj);
+    return { proj, mate };
+  }
+
+  // A teammate's commit in web, pushed to web's own remote, and the shop's pointer moved to it and pushed.
+  function teammateMovesWeb(mate: string, files: Record<string, string>): void {
+    const web = join(mate, "web");
+    writeFiles(web, files);
+    gitIn(web, ["commit", "-qam", "the wishlist"]);
+    const branch = gitIn(web, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]).trim().replace(/^origin\//, "");
+    gitIn(web, ["push", "-q", "origin", `HEAD:refs/heads/${branch}`]);
+    gitIn(mate, ["add", "--", "web"]);
+    gitIn(mate, ["commit", "-qm", "web moved on"]);
+    gitIn(mate, ["push", "-q"]);
+  }
+
+  test("a teammate's move of the web submodule, pulled and updated, is not named, and asking writes nothing in its git", () => {
+    const { proj, mate } = submoduleProject();
+    teammateMovesWeb(mate, { "app.js": "render(wishlist);\n", "README.md": "# web\n\nA wishlist.\n" });
+    gitIn(proj, ["pull", "-q", "--no-rebase"]);
+    expect(alreadyChanged(askFor(proj))).toEqual([]);
+    gitIn(proj, ["submodule", "update", "-q"]);
+    // A file saved again unchanged: git's record of it is out of date, and reading it must not rewrite that record.
+    utimesSync(join(proj, "web", "index.html"), new Date("2030-01-01T00:00:00Z"), new Date("2030-01-01T00:00:00Z"));
+    const indexFile = gitIn(join(proj, "web"), ["rev-parse", "--path-format=absolute", "--git-path", "index"]).trim();
+    const index = (): string => createHash("sha256").update(readFileSync(indexFile)).digest("hex");
+    const before = index();
+    expect(alreadyChanged(next(proj))).toEqual([]);
+    expect(index()).toBe(before);
+  });
+
+  test("where git is set to leave the web submodule out of its diffs, a teammate's move, pulled and updated, is not named", () => {
+    const { proj, mate } = submoduleProject();
+    teammateMovesWeb(mate, { "app.js": "render(wishlist);\n" });
+    gitIn(proj, ["pull", "-q", "--no-rebase"]);
+    gitIn(proj, ["submodule", "update", "-q"]);
+    gitIn(proj, ["config", "submodule.web.ignore", "all"]);
+    expect(alreadyChanged(askFor(proj))).toEqual([]);
+  });
+
+  test("a web submodule not checked out when the work started, checked out during it, is not named", () => {
+    const { proj } = submoduleProject(false);
+    gitIn(proj, ["submodule", "update", "-q", "--init"]);
+    expect(alreadyChanged(askFor(proj))).toEqual([]);
+  });
+
+  test("beside a teammate's move of the web submodule, the build's own change inside it is named", () => {
+    const { proj, mate } = submoduleProject();
+    teammateMovesWeb(mate, { "app.js": "render(wishlist);\n" });
+    gitIn(proj, ["pull", "-q", "--no-rebase"]);
+    gitIn(proj, ["submodule", "update", "-q"]);
+    writeFiles(proj, { "web/index.html": "<html><body></body></html>\n" });
+    expect(alreadyChanged(askFor(proj))).toEqual(["Already changed before you approved: web/index.html."]);
+  });
+
+  test("a web submodule checked out at another commit than the shop's remote branch records is named as before", () => {
+    const { proj, mate } = submoduleProject();
+    teammateMovesWeb(mate, { "app.js": "render(wishlist);\n" });
+    // The person moves web on themselves, with no pull of the shop.
+    gitIn(join(proj, "web"), ["fetch", "-q"]);
+    gitIn(join(proj, "web"), ["checkout", "-q", "origin/HEAD"]);
+    expect(alreadyChanged(askFor(proj))).toEqual(["Already changed before you approved (2 files): web, web/app.js."]);
   });
 });

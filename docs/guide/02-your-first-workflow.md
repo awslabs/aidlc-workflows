@@ -327,8 +327,9 @@ setup or a later `aidlc config` wrote them, are not among them, and neither is A
 it shares with you, such as AGENTS.md or `.gitignore`, when git holds your copy
 of it: your part of that file still is. After a `git pull`, the files a
 teammate's commit brought, as your branch's remote branch holds them, are not
-among them either, and neither is a change the build made once it is pushed to
-that branch; one only on your machine still is.
+among them either (in a submodule, once `git submodule update` checks out the
+commit that branch records for it), and neither is a change the build made once
+it is pushed to that branch; one only on your machine still is.
 
 If no autonomy choice is already recorded, the workflow then asks how to continue building the remaining work: **Continue automatically** or **Review each checkpoint**.
 
