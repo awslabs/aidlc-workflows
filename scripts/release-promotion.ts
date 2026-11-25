@@ -412,6 +412,9 @@ export function promotionNotes(p: Promotion): string {
       "Copying the tree over a project that already has AI-DLC replaces the setup answers and plugin choices it recorded. " +
       "A new copy install copies the complete `runtime/<harness>/` tree, then runs the same command; so does a project copied " +
       "before 2.11.0 or whose setup command never ran, and a project set up on 2.11.0 runs the command twice. " +
+      `On Kiro, each of these copies follows the guide's manual-copy steps instead: [Kiro](${github}/blob/main/docs/guide/harnesses/kiro.md#versioned-manual-copy-alternative) ` +
+      `copies \`runtime/kiro-ide/\` and [Kiro CLI (V2)](${github}/blob/main/docs/guide/harnesses/kiro.md#kiro-cli-v2-versioned-manual-copy-alternative) ` +
+      "copies `runtime/kiro/`, and both say how to keep the project's own Kiro settings. " +
       "This installation path requires **Bun 1.4.4 or newer** but does not require the native `aidlc` executable.",
     "Chat commands below use `/aidlc`; in Codex CLI, use `$aidlc` instead.",
     "## Fresh install",

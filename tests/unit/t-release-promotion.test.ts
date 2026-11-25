@@ -398,6 +398,15 @@ describe("the stable page", () => {
     expect(readFileSync(join(REPO_ROOT, "docs/guide/18-install-and-lifecycle.md"), "utf8")).toMatch(/^## Copy Channel$/m);
   });
 
+  test("the copy-channel line sends Kiro to the two Kiro manual-copy sections the guide has", () => {
+    const page = promotionNotes(shipped);
+    expect(page).toContain("/docs/guide/harnesses/kiro.md#versioned-manual-copy-alternative) copies `runtime/kiro-ide/`");
+    expect(page).toContain("/docs/guide/harnesses/kiro.md#kiro-cli-v2-versioned-manual-copy-alternative) copies `runtime/kiro/`");
+    const guide = readFileSync(join(REPO_ROOT, "docs/guide/harnesses/kiro.md"), "utf8");
+    expect(guide).toMatch(/^### Versioned manual-copy alternative$/m);
+    expect(guide).toMatch(/^#### Kiro CLI \(V2\) versioned manual-copy alternative$/m);
+  });
+
   const BREAKING = "Compatibility: breaking for scripts\n\nA summary.\n\nOnly scripts that run the tool are affected.\n\n" +
     "### Changes\n\n* A change.\n\n### Script compatibility\n\n* Breaking for scripts: a flag is gone.";
   test("Breaking for scripts bullets render under Script compatibility with the prefix dropped", () => {
