@@ -50,9 +50,11 @@ test-pro/
   tools/aidlc-sensor-coverage-threshold.ts            # the sensor scripts
   tools/aidlc-sensor-requirement-coverage.ts
   tools/test-pro-doctor.ts                             # optional /aidlc --doctor checks
+  tools/test-pro-metrics.ts                            # optional metrics tags (needs advertiseMetrics)
   scopes/test-pro-validation.md                       # NEW plugin scope
   agents/test-pro-metrics-agent.md                    # NEW support persona
   knowledge/test-pro-metrics-agent/methodology.md     # plugin methodology knowledge
+  types/aidlc-plugin-metrics-contract.ts               # copy of the metrics contract (not shipped)
   tests/plugin.test.ts                                # plugin content and compose tests
 ```
 
@@ -484,6 +486,110 @@ console.log(JSON.stringify({
 Omit `severity` for the default `error` behavior. Use `advisory` for a visible
 finding that must not fail doctor. Keep the script read-only and dependency-free;
 doctor bounds its runtime/output and turns script failures into diagnostic rows.
+
+### Advertise metrics
+
+AI-DLC can send metrics to a StatsD-style endpoint, and only when the person
+sets `AIDLC_METRICS_ENDPOINT`. A plugin stays out of those metrics unless its
+manifest opts in:
+
+```json
+"aidlc": { "advertiseMetrics": true }
+```
+
+`advertiseMetrics` is a boolean and defaults to `false` when missing. With it
+on, every metric line gains `plugin.<name>.version:<version>` while the plugin
+is on (a plugin that is off or paused adds nothing). With it off, the plugin
+adds no tag and its metrics script is never run. Plugin sync records the flag
+in the plugin's composition stamp, so a change to it needs `plugin sync`.
+
+### Ship a metrics script
+
+For tags a version cannot carry, add `tools/<plugin>-metrics.ts` (optional; it
+runs only while the plugin is on and `advertiseMetrics` is `true`). AI-DLC
+starts it the way it starts a doctor script, once for each metric event, and
+writes one JSON object to its stdin:
+
+```typescript
+export interface PluginMetricsInput {
+  plugin: string;
+  event: string;                 // the audit event, such as STAGE_STARTED
+  fields: Record<string, string>; // that event's own fields
+  contractVersion: number;       // 1
+  harness: string;               // ".claude", ".kiro", ".codex", ...
+  harnessDir: string;
+  projectDir: string;
+  hookInput: string;             // the harness hook's raw stdin text; "" when no hook caused the event
+}
+export interface PluginMetricsOutput {
+  additionalTags: Record<string, string>;
+}
+```
+
+It prints one `PluginMetricsOutput` as JSON on stdout. Each tag goes out as
+`plugin.<name>.<key>:<value>`, so a plugin can never replace a core tag. The
+limits (one place, `aidlc-plugin-metrics.ts`):
+
+- keys are lowercase letters, digits and `_`, starting with a letter, at most 32
+  characters; others are dropped;
+- values are cut at 64 characters and secret-shaped text is masked;
+- **only the first 10 tags are sent**, in the order the script wrote them;
+- the script has about one second. A timeout, a non-zero exit or bad output
+  sends the event with its core tags only (metrics never block your work).
+
+`hookInput` is the harness's own text, untouched, so the script tunes per
+harness without AI-DLC deciding what matters. It is empty when the event came
+from an `aidlc` command the agent ran rather than from a hook. Values leave the
+machine: send identifying fields, not prompts or tool content, and hash
+anything personal. `aidlc plugin validate` runs the script on an empty, a
+Claude-shaped and a Kiro-shaped sample and warns about every tag it would drop
+or shorten, and errors when the output is not the shape above.
+
+#### Typing your script from another repository
+
+The input and output shapes live in one file with no imports,
+`aidlc-plugin-metrics-contract.ts` (in every install's `tools/`, and the same
+file for every harness). Bun reads it as TypeScript, so there is nothing to build
+or publish. Start a plugin with it already in place:
+
+```bash
+bun <tools-dir>/aidlc-plugin-create.ts my-plugin --with-metrics
+```
+
+This sets `advertiseMetrics`, adds `tools/my-plugin-metrics.ts`, and copies the
+contract to `types/` (not `tools/`, which is copied into every install, where
+the file already is). The script imports from it with `import type`, which Bun
+erases at run time. An existing plugin can copy the file in by hand. The input
+carries `contractVersion` (now `1`): a script that does not know the version can
+print no tags.
+
+#### A vendor-agnostic example
+
+Both harnesses send hook input as JSON on stdin. From their documentation
+([Claude Code hooks](https://code.claude.com/docs/en/hooks),
+[Kiro hooks](https://kiro.dev/docs/hooks/)): `session_id`, `hook_event_name`
+and `cwd` have the same names in both; Claude Code adds `transcript_path` and
+`permission_mode`; Kiro IDE's older payloads used camelCase (`sessionId`,
+`hookEventName`; see `docs/reference/kiro-ide-hook-payload.md`). So read each
+field under both spellings, parse defensively, and put harness-only extras
+behind a check on `harness`:
+
+```typescript
+import { createHash } from "node:crypto";
+import { basename } from "node:path";
+
+const input = JSON.parse(await Bun.stdin.text());
+const tags: Record<string, string> = { harness_kind: input.harness.replace(/^\./, "") };
+let hook: any = {};
+try { hook = JSON.parse(input.hookInput); } catch { /* no hook input */ }
+const session = hook.session_id ?? hook.sessionId;
+if (session) tags.session = createHash("sha256").update(session).digest("hex").slice(0, 12);
+if (hook.cwd) tags.repo = basename(hook.cwd);
+if (input.harness === ".claude" && hook.permission_mode) tags.permission_mode = hook.permission_mode;
+console.log(JSON.stringify({ additionalTags: tags }));
+```
+
+`plugins/test-pro/tools/test-pro-metrics.ts` is the full, commented version.
 
 ### Ship a command
 

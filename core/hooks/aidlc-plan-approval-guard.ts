@@ -67,6 +67,7 @@
 // emits a PLAN_APPROVAL_BLOCKED audit event so the run's record shows when the
 // ordering bit; audit failures never change the decision.
 
+import { readHookInput } from "../tools/aidlc-hook-input.ts";
 import {
   existsSync,
   lstatSync,
@@ -3428,6 +3429,6 @@ async function evaluate(
 }
 
 if (import.meta.main) {
-  const input = process.stdin.isTTY ? "" : await Bun.stdin.text();
+  const input = process.stdin.isTTY ? "" : await readHookInput();
   process.exit(await run(input));
 }

@@ -43,6 +43,7 @@
 // the run's record shows when the bound bit; audit failures never change the
 // decision.
 
+import { readHookInput } from "../tools/aidlc-hook-input.ts";
 import { existsSync, statSync, unlinkSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import {
@@ -1202,5 +1203,5 @@ async function checkScope(input: string, projectDir: string, outside: boolean, b
 if (import.meta.main) {
   // A TTY means no harness JSON is coming (test / debug contexts) - allow.
   if (process.stdin.isTTY) process.exit(0);
-  process.exit(await run(await Bun.stdin.text()));
+  process.exit(await run(await readHookInput()));
 }

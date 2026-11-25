@@ -17,6 +17,7 @@
 // SENSOR_PASSED|FAILED|COULD_NOT_RUN|BUDGET_OVERRIDE) and detail files. Blocking
 // semantics belong to aidlc-state.ts enforceBlockingGateSensors.
 
+import { readHookInput } from "../tools/aidlc-hook-input.ts";
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
@@ -311,5 +312,5 @@ return 0;
 }
 
 if (import.meta.main) {
-  process.exit(await run(await Bun.stdin.text()));
+  process.exit(await run(await readHookInput()));
 }

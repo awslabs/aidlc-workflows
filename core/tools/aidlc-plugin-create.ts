@@ -3,6 +3,7 @@
 
 import {
   existsSync,
+  readFileSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -12,13 +13,14 @@ import {
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   type PluginValidationFinding,
   validatePluginName,
 } from "./aidlc-plugin-validate.ts";
 
 const USAGE =
-  "Usage: bun <tools-dir>/aidlc-plugin-create.ts <name> [targetDir] [--json]";
+  "Usage: bun <tools-dir>/aidlc-plugin-create.ts <name> [targetDir] [--with-metrics] [--json]";
 
 export interface PluginCreateResult {
   valid: boolean;
@@ -45,7 +47,7 @@ function titleCase(name: string): string {
     .join(" ");
 }
 
-function manifest(name: string): string {
+function manifest(name: string, withMetrics: boolean): string {
   return `${JSON.stringify(
     {
       name,
@@ -54,16 +56,46 @@ function manifest(name: string): string {
       author: { name: "TODO: Your name or organization" },
       dependencies: ["core"],
       aidlc: {
+        ...(withMetrics ? { advertiseMetrics: true } : {}),
         contributes: {
           stages: "stages/",
           agents: "agents/",
           scopes: "scopes/",
+          ...(withMetrics ? { tools: "tools/" } : {}),
         },
       },
     },
     null,
     2,
   )}\n`;
+}
+
+const METRICS_CONTRACT_FILE = "aidlc-plugin-metrics-contract.ts";
+
+// The contract file ships beside this tool; the scaffold carries a copy so the
+// plugin repository types its script against the shape this AI-DLC sends. It
+// lives under types/, not tools/: tools/ is copied into every install, and the
+// install already has the file.
+function metricsContract(): string {
+  return readFileSync(join(dirname(fileURLToPath(import.meta.url)), METRICS_CONTRACT_FILE), "utf-8");
+}
+
+function metricsScript(name: string): string {
+  return `// ${name}'s metrics tags. AI-DLC runs this once per metric event while the
+// plugin is on (the manifest sets advertiseMetrics). It reads one JSON object on
+// stdin and prints {"additionalTags": {...}}; at most the first 10 tags are
+// sent as plugin.${name}.<key>. Anything that goes wrong sends no extra tags.
+// See the authoring guide, "Ship a metrics script".
+import type { PluginMetricsInput, PluginMetricsOutput } from "../types/${METRICS_CONTRACT_FILE}";
+
+const input = JSON.parse(await Bun.stdin.text()) as PluginMetricsInput;
+const output: PluginMetricsOutput = {
+  additionalTags: {
+    harness_kind: input.harness.replace(/^\\./, "") || "unknown",
+  },
+};
+console.log(JSON.stringify(output));
+`;
 }
 
 function stage(name: string): string {
@@ -195,13 +227,13 @@ build injects the current bundled compose hook into each host projection.
 `;
 }
 
-export function scaffoldFiles(name: string): ScaffoldFile[] {
+export function scaffoldFiles(name: string, withMetrics = false): ScaffoldFile[] {
   const stageName = `${name}-example-stage`;
   const scopeName = `${name}-example`;
   return [
     {
       path: join(".aidlc-plugin", "plugin.json"),
-      content: manifest(name),
+      content: manifest(name, withMetrics),
     },
     {
       path: join("stages", "construction", `${stageName}.md`),
@@ -217,6 +249,12 @@ export function scaffoldFiles(name: string): ScaffoldFile[] {
     },
     { path: join("tests", "README.md"), content: testsReadme() },
     { path: "README.md", content: readme(name) },
+    ...(withMetrics
+      ? [
+        { path: join("tools", `${name}-metrics.ts`), content: metricsScript(name) },
+        { path: join("types", METRICS_CONTRACT_FILE), content: metricsContract() },
+      ]
+      : []),
   ].sort((left, right) =>
     left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
   );
@@ -283,6 +321,7 @@ function targetFindings(
 export function createPluginScaffold(
   name: string,
   targetDir: string,
+  options: { withMetrics?: boolean } = {},
 ): PluginCreateResult {
   const target = resolve(targetDir);
   const errors = targetFindings(name, target);
@@ -296,7 +335,7 @@ export function createPluginScaffold(
     };
   }
 
-  const files = scaffoldFiles(name);
+  const files = scaffoldFiles(name, options.withMetrics === true);
   const parent = dirname(target);
   let staging = "";
   let removedEmptyTarget = false;
@@ -398,11 +437,13 @@ export function main(argv: string[]): number {
     return 0;
   }
   const jsonArgs = argv.filter((arg) => arg === "--json");
-  const positional = argv.filter((arg) => arg !== "--json");
+  const metricsArgs = argv.filter((arg) => arg === "--with-metrics");
+  const positional = argv.filter((arg) => arg !== "--json" && arg !== "--with-metrics");
   if (
     (positional.length !== 1 && positional.length !== 2) ||
     jsonArgs.length > 1 ||
-    argv.some((arg) => arg.startsWith("-") && arg !== "--json")
+    metricsArgs.length > 1 ||
+    argv.some((arg) => arg.startsWith("-") && arg !== "--json" && arg !== "--with-metrics")
   ) {
     process.stderr.write(`${USAGE}\n`);
     return 2;
@@ -412,7 +453,7 @@ export function main(argv: string[]): number {
   const targetDir = targetArg
     ? resolve(targetArg)
     : resolve(process.cwd(), name);
-  const result = createPluginScaffold(name, targetDir);
+  const result = createPluginScaffold(name, targetDir, { withMetrics: metricsArgs.length === 1 });
   if (jsonArgs.length === 1) {
     process.stdout.write(`${JSON.stringify(pluginCreateJson(result))}\n`);
   } else {

@@ -186,6 +186,7 @@
 // unexpected error also falls through to allow the stop - failing open is the
 // only safe failure mode for a hook that can otherwise trap a turn.
 
+import { readHookInput } from "../tools/aidlc-hook-input.ts";
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "../tools/aidlc-runtime-budget.ts";
 import { createHash } from "node:crypto";
 import { closeSync, existsSync, fstatSync, openSync, readFileSync, readdirSync, readSync } from "node:fs";
@@ -2263,5 +2264,5 @@ return blockStop(continuationReason(
 }
 
 if (import.meta.main) {
-  process.exit(await run(await Bun.stdin.text()));
+  process.exit(await run(await readHookInput()));
 }

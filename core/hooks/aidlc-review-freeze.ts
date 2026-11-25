@@ -51,6 +51,7 @@
 // redirections and operands of common mutation commands; read-only shell calls
 // do not produce targets and remain untouched.
 
+import { readHookInput } from "../tools/aidlc-hook-input.ts";
 import { readFileSync } from "node:fs";
 import {
   hookOutsideGate,
@@ -443,6 +444,6 @@ async function checkFreeze(input: string, projectDir: string): Promise<number> {
 }
 
 if (import.meta.main) {
-  const input = process.stdin.isTTY ? "" : await Bun.stdin.text();
+  const input = process.stdin.isTTY ? "" : await readHookInput();
   process.exit(await run(input));
 }

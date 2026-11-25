@@ -36,6 +36,17 @@ import {
   validateStageFrontmatter,
 } from "./aidlc-stage-schema.ts";
 import { resolveHarnessPath } from "./aidlc-runtime-paths.ts";
+import {
+  filterPluginMetricTags,
+  MAX_PLUGIN_METRIC_TAGS,
+  parsePluginMetricsOutput,
+  PLUGIN_METRICS_CONTRACT_VERSION,
+  PLUGIN_METRICS_MAX_BUFFER,
+  PLUGIN_METRICS_TIMEOUT_MS,
+  type PluginMetricsInput,
+} from "./aidlc-plugin-metrics.ts";
+import { pluginScriptLaunch } from "./aidlc-plugin-script.ts";
+import { spawnSync } from "node:child_process";
 import { CORE_COMMAND_WORDS, PLUGIN_COMMAND_NAME_RE, PLUGIN_COMMAND_SCRIPT_RE } from "./aidlc-command.ts";
 
 export type PluginValidationRule =
@@ -46,6 +57,8 @@ export type PluginValidationRule =
   | "manifest-name"
   | "manifest-marketplace"
   | "manifest-commands"
+  | "manifest-advertise-metrics"
+  | "plugin-metrics-script"
   | "content-symlink"
   | "stage-frontmatter"
   | "stage-schema"
@@ -977,7 +990,132 @@ function validateManifest(
     }
   }
 
+  validateMetricsSeam(findings, displayFile, root, declaredName, manifest.aidlc);
+
   return { pluginName: declaredName, base };
+}
+
+// Sample hook payloads the metrics script is tried with: none (an event from a
+// tool the agent ran), a Claude Code shape and a Kiro IDE shape.
+const METRICS_SAMPLE_HOOK_INPUTS = [
+  "",
+  JSON.stringify({ session_id: "sample-session", hook_event_name: "PostToolUse", cwd: "/sample/project", tool_name: "Write", tool_input: {} }),
+  JSON.stringify({ session_id: "sample-session", hook_event_name: "PostToolUse", cwd: "/sample/project", tool_name: "fs_write", tool_input: {} }),
+];
+
+// `aidlc.advertiseMetrics` (default false) and the optional
+// tools/<plugin>-metrics.ts it switches on. The script is run on the samples
+// above so the cap the emitter enforces is checked here by the same filter.
+function validateMetricsSeam(
+  findings: MutableFindings,
+  displayFile: string,
+  root: string,
+  pluginName: string,
+  aidlc: Record<string, unknown>,
+): void {
+  const flag = aidlc.advertiseMetrics;
+  if (flag !== undefined && typeof flag !== "boolean") {
+    addError(
+      findings,
+      displayFile,
+      "manifest-advertise-metrics",
+      `aidlc.advertiseMetrics must be true or false; got ${JSON.stringify(flag)}`,
+      'Set "advertiseMetrics": true to publish the plugin version in metrics, or leave it out (default false).',
+    );
+    return;
+  }
+  const scriptName = `${pluginName}-metrics.ts`;
+  const scriptPath = join(root, "tools", scriptName);
+  if (!existsSync(scriptPath) || !statSync(scriptPath).isFile()) return;
+  if (flag !== true) {
+    addWarning(
+      findings,
+      displayFile,
+      "plugin-metrics-script",
+      `tools/${scriptName} is never run: aidlc.advertiseMetrics is not true`,
+      'Set "advertiseMetrics": true in aidlc, or remove the script.',
+    );
+    return;
+  }
+  const contributes = aidlc.contributes;
+  if (!isPlainRecord(contributes) || contributes.tools !== CANONICAL_CONTRIBUTION_PATHS.tools) {
+    addError(
+      findings,
+      displayFile,
+      "plugin-metrics-script",
+      `tools/${scriptName} does not ship: aidlc.contributes.tools is not set`,
+      'Add "tools": "tools/" to aidlc.contributes.',
+    );
+    return;
+  }
+  const launch = pluginScriptLaunch({ projectDir: root, harnessDir: ".", plugin: pluginName, file: scriptName });
+  if (!launch.ok) {
+    addError(
+      findings,
+      displayFile,
+      "plugin-metrics-script",
+      `tools/${scriptName} cannot be started (${launch.reason})`,
+      "Make it a regular file directly in the plugin's tools/ folder.",
+    );
+    return;
+  }
+  for (const hookInput of METRICS_SAMPLE_HOOK_INPUTS) {
+    const input: PluginMetricsInput = {
+      contractVersion: PLUGIN_METRICS_CONTRACT_VERSION,
+      plugin: pluginName,
+      event: "STAGE_STARTED",
+      fields: { Stage: "sample-stage", Phase: "construction" },
+      harness: ".claude",
+      harnessDir: ".claude",
+      projectDir: root,
+      hookInput,
+    };
+    const run = spawnSync(launch.command, launch.args, {
+      cwd: root,
+      encoding: "utf-8",
+      env: launch.env,
+      input: JSON.stringify(input),
+      maxBuffer: PLUGIN_METRICS_MAX_BUFFER,
+      timeout: PLUGIN_METRICS_TIMEOUT_MS * 5,
+      killSignal: "SIGKILL",
+      windowsHide: true,
+    });
+    const sample = hookInput === "" ? "an empty hook input" : "a sample hook input";
+    if (run.error || run.status !== 0) {
+      addError(
+        findings,
+        displayFile,
+        "plugin-metrics-script",
+        `tools/${scriptName} failed on ${sample} (${run.error?.message ?? `exit ${run.status}`})`,
+        `It must exit 0 within ${PLUGIN_METRICS_TIMEOUT_MS} ms and print {"additionalTags": {...}}.`,
+      );
+      return;
+    }
+    const parsed = parsePluginMetricsOutput(run.stdout ?? "");
+    if (!parsed.ok) {
+      addError(
+        findings,
+        displayFile,
+        "plugin-metrics-script",
+        `tools/${scriptName} printed the wrong shape on ${sample}: ${parsed.reason}`,
+        'Print exactly one JSON object: {"additionalTags": {"key": "value"}}.',
+      );
+      return;
+    }
+    const entries = Object.keys(parsed.output.additionalTags).length;
+    const { notes } = filterPluginMetricTags(parsed.output.additionalTags);
+    if (entries > MAX_PLUGIN_METRIC_TAGS || notes.length > 0) {
+      for (const note of notes) {
+        addWarning(
+          findings,
+          displayFile,
+          "plugin-metrics-script",
+          `tools/${scriptName} on ${sample}: ${note}`,
+          `Return at most ${MAX_PLUGIN_METRIC_TAGS} tags with valid keys and short values.`,
+        );
+      }
+    }
+  }
 }
 
 // A plugin's rules are practice rules in words: the level they land at is

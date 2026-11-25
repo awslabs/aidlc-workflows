@@ -2999,6 +2999,8 @@ A shared tap used by both single and batch structured audit append paths POSTs a
 
 Every audit event emits a `<prefix>.<event_type>:1|c` counter; `STAGE_COMPLETED` / `WORKFLOW_COMPLETED` additionally emit token counters and a cost gauge (aggregate plus per-model and per-agent variants), parsed purely from the pre-computed rollup fields — no transcript I/O and no ledger read on the metrics path, so it stays cheap under the audit lock.
 
+Plugins join the stream only when their manifest sets `aidlc.advertiseMetrics: true`: each line then carries `plugin.<name>.version:<version>`, plus up to 10 tags from the plugin's optional `tools/<plugin>-metrics.ts` (which receives the raw hook input). See [Plugin Mechanism: Plugin metrics](18-plugin-mechanism.md#plugin-metrics).
+
 ### Harness scoping
 
 The transcript reader is **Claude-Code-format-specific**, and only the Claude harness wires a producer (the fold hook on both PreToolUse and PostToolUse, plus the Stop-hook flush). Kiro, Codex, and opencode wire no producer: their ledger is never written, so the statusline shows no cost segment, the audit rollup adds no fields, and the metrics path (if an endpoint is set) still emits the per-event counters but no token/cost magnitude lines. Every consumer degrades silently to no-data rather than erroring.

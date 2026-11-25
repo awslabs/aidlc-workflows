@@ -28,6 +28,7 @@
 // and opencode, the whole brief at the head of its message (handedBrief). On
 // Codex, Kiro CLI, Kiro IDE and Cursor the conductor passes the brief.
 
+import { readHookInput } from "../tools/aidlc-hook-input.ts";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
@@ -583,4 +584,4 @@ function deliver(parsed: HookInput, projectDir: string): number {
   return 0;
 }
 
-if (import.meta.main) process.exit(await run(await Bun.stdin.text()));
+if (import.meta.main) process.exit(await run(await readHookInput()));

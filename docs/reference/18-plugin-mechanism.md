@@ -54,6 +54,7 @@ plugins/<name>/
   sensors/aidlc-<id>.md                  # ✅ NEW sensor manifests
   tools/<id>.ts                          # ✅ sensor scripts (so a sensor can run)
   tools/<plugin>-doctor.ts               # ✅ optional /aidlc --doctor checks
+  tools/<plugin>-metrics.ts              # ✅ optional metrics tags (aidlc.advertiseMetrics: true)
   contributions/<phase>/<slug>.md        # ✅ ADDITIVE modifications to core stages (§6)
   contributions/agents/<agent>.md        # ✅ PROSE fragments into core personas (§6)
   agents/<plugin>-<role>-agent.md        # ✅ NEW agents (stem == frontmatter name)
@@ -858,3 +859,19 @@ wherever their scopes put them on-path.
 - [Artifact Vocabulary](16-artifact-vocabulary.md) — logical-name namespacing.
 - [Engine and Skill System](17-skill-system.md) — the compiled graph the composer feeds and the orchestrator routes off.
 - Example config docs (`marketplace.json`, `managed-settings.json`, `aidlc.lock.json`) under [`examples/test-pro/`](examples/test-pro/); the composition-timing evidence and the sequenced build history are preserved in this repo's git log.
+
+## Plugin metrics
+
+`aidlc.advertiseMetrics` (boolean, default `false`) opts a plugin into the
+metrics stream (`AIDLC_METRICS_ENDPOINT`). Plugin sync copies it into the
+composition stamp (`plugin-compose-<name>.json`, written only when `true`);
+`aidlc-metrics.ts` reads the stamps of the plugins that are on and adds
+`plugin.<name>.version:<version>` to every line of an event. If the plugin
+ships `tools/<plugin>-metrics.ts`, it is started per event through
+`pluginScriptLaunch` with a `PluginMetricsInput` JSON on stdin (including the
+raw text of the harness hook that caused the event, kept by `readHookInput` /
+`setHookInput` (`aidlc-hook-input.ts`) in each hook's entry, or `""` outside a hook) and must print
+`{"additionalTags": {...}}`. `aidlc-plugin-metrics.ts` owns the limits
+(10 tags, key shape, 64-character values, 1 s timeout), which both the emitter
+and `aidlc plugin validate` (rules `manifest-advertise-metrics`,
+`plugin-metrics-script`) apply. Authoring: [Authoring a Plugin](../harness-engineering/10-authoring-a-plugin.md#advertise-metrics).
