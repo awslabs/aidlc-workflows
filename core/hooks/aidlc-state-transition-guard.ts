@@ -26,6 +26,7 @@ import {
   validSessionId,
   writeGuardStoodAside,
 } from "../tools/aidlc-lib.ts";
+import { withoutBunLaunchOptions } from "../tools/aidlc-runtime-paths.ts";
 import { LAUNCHER_GLOBAL_FLAGS } from "../tools/aidlc-command.ts";
 import { refuseRuntimeIntegrityViolation } from "./runtime-integrity.ts";
 
@@ -391,7 +392,7 @@ export function isLifecycleBoundaryCommand(command: string): boolean {
   // unchanged.
   const invocation =
     /(?:^|&&|\|\||[;|(\n{])[ \t]*(?:(?:command|exec)\s+)?(?:env(?:\s+-[^\s]+)*\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"\n]*"|'[^'\n]*'|[^\s;&|]+)\s+)*(?:[^\s"';&|({]+\/)?bun(?:\.exe)?(?:\s+run)?\s+(?:"[^"\n]*aidlc-(orchestrate|state|jump)\.ts"|'[^'\n]*aidlc-(orchestrate|state|jump)\.ts'|[^\s;&|]*aidlc-(orchestrate|state|jump)\.ts)\s+([a-z][a-z0-9-]*)\b/g;
-  for (const match of executableShellText(command).matchAll(invocation)) {
+  for (const match of executableShellText(withoutBunLaunchOptions(command)).matchAll(invocation)) {
     const tool = match[1] ?? match[2] ?? match[3];
     const verb = match[4];
     if (tool === "orchestrate" && verb === "report") return true;

@@ -49,6 +49,7 @@ import { recordedDigestMatches } from "./aidlc-review-manifest.ts";
 import { refreshActiveMemory } from "./aidlc-includes.ts";
 import { resolveInvokingSessionId } from "./aidlc-record-core.ts";
 import {
+  bunLaunchFlags,
   aidlcInvocation,
   compiledExecutable,
   discoverProjectHarnesses,
@@ -1339,7 +1340,7 @@ async function runComposer(
       }
     }
   } else {
-    const result = spawnSync(process.execPath, [composePath], {
+    const result = spawnSync(process.execPath, [...bunLaunchFlags(), composePath], {
       cwd: stagedProject,
       encoding: "utf-8",
       env,

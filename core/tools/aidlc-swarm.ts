@@ -195,7 +195,7 @@ import {
 import { messagesSince, proveMessage, requestMessageStep } from "./aidlc-message-store.ts";
 import { codeGenerationPlanNamedPaths } from "./aidlc-plan-approval-ask.ts";
 import { quoted } from "./aidlc-recorded-switches.ts";
-import { aidlcDispatcherInvocation, compiledExecutable } from "./aidlc-runtime-paths.ts";
+import { aidlcDispatcherInvocation, bunLaunchFlags, compiledExecutable } from "./aidlc-runtime-paths.ts";
 import {
   beginCodeGeneration,
   bindCodeGenerationWorktreeApproval,
@@ -291,7 +291,7 @@ function runTool(toolFile: string, args: string[], projectDir: string): ToolRun 
   const noun = toolFile.replace(/^aidlc-/, "").replace(/\.ts$/, "");
   const command = executable
     ? [executable, "engine", noun, ...args, "--project-dir", projectDir]
-    : [process.execPath, join(TOOLS_DIR, toolFile), "--project-dir", projectDir, ...args];
+    : [process.execPath, ...bunLaunchFlags(), join(TOOLS_DIR, toolFile), "--project-dir", projectDir, ...args];
   const result = spawnSync(command[0], command.slice(1), {
     encoding: "utf-8",
     cwd: projectDir,

@@ -167,7 +167,7 @@ import {
 } from "../tools/aidlc-lock-line.ts";
 import { mainCheckoutChangeStep, personTurnStands } from "../tools/aidlc-message-store.ts";
 import type { planApprovalAskState } from "../tools/aidlc-plan-approval-ask.ts";
-import { aidlcToolInvocation, quoteCommandArgument, runtimeHarnessName } from "../tools/aidlc-runtime-paths.ts";
+import { aidlcToolInvocation, bunLaunchOptionWords, quoteCommandArgument, runtimeHarnessName } from "../tools/aidlc-runtime-paths.ts";
 import { claimedCheckoutReopens } from "../tools/aidlc-unit-landing.ts";
 import { RECORDABLE_PROJECT_BYPASSES } from "../tools/aidlc-settings.ts";
 import {
@@ -1752,7 +1752,11 @@ function installedEngineArgs(
       arg === "-r" || arg === "--require" || arg === "--preload" ||
       arg.startsWith("--require=") || arg.startsWith("--preload="))
   ) return null;
-  const scriptIndex = args[0] === "run" ? 1 : 0;
+  // A copy launch's two Bun options read as the launch without them, when the
+  // config file is the install's own: another file could preload code.
+  const options = bunLaunchOptionWords(args, 0);
+  if (options > 0 && !isTrustedToolFile(projectDir, cwd, args[0].slice("--config=".length))) return null;
+  const scriptIndex = options + (args[options] === "run" ? 1 : 0);
   const script = args[scriptIndex];
   if (!script || script.startsWith("-") || !isTrustedToolFile(projectDir, cwd, script)) return null;
   const stem = basename(isAbsolute(script) ? resolve(script) : resolve(cwd, script));
@@ -1770,10 +1774,14 @@ function isSelectedGuardRestartContinuation(
   marker: ActiveDirectiveMarker | null,
 ): boolean {
   const continuation = parseGuardRestartContinuationCommand(command, { harnessDir: harnessDir() });
-  // The source spelling names a script: it must be the installed tool itself.
-  const script = command.split(" ")[1] ?? "";
+  // The source spelling names a script: it must be the installed tool itself,
+  // and a copy launch's config file the install's own.
+  const words = command.split(" ");
+  const options = bunLaunchOptionWords(words, 1);
+  const script = words[1 + options] ?? "";
   if (
     continuation === null ||
+    (options > 0 && !isTrustedToolFile(projectDir, cwd, words[1].slice("--config=".length))) ||
     (command.startsWith("bun ") && !isTrustedToolFile(projectDir, cwd, script)) ||
     marker?.version !== 2 ||
     marker.kind !== "ask" ||

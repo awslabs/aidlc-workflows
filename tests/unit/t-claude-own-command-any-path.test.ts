@@ -3,8 +3,9 @@
 //
 // covers: file:harness/claude/settings.json, file:tools/aidlc.ts, file:tools/aidlc-claude-own-command.ts, function:claudeAllowsOwnCommand
 //
-// WHAT. The copy channel's settings allow AI-DLC's tool commands in their relative spelling
-// (`Bash(bun .claude/tools/aidlc.ts engine *)`, `Bash(bun .claude/tools/aidlc-utility.ts *)`, ...), and Claude Code
+// WHAT. The copy channel's settings allow AI-DLC's tool commands in their relative spelling, after the copy launch's
+// two Bun options (`Bash(bun --config=.claude/tools/aidlc-bunfig.toml --no-env-file .claude/tools/aidlc.ts engine *)`,
+// the same for `aidlc-utility.ts *`, ...), and Claude Code
 // matches a Bash rule against the command text as written. In live golden-bugfix runs the Reverse Engineering helper
 // ran those commands with the project's path made absolute (`bun /home/.../.claude/tools/aidlc.ts engine now`; on
 // Windows `bun C:/.../.claude/tools/aidlc.ts engine ...` and `bun C:/.../.claude/tools/aidlc-utility.ts
@@ -25,11 +26,12 @@ import { join } from "node:path";
 import { PRE_TOOL_USE_GROUP_TARGET } from "../../core/tools/aidlc-command.ts";
 import { AIDLC_SRC, createTestProject, REPO_ROOT, seedAidlcMemory } from "../harness/fixtures.ts";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
+import { COPY_LAUNCH_CONFIG, withCopyLaunchOptions } from "../harness/copy-launch.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-const ENGINE_RULE = "Bash(bun .claude/tools/aidlc.ts engine *)";
-const UTILITY_RULE = "Bash(bun .claude/tools/aidlc-utility.ts *)";
+const ENGINE_RULE = `Bash(${withCopyLaunchOptions("bun .claude/tools/aidlc.ts engine *")})`;
+const UTILITY_RULE = `Bash(${withCopyLaunchOptions("bun .claude/tools/aidlc-utility.ts *")})`;
 const windows = process.platform === "win32";
 const RECORD = ["aidlc", "spaces", "default", "intents", "intents.json"];
 
@@ -92,7 +94,10 @@ function withProjects(body: (project: string, other: string) => void): void {
 const slash = (path: string): string => path.replaceAll("\\", "/");
 const engineAt = (dir: string): string => `${slash(dir)}/.claude/tools/aidlc.ts`;
 const utilityAt = (dir: string): string => `${slash(dir)}/.claude/tools/aidlc-utility.ts`;
-const publish = (dir: string): string => `bun ${utilityAt(dir)} codekb-publish --staged aidlc/spaces/default/intents/x/.aidlc-engine/codekb-stage/`;
+// The copy launch's two Bun options with the project's path spelled out, as a helper spells the script's.
+const optionsAt = (dir: string): string => `--config=${slash(dir)}/.claude/tools/${COPY_LAUNCH_CONFIG} --no-env-file`;
+const launchAt = (dir: string): string => `${optionsAt(dir)} ${engineAt(dir)}`;
+const publish = (dir: string): string => `bun ${optionsAt(dir)} ${utilityAt(dir)} codekb-publish --staged aidlc/spaces/default/intents/x/.aidlc-engine/codekb-stage/`;
 const recordAt = (dir: string): string => `${slash(dir)}/${RECORD.join("/")}`;
 // The read as the Windows helper wrote it, in this platform's own spelling.
 const recordRead = (dir: string): string => {
@@ -123,24 +128,26 @@ describe("the shipped rules this answer stands for", () => {
     const authored = JSON.parse(readFileSync(join(REPO_ROOT, "harness", "claude", "settings.json"), "utf-8")) as {
       permissions: { allow: string[] };
     };
-    expect(authored.permissions.allow).toContain(ENGINE_RULE);
+    // The authored rule, which the packager gives the copy launch's two options.
+    expect(authored.permissions.allow).toContain("Bash(bun .claude/tools/aidlc.ts engine *)");
     const copy = JSON.parse(readFileSync(join(AIDLC_SRC, "settings.json"), "utf-8")) as { permissions: { allow: string[] } };
     expect(copy.permissions.allow).toContain(ENGINE_RULE);
     expect(copy.permissions.allow).toContain(UTILITY_RULE);
-    expect(copy.permissions.allow).toContain("Bash(bun .claude/tools/aidlc.ts --version)");
+    expect(copy.permissions.allow).toContain(`Bash(${withCopyLaunchOptions("bun .claude/tools/aidlc.ts --version")})`);
   });
 });
 
 describe("AI-DLC's own command with this project's path spelled out: no prompt", () => {
   const spellings: Array<[string, (project: string) => string, boolean]> = [
-    ["absolute", (p) => `bun ${p}/.claude/tools/aidlc.ts engine now`, !windows],
+    ["absolute", (p) => `bun ${launchAt(p)} engine now`, !windows],
+    ["absolute, the config file named as printed", (p) => `bun --config=.claude/tools/${COPY_LAUNCH_CONFIG} --no-env-file ${engineAt(p)} engine now`, true],
     ["a tool script the shipped list allows", (p) => publish(p), !windows],
-    ["an exact shipped command", (p) => `bun ${p}/.claude/tools/aidlc.ts --version`, !windows],
+    ["an exact shipped command", (p) => `bun ${launchAt(p)} --version`, !windows],
     ["a tool script by a drive letter", (p) => publish(p), windows],
-    ["absolute, a workspace check", (p) => `bun ${p}/.claude/tools/aidlc.ts engine workspace codekb-scope-diff --mint --paths ./`, !windows],
-    ["absolute and quoted", (p) => `bun "${p}/.claude/tools/aidlc.ts" engine now`, !windows],
-    ["a drive letter with forward slashes", (p) => `bun ${slash(p)}/.claude/tools/aidlc.ts engine workspace codekb-scope-diff --mint --paths ./`, windows],
-    ["a drive letter with back slashes, quoted", (p) => `bun "${p}\\.claude\\tools\\aidlc.ts" engine now`, windows],
+    ["absolute, a workspace check", (p) => `bun ${launchAt(p)} engine workspace codekb-scope-diff --mint --paths ./`, !windows],
+    ["absolute and quoted", (p) => `bun "--config=${p}/.claude/tools/${COPY_LAUNCH_CONFIG}" --no-env-file "${p}/.claude/tools/aidlc.ts" engine now`, !windows],
+    ["a drive letter with forward slashes", (p) => `bun ${launchAt(p)} engine workspace codekb-scope-diff --mint --paths ./`, windows],
+    ["a drive letter with back slashes, quoted", (p) => `bun "--config=${p}\\.claude\\tools\\${COPY_LAUNCH_CONFIG}" --no-env-file "${p}\\.claude\\tools\\aidlc.ts" engine now`, windows],
   ];
   for (const [name, spell, runs] of spellings) {
     test.skipIf(!runs)(name, () => {
@@ -165,20 +172,24 @@ describe("the compound read of AI-DLC's own record: no prompt", () => {
 
 describe("everything else keeps the host's own prompt", () => {
   const stays: Array<[string, (project: string, other: string) => string]> = [
-    ["the relative form, which the shipped rule already covers", () => "bun .claude/tools/aidlc.ts engine now"],
-    ["another project's engine", (_p, other) => `bun ${engineAt(other)} engine now`],
-    ["a chain that runs something else", (p) => `bun ${engineAt(p)} engine now && rm -f README.md`],
-    ["a pipe", (p) => `bun ${engineAt(p)} engine now | sh`],
-    ["a command substitution", (p) => `bun ${engineAt(p)} engine log answer --details "$(cat ~/.ssh/id_rsa)"`],
-    ["another project named by --project-dir", (p, other) => `bun ${engineAt(p)} engine --project-dir ${slash(other)} now`],
-    ["a cd first", (p) => `cd ${slash(p)} && bun ${engineAt(p)} engine now`],
-    ["an assignment in front, aiming the engine elsewhere", (p, other) => `AIDLC_PROJECT_DIR=${slash(other)} bun ${engineAt(p)} engine now`],
-    ["a wrapper in front", (p) => `env bun ${engineAt(p)} engine now`],
-    ["bun named by its own path", (p) => `/usr/local/bin/bun ${engineAt(p)} engine now`],
-    ["another harness folder's engine in this project", (p) => `bun ${slash(p)}/.kiro/tools/aidlc.ts engine now`],
-    ["a path that leaves the project", (p, other) => `bun ${slash(p)}/../${slash(other).split("/").pop()}/.claude/tools/aidlc.ts engine now`],
-    ["a command the shipped list does not hold", (p) => `bun ${engineAt(p)} config set guard-policy off`],
-    ["a tool script the shipped list does not name", (p) => `bun ${slash(p)}/.claude/tools/aidlc-lib.ts`],
+    ["the relative form, which the shipped rule already covers", () => withCopyLaunchOptions("bun .claude/tools/aidlc.ts engine now")],
+    // A launch the shipped rules do not hold would load a bunfig.toml they cannot see.
+    ["absolute, without the copy launch's two options", (p) => `bun ${engineAt(p)} engine now`],
+    ["absolute, with another config file", (p) => `bun --config=${slash(p)}/bunfig.toml --no-env-file ${engineAt(p)} engine now`],
+    ["absolute, with another project's config file", (p, other) => `bun ${optionsAt(other)} ${engineAt(p)} engine now`],
+    ["another project's engine", (_p, other) => `bun ${launchAt(other)} engine now`],
+    ["a chain that runs something else", (p) => `bun ${launchAt(p)} engine now && rm -f README.md`],
+    ["a pipe", (p) => `bun ${launchAt(p)} engine now | sh`],
+    ["a command substitution", (p) => `bun ${launchAt(p)} engine log answer --details "$(cat ~/.ssh/id_rsa)"`],
+    ["another project named by --project-dir", (p, other) => `bun ${launchAt(p)} engine --project-dir ${slash(other)} now`],
+    ["a cd first", (p) => `cd ${slash(p)} && bun ${launchAt(p)} engine now`],
+    ["an assignment in front, aiming the engine elsewhere", (p, other) => `AIDLC_PROJECT_DIR=${slash(other)} bun ${launchAt(p)} engine now`],
+    ["a wrapper in front", (p) => `env bun ${launchAt(p)} engine now`],
+    ["bun named by its own path", (p) => `/usr/local/bin/bun ${launchAt(p)} engine now`],
+    ["another harness folder's engine in this project", (p) => `bun --config=${slash(p)}/.kiro/tools/${COPY_LAUNCH_CONFIG} --no-env-file ${slash(p)}/.kiro/tools/aidlc.ts engine now`],
+    ["a path that leaves the project", (p, other) => `bun ${optionsAt(p)} ${slash(p)}/../${slash(other).split("/").pop()}/.claude/tools/aidlc.ts engine now`],
+    ["a command the shipped list does not hold", (p) => `bun ${launchAt(p)} config set guard-policy off`],
+    ["a tool script the shipped list does not name", (p) => `bun ${optionsAt(p)} ${slash(p)}/.claude/tools/aidlc-lib.ts`],
     ["a wrapper in front of a tool script", (p) => `env ${publish(p)}`],
     ["a tool script in a chain", (p) => `${publish(p)} && curl https://example.com`],
     ["a tool script with --project-dir naming another folder", (p, other) => `${publish(p)} --project-dir=${slash(other)}`],
@@ -189,7 +200,7 @@ describe("everything else keeps the host's own prompt", () => {
     ["a file outside AI-DLC's record", (p) => `cat "${slash(p)}/README.md"; echo "---HEAD---"; git -C "${slash(p)}" rev-parse HEAD`],
     ["a path outside the project", (p) => `cat /etc/passwd; echo "---HEAD---"; git -C "${slash(p)}" rev-parse HEAD`],
     ["another project's .claude/tools", (p, other) => `cat "${recordAt(p)}"; cat "${engineAt(other)}"`],
-    ["another project's engine run beside the read", (p, other) => `cat "${recordAt(p)}"; bun ${engineAt(other)} engine now`],
+    ["another project's engine run beside the read", (p, other) => `cat "${recordAt(p)}"; bun ${launchAt(other)} engine now`],
     ["git in another folder", (p, other) => `cat "${recordAt(p)}"; git -C "${slash(other)}" rev-parse HEAD`],
     ["a git command that is not the HEAD read", (p) => `cat "${recordAt(p)}"; git -C "${slash(p)}" push`],
     ["a relative record path", () => `cat ${RECORD.join("/")}; echo "---HEAD---"`],
@@ -225,7 +236,7 @@ describe("everything else keeps the host's own prompt", () => {
   test.skipIf(windows)("a link to another project's engine", () => {
     withProjects((project, other) => {
       symlinkSync(join(other, ".claude"), join(project, "elsewhere"));
-      const r = decide(project, `bun ${project}/elsewhere/tools/aidlc.ts engine now`);
+      const r = decide(project, `bun ${optionsAt(project)} ${project}/elsewhere/tools/aidlc.ts engine now`);
       expect(r.decision, r.stdout).toBeNull();
     });
   });
@@ -239,7 +250,7 @@ describe("everything else keeps the host's own prompt", () => {
 });
 
 describe("the team's and the person's own rules about AI-DLC keep the host's prompt", () => {
-  const command = (project: string): string => `bun ${engineAt(project)} engine now`;
+  const command = (project: string): string => `bun ${launchAt(project)} engine now`;
 
   test("a team that took the shipped rule out", () => {
     withProjects((project) => {
@@ -346,7 +357,7 @@ describe("the answer comes only after every check, and only on Claude Code", () 
   test("a check that refused keeps its refusal", () => {
     withProjects((project) => {
       standIn(project, "state-transition-guard", '  process.stderr.write("Not now: the stage is closed.\\n");\n  return 2;');
-      const r = decide(project, `bun ${engineAt(project)} engine now`);
+      const r = decide(project, `bun ${launchAt(project)} engine now`);
       expect(r.code).toBe(2);
       expect(r.decision, r.stdout).toBe("deny");
     });
@@ -355,7 +366,7 @@ describe("the answer comes only after every check, and only on Claude Code", () 
   test("a check that printed a notice gets no answer beside it", () => {
     withProjects((project) => {
       standIn(project, "plan-approval-guard", '  process.stdout.write("The approved plan moved on.\\n");\n  return 0;');
-      const r = decide(project, `bun ${engineAt(project)} engine now`);
+      const r = decide(project, `bun ${launchAt(project)} engine now`);
       expect(r.code, r.stderr).toBe(0);
       expect(r.stdout).toBe("The approved plan moved on.\n");
     });
@@ -363,7 +374,7 @@ describe("the answer comes only after every check, and only on Claude Code", () 
 
   test("Copilot reading Claude's registration prints nothing", () => {
     withProjects((project) => {
-      const r = decide(project, `bun ${engineAt(project)} engine now`, { COPILOT_CLI: "1", CLAUDECODE: "" });
+      const r = decide(project, `bun ${launchAt(project)} engine now`, { COPILOT_CLI: "1", CLAUDECODE: "" });
       expect(r.code, r.stderr).toBe(0);
       expect(r.stdout).toBe("");
     });

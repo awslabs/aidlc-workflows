@@ -142,7 +142,7 @@ import { appendCoordinationStoodAside, appendSubagentPromptUnmatched } from "../
 import { patchTargets } from "./review-freeze-command.ts";
 import { keptRestartRun } from "../tools/aidlc-question-store.ts";
 import { ROUTES, routePolicyFor, withoutProjectDirFlag } from "../tools/aidlc.ts";
-import { aidlcInvocation, quoteCommandArgument } from "../tools/aidlc-runtime-paths.ts";
+import { aidlcInvocation, bunLaunchFlags, bunLaunchFor, bunLaunchOptionWords, quoteCommandArgument, withoutBunLaunchOptions } from "../tools/aidlc-runtime-paths.ts";
 import { LAUNCHER_PATH, launcherBody, launcherVoucherUnspent, recordLauncherVoucher } from "../tools/aidlc-launcher-voucher.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
@@ -457,11 +457,11 @@ export async function run(
       : authorityToken
         ? [
             process.execPath,
-            join(HOOKS_DIR, "..", "tools", "aidlc.ts"),
+            ...bunLaunchFlags(), join(HOOKS_DIR, "..", "tools", "aidlc.ts"),
             "--internal-aidlc-record-human-turn",
             join(HOOKS_DIR, hookFile),
           ]
-        : [process.execPath, join(HOOKS_DIR, hookFile)];
+        : [process.execPath, ...bunLaunchFlags(), join(HOOKS_DIR, hookFile)];
     const r = Bun.spawnSync(command, {
       stdin: Buffer.from(stdin, "utf-8"),
       stdout: "pipe",
@@ -1027,7 +1027,7 @@ export async function run(
   function toolScriptCommand(command: string): ParsedOrchestration {
     const parsed = simpleCommand(command);
     if (!parsed || parsed.expansionActive) return { status: "unrelated" };
-    let cursor = 1;
+    let cursor = 1 + bunLaunchOptionWords(parsed.words, 1);
     if (parsed.words[cursor] === "run") cursor++;
     let file: string | null = null;
     try { file = ownToolScript(realpathSync(resolve(projectDir, terminalPath(parsed.words[cursor++] ?? "")))); }
@@ -1065,9 +1065,10 @@ export async function run(
   function toLauncher(command: string): string | null {
     if (command.startsWith(`${ENGINE_PREFIX} `)) return `${LAUNCHER_PATH} ${command.slice(ENGINE_PREFIX.length + 1)}`;
     if (!ENGINE_PREFIX.startsWith("bun ")) return null;
-    const m = /^bun \.aidlc\/tools\/(aidlc-[a-z0-9-]+\.ts) /.exec(command);
+    const plain = withoutBunLaunchOptions(command);
+    const m = /^bun \.aidlc\/tools\/(aidlc-[a-z0-9-]+\.ts) /.exec(plain);
     if (!m) return null;
-    const rest = command.slice(m[0].length);
+    const rest = plain.slice(m[0].length);
     if (m[1] === "aidlc-orchestrate.ts") return `${LAUNCHER_PATH} orchestrate ${rest}`;
     const route = toolScriptRoute(m[1]);
     if (route) return route[0] === "engine" ? `${LAUNCHER_PATH} ${route[1]} ${rest}` : null;
@@ -1106,7 +1107,7 @@ export async function run(
     if (name && name !== "aidlc-engine" && ENGINE_PREFIX.startsWith("bun ") &&
         existsSync(join(projectDir, ".aidlc", "tools", `${name}.ts`))) {
       const rest = words.slice(1).map((word) => quoteCommandArgument(word, "posix"));
-      return `\`.aidlc/bin/${name}\` does not exist, so this did not run. Run \`${["bun", `.aidlc/tools/${name}.ts`, ...rest].join(" ")}\` instead.`;
+      return `\`.aidlc/bin/${name}\` does not exist, so this did not run. Run \`${[bunLaunchFor(".aidlc"), `.aidlc/tools/${name}.ts`, ...rest].join(" ")}\` instead.`;
     }
     return `Only \`${LAUNCHER_PATH}\`, typed first and from the project folder, runs from \`.aidlc/bin/\`, so this did not run. Run \`${ENGINE_PREFIX} ...\` instead.`;
   }
@@ -1117,7 +1118,7 @@ export async function run(
   const PROJECT_DIR_MISSING = "The folder after `--project-dir` does not exist, so this did not run. Name this project's folder, or run the command without `--project-dir`.";
   function noScript(direct: boolean): string {
     const script = direct ? ".aidlc/tools/aidlc-orchestrate.ts" : ".aidlc/tools/aidlc.ts";
-    return `This project has no \`${script}\`, so this did not run. Run the same command with \`${direct ? "aidlc engine orchestrate" : "aidlc"}\` in place of \`bun ${script}\`.`;
+    return `This project has no \`${script}\`, so this did not run. Run the same command with \`${direct ? "aidlc engine orchestrate" : "aidlc"}\` in place of \`${bunLaunchFor(".aidlc")} ${script}\`.`;
   }
 
   // The same words with the installed `aidlc` in place of a missing copied
@@ -1125,7 +1126,7 @@ export async function run(
   function installedForm(command: string, direct: boolean): string | null {
     const parsed = simpleCommand(command);
     if (!parsed || parsed.expansionActive) return null;
-    let cursor = 1;
+    let cursor = 1 + bunLaunchOptionWords(parsed.words, 1);
     if (parsed.words[cursor] === "run") cursor++;
     const words: string[] = [];
     for (const word of parsed.words.slice(cursor + 1)) {
@@ -1154,6 +1155,7 @@ export async function run(
     // (never a deny, so its shell forms keep their earlier answer).
     let toolPrefix = false;
     if (prefixFirst === "bun" || prefixFirst === process.execPath) {
+      prefixCursor += bunLaunchOptionWords(prefix, prefixCursor);
       if (prefix[prefixCursor] === "run") prefixCursor++;
       const script = prefix[prefixCursor] ?? "";
       const directPath = join(projectDir, ".aidlc", "tools", "aidlc-orchestrate.ts");
@@ -1204,7 +1206,7 @@ export async function run(
       const resume = verbs[0] === "--resume" || (verb === "next" && verbs[1] === "--resume");
       const named = resume ? "next --resume" : verb;
       const start = !bunLed ? "aidlc"
-        : `bun ${[".aidlc", "tools", prefixDispatcher ? "aidlc.ts" : "aidlc-orchestrate.ts"].join("/")}`;
+        : `${bunLaunchFor(".aidlc")} ${[".aidlc", "tools", prefixDispatcher ? "aidlc.ts" : "aidlc-orchestrate.ts"].join("/")}`;
       // The dispatcher's routed form runs every step, the --resume shorthand included.
       const orchestrate = !bunLed || prefixDispatcher ? " engine orchestrate" : "";
       return {
@@ -1221,6 +1223,7 @@ export async function run(
     let viaDispatcher = true;
     const first = words[cursor++] ?? "";
     if (first === "bun" || first === process.execPath) {
+      cursor += bunLaunchOptionWords(words, cursor);
       if (words[cursor] === "run") cursor++;
       const script = words[cursor++] ?? "";
       let resolved = "", direct = "", dispatcher = "";
@@ -1246,7 +1249,7 @@ export async function run(
     // The form a refusal names, started the way the agent started the command.
     // (Built from parts: a release rewrites literal copy-channel spellings.)
     const start = !(first === "bun" || first === process.execPath) ? "aidlc"
-      : `bun ${[".aidlc", "tools", viaDispatcher ? "aidlc.ts" : "aidlc-orchestrate.ts"].join("/")}`;
+      : `${bunLaunchFor(".aidlc")} ${[".aidlc", "tools", viaDispatcher ? "aidlc.ts" : "aidlc-orchestrate.ts"].join("/")}`;
     const form = (verb: string) => `${start}${viaDispatcher && routedOrchestrate ? " engine orchestrate" : ""} ${verb}`;
     // Where the verb stands among the command's words: the attempt id goes
     // right after it (rewrite), ahead of any word of the person's.

@@ -2,8 +2,10 @@ import { isSwitchableGuardFence, type SwitchableGuardFence } from "./aidlc-guard
 import {
   aidlcInvocation,
   aidlcToolInvocation,
+  bunLaunchFor,
   quoteCommandArgument,
   runtimeHarnessDir,
+  withoutBunLaunchOptions,
 } from "./aidlc-runtime-paths.ts";
 
 // The step a Construction policy refusal names. Built when said, so it names
@@ -162,7 +164,7 @@ export function renderEngineInvocation(
   if (!/^\.[A-Za-z0-9_.-]+$/.test(harness)) throw new Error("Invalid recovery harness directory");
   const prefix = mode === "native"
     ? `aidlc engine ${quoteArgument(invocation.route, shell)}`
-    : `bun ${quoteArgument(`${harness}/tools/aidlc-${invocation.route}.ts`, shell)}`;
+    : `${bunLaunchFor(harness)} ${quoteArgument(`${harness}/tools/aidlc-${invocation.route}.ts`, shell)}`;
   return `${prefix} ${invocation.args.map((arg) => quoteArgument(arg, shell)).join(" ")}`;
 }
 
@@ -175,13 +177,16 @@ export function guardOperationMatchesCommand(
 ): boolean {
   if (!isGuardRecoveryOperation(operation)) return false;
   // The tool stem is not pinned here: the exact comparison below renders the
-  // operation's own source tool, so any other stem fails equality.
-  const source = /^bun (\.[A-Za-z0-9_.-]+)\/tools\/aidlc-[A-Za-z0-9_-]+\.ts /.exec(command);
+  // operation's own source tool, so any other stem fails equality. A copy
+  // launch's two Bun options compare as the launch without them, so a remedy
+  // an older engine printed still matches.
+  const plain = withoutBunLaunchOptions(command);
+  const source = /^bun (\.[A-Za-z0-9_.-]+)\/tools\/aidlc-[A-Za-z0-9_-]+\.ts /.exec(plain);
   for (const shell of ["posix", "powershell"] as const) {
     if (command === renderGuardOperation(operation, { mode: "native", shell })) return true;
-    if (source && command === renderGuardOperation(operation, {
+    if (source && plain === withoutBunLaunchOptions(renderGuardOperation(operation, {
       mode: "source", harnessDir: source[1], shell,
-    })) return true;
+    }))) return true;
   }
   return false;
 }
@@ -258,7 +263,7 @@ export function parseGuardRestartContinuationCommand(
   command: string,
   options: { harnessDir?: string } = {},
 ): GuardRestartContinuation | null {
-  const [executable, ...words] = command.split(" ");
+  const [executable, ...words] = withoutBunLaunchOptions(command).split(" ");
   let args: string[];
   if ((executable === "aidlc" || executable === "aidlc.exe") &&
     words[0] === "engine" && words[1] === "jump") {

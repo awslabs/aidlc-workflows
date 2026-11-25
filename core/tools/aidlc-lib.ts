@@ -35,6 +35,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { TextDecoder } from "node:util";
 import { inflateSync } from "node:zlib";
 import {
+  bunLaunchFlags,
+  bunLaunchOptionWords,
   aidlcDispatcherInvocation,
   aidlcInvocation,
   aidlcToolInvocation,
@@ -55,6 +57,7 @@ import {
   repoNameProblem,
   repoNameRefusal,
   typedHarnessName,
+  withoutBunLaunchOptions,
 } from "./aidlc-runtime-paths.ts";
 export { entrySkillInvocation, repoNameProblem, repoNameRefusal, SPACE_NAME_REGEX } from "./aidlc-runtime-paths.ts";
 import { humanTurnMintAllowed, personGitNameField } from "./aidlc-git-name.ts";
@@ -3152,7 +3155,7 @@ const sourceEngineDispatcher = new RegExp(
 // Canonicalize only the engine tools these detectors own so the Bun and native
 // spellings share one classification policy. Other engine tools remain untouched.
 function canonicalEngineCommand(text: string): string {
-  return text
+  return withoutBunLaunchOptions(text)
     .replace(sourceEngineDispatcher, "aidlc ")
     .replace(
       /\baidlc\s+engine\s+orchestrate\s+help\b/g,
@@ -3454,7 +3457,9 @@ function engineInvocationFromWords(
   }
   if (commandIndex >= tokens.length) return null;
   const viaBun = base(tokens[commandIndex]) === "bun";
-  if (viaBun) commandIndex++;
+  const bunIndex = commandIndex;
+  // A copy launch's two Bun options (bunLaunchOptionWords) read as the launch without them.
+  if (viaBun) commandIndex += 1 + bunLaunchOptionWords(tokens, commandIndex + 1);
   if (commandIndex >= tokens.length) return null;
   if (!/^(?:aidlc|aidlc\.ts|aidlc-(?:orchestrate|state|jump|bolt|swarm|unit)(?:\.ts)?)$/.test(base(tokens[commandIndex]))) {
     // Unsupported interpreters do not become Bun transports merely because a
@@ -3464,7 +3469,7 @@ function engineInvocationFromWords(
   let command = tokens[commandIndex].replaceAll("\\", "/").split("/").pop() ?? "";
   if (command === "aidlc.ts") {
     if (
-      !/(?:^|[/\\])bun$/.test(tokens[commandIndex - 1] ?? "") ||
+      !viaBun || !/(?:^|[/\\])bun$/.test(tokens[bunIndex] ?? "") ||
       !new RegExp(`${sourceEngineDispatcherPath}$`).test(tokens[commandIndex])
     ) return "opaque";
     command = "aidlc";
@@ -3607,7 +3612,7 @@ export function settingsBesideDecision(
   const run = Bun.spawnSync({
     cmd: isCompiledExecutable()
       ? [process.execPath, ...args]
-      : [process.execPath, join(dirname(fileURLToPath(import.meta.url)), "aidlc.ts"), ...args],
+      : [process.execPath, ...bunLaunchFlags(), join(dirname(fileURLToPath(import.meta.url)), "aidlc.ts"), ...args],
     env: hookChildEnv(projectDir, session ?? undefined),
     stdout: "pipe",
     stderr: "pipe",
@@ -11438,7 +11443,8 @@ function copilotGuardRestartPrintHashes(
       (parseStateStageSuffixes(stateContent).get(operation.stage) ?? mapping.stages[operation.stage]) !== "EXECUTE"
     ) return [];
     const direction = targetIndex === currentIndex ? "redo" : "backward";
-    return ["aidlc engine jump", `bun ${runtimeHarnessDir()}/tools/aidlc-jump.ts`].map(
+    // The jump tool's line in either spelling of a copy launch (aidlcToolInvocation prints the one with its options).
+    return [...new Set(["aidlc engine jump", `bun ${runtimeHarnessDir()}/tools/aidlc-jump.ts`, aidlcToolInvocation("jump")])].map(
       (invocation) => contentSha256(JSON.stringify(withPersonsWordsFirst({
         kind: "print",
         message: `Run \`${invocation} execute --target ${operation.stage} --direction ${direction} --scope ${scopeArg(scope)}\` to perform the jump, then re-run \`next\` to continue from the jump target.`,

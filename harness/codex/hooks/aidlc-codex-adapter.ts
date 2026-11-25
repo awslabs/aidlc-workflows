@@ -86,6 +86,7 @@ import {
   stateFilePath,
   validSessionId,
 } from "../tools/aidlc-lib.ts";
+import { bunLaunchFlags } from "../tools/aidlc-runtime-paths.ts";
 import { patchTargets } from "./review-freeze-command.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
@@ -491,11 +492,11 @@ function runCore(hookFile: string, input: string): { stdout: string; code: numbe
     : authorityToken
       ? [
           process.execPath,
-          join(HOOKS_DIR, "..", "tools", "aidlc.ts"),
+          ...bunLaunchFlags(), join(HOOKS_DIR, "..", "tools", "aidlc.ts"),
           "--internal-aidlc-record-human-turn",
           join(HOOKS_DIR, hookFile),
         ]
-      : [process.execPath, join(HOOKS_DIR, hookFile)];
+      : [process.execPath, ...bunLaunchFlags(), join(HOOKS_DIR, hookFile)];
   const r = Bun.spawnSync(command, {
     stdin: Buffer.from(input, "utf-8"),
     stdout: "pipe",
@@ -524,11 +525,11 @@ function runCoreWithStderr(
     : authorityToken
       ? [
           process.execPath,
-          join(HOOKS_DIR, "..", "tools", "aidlc.ts"),
+          ...bunLaunchFlags(), join(HOOKS_DIR, "..", "tools", "aidlc.ts"),
           "--internal-aidlc-record-human-turn",
           join(HOOKS_DIR, hookFile),
         ]
-      : [process.execPath, join(HOOKS_DIR, hookFile)];
+      : [process.execPath, ...bunLaunchFlags(), join(HOOKS_DIR, hookFile)];
   const r = Bun.spawnSync(command, {
     stdin: Buffer.from(input, "utf-8"),
     stdout: "pipe",

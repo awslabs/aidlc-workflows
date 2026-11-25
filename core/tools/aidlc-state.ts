@@ -311,7 +311,7 @@ import { swarmSourceChangedSince } from "./aidlc-swarm-source.ts";
 import { memoryDirFor, PATH_SET_SENSOR_IDS, STAGE_WIDE_SENSOR_IDS, templateEligibleArtifacts, withStageProgressRow } from "./aidlc-graph.ts";
 import { generateFireId, recordUnfinishedFire, sensorMatchesPath, unfinishedFire } from "./aidlc-sensor-record.ts";
 import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
-import { aidlcDispatcherInvocation, aidlcToolInvocation, compiledExecutable, entrySkillInvocation, syncFolderClause } from "./aidlc-runtime-paths.ts";
+import { aidlcDispatcherInvocation, aidlcToolInvocation, bunLaunchFlags, compiledExecutable, entrySkillInvocation, syncFolderClause } from "./aidlc-runtime-paths.ts";
 import { markdownBlocks, projectVisibleMarkdownLines } from "./aidlc-markdown.ts";
 import { newlineOf } from "./aidlc-distribution.ts";
 import { type EngineUnitDirective, readEngineUnitDirective, reviewHasUnseenFinding, routesUnitStep, routesWave } from "./aidlc-log.ts";
@@ -3194,7 +3194,7 @@ function requireEngineRoutedWaveUnit(
       ? [executable, "engine", "orchestrate", ...subargs]
       : [
           process.execPath,
-          fileURLToPath(new URL("./aidlc-orchestrate.ts", import.meta.url)),
+          ...bunLaunchFlags(), fileURLToPath(new URL("./aidlc-orchestrate.ts", import.meta.url)),
           ...subargs,
         ];
     const result = spawnSync(command[0], command.slice(1), {
@@ -4102,7 +4102,7 @@ function fireGateSensors(
       ];
       const command = executable
         ? [executable, "engine", "sensor", ...args]
-        : [process.execPath, sensorTool, ...args];
+        : [process.execPath, ...bunLaunchFlags(), sensorTool, ...args];
       const startedAt = Date.now();
       const result = spawnSync(command[0], command.slice(1), {
         cwd: pd,

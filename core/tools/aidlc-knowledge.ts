@@ -52,7 +52,7 @@
 
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS, LONG_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { readPdfMain } from "./aidlc-pdf.ts";
-import { compiledExecutable } from "./aidlc-runtime-paths.ts";
+import { bunLaunchFlags, compiledExecutable } from "./aidlc-runtime-paths.ts";
 import { createHash } from "node:crypto";
 import { type SpawnSyncReturns, spawnSync } from "node:child_process";
 import {
@@ -507,7 +507,7 @@ function builtinPdfCommand(): readonly string[] {
   const exe = compiledExecutable();
   return exe !== null
     ? [exe, "engine", "knowledge", "read-pdf", "--page-cap", String(EXTRACT_PAGE_CAP)]
-    : [process.execPath, fileURLToPath(new URL("./aidlc-pdf.ts", import.meta.url)), "--page-cap", String(EXTRACT_PAGE_CAP)];
+    : [process.execPath, ...bunLaunchFlags(), fileURLToPath(new URL("./aidlc-pdf.ts", import.meta.url)), "--page-cap", String(EXTRACT_PAGE_CAP)];
 }
 
 /** The page count the built-in reader reports as the last line of its stderr (0 when it says none). */

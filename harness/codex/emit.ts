@@ -25,6 +25,7 @@ import {
 } from "../../scripts/agent-knowledge.ts";
 import { copyChannelToolScripts } from "../../core/tools/aidlc.ts";
 import { codexHookTrustHash } from "../../core/tools/aidlc-command.ts";
+import { copyLaunchPrefix } from "../../core/tools/aidlc-runtime-paths.ts";
 import type { Tier } from "../../core/tools/aidlc-tiers.ts";
 import { EXTENDED_SUBPROCESS_TIMEOUT_MS } from "../../core/tools/aidlc-runtime-budget.ts";
 import {
@@ -187,10 +188,12 @@ export function emitDefaultRules(
     .join(", ");
   // Codex compares whole words, so the copy channel names the dispatcher's
   // engine namespace and each tool script a copy channel pre-approves
-  // (copyChannelToolScripts), as AI-DLC runs them. An allowed command also runs
+  // (copyChannelToolScripts), as AI-DLC runs them: Bun and the copy launch's two
+  // options (copyLaunchPrefix), then the script. An allowed command also runs
   // outside the sandbox; a config change and a script behind a machine-changing
   // command stay in it and get Codex's own ask.
-  const enginePattern = ["bun", `${harnessDir}/tools/aidlc.ts`, trustedNamespace]
+  const launch = copyLaunchPrefix(harnessDir).split(" ").map((token) => JSON.stringify(token)).join(", ");
+  const enginePattern = [`${harnessDir}/tools/aidlc.ts`, trustedNamespace]
     .map((token) => JSON.stringify(token))
     .join(", ");
   const scripts = copyChannelToolScripts()
@@ -200,8 +203,8 @@ export function emitDefaultRules(
     ? `# Native runtime allowlist: framework commands invoke the self-contained binary.
 prefix_rule(pattern = [${trustedPattern}], decision = "allow")`
     : `# Bun copy-channel allowlist: AI-DLC's engine commands and its tool scripts.
-prefix_rule(pattern = [${enginePattern}], decision = "allow")
-prefix_rule(pattern = ["bun", [
+prefix_rule(pattern = [${launch}, ${enginePattern}], decision = "allow")
+prefix_rule(pattern = [${launch}, [
 ${scripts}
 ]], decision = "allow")`;
   return `# dist/codex shipped permission rules (Starlark) — ${harnessDir}/rules/ is

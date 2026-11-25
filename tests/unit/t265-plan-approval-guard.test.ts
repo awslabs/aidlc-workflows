@@ -562,6 +562,8 @@ function scratchProject(): string {
     // aidlc-lib.ts reads a plugin command leading a line with this.
     "aidlc-plugin-commands.ts",
     "aidlc-color.ts",
+    // The copy launch's config file its commands name.
+    "aidlc-bunfig.toml",
   ]) {
     cpSync(join(AIDLC_SRC, "tools", t), join(dir, ".claude", "tools", t));
   }
@@ -1467,7 +1469,7 @@ describe("t265b hook lifecycle", () => {
         expect(write.code, write.stderr).toBe(policy === "strict" ? 2 : 0);
         if (policy === "strict") {
           expect(write.stderr).toContain(
-            "Run `bun .claude/tools/aidlc-orchestrate.ts next` exactly as written, as a command of its own",
+            "Run `bun --config=.claude/tools/aidlc-bunfig.toml --no-env-file .claude/tools/aidlc-orchestrate.ts next` exactly as written, as a command of its own",
           );
         } else {
           expect(write.stdout).toBe("");
@@ -2849,12 +2851,12 @@ describe("t265b hook lifecycle", () => {
       ]) {
         const result = runHook(proj, { ...BASH(refused), cwd: proj });
         expect(result.code, refused).toBe(2);
-        const step = `bun .claude/tools/aidlc-orchestrate.ts ${named}`;
+        const step = `bun --config=.claude/tools/aidlc-bunfig.toml --no-env-file .claude/tools/aidlc-orchestrate.ts ${named}`;
         expect(result.stderr, refused).toContain(`Run \`${step}\` exactly as written, as a command of its own`);
         expect(runHook(proj, { ...BASH(step), cwd: proj }).code, step).toBe(0);
       }
       const bare = runHook(proj, { ...BASH("cd other && bun .claude/tools/aidlc.ts engine orchestrate next"), cwd: proj });
-      expect(bare.stderr).toContain("Run `bun .claude/tools/aidlc-orchestrate.ts next` exactly as written");
+      expect(bare.stderr).toContain("Run `bun --config=.claude/tools/aidlc-bunfig.toml --no-env-file .claude/tools/aidlc-orchestrate.ts next` exactly as written");
       if (process.platform === "win32") {
         const gitBash = `/${proj[0].toLowerCase()}${proj.slice(2).replaceAll("\\", "/")}`;
         for (const command of [
@@ -3962,7 +3964,7 @@ describe("t265b hook lifecycle", () => {
       // itself, on Windows too).
       const sentence =
         "An apply_patch with its patch in the command itself (`apply_patch <<'PATCH'`, the patch, then `PATCH` on its own line) is read as the writes it names.";
-      const today = "This shell command could not be read, so AI-DLC cannot tell whether it writes files. Code generation cannot run it for the zero-Unit stage-level implementation because the plan, unit-test instructions, and current Testing Contract do not have a current matching approval. Reason: code-generation-plan.md is missing or empty. A read written out, naming each file (for example `cat src/app.ts`), runs while the plan waits. Writes inside the selected code-generation record directory remain available for planning. When the plan is ready, run `bun .claude/tools/aidlc-orchestrate.ts next` exactly as written, as a command of its own (no `cd` before it, no pipe or second command after it): the engine asks the person to approve it before any code is written.";
+      const today = "This shell command could not be read, so AI-DLC cannot tell whether it writes files. Code generation cannot run it for the zero-Unit stage-level implementation because the plan, unit-test instructions, and current Testing Contract do not have a current matching approval. Reason: code-generation-plan.md is missing or empty. A read written out, naming each file (for example `cat src/app.ts`), runs while the plan waits. Writes inside the selected code-generation record directory remain available for planning. When the plan is ready, run `bun --config=.claude/tools/aidlc-bunfig.toml --no-env-file .claude/tools/aidlc-orchestrate.ts next` exactly as written, as a command of its own (no `cd` before it, no pipe or second command after it): the engine asks the person to approve it before any code is written.";
       // Every other line the guard cannot read keeps today's words, byte for byte.
       const unread = runHook(proj, BASH(`sh <<'EOF'\nprintf x > ${plan}\nEOF`)).stderr.trim();
       if (process.platform !== "win32") expect(unread).toBe(today);
@@ -4235,7 +4237,7 @@ describe("t265b hook lifecycle", () => {
       writeFileSync(join(proj, ".claude", "tools", "aidlc-orchestrate.ts"), "// installed tool fixture\n");
       const statePath = join(proj, RECORD_REL, "aidlc-state.md");
       const p = shellQuoted(proj);
-      const named = "bun .claude/tools/aidlc-orchestrate.ts next";
+      const named = "bun --config=.claude/tools/aidlc-bunfig.toml --no-env-file .claude/tools/aidlc-orchestrate.ts next";
       // VS Code hands a hook `c:\...` where an agent writes `C:\...`.
       const lowerDrive = (path: string) => path.replace(/^[A-Z](?=:)/, (drive) => drive.toLowerCase());
       const upperDrive = (path: string) => path.replace(/^[a-z](?=:)/, (drive) => drive.toUpperCase());
@@ -5494,7 +5496,7 @@ describe("t265c registrations", () => {
     expect(stage).toContain("the step's plan note says how the developer gets the\nplan and its test instructions");
     // A step that carries no plan note (a legacy Kiro IDE window's) still names the brief command.
     expect(stage).toContain("for a step with no plan note, start the message with the\n" +
-      "output of `bun .claude/tools/aidlc-testing-posture.ts brief --unit <directive.unit>`");
+      "output of `bun --config=.claude/tools/aidlc-bunfig.toml --no-env-file .claude/tools/aidlc-testing-posture.ts brief --unit <directive.unit>`");
     expect(stage).not.toContain("verbatim and unedited");
   });
 

@@ -68,7 +68,7 @@ import {
   takeSessionSelectionNotice,
 } from "../tools/aidlc-lib.ts";
 import { settleClaudeTurnsFirst } from "../tools/aidlc-claude-turn-pending.ts";
-import { aidlcDispatcherInvocation, aidlcInvocation, knownActiveSpace } from "../tools/aidlc-runtime-paths.ts";
+import { aidlcDispatcherInvocation, aidlcInvocation, bunLaunchFlags, knownActiveSpace } from "../tools/aidlc-runtime-paths.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -159,11 +159,11 @@ export async function run(
       : authorityToken
         ? [
             process.execPath,
-            join(HOOKS_DIR, "..", "tools", "aidlc.ts"),
+            ...bunLaunchFlags(), join(HOOKS_DIR, "..", "tools", "aidlc.ts"),
             "--internal-aidlc-record-human-turn",
             join(HOOKS_DIR, hookFile),
           ]
-        : [process.execPath, join(HOOKS_DIR, hookFile)];
+        : [process.execPath, ...bunLaunchFlags(), join(HOOKS_DIR, hookFile)];
     const r = Bun.spawnSync(command, {
       stdin: Buffer.from(stdinText, "utf-8"),
       stdout: "pipe",
@@ -190,11 +190,11 @@ export async function run(
       : authorityToken
         ? [
             process.execPath,
-            join(HOOKS_DIR, "..", "tools", "aidlc.ts"),
+            ...bunLaunchFlags(), join(HOOKS_DIR, "..", "tools", "aidlc.ts"),
             "--internal-aidlc-record-human-turn",
             join(HOOKS_DIR, hookFile),
           ]
-        : [process.execPath, join(HOOKS_DIR, hookFile)];
+        : [process.execPath, ...bunLaunchFlags(), join(HOOKS_DIR, hookFile)];
     const r = Bun.spawnSync(command, {
       stdin: Buffer.from(stdinText, "utf-8"),
       stdout: "pipe",

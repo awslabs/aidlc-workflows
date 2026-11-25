@@ -17,6 +17,7 @@ import { join } from "node:path";
 import * as ts from "typescript";
 import { constructionPolicyRecovery } from "../../dist/claude/.claude/tools/aidlc-guard-operation.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 
 // Parsing every tool takes longer than bun's default case timeout.
@@ -118,6 +119,6 @@ describe("a printed command goes through its renderer", () => {
   });
 
   test("the Construction policy refusal names the state tool as this install runs it", () => {
-    expect(constructionPolicyRecovery()).toContain("run bun .claude/tools/aidlc-state.ts set-construction-checkpoints, ");
+    expect(constructionPolicyRecovery()).toContain(`run ${withCopyLaunchOptions("bun .claude/tools/aidlc-state.ts")} set-construction-checkpoints, `);
   });
 });

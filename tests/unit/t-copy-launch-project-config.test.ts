@@ -16,7 +16,7 @@
 // without them, so a launch AI-DLC prints with them is still its own.
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import * as ts from "typescript";
 import { isLifecycleBoundaryCommand } from "../../dist/claude/.claude/hooks/aidlc-state-transition-guard.ts";
@@ -29,7 +29,8 @@ import {
   literalOrchestrateVerb,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { isAidlcClaudeStatusLine } from "../../dist/claude/.claude/tools/aidlc-statusline-choice.ts";
-import { aidlcInvocation } from "../../dist/claude/.claude/tools/aidlc-runtime-paths.ts";
+import { aidlcInvocation, withoutBunLaunchOptions } from "../../dist/claude/.claude/tools/aidlc-runtime-paths.ts";
+import { copyChannelOmits, projectionFiles } from "../../core/tools/aidlc-distribution.ts";
 import { COPY_LAUNCH_CONFIG, withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import { cleanupTestProject, createTestProject, REPO_ROOT } from "../harness/fixtures.ts";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
@@ -41,6 +42,8 @@ const NOT_ENGINE_FROM_A_COPY: Readonly<Record<string, string>> = {
   "core/tools/aidlc-install-paths.ts :: activeVersion :: commandPath()": "a list of paths to resolve, not a launch",
   "core/tools/aidlc-lib.ts :: settingsBesideDecision :: ...args": "the compiled branch: the executable is the installed engine",
   "core/tools/aidlc-orchestrate.ts :: toolCommand :: ...args": "the compiled branch: the executable is the installed engine",
+  "core/skills/aidlc-issue-report/scripts/collect.ts :: aidlcCommand :: join(t.dir, \"tools\", \"aidlc.ts\")":
+    "the issue-report skill's scripts import no engine module and run with a plain bun from any folder, as the skill says",
 };
 
 function sources(dir: string): string[] {
@@ -172,10 +175,13 @@ afterAll(() => {
 });
 
 // A Claude Code copy project whose bunfig.toml preloads a file that appends a
-// line to a marker file each time Bun loads it.
-function copyProject(bunfig = 'preload = ["./setup.ts"]\n'): { project: string; preloadRuns: () => number } {
-  const project = createTestProject();
-  projects.push(project);
+// line to a marker file each time Bun loads it, in its own folder (`folder`)
+// when a case needs a path with a space.
+function copyProject(bunfig = 'preload = ["./setup.ts"]\n', folder?: string): { project: string; preloadRuns: () => number } {
+  const root = createTestProject();
+  projects.push(root);
+  const project = folder === undefined ? root : join(root, folder);
+  mkdirSync(project, { recursive: true });
   cpSync(join(REPO_ROOT, "dist", "claude", ".claude"), join(project, ".claude"), { recursive: true });
   const marker = join(project, "setup-ran.txt");
   writeFileSync(join(project, "setup.ts"), `require("fs").appendFileSync(${JSON.stringify(marker)}, "ran\\n");\n`);
@@ -183,12 +189,13 @@ function copyProject(bunfig = 'preload = ["./setup.ts"]\n'): { project: string; 
   return { project, preloadRuns: () => existsSync(marker) ? readFileSync(marker, "utf-8").split("\n").length - 1 : 0 };
 }
 
-function run(project: string, command: string): { status: number | null; stdout: string; stderr: string } {
+function run(project: string, command: string, cwd = project): { status: number | null; stdout: string; stderr: string } {
   const env: NodeJS.ProcessEnv = { ...process.env, CLAUDE_PROJECT_DIR: project };
-  const res = spawnSync("sh", ["-c", command], {
-    cwd: project,
+  const res = spawnSync("bash", ["-c", command], {
+    cwd,
     encoding: "utf-8",
     env,
+    input: "{}",
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
   });
   return { status: res.status, stdout: res.stdout ?? "", stderr: res.stderr ?? "" };
@@ -240,6 +247,61 @@ describe("t-copy-launch-project-config: a copy install's own launches keep the p
     run(project, `${aidlcInvocation()} doctor`);
     expect(aidlcInvocation()).toStartWith(`bun --config=.claude/tools/${COPY_LAUNCH_CONFIG} --no-env-file `);
     expect(preloadRuns()).toBe(0);
+  });
+
+  // As Claude Code runs them: through bash, with the project's folder in
+  // CLAUDE_PROJECT_DIR, from a subfolder that holds a bunfig.toml of its own.
+  test("each hook and the status line, run as Claude Code runs them, runs no preload, from a path with a space and a subfolder with its own bunfig.toml", () => {
+    const { project, preloadRuns } = copyProject(undefined, "my shop");
+    const web = join(project, "web");
+    mkdirSync(web);
+    writeFileSync(join(web, "bunfig.toml"), 'preload = ["../setup.ts"]\n');
+    const settings = JSON.parse(readFileSync(join(project, ".claude", "settings.json"), "utf-8")) as { hooks: unknown };
+    const statusLine = (JSON.parse(readFileSync(join(project, ".claude", "tools", "data", "harness.json"), "utf-8")) as {
+      statusLine: { command: string };
+    }).statusLine.command;
+    const commands = [...new Set([...registeredCommands(settings.hooks), statusLine])];
+    expect(commands.length).toBeGreaterThan(10);
+    for (const command of commands) run(project, command, web);
+    expect(preloadRuns()).toBe(0);
+    // The same hook without the two options runs the subfolder's preload, so the marker can see one.
+    run(project, withoutBunLaunchOptions(commands[0]), web);
+    expect(preloadRuns()).toBe(1);
+  });
+
+  test("a dispatcher started without the options runs the preload once, and the hook it starts does not", () => {
+    const { project, preloadRuns } = copyProject();
+    run(project, "bun .claude/tools/aidlc.ts engine hook session-start");
+    expect(preloadRuns()).toBe(1);
+  });
+
+  test("a refresh over a copy set up before this release puts back AI-DLC's hooks with the options, keeps the person's own, and adds none twice", () => {
+    const { project } = copyProject();
+    const settingsPath = join(project, ".claude", "settings.json");
+    const shipped = registeredCommands((JSON.parse(readFileSync(settingsPath, "utf-8")) as { hooks: unknown }).hooks);
+    // The older registrations, and a hook of the person's own.
+    const older = JSON.parse(readFileSync(settingsPath, "utf-8")) as {
+      hooks: Record<string, Array<{ matcher?: string; hooks: Array<{ type: string; command: string }> }>>;
+    };
+    for (const group of Object.values(older.hooks)) {
+      for (const entry of group) for (const hook of entry.hooks) hook.command = withoutBunLaunchOptions(hook.command);
+    }
+    older.hooks.PreToolUse.push({ matcher: "Bash", hooks: [{ type: "command", command: "bun scripts/my-check.ts" }] });
+    writeFileSync(settingsPath, `${JSON.stringify(older, null, 2)}\n`);
+    expect(registeredCommands(older.hooks).filter((command) => command.includes("--no-env-file"))).toEqual([]);
+
+    const runtime = join(createTestProject(), "claude");
+    projects.push(runtime);
+    const release = join(REPO_ROOT, "dist", "claude");
+    cpSync(release, runtime, { recursive: true });
+    for (const path of copyChannelOmits(projectionFiles(release).descriptor)) rmSync(join(runtime, path), { force: true });
+    const refreshed = run(project, `${aidlcInvocation()} config --from ${JSON.stringify(runtime)} --harness claude --mcp none --yes`);
+    expect(refreshed.status, `${refreshed.stdout}${refreshed.stderr}`).toBe(0);
+
+    const after = registeredCommands((JSON.parse(readFileSync(settingsPath, "utf-8")) as { hooks: unknown }).hooks);
+    expect(after.filter((command) => command !== "bun scripts/my-check.ts").sort()).toEqual([...shipped].sort());
+    expect(after.filter((command) => command === "bun scripts/my-check.ts")).toHaveLength(1);
+    expect(preloadRows(doctorChecks(project, `${aidlcInvocation()} doctor`))).toEqual([]);
   });
 
   test("doctor says once when AI-DLC's hooks here start Bun without the options, with the setup line that fixes it", () => {
