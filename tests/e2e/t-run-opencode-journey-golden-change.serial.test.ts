@@ -48,7 +48,7 @@ import {
 } from "../harness/golden-journey.ts";
 import { PersonTurnLedger, unbackedFailure } from "../harness/person-turns.ts";
 import { RELEASE_JOURNEY_REQUEST, recordedPersonLines, seedGreeter } from "../harness/release-journey.ts";
-import { opencodePermissionProblems } from "../harness/stock-permissions.ts";
+import { folderCommandsBlock, opencodePermissionProblems } from "../harness/stock-permissions.ts";
 
 const OPENCODE_BIN = process.env.AIDLC_OPENCODE_BIN ?? "opencode";
 const MODEL = process.env.AIDLC_OPENCODE_MODEL ?? `amazon-bedrock/${CI_BEDROCK_MODELS.opencode}`;
@@ -113,6 +113,7 @@ describe("t-run-opencode-journey-golden-change: fix existing code on opencode, t
       const person = new GoldenPerson(journey);
       const turns: Array<{ line: string; seconds: number }> = [];
       const refused: string[] = [];
+      const folderCommands: string[] = [];
       const tokens: Record<string, number> = {};
       let sessionId: string | undefined;
       const problems: string[] = [];
@@ -130,6 +131,7 @@ describe("t-run-opencode-journey-golden-change: fix existing code on opencode, t
           const permissions = opencodePermissionProblems(turn.stdout);
           problems.push(...permissions.problems);
           refused.push(...permissions.listed);
+          folderCommands.push(...permissions.folderCommands);
           const { sessionId: id, results } = opencodeToolResults(turn.stdout);
           if (sessionId !== undefined && id !== undefined && id !== sessionId) throw new Error(`"${line}" went to session ${id}, not the person's ${sessionId}`);
           sessionId ??= id;
@@ -146,7 +148,8 @@ describe("t-run-opencode-journey-golden-change: fix existing code on opencode, t
         problems.push(`the journey stopped: ${(error instanceof Error ? error.message : String(error)).split("\n")[0]}`);
         throw error;
       } finally {
-        writeGoldenReport("opencode", { problems, person: person.said, turns, refused, tokens });
+        console.log(folderCommandsBlock(folderCommands));
+        writeGoldenReport("opencode", { problems, person: person.said, turns, refused, folderCommands, tokens });
       }
       expect(problems, `the person:\n  ${person.said.join("\n  ")}`).toEqual([]);
       rmSync(root, { recursive: true, force: true });

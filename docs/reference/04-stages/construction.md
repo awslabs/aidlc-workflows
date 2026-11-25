@@ -993,7 +993,10 @@ This stage has a **two-part structure**: planning followed by generation.
    mocking/stubbing guidance, and test data management. Every run command MUST
    be scoped to this unit using exact test file paths or an exact unit filter.
    A bare project-wide command such as `npm test` is not acceptable because
-   Build and Test executes every unit's commands. A coverage floor set for the
+   Build and Test executes every unit's commands. Write each command to run as
+   written from the workspace root, with any folder it needs inside the
+   command and never in a note beside it: the review and Build and Test run it
+   exactly as recorded. A coverage floor set for the
    whole project is measured by Build and Test on the full suite, not by these
    commands (on one Unit's tests a runner's threshold can fail on source other
    Units' tests cover); the file names the floor, and the floor's threshold in
@@ -1122,8 +1125,13 @@ This stage has a **two-part structure**: planning followed by generation.
    (subagent_type="aidlc-developer-agent").
 
    **Context passed to subagent:**
-   - First, verbatim, the output of `aidlc-testing-posture.ts brief --unit
-     <unit>` (or `--stage-level`). Its first line is the exact target marker,
+   - The plan and its test instructions, as the step's plan note says. On
+     Claude Code (with its SubagentStart delivery registered), Copilot and
+     opencode a tool hands them to the developer as it starts and the message
+     leaves them out; for a parallel batch, and on Codex, Kiro CLI, Kiro IDE
+     and Cursor, the message starts with the output of
+     `aidlc-testing-posture.ts brief --unit <unit>` (or `--stage-level`), word
+     for word, which the note names. Its first line is the exact target marker,
      `AIDLC-UNIT: <directive.unit>` for unit work or
      `AIDLC-STAGE: code-generation` for a zero-Unit directive; its second line
      is `AIDLC-TESTING-CONTRACT: <contract_sha256>` from the current plan. With
@@ -1537,7 +1545,11 @@ with the aidlc-devsecops-agent providing security testing expertise.
     reason in every table there that lists it; an `N/A` with no reason is not
     settled. A story Units Generation kept out of every Unit, `Deferred` with
     its reason, settles its criteria the same way (a requirement, in work
-    without stories), unless a later stage's table lists them. Write
+    without stories), unless a later stage's table lists them. A Code Generation
+    `N/A` whose target names another Unit on its own, by directory or `U{n}` ID,
+    hands the ID to that Unit and settles nothing: if no Unit built it, it is
+    uncovered and its row lists the hand-offs as `handed_off`.
+    Write
     `cross-unit-traceability.md` from that output with the verdict, per-ID
     coverage and every uncovered ID; an uncovered ID is a finding shown at the
     approval gate.

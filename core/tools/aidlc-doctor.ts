@@ -70,6 +70,7 @@ import {
   kiroCliWorkflowsDoctorCheck,
   kiroIdeWorkflowsDoctorCheck,
   kiroIdeTerminalDoctorCheck,
+  otherFolderLine,
   providerDoctorCheck,
   settingsDoctorChecks,
   vscodeRequestCapDoctorCheck,
@@ -490,6 +491,8 @@ function humanReport(
     return rows;
   };
   let output = `${heading("AI-DLC doctor", out)}\n\n`;
+  const elsewhere = otherFolderLine(projectDir, "doctor");
+  if (elsewhere) output += `${elsewhere}\n\n`;
   output += `${heading("Machine", out)}\n`;
   output += renderSection(machine);
   output += `\n${heading(`Project${
@@ -705,6 +708,7 @@ export async function main(argv: string[]): Promise<void> {
 
   const shown = withWorkflowFindings(report, analysis);
   if (flags.json === "true") {
+    const elsewhere = otherFolderLine(projectDir, "doctor");
     process.stdout.write(`${JSON.stringify({
       schemaVersion: 1,
       ok: code === 0,
@@ -715,7 +719,7 @@ export async function main(argv: string[]): Promise<void> {
         ? "warning"
         : "ok",
       message: `${shown.passed} passed, ${shown.warnings} warnings, ${shown.failed} failed`,
-      data: shown,
+      data: elsewhere ? { ...shown, notes: [elsewhere] } : shown,
     })}\n`);
   } else if (flags.quiet === "true") {
     process.stdout.write(

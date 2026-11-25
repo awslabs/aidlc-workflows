@@ -356,6 +356,7 @@ import {
   normalizeRuntimeRecord,
   normalizeTrustRecord,
   ownedModelAccessFact,
+  otherFolderLine,
   pendingProviderIssues,
   postApplyOutstandingActions,
   shellOnlyRuntimes,
@@ -395,7 +396,7 @@ import {
   type TrustRecord,
 } from "./aidlc-config-diagnostics.ts";
 import { gitCommonDirOf } from "./aidlc-git.ts";
-import { committedRecordIgnoreConflicts } from "./aidlc-gitignore.ts";
+import { committedRecordIgnoreConflicts, untrackedSetupLine } from "./aidlc-gitignore.ts";
 import { deepFolder } from "./aidlc-folder-depth.ts";
 import {
   LOCAL_SETTINGS_FILE,
@@ -1946,6 +1947,9 @@ function showDiagnosticSection(
     return;
   }
   let output = `${section[0].toUpperCase()}${section.slice(1)} configuration for ${typedHarnessName(selected.harness)}\n`;
+  // `config --show` names the folder once, above every section's report.
+  const elsewhere = showingEverySection ? null : otherFolderLine(projectDir, "config");
+  if (elsewhere) output += `  ${elsewhere}\n`;
   if (section === "runtime") {
     const diagnostics = data.diagnostics as ReturnType<typeof probeRuntime>;
     output += `  Hook baseline PATH: ${diagnostics.baselinePath}\n`;
@@ -2077,12 +2081,13 @@ function checkDiagnosticSection(
       )
     : providersUnrecorded
     ? `providers has no recorded answer for ${typedHarnessName(selected.harness)}; the shipped fallback is in use. ` +
-      `Record one with '${configCommand("providers")}'`
+      `Record one with '${configCommandForHarness(projectDir, selected.harnessDir, "providers")}'`
     : warnings.length > 0
     ? `${section} configuration has ${warnings.length} warning(s) for ${typedHarnessName(selected.harness)}: ${
       warnings.map((issue) => `${issue.id} (${issue.message})`).join("; ")
     }`
     : `${section} configuration is clean for ${typedHarnessName(selected.harness)}`;
+  writeCheckFolderLine(projectDir, options);
   emitResult(
     blockers.length === 0
       ? success(cleanMessage, {
@@ -2095,7 +2100,7 @@ function checkDiagnosticSection(
             blockers.map((issue) => `${issue.id} (${issue.message})`).join("; ")
           }`,
           EXIT.failure,
-          hostStep ?? configCommand(`${section} --show`),
+          hostStep ?? configCommandForHarness(projectDir, selected.harnessDir, `${section} --show`),
         ),
     options,
   );
@@ -2798,20 +2803,30 @@ function diagnosticSummary(
   };
 }
 
+// A section check's result and its next step are for the project folder, so a
+// check run from another folder names that folder first.
+function writeCheckFolderLine(projectDir: string, options: ReturnType<typeof globalOptions>): void {
+  const elsewhere = options.mode === "human" ? otherFolderLine(projectDir, "config") : null;
+  if (elsewhere) process.stdout.write(`${elsewhere}\n`);
+}
+
 function configCompletionMessage(
   base: string,
   actions: readonly ConfigOutstandingAction[],
   mode: "human" | "quiet" | "json",
+  projectDir: string,
 ): string {
   if (actions.length === 0 || mode === "json") return base;
   if (mode === "quiet") {
     const commands = [...new Set(actions.map((action) => action.step ?? action.command))];
     return `${base}\nOutstanding actions: ${commands.join("; ")}`;
   }
+  const elsewhere = otherFolderLine(projectDir, "config");
   // The section is the one the person runs, as the setup map names it; the
   // action's id is the diagnostic's own key and stays off the line.
   return [
     base,
+    ...(elsewhere ? [elsewhere] : []),
     "Outstanding actions:",
     ...actions.map((action) =>
       `  ${action.section}: ${action.message} - ${action.step ?? `run \`${action.command}\``}`
@@ -2867,6 +2882,9 @@ function sameFile(left: string, right: string): boolean {
 // projection names one in the source tree, so the commands this run prints
 // name this harness's tool there, not the first install the project shows.
 let configTargetHarnessDir: string | null = null;
+
+// Set while `config --show` gathers each section's report.
+let showingEverySection = false;
 
 // A note every --json refusal of this config run carries in its data, so a
 // script reading only the result learns it too (the `--harness kiro` note).
@@ -3212,6 +3230,7 @@ function renderSetupMap(rows: readonly SetupMapRow[]): SetupWalkSection[] {
 }
 
 function renderSetupLedger(
+  projectDir: string,
   actions: readonly ConfigOutstandingAction[],
 ): void {
   process.stdout.write(
@@ -3219,6 +3238,8 @@ function renderSetupLedger(
       actions.length === 1 ? "" : "s"
     } still need${actions.length === 1 ? "s" : ""} you\n`,
   );
+  const elsewhere = otherFolderLine(projectDir, "config");
+  if (elsewhere) writeMenuRow("    ", elsewhere);
   for (const action of actions) {
     if (action.step) writeMenuRow(`    ${action.section.padEnd(12)} `, action.step);
     else writeCommandRow(`    ${action.section.padEnd(12)} `, action.command);
@@ -3360,7 +3381,7 @@ async function runSetupWalk(
       );
     }
     if (initialLedger.length > 0) {
-      renderSetupLedger(initialLedger);
+      renderSetupLedger(projectDir, initialLedger);
     }
     return;
   }
@@ -3379,7 +3400,7 @@ async function runSetupWalk(
     return;
   }
   if (!answer) {
-    renderSetupLedger(initialLedger);
+    renderSetupLedger(projectDir, initialLedger);
     return;
   }
   for (const section of flagged) {
@@ -3414,7 +3435,7 @@ async function runSetupWalk(
     modelHarness(distribution),
     existingProjectionOutstanding(projectDir, { harnessDir, distribution }),
   );
-  renderSetupLedger(remaining);
+  renderSetupLedger(projectDir, remaining);
 }
 
 function prepareDiagnosticSection(
@@ -4103,6 +4124,7 @@ function checkChoiceSection(
         records.project,
         plugins,
       );
+  writeCheckFolderLine(projectDir, options);
   emitResult(
     issues.length === 0
       ? success(`${section} configuration is clean for ${typedHarnessName(selected.harness)}`, {
@@ -4726,6 +4748,38 @@ function entryIdentity(path: string): string {
   return `${stat.mode}:${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
 }
 
+// The release files keep Kiro in runtime/kiro-ide/ and Kiro CLI (V2) in
+// runtime/kiro/, while `--harness kiro` names Kiro. A .kiro holding Kiro CLI
+// (V2)'s files whose ownership record is Kiro's can neither be switched to Kiro
+// (the switch plans from a Kiro CLI (V2) record) nor refreshed as Kiro CLI
+// (V2), so config says where Kiro's files are instead of asking to switch. A
+// stamp and a record that disagree do not say how they came to, so the line
+// says what is there. With no record, the refusal below names the Kiro CLI (V2)
+// refresh that records one, after which the switch goes through.
+function kiroCopyRefusal(occupant: ProjectHarness, requested: string, run: "switch" | "refresh" = "switch"): SwitchRefusal | null {
+  if (occupant.distribution !== "kiro" || requested !== "kiro-ide" || occupant.harnessDir !== KIRO_SWITCH_DIR) return null;
+  let baseline: Baseline | null;
+  try {
+    baseline = readBaseline(join(occupant.root, "tools", "data", "aidlc-manifest.json"));
+  } catch {
+    return null;
+  }
+  if (!baseline || baselineShapeProblem(baseline) !== null ||
+    !baselineNamesHarness(baseline, { distribution: requested, harnessDir: occupant.harnessDir })) {
+    return null;
+  }
+  return new SwitchRefusal(
+    `cannot ${run === "switch" ? `switch ${occupant.harnessDir} to` : `refresh ${occupant.harnessDir} as`} Kiro: it holds Kiro CLI (V2)'s files, which the release files keep in runtime/kiro/, ` +
+      `while its ownership record (${occupant.harnessDir}/tools/data/aidlc-manifest.json) is Kiro's; nothing changed`,
+    {
+      kind: "text",
+      text: "run the whole copy block of \"Versioned manual-copy alternative\" in Running AI-DLC on Kiro " +
+        "(https://awslabs.github.io/aidlc-workflows/guide/harnesses/kiro/), not only its setup command: it removes Kiro CLI " +
+        "(V2)'s agent files, copies runtime/kiro-ide/ from the release files over the project, and runs config",
+    },
+  );
+}
+
 // Without a usable occupant baseline nothing says which of its files are
 // AI-DLC's, so the files only it ships would be left behind. The switch never
 // changes the baseline itself: every refusal here leaves the project as it is
@@ -4733,6 +4787,8 @@ function entryIdentity(path: string): string {
 // then the stock refresh of the installed row, which picks its source as any
 // refresh does.
 function assertSwitchBaseline(occupant: ProjectHarness, requested: string): void {
+  const copied = kiroCopyRefusal(occupant, requested);
+  if (copied) throw copied;
   const rel = `${occupant.harnessDir}/tools/data/aidlc-manifest.json`;
   const path = join(occupant.root, "tools", "data", "aidlc-manifest.json");
   const lead = `cannot switch ${occupant.harnessDir} from ${typedHarnessName(occupant.distribution)} to ${typedHarnessName(requested)}: installed ${typedHarnessName(occupant.distribution)}`;
@@ -9279,6 +9335,11 @@ function renderFirstRunEnding(
         remaining.length === 1 ? "it can't" : "they can't"
       } be done automatically:\n\n`,
     );
+    const elsewhere = otherFolderLine(projectDir, "config");
+    if (elsewhere) {
+      writeMenuRow("    ", elsewhere);
+      process.stdout.write("\n");
+    }
     for (const action of remaining) {
       if (action.id === "runtime-aidlc-missing") {
         writeMenuRow(
@@ -9320,6 +9381,11 @@ function renderFirstRunEnding(
   });
   if (deep) {
     writeMenuRow("  Note: ", deep.note);
+    process.stdout.write("\n");
+  }
+  const untracked = untrackedSetupLine(projectDir, choices.candidate.descriptor);
+  if (untracked) {
+    writeMenuRow("  Note: ", untracked);
     process.stdout.write("\n");
   }
   const steps = leadingCliGuidance(choices.candidate.descriptor, choices.candidate.stamp.distribution)?.firstRunSteps ??
@@ -11705,6 +11771,7 @@ function prepareModelsSection(
     // On Kiro's row the agent files' models are checked against Kiro CLI's
     // list whether or not they match the record.
     const agentModels = harness === "kiro-ide" ? kiroAgentModelReport(kiroIdeAgentFileModels(selected.root)) : null;
+    writeCheckFolderLine(projectDir, options);
     emitWithKiroAgentModels(
       drift.length === 0
         ? success(
@@ -12071,6 +12138,7 @@ function handleSettingsOnlySection(
     return true;
   }
   if (argv.includes("--check")) {
+    writeCheckFolderLine(projectDir, options);
     emitResult(success(`${section} settings files are valid`, {
       files: resolved.files,
     }), options);
@@ -13096,7 +13164,7 @@ function recordBypassesOnly(
         writeMenuLines("", [`configured flags settings for ${projectDir}`]);
       }
       if (outstandingActions.length > 0) {
-        process.stdout.write(`${menuText(configCompletionMessage("", outstandingActions, "human").trimStart())}\n`);
+        process.stdout.write(`${menuText(configCompletionMessage("", outstandingActions, "human", projectDir).trimStart())}\n`);
       }
       process.exitCode = EXIT.ok;
       return;
@@ -13105,6 +13173,7 @@ function recordBypassesOnly(
       `configured flags settings for ${projectDir}`,
       outstandingActions,
       options.mode,
+      projectDir,
     );
     emitResult(success(
       completion,
@@ -13147,8 +13216,13 @@ async function showEverySection(
     ...(options.mode === "json" ? ["--json"] : []),
   ];
   const answers: Array<{ section: string; stdout: string; output: string; code: number }> = [];
-  for (const section of CONFIG_SECTIONS) {
-    answers.push({ section, ...(await gatherConfigOutput([section, "--show", ...shared], internal)) });
+  showingEverySection = true;
+  try {
+    for (const section of CONFIG_SECTIONS) {
+      answers.push({ section, ...(await gatherConfigOutput([section, "--show", ...shared], internal)) });
+    }
+  } finally {
+    showingEverySection = false;
   }
   if (options.mode === "json") {
     const sections = Object.fromEntries(answers.map(({ section, stdout, code }) => {
@@ -13161,7 +13235,9 @@ async function showEverySection(
     emitResult(success("settings for every config section", { sections }), options);
     return;
   }
+  const elsewhere = otherFolderLine(projectDirFrom(argv), "config");
   process.stdout.write(
+    (elsewhere ? `${elsewhere}\n\n` : "") +
     answers.map(({ section, output }) => `${heading(section, process.stdout)}\n${output.replace(/\n*$/, "\n")}`)
       .join("\n"),
   );
@@ -13683,6 +13759,12 @@ export async function main(
   let releaseHold: (() => void) | null = null;
   const sourceNotes: string[] = [];
   try {
+    // A refresh that names no harness refreshes the one the project has, and
+    // its record names Kiro, so it gets the same refusal before the record check.
+    const unnamedCopy = !requestedHarness && !section && projectHarnesses.length === 1
+      ? kiroCopyRefusal(projectHarnesses[0], "kiro-ide", "refresh")
+      : null;
+    if (unnamedCopy) throw unnamedCopy;
     const existing = existingProject(projectDir, requestedHarness);
     // A switch that cannot proceed is refused before any release is fetched
     // for it; it runs again once the source is selected, just before planning.
@@ -13692,6 +13774,9 @@ export async function main(
       )
       : undefined;
     const dryRun = argv.includes("--dry-run");
+    // A switch that can never go through is not asked about.
+    const copied = switchOccupant && requestedHarness ? kiroCopyRefusal(switchOccupant, requestedHarness) : null;
+    if (copied) throw copied;
     // `--harness kiro` named Kiro CLI (V2) before it named Kiro, so on a Kiro
     // CLI (V2) project it may be an older script's refresh. A copied tool from
     // before these names hands its refresh over in ids, where `kiro` is still
@@ -15004,6 +15089,12 @@ export async function main(
         "This project is not in a git repository. Cursor may skip AI-DLC's hooks there, and without them your approvals are not recorded.",
       );
     }
+    // Said once: by the run that first writes this harness's setup here, which found no install record before it.
+    const untracked = prior === null && !choicesContext && !diagnosticsContext && !modelsContext &&
+        !internal.setupWalkChild && options.mode === "human"
+      ? untrackedSetupLine(projectDir, descriptor)
+      : null;
+    if (untracked) prepared.notes.push(untracked);
     if (options.mode === "human") {
       writeMenuLines("", prepared.notes.map((note) => `  Note: ${note}`));
     }
@@ -15043,6 +15134,7 @@ export async function main(
       withQuietWarnings(baseMessage),
       setupMapWillRender ? [] : outstandingActions,
       options.mode,
+      projectDir,
     );
     // AI-DLC's record is saved, but the person's Kiro session is not what they
     // asked for until the printed command runs again.
@@ -15052,7 +15144,7 @@ export async function main(
     // anything more only when something still needs them.
     if (modelsContext && options.mode === "human" && changes.length > 0 && !kiroUnsaved) {
       if (outstandingActions.length > 0) {
-        process.stdout.write(`${menuText(configCompletionMessage("", outstandingActions, "human").trimStart())}\n`);
+        process.stdout.write(`${menuText(configCompletionMessage("", outstandingActions, "human", projectDir).trimStart())}\n`);
       }
       process.exitCode = EXIT.ok;
       return;

@@ -83,6 +83,20 @@ function runUtility(proj: string, args: string[]): RunResult {
   return { rc: res.status ?? -1, out: `${res.stdout ?? ""}${res.stderr ?? ""}` };
 }
 
+// The review level a creation step's own command gives the work: its printed
+// `intent create`, run with only the label filled in.
+function reviewCreatedBy(proj: string, step: Record<string, unknown>): string {
+  const create = /`[^`]*? engine intent create ([^`]+)`/.exec(String(step.message))?.[1];
+  expect(create, String(step.message)).toBeDefined();
+  expect(create).toContain("--review none");
+  const args = (create as string).replace("'<2-3 word kebab essence>'", "login-crash").split(" ");
+  const made = runUtility(proj, ["intent-create", ...args]);
+  expect(made.rc, made.out).toBe(0);
+  const intents = intentsDirOf(proj);
+  const record = readFileSync(join(intents, "active-intent"), "utf-8").trim();
+  return /- \*\*Review Override\*\*: ?(.*)/.exec(readFileSync(join(intents, record, "aidlc-state.md"), "utf-8"))?.[1] ?? "";
+}
+
 function directiveOf(out: string): Record<string, unknown> {
   const line = out.split("\n").find((l) => l.trim().startsWith("{"));
   expect(line).toBeDefined();
@@ -435,7 +449,7 @@ describe("t198 Branch 8: inference confirm + compose offer", () => {
     const dispatch = directiveOf(runNext(proj, compose.slice(compose.indexOf(" next ") + 6).split(" ")).out);
     expect(dispatch.kind, String(dispatch.message)).toBe("print");
     expect(String(dispatch.message)).toContain(`This request carries ${typed}: add exactly that to the approval's \`next\` command`);
-    expect(String(dispatch.message)).toContain("A switch typed here is the person's choice");
+    expect(String(dispatch.message)).toContain("A switch or review level typed here is the person's choice");
     const created = directiveOf(runNext(proj, confirm.slice(confirm.indexOf(" next ") + 6).split(" ")).out);
     expect(created.kind).toBe("print");
     const message = String(created.message);
@@ -449,6 +463,56 @@ describe("t198 Branch 8: inference confirm + compose offer", () => {
     const record = readFileSync(join(intents, "active-intent"), "utf-8").trim();
     const state = readFileSync(join(intents, record, "aidlc-state.md"), "utf-8");
     expect(state).toContain(`- **${field}**: ${value} (set by a command)`);
+  });
+
+  // A review level typed with the description is the person's too: each of the
+  // plan question's answers carries it on to the saved work, the tailored plan's
+  // through the composer, as a switch's goes.
+  describe("a review level typed with the description reaches the saved work", () => {
+    const answer = (command: string): Record<string, unknown> =>
+      directiveOf(runNext(proj, command.slice(command.indexOf(" next ") + 6).split(" ")).out);
+    const planQuestion = (): Record<string, unknown> => {
+      proj = createTestProject();
+      removeWorkspaceRecord(proj);
+      const ask = directiveOf(runNext(proj, ["--review", "none", "Fix the login crash when the session expires"]).out);
+      expect(ask.ask_type).toBe("scope-confirm");
+      expect(ask.proposed_scope).toBe("bugfix");
+      return ask;
+    };
+
+    test("through go ahead", () => {
+      const confirm = String(planQuestion().confirm_command);
+      expect(confirm).toContain("--review none");
+      const created = answer(confirm);
+      expect(String(created.message)).toContain("intent create --scope bugfix");
+      expect(reviewCreatedBy(proj, created)).toBe("none");
+    });
+
+    test("through a different plan", () => {
+      const rows = planQuestion().scope_commands as Array<{ scope: string; command: string }>;
+      const feature = rows.find((row) => row.scope === "feature")?.command ?? "";
+      expect(feature).toContain("--review none");
+      const created = answer(feature);
+      expect(String(created.message)).toContain("intent create --scope feature");
+      expect(reviewCreatedBy(proj, created)).toBe("none");
+    });
+
+    test("through the tailored plan, to the composer and to creation", () => {
+      const compose = String(planQuestion().compose_command);
+      expect(compose).toContain("--review none");
+      const dispatch = answer(compose);
+      expect(dispatch.kind, String(dispatch.message)).toBe("print");
+      const message = String(dispatch.message);
+      expect(message).toContain("This request carries --review none: add exactly that to the approval's `next` command");
+      expect(message).toContain("A switch or review level typed here is the person's choice");
+      const request = /On approval, run `next --scope <scopeName> --request ([0-9a-f]{8})`/.exec(message)?.[1];
+      const carried = /This request carries (.+?): add exactly that/.exec(message)?.[1];
+      expect(request, message).toBeDefined();
+      // The approval as the step has the agent run it for a bugfix plan.
+      const created = directiveOf(runNext(proj, ["--scope", "bugfix", "--request", request as string, ...(carried as string).split(" ")]).out);
+      expect(String(created.message)).toContain("intent create --scope bugfix");
+      expect(reviewCreatedBy(proj, created)).toBe("none");
+    });
   });
 
   // `/aidlc-init "<description>"` asks for new work with no scope: the person
@@ -483,6 +547,22 @@ describe("t198 Branch 8: inference confirm + compose offer", () => {
     expect(String(created.message)).toContain("intent create --scope bugfix");
     expect(String(created.message)).toContain("--depth comprehensive");
     expect(String(created.message)).toContain("to start the new intent");
+  });
+
+  test("a review level typed with new work asked for beside an active workflow reaches the saved work", () => {
+    proj = createTestProject();
+    seedAidlcMemory(proj);
+    seedStateFile(proj, MID_IDEATION);
+    const ask = directiveOf(runNext(proj, [
+      "--new-intent", "--review", "none", "Fix the login crash when the session expires",
+    ]).out);
+    expect(ask.ask_type).toBe("scope-confirm");
+    const confirm = String(ask.confirm_command);
+    expect(confirm).toContain("--review none");
+    expect(String(ask.compose_command)).toContain("--review none");
+    const created = directiveOf(runNext(proj, confirm.slice(confirm.indexOf(" next ") + 6).split(" ")).out);
+    expect(String(created.message)).toContain("to start the new intent");
+    expect(reviewCreatedBy(proj, created)).toBe("none");
   });
 
   // poc builds its code plans without asking. Typing plan approval back on with
@@ -631,6 +711,25 @@ describe("t198 Branch 8: inference confirm + compose offer", () => {
     const ask = directiveOf(runNext(proj, ["--request", id!]).out);
     expect(ask.kind).toBe("ask");
     expect(ask.ask_type).toBe("new-work-routing");
+  });
+
+  // Its tailored answer carries the settings typed with the words as its other
+  // answers do: run once a listed piece is selected, they are set on that piece
+  // before it is reshaped.
+  test("a review level typed with the words in an unselected workspace rides the which-work question's tailored answer", () => {
+    seedTwoRecordsNoneSelected();
+    const ask = directiveOf(runNext(proj, [
+      "--depth", "minimal", "--review", "none", "Fix the login crash when the session expires",
+    ]).out);
+    expect(ask.ask_type, JSON.stringify(ask).slice(0, 300)).toBe("new-work-routing");
+    const compose = String(ask.compose_command);
+    expect(compose).toContain("--depth minimal --review none");
+    const listed = ask.available_intents as string[];
+    expect(runUtility(proj, ["intent", "switch", listed[0]]).rc).toBe(0);
+    const reshaped = directiveOf(runNext(proj, compose.slice(compose.indexOf(" next ") + 6).split(" ")).out);
+    expect(String(reshaped.message)).toContain(
+      "config set depth minimal --review none` to apply the settings typed with this request to the work being reshaped",
+    );
   });
 
   // Settings typed with a new description beside other work go with the work
