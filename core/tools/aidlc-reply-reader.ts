@@ -171,6 +171,22 @@ export function aidlcEntryWords(prompt: string): string | null {
   return entry === null ? null : text.slice(entry[0].length).trim();
 }
 
+// What a shortcut's line stands for as an `/aidlc` line: `/aidlc-compose <rest>`
+// is `compose <rest>`, `/aidlc-init <rest>` is `--new-intent <rest>`, and
+// `/aidlc-<name> <rest>` is `--scope <name> <rest>` when isPlan(name), the
+// arguments that shortcut's generated file runs (aidlc-runner-gen.ts). The name
+// is read as typed. Null for any other prompt, `/aidlc` included, and for a
+// shortcut typed as `$aidlc-<name>` (Codex's form).
+export function shortcutEntryWords(prompt: string, isPlan: (name: string) => boolean): string | null {
+  const text = prompt.trim();
+  const entry = /^\/aidlc-(\S+)(?:\s+|$)/i.exec(text);
+  if (entry === null) return null;
+  const name = entry[1];
+  const args = name === "compose" ? "compose" : name === "init" ? "--new-intent" : isPlan(name) ? `--scope ${name}` : null;
+  const rest = text.slice(entry[0].length).trim();
+  return args === null ? null : rest === "" ? args : `${args} ${rest}`;
+}
+
 // A gap typed between two of the person's words as their request keeps it: the
 // spaces, tabs and line breaks typed, a Windows or older Mac line ending as one
 // line break, and beside a line break any other space (a no-break space

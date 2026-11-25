@@ -238,9 +238,11 @@ function initGitWorkspace(dir: string, options: { applicationSourceOnly?: boolea
 
 function seedStageLevelPlanApproval(
   dir: string,
-  options: { bareSection?: boolean; unit?: string } = {},
+  // `earlierContract`: the plan's Testing Contract read the earlier way (over
+  // the raw section text), as a plan written before the update carries it.
+  options: { bareSection?: boolean; unit?: string; earlierContract?: boolean } = {},
 ): string {
-  const contract = resolveTestingPosture(dir);
+  const contract = resolveTestingPosture(dir, options.earlierContract ? "raw" : undefined);
   const authority = resolveCodeGenerationAuthority(dir, { unit: options.unit ?? null });
   const record = codeGenerationRecordDir(dir, options.unit ?? null);
   mkdirSync(record, { recursive: true });
@@ -1193,9 +1195,14 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
     }
   });
 
+  // The first-step line the card writes for an /aidlc line it hands to the conductor.
+  const FIRST_STEP_LINE = "AI-DLC: this message is an AI-DLC request and AI-DLC has it on record. " +
+    "Run `bun .kiro/tools/aidlc.ts engine orchestrate next --entry` now and do only what it prints.\n";
+
   // A bare name that is no record, or words after a name, are the conductor's
   // to read (the engine hands them over): the prompt seam runs nothing for them
-  // and writes no terminal context. A record's own name is still run here.
+  // and writes no terminal context, only the first step, `next --entry`, which
+  // reads the line itself. A record's own name is still run here.
   test("8c2: the prompt seam leaves an unknown workspace word and words after a name to the conductor", () => {
     const dir = scratchProject(true);
     const slug = DEFAULT_RECORD_DIR.replace(/-[0-9a-f]+$/, "");
@@ -1205,7 +1212,7 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
           session_id: "sess_unknown_word", hook_event_name: "UserPromptSubmit", cwd: dir, prompt,
         }));
         expect(r.code, prompt).toBe(0);
-        expect(r.stdout, prompt).toBe("");
+        expect(r.stdout, prompt).toBe(FIRST_STEP_LINE);
       }
       const switched = runIdeStdin(dir, "verb-intercept", JSON.stringify({
         session_id: "sess_unknown_word", hook_event_name: "UserPromptSubmit", cwd: dir, prompt: `/aidlc intent ${slug}`,
@@ -1220,7 +1227,8 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
 
   // The chat's own selection decides which space a bare name is looked up in:
   // a chat bound to another space switches to that space's intent off-band,
-  // while a chat bound to the default space is handed the word.
+  // while a chat bound to the default space is handed the word: the card then
+  // names only the first step, `next --entry`, which reads the line itself.
   test("8c3: the prompt seam judges a bare name against the chat's own space", () => {
     const dir = scratchProject(true);
     try {
@@ -1241,7 +1249,7 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
       expect(bound.stdout).toContain("Now working on `auth` in space `teamb`.");
       const elsewhere = prompt("sess_default_chat");
       expect(elsewhere.code, elsewhere.stderr).toBe(0);
-      expect(elsewhere.stdout).toBe("");
+      expect(elsewhere.stdout).toBe(FIRST_STEP_LINE);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -3420,6 +3428,34 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
           routed[0].stderr.split("Directive:")[0],
         );
       }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // A plan written before the update and asked after it: the mediation reads
+  // its contract the way the engine does, so the question and the person's
+  // approval go through with the plan as it is.
+  test("legacy: a plan whose Testing Contract was rendered before the update is asked and approved", () => {
+    const dir = scratchProject(true);
+    try {
+      initGitWorkspace(dir);
+      seedCodeGenerationDirective(dir);
+      const choices = seedLegacyDirectiveChoices(dir);
+      expect(runIde(dir, "session-start", null).code).toBe(0);
+      const questions = seedStageLevelPlanApproval(dir, { bareSection: true, earlierContract: true });
+      const planPath = join(codeGenerationRecordDir(dir, null), "code-generation-plan.md");
+      const plan = readFileSync(planPath, "utf-8");
+      expect(plan).toContain(resolveTestingPosture(dir, "raw").contract_sha256);
+      const asked = runIde(dir, "audit-and-sensors", ctx("fs_write", `Created the ${relative(dir, questions)} file.`));
+      expect(asked.code, asked.stderr).toBe(0);
+      expect(readFileSync(planPath, "utf-8")).toBe(plan);
+      expect(runIde(dir, "record-human-turn", JSON.stringify({ prompt: choices.approve })).code).toBe(0);
+      writeFileSync(questions, readFileSync(questions, "utf-8").replace("[Answer]:", "[Answer]: Approve Plan"));
+      const answered = runIde(dir, "audit-and-sensors", ctx("fs_write", `Created the ${relative(dir, questions)} file.`));
+      expect(answered.code, answered.stderr).toBe(0);
+      expect(evaluateCodeGenerationApproval(dir, { unit: null }).ok).toBe(true);
+      expect(readFileSync(planPath, "utf-8")).toBe(plan);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -8639,10 +8675,10 @@ describe("t218 a shell call on a turn whose terminal command already ran is refu
 // runs before the agent's first word on every typed line and Kiro adds its
 // stdout to the agent's context, so on an `/aidlc` line that is not a utility
 // the hook runs itself, the person-message card names the one first step: the
-// engine's `next`, which holds the person's recorded line (takePersonsOwnLine)
-// while no work is selected; with work on record the words stay the agent's.
+// skill's `next --entry`, which carries none of the person's words; the engine
+// reads their recorded line (entryLine), with or without work on record.
 describe("t218 the person-message card names the first engine step on an /aidlc line", () => {
-  const FIRST_STEP = "engine orchestrate next` now and do only what it prints.";
+  const FIRST_STEP = "engine orchestrate next --entry` now and do only what it prints.";
   const card = (dir: string, prompt: string, sessionId = "sess_first_step") =>
     runIdeStdin(dir, "person-message", JSON.stringify({
       session_id: sessionId,
@@ -8650,126 +8686,46 @@ describe("t218 the person-message card names the first engine step on an /aidlc 
       cwd: dir,
       prompt,
     }));
+  // Words, a plan's name before them or alone, a quoted request that opens
+  // with a flag-shaped word (#2401), a flag with words, a reply, and `/aidlc`
+  // alone: the card names the same call for every one.
+  const LINES = [
+    "/aidlc fix the greeter: it prints hello instead of greeting the person by name",
+    "/aidlc bugfix fix the login",
+    "/aidlc classic car rental website",
+    "/aidlc bugfix",
+    '/aidlc "--name the work after the bank"',
+    "/aidlc --scope bugfix build a notes app",
+    "/aidlc approve the plan",
+    "/aidlc take me back to requirements analysis",
+    "/aidlc",
+  ];
 
-  test("an /aidlc line with words, on a workspace with no work yet, names next", () => {
-    const dir = scratchProject(false);
-    try {
-      const r = card(dir, "/aidlc fix the greeter: it prints hello instead of greeting the person by name");
-      expect(r.code, r.stderr).toBe(0);
-      expect(r.stdout).toContain("AI-DLC: this message is an AI-DLC request");
-      expect(r.stdout).toContain(FIRST_STEP);
-      // One line, once: the three members print nothing else for this line.
-      expect(r.stdout.split(FIRST_STEP).length).toBe(2);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  // #2359 F1: a line that opens with a plan's name and goes on in words is a
-  // request like any other, so the card names the first step for it too.
-  test("an /aidlc line that opens with a plan's name and goes on in words names next, like any request", () => {
-    const dir = scratchProject(false);
-    try {
-      for (const [line, session] of [
-        ["/aidlc bugfix fix the login", "sess_first_step_plan_word"],
-        ["/aidlc classic car rental website", "sess_first_step_plan_word_2"],
-      ]) {
-        const r = card(dir, line, session);
-        expect(r.code, r.stderr).toBe(0);
-        expect(r.stdout, line).toContain(FIRST_STEP);
+  for (const withWork of [false, true]) {
+    test(`every /aidlc line that is no utility names next --entry, ${withWork ? "with work on record" : "before work exists"}`, () => {
+      const dir = scratchProject(withWork);
+      try {
+        LINES.forEach((line, index) => {
+          const r = card(dir, line, `sess_first_step_${withWork ? "work" : "fresh"}_${index}`);
+          expect(r.code, r.stderr).toBe(0);
+          expect(r.stdout, line).toContain("AI-DLC: this message is an AI-DLC request");
+          // One line, once, and never a call that carries their words.
+          expect(r.stdout.split(FIRST_STEP).length, line).toBe(2);
+          expect(r.stdout.split("do only what it prints").length, line).toBe(2);
+        });
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
       }
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
+    });
+  }
 
-  // #2401 F1: one quoted argument is the person's request whatever its first
-  // word, so a request that opens with a flag-shaped word still gets the step.
-  test("a quoted /aidlc request that opens with a flag-shaped word names next", () => {
-    const dir = scratchProject(false);
-    try {
-      for (const [line, session] of [
-        ['/aidlc "--name the work after the bank"', "sess_first_step_quoted_flag"],
-        ['/aidlc "--description should be added to the CLI"', "sess_first_step_quoted_flag_2"],
-      ]) {
-        const r = card(dir, line, session);
-        expect(r.code, r.stderr).toBe(0);
-        expect(r.stdout, line).toContain(FIRST_STEP);
-      }
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  // A plan's name typed alone is the person's pick with nothing said yet about
-  // the work. A bare `next` reads no such line, so the card names `next <plan>`,
-  // which asks what the work is for and creates nothing (#2378).
-  test("a plan's name typed alone names next <plan> before work exists, and nothing once it does", () => {
-    const fresh = scratchProject(false);
-    try {
-      for (const plan of ["bugfix", "workshop"]) {
-        const r = card(fresh, `/aidlc ${plan}`, `sess_first_step_plan_${plan}`);
-        expect(r.code, r.stderr).toBe(0);
-        expect(r.stdout, plan).toContain(`engine orchestrate next ${plan}\` now and do only what it prints.`);
-        expect(r.stdout.split("do only what it prints").length, plan).toBe(2);
-      }
-      // Something else typed beside the plan is the agent's to pass on whole.
-      const untaken = card(fresh, "/aidlc bugfix --verbose", "sess_first_step_plan_untaken");
-      expect(untaken.code, untaken.stderr).toBe(0);
-      expect(untaken.stdout).not.toContain("do only what it prints");
-    } finally {
-      rmSync(fresh, { recursive: true, force: true });
-    }
-    const dir = scratchProject(true);
-    try {
-      const r = card(dir, "/aidlc bugfix", "sess_first_step_plan_active");
-      expect(r.code, r.stderr).toBe(0);
-      expect(r.stdout).not.toContain("do only what it prints");
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  test("a bare /aidlc names next on any path; a reply in words after the entry names it only before work exists", () => {
-    const fresh = scratchProject(false);
-    try {
-      const reply = card(fresh, "/aidlc approve the plan", "sess_first_step_reply");
-      expect(reply.code, reply.stderr).toBe(0);
-      expect(reply.stdout).toContain(FIRST_STEP);
-    } finally {
-      rmSync(fresh, { recursive: true, force: true });
-    }
-    const dir = scratchProject(true);
-    try {
-      const bare = card(dir, "/aidlc");
-      expect(bare.code, bare.stderr).toBe(0);
-      expect(bare.stdout).toContain(FIRST_STEP);
-      // With this chat's workflow on record, a bare `next` is the work's own
-      // continuation and the engine reads no recorded line, so the words are
-      // the agent's to pass (the aidlc agent's skill does): no line.
-      for (const [prompt, session] of [
-        ["/aidlc approve the plan", "sess_first_step_reply_active"],
-        ["/aidlc take me back to requirements analysis", "sess_first_step_reentry"],
-      ]) {
-        const r = card(dir, prompt, session);
-        expect(r.code, r.stderr).toBe(0);
-        expect(r.stdout, prompt).not.toContain("do only what it prints");
-      }
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  test("a utility the card runs itself, a line with flags, plain words and a /aidlc-<name> entry get no first-step line", () => {
+  test("a utility the card runs itself, plain words and a /aidlc-<name> entry get no first-step line", () => {
     const dir = scratchProject(true);
     try {
       const help = card(dir, "/aidlc --help");
       expect(help.code, help.stderr).toBe(0);
       expect(help.stdout).toContain("has already run");
       expect(help.stdout).not.toContain("do only what it prints");
-      const flags = card(dir, "/aidlc --scope bugfix build a notes app", "sess_first_step_flags");
-      expect(flags.code, flags.stderr).toBe(0);
-      expect(flags.stdout).not.toContain("do only what it prints");
       const words = card(dir, "fix the greeter: it prints hello instead of greeting the person by name", "sess_first_step_words");
       expect(words.code, words.stderr).toBe(0);
       expect(words.stdout).not.toContain("do only what it prints");
@@ -8882,6 +8838,8 @@ describe("t218 a chat on Kiro's Default agent hears once how to stop the approva
       // Kiro still asks: one exact command, a rule with more to it, a deny, another
       // capability, another workspace's rules, a file Kiro cannot read.
       expect(heard(join(workspaceRules, "permissions.yaml"), shellRule("bun .kiro/tools/aidlc.ts engine orchestrate next 'fix the docs'"))).toBe(1);
+      // The first command the card names is `next --entry`; a rule for a bare `next` alone does not cover it.
+      expect(heard(join(workspaceRules, "permissions.yaml"), shellRule("bun .kiro/tools/aidlc.ts engine orchestrate next"))).toBe(1);
       expect(heard(join(workspaceRules, "permissions.yaml"), shellRule("bun *", "    exclude:\n      - bun .kiro/tools/aidlc.ts *\n"))).toBe(1);
       expect(heard(join(workspaceRules, "permissions.yaml"), shellRule("bun *").replace("effect: allow", "effect: deny"))).toBe(1);
       expect(heard(join(workspaceRules, "permissions.yaml"), "rules:\n  - capability: skill\n    effect: allow\n    match:\n      - aidlc\n")).toBe(1);

@@ -45,7 +45,7 @@ import {
   maskSecretShapes,
   saySecretMaskedOnce,
 } from "./aidlc-audit.ts";
-import { hasStateUpgrade, stateUpgradeRecord, waitsToBeBroughtUp } from "./aidlc-state-upgrade.ts";
+import { hasStateUpgrade, newerStateStep, stateUpgradeRecord, waitsToBeBroughtUp } from "./aidlc-state-upgrade.ts";
 import {
   applyIntentSettings,
   applyReviewOverride,
@@ -5861,7 +5861,7 @@ export async function collectDoctorReport(
         results.push({
           pass: false,
           label: "state version compatible",
-          fix: verdict.message,
+          fix: newerStateStep(projectDir, verdict.version),
         });
       } else {
         const upgrade = stateUpgradeRecord(projectDir, doctorIntent, doctorSelection.space);
@@ -10641,7 +10641,10 @@ async function handleDocumentInput(
   })();
 
   const mime = detectMimeType(absPath, bytes);
-  if (mime !== "text/plain" && mime !== "text/markdown") {
+  // A UTF-8 page is passed on as it is written, like a text file; the reader
+  // that takes its markup out is the knowledge base's.
+  const direct = mime === "text/plain" || mime === "text/markdown" || (mime === "text/html" && kb.decodesAsUtf8(bytes));
+  if (!direct) {
     if (mime !== "application/pdf" && mime !== kb.WORD_DOCX_MIME) {
       refuse(
         `${JSON.stringify(portablePath)} is ${mime}, not direct UTF-8 text, Markdown, PDF, ` +

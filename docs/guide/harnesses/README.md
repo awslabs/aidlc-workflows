@@ -67,7 +67,7 @@ For a manual copy, install Bun, download a specific release's
 `aidlc-copy-runtime-X.Y.Z.tar.gz`, extract it, copy the complete
 `runtime/<harness>/` directory, and run its own setup once (see
 [Copy Channel](../18-install-and-lifecycle.md#copy-channel)); the native `aidlc`
-executable is not required. On Kiro, follow the guide's manual-copy steps
+executable is not required. On Kiro, install with the guide's manual-copy steps
 instead: [Kiro](kiro.md#versioned-manual-copy-alternative) copies
 `runtime/kiro-ide/` and
 [Kiro CLI (V2)](kiro.md#kiro-cli-v2-versioned-manual-copy-alternative) copies
@@ -81,7 +81,10 @@ instructions under a clearly labeled alternative.
 After `aidlc update`, run `aidlc doctor` to see project/runtime version skew
 and refresh each project with `aidlc config`. A refresh while a workflow is open
 is done, says whether that work carries on, and names the command that goes
-back to the earlier release.
+back to the earlier release. A copied project moves to a newer release with its
+own setup command run from that release's copy runtime
+([Copy Channel](../18-install-and-lifecycle.md#copy-channel)), not a second
+copy, which replaces the setup answers and plugin choices it recorded.
 
 This set is open: a new harness gets its own chapter here, added from the same
 template. For *building* a new harness (the source contract — manifest, hook

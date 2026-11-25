@@ -10,6 +10,10 @@
 //
 //   - a ready plan is asked for by the engine (summary, plan path, three
 //     choices), and nothing the agent writes can answer it;
+//   - in work with several repositories, one line under the summary names the
+//     repositories the plan names files in, and leaves the fingerprint, the
+//     approval and a file asked before it (with an answer written there) as
+//     they are; nothing in one-repository work;
 //   - the hook keeps the person's reply, from any chat on this work; the agent
 //     reads it and records their choice (an exact pick like "1" the hook records
 //     itself, and the agent cannot overrule it);
@@ -54,18 +58,21 @@
 //     question is asked and answered as inside work, PLAN_APPROVAL_RECORDED
 //     lands beside the run's start, and Approve Plan builds and the run
 //     finishes; Request Changes, editing the files and "review the plan" go as
-//     inside work.
+//     inside work; the build's developer is pointed at its plan as it starts,
+//     as the step's note tells the conductor.
 //   - the plan's Testing Contract is the engine's to write: `next` writes a
 //     block left out, broken or out of date into that section only, before the
 //     question and after it, and after an approval, under every Guard Policy,
 //     over what an agent wrote in that section instead; never under the
 //     person's edit, over a plan sent back, over a heading or plan step, into a
 //     plan that is not UTF-8 text, or from the Stop hook's read-only probe.
+//   - after a git pull, the files a teammate's commit brought are not named as
+//     already changed, nor a checkout's files as its own remote branch holds them.
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash, createHmac } from "node:crypto";
-import { appendFileSync, cpSync, existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, cpSync, existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
@@ -3171,6 +3178,29 @@ describe("an isolated Code Generation run in a project with no work", () => {
     asked(proj);
   });
 
+  test("the build's developer is pointed at its plan as it starts, as the step's note says", () => {
+    const proj = noWork();
+    writeOwnPlan(proj);
+    asked(proj);
+    replyAndRecord(proj, "approve", "Approve Plan");
+    const build = next(proj, SINGLE);
+    expect(build.plan_note).toContain("The developer gets the plan and its test instructions from AI-DLC as it starts");
+    const start = spawnSync(BUN, [join(proj, ".claude", "hooks", "aidlc-deliver-stage-rules.ts")], {
+      cwd: proj,
+      input: JSON.stringify({
+        hook_event_name: "SubagentStart", agent_id: "agent-1", agent_type: "aidlc-developer-agent", cwd: proj, session_id: SESSION,
+      }),
+      env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0" },
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(start.status, start.stderr).toBe(0);
+    const context = String((JSON.parse(start.stdout || "{}") as { hookSpecificOutput?: { additionalContext?: string } })
+      .hookSpecificOutput?.additionalContext ?? "");
+    expect(context).toContain("Read your plan `code-generation-plan.md` and its test instructions `unit-test-instructions.md`, " +
+      `in \`${[...SPACE_RECORD, "construction", "code-generation"].join("/")}/\``);
+  });
+
   test("with no run open the plan answer is refused as before and records nothing", () => {
     const proj = noWork(false);
     reply(proj, "approve");
@@ -3580,6 +3610,133 @@ describe("the question's summary", () => {
       .toEqual(["Builds: x"]);
     expect(planSummaryLines("# P\n\n- [ ] a\n- [x] b\n", "run it"))
       .toEqual(["2 plan steps", "Tests: see unit-test-instructions.md"]);
+  });
+});
+
+// In work with several repositories the question says which of them the plan
+// names files in, in one line the tool writes from the plan's own paths: a
+// summary line is cut at 200 characters, and a repository named after the cut
+// would not be on screen. In work with one repository nothing is added.
+describe("in work with several repositories the question names the plan's repositories", () => {
+  const CUT_TOUCHES = "api/src/routes/orders.ts, api/src/routes/payments.ts, api/src/services/orders-service.ts, " +
+    "api/src/services/payments-service.ts, api/src/models/order.ts, api/src/models/payment.ts, " +
+    "api/src/db/migrations.ts, web/src/pages/Checkout.tsx";
+
+  function reposProject(repos: string[]): string {
+    const proj = project();
+    const registry = join(intentsDirOf(proj), "intents.json");
+    const rows = JSON.parse(readFileSync(registry, "utf-8"));
+    rows[0].repos = repos;
+    writeFileSync(registry, `${JSON.stringify(rows, null, 2)}\n`);
+    for (const repo of repos) {
+      mkdirSync(join(proj, repo, "src"), { recursive: true });
+      writeFileSync(join(proj, repo, "src", "base.ts"), "export const base = true;\n");
+    }
+    return proj;
+  }
+
+  function askedWith(proj: string, touches: string): Emitted {
+    writePlan(proj, "", null, touches);
+    const directive = next(proj);
+    expect(directive.ask_type, JSON.stringify(directive)).toBe("plan-approval");
+    return directive;
+  }
+
+  function fingerprint(proj: string): string | null {
+    return /^\[Approval Fingerprint\]: (\S+)$/m.exec(questions(proj))?.[1] ?? null;
+  }
+
+  test("two repositories: the line is under the cut summary, whole, in the question, its prose and its record", () => {
+    const proj = reposProject(["api", "web"]);
+    const asked = askedWith(proj, CUT_TOUCHES);
+    const cut = `Touches: ${CUT_TOUCHES}`.slice(0, 197) + "...";
+    expect(cut).not.toContain("web/");
+    expect(asked.plan_approval.targets?.[0].summary).toEqual([
+      "Builds: slugify for titles", cut, "Tests: 3 unit tests", "Names files in api and web.",
+    ]);
+    const prose = (asked as unknown as Record<string, unknown>).numbered_prose_question as string;
+    expect(prose).toContain(`- ${cut}\n- Tests: 3 unit tests\n- Names files in api and web.\n`);
+    expect(questions(proj)).toContain(`- ${cut}\n- Tests: 3 unit tests\n- Names files in api and web.\n\nFull plan: `);
+  });
+
+  test("each form of the line, and nothing where the plan names no file in a repository", () => {
+    const line = (repos: string[], touches: string) =>
+      askedWith(reposProject(repos), touches).plan_approval.targets?.[0].summary.slice(3);
+    expect(line(["api", "web", "worker"], "api/src/a.ts, web/src/b.tsx, worker/src/c.ts"))
+      .toEqual(["Names files in api, web and worker."]);
+    expect(line(["api", "web"], "api/src/a.ts, api/src/b.ts")).toEqual(["Names files in api."]);
+    expect(line(["api", "web"], "api\\src\\a.ts, web\\src\\b.tsx")).toEqual(["Names files in api and web."]);
+    expect(line(["api", "web"], "api/src/a.ts, deploy/compose.yaml, package.json")).toEqual(["Names files in api."]);
+    expect(line(["api", "web"], "deploy/compose.yaml, package.json")).toEqual([]);
+  });
+
+  test("one repository: the question and its record are as they always were", () => {
+    for (const repos of [["api"], []]) {
+      const proj = repos.length > 0 ? reposProject(repos) : project();
+      const asked = askedWith(proj, "api/src/a.ts, api/src/b.ts");
+      expect(asked.plan_approval.targets?.[0].summary).toEqual([
+        "Builds: slugify for titles", "Touches: api/src/a.ts, api/src/b.ts", "Tests: 3 unit tests",
+      ]);
+      expect(questions(proj)).toContain("- Tests: 3 unit tests\n\nFull plan: ");
+    }
+  });
+
+  // The approval is of the plan, by its fingerprint, never of the question's
+  // lines: the same plan asked with and without the line has one fingerprint,
+  // and approving it records that fingerprint and builds.
+  test("the plan's fingerprint and its approval do not depend on the line", () => {
+    const one = reposProject(["api"]);
+    askedWith(one, CUT_TOUCHES);
+    const two = reposProject(["api", "web"]);
+    askedWith(two, CUT_TOUCHES);
+    expect(questions(two)).toContain("- Names files in api and web.");
+    expect(fingerprint(two)).not.toBeNull();
+    expect(fingerprint(two)).toBe(fingerprint(one));
+    replyAndRecord(two, "approve", "Approve Plan");
+    const recorded = readAuditShardEvents(two).filter((row) => row.event === "PLAN_APPROVAL_RECORDED");
+    expect(recorded).toHaveLength(1);
+    expect(auditBlockField(recorded[0].block, "Approval Fingerprint")).toBe(fingerprint(one));
+    expect(next(two).kind).toBe("run-stage");
+  });
+
+  // A questions file written without the line (by an earlier AI-DLC, for the
+  // same question) is not rewritten for the line alone: an answer the person
+  // wrote there stays whole, nothing asks them again, and it is read as theirs.
+  test("a question asked before the line keeps its file and the answer written in it", () => {
+    const proj = reposProject(["api", "web"]);
+    askedWith(proj, CUT_TOUCHES);
+    const path = join(stageDir(proj), "code-generation-questions.md");
+    const earlier = questions(proj).replace("- Names files in api and web.\n", "");
+    expect(earlier).not.toContain("Names files in");
+    writeFileSync(path, earlier);
+    expect(next(proj).plan_approval.targets?.[0].summary.at(-1)).toBe("Names files in api and web.");
+    expect(questions(proj)).toBe(earlier);
+    const written = earlier.replace(/^\[Answer\]:.*$/m, "[Answer]: Approve Plan, the payments part looks right");
+    writeFileSync(path, written);
+    expect(next(proj).ask_type).toBe("plan-approval");
+    expect(questions(proj)).toBe(written);
+    const events = (name: string) => readAuditShardEvents(proj).filter((row) => row.event === name);
+    expect(events("QUESTION_ASKED")).toHaveLength(1);
+    expect(events("QUESTION_SHOWN")).toHaveLength(0);
+    replyAndRecord(proj, "done, my answer is in the questions file", "Approve Plan");
+    expect(events("PLAN_APPROVAL_RECORDED")).toHaveLength(1);
+    expect(auditBlockField(events("PLAN_APPROVAL_RECORDED")[0].block, "Answer Line In File"))
+      .toBe("Approve Plan, the payments part looks right");
+    expect(next(proj).kind).toBe("run-stage");
+  });
+
+  // A teammate's clone keeps no record of the question: the file the earlier
+  // AI-DLC wrote and committed stays as it was there too.
+  test("in a clone with no record of the question, the file asked before the line stays as it was", () => {
+    const proj = reposProject(["api", "web"]);
+    askedWith(proj, CUT_TOUCHES);
+    const path = join(stageDir(proj), "code-generation-questions.md");
+    const earlier = questions(proj).replace("- Names files in api and web.\n", "");
+    writeFileSync(path, earlier);
+    const records = dirname(planApprovalRuntimeFile(proj, "probe"));
+    for (const name of readdirSync(records).filter((entry) => entry.startsWith("ask-"))) rmSync(join(records, name));
+    expect(next(proj).plan_approval.targets?.[0].summary.at(-1)).toBe("Names files in api and web.");
+    expect(questions(proj)).toBe(earlier);
   });
 });
 
@@ -5123,6 +5280,36 @@ describe("the engine writes the plan's Testing Contract itself", () => {
     expect(next(proj).plan_approval).toEqual({ status: "approved" });
   });
 
+  // A plan approved before the update carries its contract read the earlier
+  // way (over the raw section text). While that text is the same the engine
+  // leaves the block as it is, the answer records it as it is, and the
+  // fingerprint command prints the approval's own fingerprint.
+  test("a contract rendered before the update is left as it is while its text is the same", () => {
+    const proj = project("strict");
+    writePlan(proj);
+    const earlier = renderTestingContract(resolveTestingPosture(proj, "raw"));
+    expect(earlier).not.toBe(contract(proj));
+    writeFileSync(planPath(proj), STEPS + earlier, "utf-8");
+    expect(next(proj)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
+    expect(planText(proj)).toBe(STEPS + earlier);
+    replyAndRecord(proj, "1", "Approve Plan");
+    expect(planText(proj)).toBe(STEPS + earlier);
+    expect(next(proj).plan_approval).toEqual({ status: "approved" });
+    const recorded = /^\[Approval Fingerprint\]: (\S+)$/m
+      .exec(readFileSync(join(stageDir(proj), "code-generation-questions.md"), "utf-8"))?.[1];
+    expect(recorded).toBeDefined();
+    const printed = spawnSync(BUN, [
+      join(AIDLC_SRC, "tools", "aidlc-testing-posture.ts"), "fingerprint", "--stage-level", "--project-dir", proj,
+    ], {
+      cwd: proj,
+      env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj },
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(printed.status, printed.stderr).toBe(0);
+    expect(printed.stdout.split("\n")[0]).toBe(`[Approval Fingerprint]: ${recorded}`);
+  });
+
   test("a plan that already carries the current contract is asked about as written", () => {
     const proj = project();
     writePlan(proj);
@@ -5472,5 +5659,193 @@ describe("the engine writes the plan's Testing Contract itself", () => {
       expect(readFileSync(join(codeGenerationRecordDir(pd, unit), "code-generation-plan.md"), "utf-8"))
         .toBe(`# Plan for ${unit}\n\n## Summary\n\n- Builds: ${unit}\n\n## Steps\n- [ ] Implement ${unit}\n\n${contract(pd)}`);
     }
+  });
+});
+
+// After a git pull, the files a teammate's commit brought are not something
+// that ran ahead of the plan: the project is a clone whose branch tracks a
+// branch of a team remote (a bare repository here), and a teammate pushes to it.
+describe("the plan question after a git pull", () => {
+  function gitIn(dir: string, args: string[]): string {
+    const run = spawnSync("git", ["-c", "protocol.file.allow=always", ...args], {
+      cwd: dir, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@test", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@test" },
+    });
+    expect(run.status, `git ${args.join(" ")}: ${run.stdout}${run.stderr}`).toBe(0);
+    return run.stdout;
+  }
+
+  function writeFiles(dir: string, files: Record<string, string>): void {
+    for (const [path, body] of Object.entries(files)) {
+      mkdirSync(dirname(join(dir, path)), { recursive: true });
+      writeFileSync(join(dir, path), body, "utf-8");
+    }
+  }
+
+  // A repository with `files`, pushed to a new bare remote its branch tracks; the remote's path.
+  function published(dir: string, files: Record<string, string>): string {
+    writeFiles(dir, files);
+    gitIn(dir, ["init", "-q"]);
+    gitIn(dir, ["add", "--", ...Object.keys(files)]);
+    gitIn(dir, ["commit", "-qm", "the shop"]);
+    const remote = `${dir}-origin.git`;
+    created.push(remote);
+    gitIn(dir, ["init", "-q", "--bare", remote]);
+    gitIn(dir, ["remote", "add", "origin", remote]);
+    gitIn(dir, ["push", "-q", "-u", "origin", "HEAD"]);
+    return remote;
+  }
+
+  // A teammate's clone of `remote`.
+  function teammate(dir: string, remote: string): string {
+    const mate = `${dir}-mate`;
+    created.push(mate);
+    gitIn(dir, ["clone", "-q", "-b", gitIn(dir, ["rev-parse", "--abbrev-ref", "HEAD"]).trim(), remote, mate]);
+    return mate;
+  }
+
+  const SHOP = {
+    "README.md": "# shop\n",
+    "run.sh": "echo run\n",
+    "web/app.js": "render();\n",
+    "web/index.html": "<html></html>\n",
+    "web/styles.css": "body {}\n",
+  };
+
+  // The project at Code Generation's start as a clone of the team's repository, and a teammate's clone.
+  function teamProject(): { proj: string; mate: string } {
+    const proj = project();
+    const remote = published(proj, SHOP);
+    const mate = teammate(proj, remote);
+    const baseline = writeBaselineSourceSnapshot(proj, "code-generation", workspaceSourceListing(proj)!);
+    appendAuditEntry("STAGE_STARTED", { Stage: "code-generation", "Source Baseline": baseline }, proj);
+    return { proj, mate };
+  }
+
+  const alreadyChanged = (asked: Emitted): string[] =>
+    (asked.plan_approval.targets?.[0].summary ?? []).filter((line) => line.startsWith("Already changed"));
+
+  test("a teammate's move of web/ and README change, pulled before the question, are not named", () => {
+    const { proj, mate } = teamProject();
+    gitIn(mate, ["rm", "-q", "-r", "--", "web"]);
+    writeFiles(mate, { "README.md": "# shop\n\nThe web page now lives in its own repository.\n" });
+    gitIn(mate, ["commit", "-qam", "move web out"]);
+    gitIn(mate, ["push", "-q"]);
+    gitIn(proj, ["pull", "-q", "--no-rebase"]);
+    expect(alreadyChanged(askFor(proj))).toEqual([]);
+  });
+
+  test("where git keeps no executable bit, a teammate's change of a file's mode alone, pulled, is not named", () => {
+    const { proj, mate } = teamProject();
+    gitIn(proj, ["config", "core.fileMode", "false"]);
+    gitIn(mate, ["update-index", "--chmod=+x", "run.sh"]);
+    gitIn(mate, ["commit", "-qm", "run.sh is executable"]);
+    gitIn(mate, ["push", "-q"]);
+    gitIn(proj, ["pull", "-q", "--no-rebase"]);
+    expect(alreadyChanged(askFor(proj))).toEqual([]);
+  });
+
+  test("a teammate's change of a file's mode alone, pulled, is not named", () => {
+    const { proj, mate } = teamProject();
+    gitIn(mate, ["update-index", "--chmod=+x", "run.sh"]);
+    gitIn(mate, ["commit", "-qm", "run.sh is executable"]);
+    gitIn(mate, ["push", "-q"]);
+    gitIn(proj, ["pull", "-q", "--no-rebase"]);
+    expect(alreadyChanged(askFor(proj))).toEqual([]);
+  });
+
+  test("where git keeps no executable bit, a teammate's change to a script git holds as executable, pulled, is not named", () => {
+    const { proj, mate } = teamProject();
+    // Git for Windows sets this at every clone; a Windows drive under WSL too.
+    gitIn(proj, ["config", "core.fileMode", "false"]);
+    writeFiles(mate, { "run.sh": "echo run\necho done\n" });
+    chmodSync(join(mate, "run.sh"), 0o755);
+    gitIn(mate, ["add", "--", "run.sh"]);
+    gitIn(mate, ["update-index", "--chmod=+x", "run.sh"]);
+    gitIn(mate, ["commit", "-qm", "run.sh is executable and says done"]);
+    expect(gitIn(mate, ["ls-tree", "HEAD", "--", "run.sh"])).toStartWith("100755 ");
+    gitIn(mate, ["push", "-q"]);
+    gitIn(proj, ["pull", "-q", "--no-rebase"]);
+    // As such a folder reads it: no executable bit.
+    chmodSync(join(proj, "run.sh"), 0o644);
+    expect(alreadyChanged(askFor(proj))).toEqual([]);
+  });
+
+  test("a teammate's change to a script git held as executable from the start, pulled, is not named", () => {
+    const proj = project();
+    writeFiles(proj, SHOP);
+    gitIn(proj, ["init", "-q"]);
+    chmodSync(join(proj, "run.sh"), 0o755);
+    gitIn(proj, ["add", "--", ...Object.keys(SHOP)]);
+    gitIn(proj, ["update-index", "--chmod=+x", "run.sh"]);
+    gitIn(proj, ["commit", "-qm", "the shop"]);
+    const remote = `${proj}-origin.git`;
+    created.push(remote);
+    gitIn(proj, ["init", "-q", "--bare", remote]);
+    gitIn(proj, ["remote", "add", "origin", remote]);
+    gitIn(proj, ["push", "-q", "-u", "origin", "HEAD"]);
+    const mate = teammate(proj, remote);
+    const baseline = writeBaselineSourceSnapshot(proj, "code-generation", workspaceSourceListing(proj)!);
+    appendAuditEntry("STAGE_STARTED", { Stage: "code-generation", "Source Baseline": baseline }, proj);
+    writeFiles(mate, { "run.sh": "echo run\necho done\n" });
+    gitIn(mate, ["add", "--", "run.sh"]);
+    gitIn(mate, ["update-index", "--chmod=+x", "run.sh"]);
+    gitIn(mate, ["commit", "-qm", "run.sh says done"]);
+    expect(gitIn(mate, ["ls-tree", "HEAD", "--", "run.sh"])).toStartWith("100755 ");
+    gitIn(mate, ["push", "-q"]);
+    gitIn(proj, ["pull", "-q", "--no-rebase"]);
+    expect(alreadyChanged(askFor(proj))).toEqual([]);
+  });
+
+  test("a checkout recorded after the start, as its own remote holds it, is not named; a file the build then changes in it is", () => {
+    const { proj } = teamProject();
+    const parent = mkdtempSync(join(tmpdir(), "plan-gate-checkout-"));
+    created.push(parent);
+    const web = join(parent, "shop-web");
+    mkdirSync(web, { recursive: true });
+    published(web, { "app.js": "render();\n", "index.html": "<html></html>\n" });
+    const added = spawnSync(BUN, [join(AIDLC_SRC, "tools", "aidlc-utility.ts"), "intent", "add-checkout", web, "--project-dir", proj], {
+      cwd: proj, encoding: "utf-8", env: { ...process.env, AIDLC_PROJECT_DIR: proj },
+    });
+    expect(added.status, `${added.stdout}${added.stderr}`).toBe(0);
+    expect(alreadyChanged(askFor(proj))).toEqual([]);
+    writeFileSync(join(web, "app.js"), "render(wishlist);\n", "utf-8");
+    expect(alreadyChanged(next(proj))).toEqual(["Already changed before you approved: shop-web@checkout/app.js."]);
+  });
+
+  test("asking about a checkout recorded outside the project writes nothing in that checkout's git", () => {
+    const { proj } = teamProject();
+    const parent = mkdtempSync(join(tmpdir(), "plan-gate-checkout-"));
+    created.push(parent);
+    const web = join(parent, "shop-web");
+    mkdirSync(web, { recursive: true });
+    published(web, { "app.js": "render();\n", "index.html": "<html></html>\n" });
+    const added = spawnSync(BUN, [join(AIDLC_SRC, "tools", "aidlc-utility.ts"), "intent", "add-checkout", web, "--project-dir", proj], {
+      cwd: proj, encoding: "utf-8", env: { ...process.env, AIDLC_PROJECT_DIR: proj },
+    });
+    expect(added.status, `${added.stdout}${added.stderr}`).toBe(0);
+    // A file saved again unchanged: git's record of it is out of date, and reading it must not rewrite that record.
+    utimesSync(join(web, "index.html"), new Date("2030-01-01T00:00:00Z"), new Date("2030-01-01T00:00:00Z"));
+    const index = (): string => createHash("sha256").update(readFileSync(join(web, ".git", "index"))).digest("hex");
+    const before = index();
+    askFor(proj);
+    expect(index()).toBe(before);
+  });
+
+  test("a teammate's submodule in place of web/, pulled, is not named before or after it is checked out", () => {
+    const { proj, mate } = teamProject();
+    const parent = mkdtempSync(join(tmpdir(), "plan-gate-submodule-"));
+    created.push(parent);
+    const web = join(parent, "shop-web");
+    mkdirSync(web, { recursive: true });
+    const webRemote = published(web, { "app.js": "render();\n", "index.html": "<html></html>\n", "styles.css": "body {}\n" });
+    gitIn(mate, ["rm", "-q", "-r", "--", "web"]);
+    gitIn(mate, ["submodule", "add", "-q", webRemote, "web"]);
+    gitIn(mate, ["commit", "-qm", "web as a submodule"]);
+    gitIn(mate, ["push", "-q"]);
+    gitIn(proj, ["pull", "-q", "--no-rebase"]);
+    expect(alreadyChanged(askFor(proj))).toEqual([]);
+    gitIn(proj, ["submodule", "update", "-q", "--init"]);
+    expect(alreadyChanged(next(proj))).toEqual([]);
   });
 });

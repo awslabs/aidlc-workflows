@@ -889,7 +889,7 @@ describe("t114 gate axis != execution axis", () => {
 // ===========================================================================
 describe("t114 cutover: no --args swallow", () => {
   test("14a: SKILL.md forwarding loop has no 'next --args' wrapper", () => {
-    // SKILL.md invokes the engine as `next $ARGUMENTS` (argv word-split into the
+    // SKILL.md invokes the engine as `next`, with a flag typed alone (argv word-split into the
     // parser). A `next --args "$ARGUMENTS"` wrapper would silently drop every
     // flag-bearing invocation. Pin half (a): the shipped prose must NOT document
     // a `--args` wrapper.
@@ -1845,6 +1845,37 @@ describe("t114 Branch 9c: replies that are not new work", () => {
     expect(file, String(d.message)).toBeDefined();
     expect(readFileSync(join(proj, ...file!.split("/")), "utf-8")).toBe(OTHER_ANSWER);
     expect(d.message).toContain(`(their words: ${JSON.stringify(OTHER_ANSWER)})`);
+  });
+
+  test("words the agent passes on as something else: once the request they became starts work, prose gets no step for the old question, and its own answers still reach its request", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    const ask = routingAsk();
+    const d = directive([OTHER_ANSWER]);
+    expect(d.message).toContain(ROUTING_STEP);
+    const other = / next (--request-file aidlc\/\.aidlc-request-text\/other[^ `]*\.txt)`/.exec(String(d.message))?.[1];
+    expect(other, String(d.message)).toBeDefined();
+    // The agent reads their words as new work: the reading they get, then the routing question for them, answered
+    // with separate work, which is created.
+    const routed = runCommand(requestCommand(directive(other!.split(" ")).message!));
+    expect(routed.ask_type, JSON.stringify(routed).slice(0, 300)).toBe("new-work-routing");
+    const created = runCommand(routed.new_intent_command!);
+    const request = /intent create --scope feature (--request [0-9a-f]{8})/.exec(String(created.message))?.[1];
+    expect(request, String(created.message)).toBeDefined();
+    const made = spawnSync(BUN, [
+      join(AIDLC_SRC, "tools", "aidlc-utility.ts"),
+      "intent-create", "--scope", "feature", ...request!.split(" "), "--label", "documentation update", "--project-dir", proj,
+    ], { cwd: proj, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
+    expect(made.status, `${made.stdout}${made.stderr}`).toBe(0);
+    const later = directive(["also add a CSV export"]);
+    expect(String(later.message ?? JSON.stringify(later))).not.toContain(ROUTING_STEP);
+    // Its own continue and reshape answers still reach the request it kept: with other work selected now, each asks
+    // where that request belongs again, as a late answer does.
+    for (const command of [ask.continue_command!, ask.compose_command!]) {
+      const late = runCommand(command);
+      expect(late.ask_type, JSON.stringify(late).slice(0, 300)).toBe("new-work-routing");
+      expect(late.new_work_description).toBe(NEW_WORK);
+    }
   });
 
   for (const reply of ["1", "2", "Separate new piece of work"]) {

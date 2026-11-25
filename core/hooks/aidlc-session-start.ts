@@ -308,9 +308,17 @@ try {
 // edit of a memory file, held the copy as it was before). When the copy was
 // written just now, this chat is told: with the text of the files written when
 // it fits in the hook's context (Claude Code keeps about 10 KB of it, measured:
-// 9 KB arrives whole and 15 KB is cut), else by name, to read before acting on
-// AI-DLC work. Nothing is added when the copy was current, and an AI-DLC step
-// carries its rules in full either way.
+// 9 KB arrives whole and 15 KB is cut), else by name, for a question about the
+// team's practices. When they do not all fit, team.md and project.md, written
+// just now, still go in whole (project.md alone when the two do not fit):
+// what only this team decided, a saved conversation language or a scope
+// override, is there, and no step carries it before the first stage. team.md
+// comes first, as the rule chain reads them, after the sentence that says
+// what the blocks are. Nothing is added when the copy was current. The chat is never sent to read them before
+// AI-DLC work: every stage step sends it its rules in full (on Claude Code its
+// load record is stale until it next loads; on Copilot no copy is ever proven
+// held), and an agent that read the shipped seven in one shell line stopped
+// for the person.
 const HANDOFF_MAX_BYTES = 8 * 1024;
 let memoryHandoff = "";
 if (copyBehind.length > 0) {
@@ -318,10 +326,21 @@ if (copyBehind.length > 0) {
     if (["claude", "copilot"].includes(runtimeHarnessName(projectDir))) {
       const written = `The method files this chat's instructions import (${ACTIVE_MEMORY_DIR}/) were written for space ` +
         `\`${selection.space}\` just now, after the instructions were read`;
-      const inline = inlineMemoryFiles(projectDir, selection.space, copyBehind);
-      memoryHandoff = inline !== null && inline.bytes <= HANDOFF_MAX_BYTES
-        ? `\n\n${written}. This is their text now:\n\n${inline.parts.join("\n")}`
-        : `\n\n${written}: ${copyBehind.join(", ")}. Read them from that folder before acting on AI-DLC work or on a question about the team's practices.`;
+      const fits = (only: string[]) => {
+        const text = only.length === 0 ? null : inlineMemoryFiles(projectDir, selection.space, only);
+        return text !== null && text.bytes <= HANDOFF_MAX_BYTES ? text : null;
+      };
+      const whole = fits(copyBehind);
+      const own = ["team.md", "project.md"].filter((rel) => copyBehind.includes(rel));
+      const carried = whole === null ? fits(own) ?? fits(own.filter((rel) => rel === "project.md")) : null;
+      const tail = "a stage step hands you the rules it needs in full.";
+      memoryHandoff = whole !== null
+        ? `\n\n${written}. This is their text now:\n\n${whole.parts.join("\n")}`
+        : carried !== null
+        ? `\n\n${written}: ${copyBehind.join(", ")}. The text of ` +
+          `${carried.inlined.map((path) => path.split("/").at(-1)).join(" and ")} is below; the others are there for a ` +
+          `question about the team's practices, and ${tail}\n\n${carried.parts.join("\n")}`
+        : `\n\n${written}: ${copyBehind.join(", ")}. They are there for a question about the team's practices; ${tail}`;
     }
   } catch {
     // The first step sends the rules in full.
@@ -662,6 +681,12 @@ try {
   // Drift check failed, never block startup over an advisory.
 }
 
+// On Claude Code, Codex and Kiro IDE (Kiro CLI v3 too) the first command carries none of the
+// person's words: the engine reads their typed line from its own record, so this says nothing of it there.
+const firstCommandLine = ["claude", "codex", "kiro-ide"].includes(runtimeHarnessName(projectDir))
+  ? ""
+  : `- First: take everything the user typed after \`/aidlc\` and append it to the first \`next\` call UNCHANGED. The flags ARE the user's intent; dropping them sends the workflow to the wrong place. \`/aidlc --phase ideation\` -> you MUST run \`next --phase ideation\`, never bare \`next\`. \`/aidlc --stage X\` -> \`next --stage X\`. Before running that first \`next\`, verify: if the user's message contained \`--phase\`/\`--stage\`/\`--scope\`/\`--depth\`/freeform text, it MUST appear on your \`next\` command; a bare \`next\` when the user gave arguments is a bug.\n`;
+
 // Where the tool hides the Stop note from the person, the agent says its line.
 const context = `AIDLC WORKFLOW ACTIVE
 ${rebindOffer}Scope: ${scope}
@@ -675,8 +700,7 @@ Next Action: ${next}
 ${unitLine}${driftNote}${switchOffContext(projectDir).trimStart()}A BARE /aidlc re-entry carries on with this work, with no resume menu. Then follow the recovery protocol's Session resume, including its one SAY line. When the person asks to redo, jump, or start fresh (at an approval gate too, where it is that request and not the gate's answer), report it with \`report --result resumed --choice <redo|jump|fresh>\` (add \`--target <stage slug>\` for the stage they named, and \`--unit <unit>\` or \`--every-unit\` when they named a Unit or said every Unit) and follow the print it returns. Check the active intent's aidlc-state.md for full context.
 
 - The engine route (\`aidlc engine orchestrate\`) is the ONLY authority on the next move. You run it, you do EXACTLY what its one directive says, and you report stage-work outcomes. Repeat only when the directive calls for continuation; a terminal directive or required human wait ends the turn. You never re-derive routing yourself.
-- First: take everything the user typed after \`/aidlc\` and append it to the first \`next\` call UNCHANGED. The flags ARE the user's intent; dropping them sends the workflow to the wrong place. \`/aidlc --phase ideation\` -> you MUST run \`next --phase ideation\`, never bare \`next\`. \`/aidlc --stage X\` -> \`next --stage X\`. Before running that first \`next\`, verify: if the user's message contained \`--phase\`/\`--stage\`/\`--scope\`/\`--depth\`/freeform text, it MUST appear on your \`next\` command; a bare \`next\` when the user gave arguments is a bug.
-- When the reply names a command to run (e.g. \`aidlc engine jump execute ...\`, a scope/config change, or \`init\`): that named command is your IMMEDIATE next tool call. Run THAT EXACT command FIRST. Do NOT run \`next\` again, do NOT read more files, do NOT plan a stage until the named command has run.
+${firstCommandLine}- When the reply names a command to run (e.g. \`aidlc engine jump execute ...\`, a scope/config change, or \`init\`): that named command is your IMMEDIATE next tool call. Run THAT EXACT command FIRST. Do NOT run \`next\` again, do NOT read more files, do NOT plan a stage until the named command has run.
 - After the named command, obey the message's ending. If it says "then stop", print the command's output and END THE TURN: no \`next\`, \`report\`, or stage work. In particular, \`/aidlc space default\` and other terminal workspace navigation stop even when the destination has an unfinished intent. Selecting it does not request resuming it. Continue only when the directive explicitly says to continue.
 - Under autonomous Construction, or in a run nobody attends, if you end a turn while this work still needs you, AI-DLC answers with one line, "AI-DLC is carrying on with <stage>." It is from AI-DLC, not the person: never record it as their answer, and say nothing about it. If you just asked the person a question you have not recorded, record it with \`log decision\` and end the turn without asking it again or saying anything else; if the person asked to stop or pause, run \`${aidlcToolInvocation("orchestrate")} park --person-asked\` and end the turn; if you were doing the work of a \`run-stage\` you still hold, finish its steps and run the \`report\` built from it (its stage, plus \`--unit\` in team-owned Unit work); otherwise \`continue\` with the rules receipt you hold, or run \`next\`, and follow the step it returns.${trackedSteeringAsk ? `\n\n${trackedSteeringAsk}` : ""}`;
 

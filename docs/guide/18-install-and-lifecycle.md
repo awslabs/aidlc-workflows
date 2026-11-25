@@ -372,7 +372,10 @@ When the files passed to `--from` hold that harness, the command reuses them.
 Otherwise a copied project's line says to get that release's copy runtime file
 first, because `--download` on a copied harness that is already installed
 fetches the release it already has, and a native project's line names the
-`aidlc config --pin` that installs that release.
+`aidlc config --pin` that installs that release. A harness set up with a
+release newer than this computer's is not taken down by a plain refresh, so on
+a native install its line names the update and the refresh that bring the
+harness just written up to it.
 A git worktree of a checkout that is registered on the machine is the same
 project: its pinned commands run the release its own `.aidlc-version` names,
 when the machine holds it, and register it, so a worktree a host makes per
@@ -387,7 +390,8 @@ provider. The transaction still exits 0. Non-TTY human output names every
 outstanding item and the exact `aidlc config runtime`, `aidlc config trust`, or
 `aidlc config providers --check` follow-up. Two items have no AI-DLC command
 that does them, so their line names the person's own step instead: Codex's own
-hook trust (in Codex, type `/hooks`, press `t` to trust all, then press Esc),
+hook trust (start Codex in the project folder and choose Trust all and continue
+when it asks about hooks),
 and on Kiro IDE a settings file with an error (fix the error in the file it
 names; its `command`, `config trust --check`, only checks the result). JSON
 includes `data.outstandingActions`, where such an item also carries that `step`. Quiet output stays one line when clean and appends
@@ -405,7 +409,7 @@ numbered harness picker first; no detected harness gets the complete picker
 without a default. A Kiro CLI at 2.24.1 or later counts for both Kiro
 harnesses. The picker lists Kiro CLI (V2) (`--harness kiro-v2`): it pins no
 engine and is built for Kiro CLI's v2 engine. It lists Kiro (`--harness kiro`),
-for Kiro IDE and Kiro CLI on its v3 engine. Of the two, Kiro CLI (V2) comes first, so Enter
+for Kiro IDE and Kiro CLI on its v3 engine. Of the two, Kiro is the default, so Enter
 takes it unless an earlier detected harness leads the list or setup runs in a
 harness editor's own terminal, whose harness comes first.
 
@@ -486,7 +490,7 @@ interactive wizard.
 | `--from <dir-or-tgz>` | Use local release files instead of an installed runtime: `aidlc-copy-runtime-X.Y.Z.tar.gz` (checked against a `.sha256` beside it), its extracted `runtime/` folder, or one projection directory or archive |
 | `--download` | Fetch and verify the release the project needs when this machine lacks it, then finish the command; applying a dry run's plan token needs it again |
 | `--mcp defaults\|none` | Add or omit Claude's optional shipped MCP entries |
-| `--dry-run` | Calculate the complete plan without creating the target directory or changing bytes |
+| `--dry-run` | Calculate the complete plan without creating the target directory or changing bytes; in a project set up with a release newer than this computer's, it plans nothing and names the update and the pin instead |
 | `--plan-token <token>` | Apply only the exact plan approved from a JSON dry run |
 | `--show` | Show settings without changing anything: with no section, every section in turn (`aidlc config --show`; `--json` prints one object keyed by section, each value what that section's `--show --json` prints); with a section, that section alone |
 | `--force` | Replace locally modified framework-owned files and managed blocks where that policy permits |
@@ -509,7 +513,9 @@ you typed kept.
 plan, confirmation, and transaction. It never contacts a model
 provider. On Kiro CLI, choosing a session model asks Kiro CLI for your account's
 model list and that model's effort levels; with `--yes`, only `--session-model`
-does.
+does among the session settings. On Kiro, `config models`, `--check` and
+`aidlc doctor` can also read that list to name an agent model it does not have
+([One agent on its own model and effort](harnesses/kiro.md#one-agent-on-its-own-model-and-effort)).
 
 The public groups are:
 
@@ -544,7 +550,8 @@ aidlc config models --session-model claude-opus-4.8   # Kiro CLI: your personal 
 ```
 
 A change ends with what changed, its undo command and who picks it up (plus
-any setup step still outstanding); `--json` and `--quiet` output are unchanged.
+any setup step still outstanding); `--json` and `--quiet` output are unchanged,
+except for what Kiro's agent model check adds.
 
 On Claude Code, Codex, opencode and Kiro CLI, while no policy is recorded, setup
 asks about models at each refresh until you answer (on Kiro IDE, Cursor and
@@ -1134,6 +1141,11 @@ is done too, and says so:
   Updated. Your open work (default/add-login) carries on.
 ```
 
+One refresh is not done: in a project set up with a release newer than this
+computer's, a refresh that would bring in this computer's older release files
+changes nothing and names the step instead: the update to that release, or the
+pin, which takes the project down to this computer's release.
+
 When the new release does a stage you already finished differently and nothing
 of yours changed, your work stands and nothing asks you to redo it. If the stage
 now needs a document it did not need before, your next step says so once, for
@@ -1507,9 +1519,9 @@ back, see [Go Back to an Earlier Version](#go-back-to-an-earlier-version).
 To put this machine back on an earlier release, run `aidlc use <version>`, for
 example `aidlc use 2.10.0`. It downloads that release if the machine does not
 have it, then says `Now using aidlc 2.10.0 (was 2.11.0; retained locally, no
-project changes).` Every project without a pin now runs on 2.10.0; run
-`aidlc config` in a project to bring its files to 2.10.0 as well.
-`aidlc use 2.11.0` goes forward again.
+project changes).` Every project without a pin now runs on 2.10.0; to put a
+project's files back too, pin it, as below. `aidlc use 2.11.0` goes forward
+again.
 
 To put one project back for everyone on it, pin it, then refresh it:
 
@@ -1606,9 +1618,14 @@ exact retained version whatever the machine follows.
 
 Previews are `main` as it stands, including project state-schema changes. A
 preview that raises the state schema writes project state a stable build does
-not understand, and the code refuses to open state newer than the build; that
-project cannot be walked back to stable until a stable release ships the same
-schema. Use the preview channel on projects you can recreate, or pin them.
+not understand. A build never advances work newer than it reads: on a native
+install it asks once whether to update AI-DLC and carry on ("This plan was set
+up with AI-DLC 2.12 or newer, and this computer has 2.11.5. Want me to update
+AI-DLC now and carry on?"), and on yes runs `aidlc update` and the project's
+refresh and carries on with what you asked; a copied, pinned or
+package-managed install says its own one step instead. That project cannot be
+walked back to stable until a stable release ships the same schema. Use the
+preview channel on projects you can recreate, or pin them.
 
 ## Project Pins and CI
 
@@ -1952,7 +1969,7 @@ run it twice.
 The supported manual-copy payload is the versioned `aidlc-copy-runtime-X.Y.Z.tar.gz`
 release asset. Download one exact release, extract it, and copy the complete
 `runtime/<harness>/` root so the harness tree, `aidlc/` workspace shell, and
-any project-root files the harness needs stay together. On Kiro, follow the
+any project-root files the harness needs stay together. On Kiro, install with the
 guide's manual-copy steps instead:
 [Kiro](harnesses/kiro.md#versioned-manual-copy-alternative) copies
 `runtime/kiro-ide/` and
@@ -1970,8 +1987,8 @@ by default; to turn the shipped servers on, run
 `bun .claude/tools/aidlc.ts config project --harness claude --mcp defaults --yes`. It also leaves out the team's memory
 files (`aidlc/spaces/default/memory/team.md`, where Practices Discovery records
 the practices you affirmed, and `project.md`, where your project rules and
-learnings go) and your chosen space (`aidlc/active-space`). Copying a newer
-release, or a second harness, over a project therefore keeps them. In a fresh
+learnings go) and your chosen space (`aidlc/active-space`). Copying a second
+harness into a project therefore keeps them. In a fresh
 copy, AI-DLC creates the two memory files from its bundled copy the first time
 you start work. Use **Bun 1.4.4 or newer**, which includes the Brotli decoder fix
 for CVE-2026-111497; the native `aidlc` executable is not required. Updating
@@ -2010,6 +2027,23 @@ The last line is the copy's own setup, run once from the extracted runtime: it
 adds AI-DLC's lines to your `.gitignore` and `AGENTS.md` before the first chat
 and checks the rest of the setup. Without it, AI-DLC adds them when the first
 chat starts, or at the latest when you start work.
+
+To move a copied project to a newer release, run the lines above with the newer
+`tag` and leave out the `cp -R` line; on another harness, the last line names
+that harness's folder and the `--harness` name the project was set up with. That
+line, the project's own setup command, brings the project's AI-DLC files to the
+newer release and keeps what the project recorded: the setup answers, the plugin
+choices and the space's memory files, as a native refresh does. An AI-DLC file
+you changed is named for you to keep or replace. A second copy over the project
+replaces those answers and choices, and any AI-DLC file you changed, without
+saying so.
+
+This needs a project whose setup line ran on 2.11.0 or later; on 2.11.0, run
+the line twice: its own tool does the first run, and the newer release's tool
+finishes it. A project copied from an earlier release, or one whose setup line
+never ran (the line then stops on conflicts with the files AI-DLC copied), runs
+all the lines above, `cp -R` included. That copy turns every plugin back on, so
+turn off again any you had turned off.
 
 Later, a copied project fetches releases itself. When a config command needs
 files the project does not have (a teammate's newer pin, a harness you add,

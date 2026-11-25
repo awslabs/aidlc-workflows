@@ -787,6 +787,19 @@ function markdownSurfaceValues(
   };
 }
 
+// The `model:` each shipped kiro-ide agent file carries, which is what Kiro
+// reads when it dispatches that agent.
+export function kiroIdeAgentFileModels(harnessRoot: string): Array<{ agent: string; model: string }> {
+  const models: Array<{ agent: string; model: string }> = [];
+  for (const agent of Object.keys(readAgentTiers(harnessRoot)).sort()) {
+    const path = join(harnessRoot, "agents", `${modelAgentStem(agent)}.md`);
+    if (!existsSync(path)) continue;
+    const model = markdownSurfaceValues(readFileSync(path, "utf-8"), "effortLevel").model;
+    if (model) models.push({ agent, model });
+  }
+  return models;
+}
+
 // The kiro-ide agents whose staged file carries a `model:` or `effortLevel:`
 // value the project's own file does not, with the staged values. A model or
 // effort recorded for one agent while Kiro took none (an effort is shared by

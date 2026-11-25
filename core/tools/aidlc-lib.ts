@@ -1,6 +1,7 @@
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { lockFolderHeldGiveUpMs, lockFolderHeldLine } from "./aidlc-lock-line.ts";
-import { reviewManifestForms } from "./aidlc-review-manifest.ts";
+import { committedTextBytes, committedTextParts, reviewManifestForms } from "./aidlc-review-manifest.ts";
+export { committedTextBytes } from "./aidlc-review-manifest.ts";
 import { withoutLearnedDate } from "./aidlc-learned-date.ts";
 import { claimedCheckoutReopens } from "./aidlc-unit-landing.ts";
 import {
@@ -166,6 +167,7 @@ import {
   canonicalPathKey,
   chatAwaitsFirstStep,
   type CheckboxState,
+  claudeChatRecord,
   claudeNamedChat,
   clearSessionProcessTable,
   cloneIdentity,
@@ -469,6 +471,7 @@ export {
   FILE_CHANGED_DURING_READ,
   fileIdentity,
   type FileIdentity,
+  HARDLINK_REMEDY,
   holdsAuditLock,
   installWithoutReplacing,
   intentsDir,
@@ -4789,7 +4792,11 @@ function sourceKeysChangedOutsideAidlc(
 // The paths outside AI-DLC's own files that moved since a kept listing (a
 // review's `Source Listing`, kept at the row `from`), as `<repo>\0<path>` keys;
 // a repo that joined the work since counts from what it held when it joined
-// (withRepoBaselineAdditions). Null when no listing was kept or it does not
+// (withRepoBaselineAdditions). A path Git ignores and HEAD does not track (a
+// tool's cache) is left out, as no Unit can claim it; a path in a checkout
+// nested in the project, a link's target or a recorded checkout is that
+// checkout's own source (sourceClaimCheckout judges it there), so the project's
+// .gitignore never leaves it out. Null when no listing was kept or it does not
 // read back exactly: the caller then compares fingerprints.
 export function sourceKeysChangedOutsideAidlcSince(
   projectDir: string,
@@ -4803,7 +4810,18 @@ export function sourceKeysChangedOutsideAidlcSince(
   if (recorded === null) return null;
   const joined = withRepoBaselineAdditions(projectDir, stageSlug, { state: "ready", listing: recorded }, rows, from);
   const start = joined.state === "ready" ? joined.listing : recorded;
-  return sourceKeysChangedOutsideAidlc(projectDir, recordedSourceListingForCompare(projectDir, start, current), current.listing);
+  const changed = sourceKeysChangedOutsideAidlc(projectDir, recordedSourceListingForCompare(projectDir, start, current), current.listing);
+  if (changed.size === 0) return changed;
+  const checkouts = readRecordedSourceCheckouts(projectDir);
+  const rootsOwn = [...changed].filter((key) => {
+    const parsed = splitSourcePathKey(key);
+    if (parsed === null) return false;
+    if (parsed.repo !== "") return true;
+    const claim = sourceClaimCheckout(projectDir, parsed.path, true, checkouts);
+    return claim.reason === undefined && claim.dir === projectDir;
+  });
+  for (const key of unclaimableIgnoredSourceKeys(projectDir, rootsOwn, false)) changed.delete(key);
+  return changed;
 }
 
 // A kept listing as the walk would list it now, to compare with `current`.
@@ -7190,7 +7208,8 @@ export function addPendingPersonLines(
 }
 
 // The lines waiting for the next step the agent speaks from; with `replyOnly`
-// (a question the agent logs before asking it) only those kept for the reply.
+// (a question the agent logs before asking it) only those kept for the reply,
+// with `ordinaryOnly` (the question box at a gate) only the others.
 // `said()` clears the ordinary lines handed out once the step carries them and
 // marks the reply lines carried, which keep riding the steps until the person
 // writes; until then every line stays waiting. What was written to the record
@@ -7199,7 +7218,7 @@ export function addPendingPersonLines(
 export function pendingPersonLines(
   projectDir: string,
   sessionId: string,
-  options: { replyOnly?: boolean } = {},
+  options: { replyOnly?: boolean; ordinaryOnly?: boolean } = {},
 ): { lines: string[]; reply: boolean; said(): void } {
   const path = pendingPersonLinesPath(projectDir, sessionId);
   const none = { lines: [], reply: false, said: () => {} };
@@ -7214,7 +7233,8 @@ export function pendingPersonLines(
   };
   const read = record();
   const saved = readPendingPersonLines(path, turn, work, read);
-  const handed = saved.lines.filter((entry) => entry.reply === true || options.replyOnly !== true);
+  const handed = saved.lines.filter((entry) =>
+    options.ordinaryOnly === true ? entry.reply !== true : entry.reply === true || options.replyOnly !== true);
   return {
     lines: handed.map((entry) => entry.line),
     // Whether a line kept for the reply is among them.
@@ -7616,12 +7636,8 @@ function hostChatStartFolder(projectDir: string): string | null {
     switch (runtimeHarnessDir(projectDir)) {
       case ".claude": {
         const chat = claudeNamedChat();
-        if (chat === null) return null;
-        const config = process.env.CLAUDE_CONFIG_DIR?.trim() || join(homedir(), ".claude");
-        const record = JSON.parse(readFileSync(join(config, "sessions", `${chat.pid}.json`), "utf-8")) as
-          | { pid?: unknown; sessionId?: unknown; cwd?: unknown }
-          | null;
-        return record?.pid === chat.pid && record.sessionId === chat.session ? absolute(record.cwd) : null;
+        const record = chat === null ? null : claudeChatRecord(chat.pid, chat.session);
+        return record === null ? null : absolute(record.cwd);
       }
       case ".codex": {
         const thread = validSessionId(process.env.CODEX_THREAD_ID);
@@ -14599,11 +14615,12 @@ type UnsavedReason = keyof typeof UNSAVED_REASONS;
 function unsavedOutputsMessage(
   slug: string,
   unsaved: ReadonlyArray<{ artifact: string; reason: UnsavedReason }>,
+  saveStep: (save: string) => string,
 ): string {
   if (unsaved.length === 1) {
     return `Refusing to continue "${slug}": this stage's output document ${unsaved[0].artifact} ` +
-      `${UNSAVED_REASONS[unsaved[0].reason].one}. Save the document again, so its write descends from the current ` +
-      "confirmation, then continue.";
+      `${UNSAVED_REASONS[unsaved[0].reason].one}. ` +
+      saveStep("Save the document again, so its write descends from the current confirmation, then continue.");
   }
   const reasons = new Set(unsaved.map((entry) => entry.reason));
   const names = reasons.size === 1
@@ -14613,8 +14630,8 @@ function unsavedOutputsMessage(
   const why = reasons.size === 1
     ? UNSAVED_REASONS[unsaved[0].reason].many
     : "were not saved under the current confirmation";
-  return `Refusing to continue "${slug}": this stage's output documents ${list} ${why}. Save each ` +
-    "of them again, so each write descends from the current confirmation, then continue.";
+  return `Refusing to continue "${slug}": this stage's output documents ${list} ${why}. ` +
+    saveStep("Save each of them again, so each write descends from the current confirmation, then continue.");
 }
 
 export function checkSummaryConfirmationEvidence(
@@ -14633,6 +14650,17 @@ export function checkSummaryConfirmationEvidence(
     confirmationOnly?: boolean;
   } = {},
 ): SummaryConfirmationEvidence {
+  // Where no hook ever ran here, a save makes no write, so saving again would
+  // loop: the step is the hooks-off way back, under the same test the presence
+  // refusal uses (unattendedHumanPresenceHint). Anywhere else, the save.
+  const saveStep = (save: string): string => {
+    try {
+      if (!hooksNeverRanHere(projectDir) || personAtOwnTerminal(projectDir)) return save;
+      return hooksOffAgentStep(projectDir) ?? save;
+    } catch {
+      return save;
+    }
+  };
   const failure = (
     code: string,
     message: string,
@@ -15198,14 +15226,14 @@ export function checkSummaryConfirmationEvidence(
         return failure(
           "SUMMARY_ARTIFACT_ORDER_INVALID",
           `Refusing to continue "${stage.slug}": this stage's output document ` +
-            `${artifact} was not saved after the confirmed answers. Save the ` +
-            "document after confirmation, then continue.",
+            `${artifact} was not saved after the confirmed answers. ` +
+            saveStep("Save the document after confirmation, then continue."),
           "stale",
         );
       }
     }
     if (unsaved.length > 0) {
-      return failure("SUMMARY_ARTIFACT_UNAUTHORIZED", unsavedOutputsMessage(stage.slug, unsaved), "stale");
+      return failure("SUMMARY_ARTIFACT_UNAUTHORIZED", unsavedOutputsMessage(stage.slug, unsaved, saveStep), "stale");
     }
   }
 
@@ -16643,59 +16671,6 @@ function readStableReviewArtifacts(
       }
     }
   }
-}
-
-// A committed text file's bytes as its identity: CRLF reads as LF, so a
-// checkout that turns line endings (Git for Windows' default) is no change to
-// the work. Only a file Git itself converts is read this way; one it takes as
-// binary (a NUL, a lone CR, or more than one control byte in 128 printable
-// ones, as Git's convert.c counts them) is taken as it is, and a file with LF
-// line endings is the same either way.
-export function committedTextBytes(bytes: Buffer): Buffer {
-  if (!bytes.includes(13) || process.env.AIDLC_TEST_RAW_LINE_ENDINGS === "1") return bytes;
-  const parts: Buffer[] = [];
-  return committedTextParts([bytes], (part) => parts.push(part)) ? Buffer.concat(parts) : bytes;
-}
-
-// Hands `emit` the text of `chunks` with each CRLF read as LF, a chunk at a
-// time, and says whether that reading applies: true only for text with a CRLF.
-// The caller takes the raw bytes when it is false.
-function committedTextParts(chunks: Iterable<Buffer>, emit: (part: Buffer) => void): boolean {
-  let crlf = false;
-  let pendingCr = false;
-  let printable = 0;
-  let nonprintable = 0;
-  let last = -1;
-  for (const chunk of chunks) {
-    if (chunk.length === 0) continue;
-    if (pendingCr) {
-      if (chunk[0] !== 10) return false;
-      pendingCr = false;
-    }
-    let start = 0;
-    for (let at = 0; at < chunk.length; at++) {
-      const byte = chunk[at];
-      if (byte === 13) {
-        if (at + 1 === chunk.length) pendingCr = true;
-        else if (chunk[at + 1] !== 10) return false;
-        crlf = true;
-        emit(chunk.subarray(start, at));
-        start = at + 1;
-        at++;
-      } else if (byte === 0) {
-        return false;
-      } else if (byte === 127 || (byte < 32 && byte !== 10 && byte !== 8 && byte !== 9 && byte !== 27 && byte !== 12)) {
-        nonprintable++;
-      } else if (byte !== 10) {
-        printable++;
-      }
-    }
-    emit(chunk.subarray(start));
-    last = chunk[chunk.length - 1];
-  }
-  // A trailing DOS end-of-file mark is not counted against the text.
-  if (last === 26) nonprintable--;
-  return crlf && !pendingCr && (printable >> 7) >= nonprintable;
 }
 
 // The sha256 hex of a committed file's text, as committedTextBytes reads it.
@@ -25998,6 +25973,7 @@ function ignoredPathClaimable(
 export function unclaimableIgnoredSourceKeys(
   projectDir: string,
   keys: readonly string[],
+  includeRecordedCheckouts = true,
 ): Set<string> {
   const unclaimable = new Set<string>();
   if (keys.length === 0) return unclaimable;
@@ -26008,7 +25984,7 @@ export function unclaimableIgnoredSourceKeys(
     return unclaimable;
   }
   const carriesWorkspaceShell = recordedRepos.length === 0;
-  const checkouts = readRecordedSourceCheckouts(projectDir);
+  const checkouts = includeRecordedCheckouts ? readRecordedSourceCheckouts(projectDir) : [];
   const sourceClaimValidation: GitSourceClaimValidationCache = new Map();
   const candidates: { key: string; sourceRepoDir: string; path: string }[] = [];
   for (const key of keys) {
@@ -28323,10 +28299,12 @@ const HOOKS_OFF_AGENT_RULES =
 /**
  * What the agent does, then the one line it shows the person, when this
  * harness's hooks are not running here; null for a harness that declares no
- * such step. `next` stops with it before any work, and a refusal for a reply
- * that was not recorded carries it. `keep` is the stop's: asked only when the
- * step has the person type the entry in a new chat, it keeps the stopped
- * command and returns its id, or null to leave the entry bare.
+ * such step. `next` stops with it before any work, a refusal for a reply that
+ * was not recorded carries it, and a save-again refusal of the summary evidence
+ * (checkSummaryConfirmationEvidence) gives it in place of the save, with no
+ * question waiting. `keep` is the stop's: asked only when the step has the
+ * person type the entry in a new chat, it keeps the stopped command and returns
+ * its id, or null to leave the entry bare.
  */
 export function hooksOffAgentStep(projectDir?: string, next?: string, keep?: () => string | null): string | null {
   const activation = hookActivation();
@@ -31322,7 +31300,7 @@ export function humanPresenceGuardDisabled(projectDir?: string): boolean {
 // The same hard signal `next`'s stop reads, for the current workflow: a stage
 // or gate event and no heartbeat at all, with no link on the way to the
 // status files. Anything unreadable proves nothing.
-function hooksNeverRanHere(projectDir?: string): boolean {
+export function hooksNeverRanHere(projectDir?: string): boolean {
   try {
     const project = resolveProjectDir(projectDir);
     return hookLiveness(project).neverFired && !hookStatusPathLinked(project);
@@ -31831,9 +31809,10 @@ export function memoryStrictHoldsGuardPolicy(
 /**
  * Whether the person's own approval may go over a review that did not finish
  * (asked for, with no verdict yet), at a stage gate and at a Unit checkpoint
- * alike. Off, relaxed and a strict set for this piece of work let it; only a
- * strict the team locks in memory keeps the review required. The one place
- * that says which setting counts.
+ * alike, and over a Unit's check that did not pass. Off, relaxed and a strict
+ * set for this piece of work let it; only a strict the team locks in memory
+ * keeps the review, or the check, required. The one place that says which
+ * setting counts.
  */
 export function personMayApproveOverUnfinishedReview(
   projectDir: string,
@@ -35106,9 +35085,9 @@ export function unitLifecycleRunFloorForProject(
 // a stage before the Target keeps its attempt: a jump back to Code Generation
 // leaves each Unit's Functional Design as it was. A row whose Target, or a
 // stage, the graph does not know, or a graph that cannot be read, reaches
-// every stage. A team-owned jump back before the per-Unit block records `Unit
-// Work: kept` (aidlc-jump.ts): it reaches no per-Unit stage, whose work is
-// each Unit's claim's.
+// every stage. A team-owned jump back before the per-Unit block, or a redo of
+// a stage there, records `Unit Work: kept` (aidlc-jump.ts): it reaches no
+// per-Unit stage, whose work is each Unit's claim's.
 export function stageJumpReaches(block: string, slug: string): boolean {
   const name = auditBlockField(block, "Target");
   if (!name || name === slug) return true;
@@ -38669,11 +38648,16 @@ const APPROVED_TOGETHER_ENDS = new Set([
 
 // A later listed stage's approval stands on the person's one reply while the
 // approval that listed it still covers it: no question, rejection or decision
-// since, and no gate for a stage outside the list. Ledger order only. The row
-// is that approval's own, so what it recorded travels with it.
+// since, no gate for a stage outside the list, and the latest review of this stage
+// since, if any, brings no finding the reply never saw (`reviewBringsFinding`, given
+// the review and the row that opened the gate the reply came at; the caller owns
+// the test, and this file must not import its owner, which imports this one).
+// Ledger order only. The row is that approval's own, so what it recorded travels
+// with it.
 export function approvedTogetherCover(
   projectDir: string,
   slug: string,
+  reviewBringsFinding: (review: AuditShardEvent, opened: AuditShardEvent) => boolean,
 ): { first: string; row: AuditShardEvent } | null {
   let rows: AuditShardEvent[];
   try {
@@ -38687,7 +38671,15 @@ export function approvedTogetherCover(
     const listed = approvesTogetherField(row.block);
     const first = auditBlockField(row.block, "Stage");
     if (!first || first === slug || !listed.includes(slug)) continue;
-    for (const later of rows.slice(i + 1)) {
+    const since = rows.slice(i + 1);
+    const review = since.findLast((later) => later.event === "REVIEW_COMPLETED" && auditBlockField(later.block, "Stage") === slug);
+    if (review !== undefined) {
+      const opened = rows.slice(0, i).findLast((earlier) =>
+        earlier.event === "STAGE_AWAITING_APPROVAL" && auditBlockField(earlier.block, "Stage") === first
+      ) ?? row;
+      if (reviewBringsFinding(review, opened)) return null;
+    }
+    for (const later of since) {
       if (APPROVED_TOGETHER_ENDS.has(later.event)) return null;
       if (later.event !== "GATE_APPROVED" && later.event !== "STAGE_AWAITING_APPROVAL") continue;
       const stage = auditBlockField(later.block, "Stage") ?? "";

@@ -24,7 +24,22 @@
 
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, sep } from "node:path";
-import { kiroKnowledgePreflightClause, sharedKnowledgeWithoutFormatDocs } from "../core/tools/aidlc-inline-context.ts";
+import {
+  kiroKnowledgePreflightClause,
+  SHIPPED_FORMAT_DOCS,
+  sharedKnowledgeWithoutFormatDocs,
+} from "../core/tools/aidlc-inline-context.ts";
+
+// The shared files a dispatched agent's preflight names, as Kiro `file://`
+// resources in file-name order. On Kiro a sub-agent that declares no `file://`
+// of its own gets the conductor's whole skill instead (an empty `resources: []`
+// too), so every Kiro helper declares these.
+export function sharedKnowledgeResources(coreRoot: string, harnessDir: string): string[] {
+  return readdirSync(join(coreRoot, "knowledge", "aidlc-shared"))
+    .filter((file) => file.endsWith(".md") && !SHIPPED_FORMAT_DOCS.has(file))
+    .sort()
+    .map((file) => `file://${harnessDir}/knowledge/aidlc-shared/${file}`);
+}
 
 // Walk core and owned-plugin stages and collect every frontmatter `reviewer:`
 // value. Cached per coreRoot - the packager calls this once per projected

@@ -394,15 +394,10 @@ registrations produces a warning. Your own additional hooks do not trigger
 drift warnings. A status line your team set in that file is kept. AI-DLC's own
 status line is not shipped there: each person turns it on for themselves with
 `/aidlc --statusline on`.
-For a manual copy,
-replace the complete harness root from the same versioned
-`runtime/<harness>/` archive (a copy never replaces your `.gitignore` or
-`AGENTS.md`); do not patch one hook command in isolation. On Kiro, follow the
-guide's manual-copy steps instead:
-[Kiro](harnesses/kiro.md#versioned-manual-copy-alternative) copies
-`runtime/kiro-ide/` and
-[Kiro CLI (V2)](harnesses/kiro.md#kiro-cli-v2-versioned-manual-copy-alternative)
-copies `runtime/kiro/`. The manual archive is Bun-shaped and
+For a manual copy, the copy-channel command above is the repair, not a second
+copy of the `runtime/<harness>/` archive over the project, which replaces the
+setup answers and plugin choices it recorded; do not patch one hook command in
+isolation. The manual archive is Bun-shaped and
 does not require the native `aidlc` executable.
 
 ### Hooks disabled globally (`disableAllHooks`)
@@ -662,7 +657,11 @@ with no further review; remove the line to put the path back. A path the
 project's `.gitignore` already ignores is never counted, and neither is a file
 another open piece of work in this folder lists in its own Units' source
 manifests (a second chat building its own work here), or anything under a folder
-it lists: that is the other work's change, and its own checks cover it.
+it lists: that is the other work's change, and its own checks cover it. Nor is a
+file exactly as the remote branch your branch tracks holds it once you have
+pulled it (a teammate's commit, or a change already pushed there, the build's
+own included): it is nobody's change in this work. A change only on your
+machine is still counted.
 Archiving a piece of work you will not finish (`/aidlc intent archive <name>`)
 ends its claims. Under Guard Policy relaxed or off the change is kept and said
 once instead.
@@ -945,7 +944,7 @@ To have the stage that was in progress done again, say "redo this stage".
 
 **Symptom** (GitHub Copilot): you approved the code plan, the build started, and after the chat compacted every build step the assistant tries is refused.
 
-Your approval, the workflow state, and every file already written are kept; only what the assistant had not yet written to a file is gone from the chat. After a compaction the assistant must read its step again before it builds anything. It runs `next` as its own command, which hands the approved build straight back without asking you again. `/aidlc --doctor` shows the step as out of date, with the time and the reason (the chat was compacted, or the workflow state changed after the step was issued, naming what changed when it is known), until that `next` runs.
+Your approval, the workflow state, and every file already written are kept; only what the assistant had not yet written to a file is gone from the chat. After a compaction the assistant must read its step again before it builds anything. It runs `next` as its own command, which hands the approved build straight back without asking you again. The chat is also handed the workflow contract and its current position back with the next tool result it gets, so the commands it issues keep their flags and names. `/aidlc --doctor` shows the step as out of date, with the time and the reason (the chat was compacted, or the workflow state changed after the step was issued, naming what changed when it is known), until that `next` runs.
 
 ---
 

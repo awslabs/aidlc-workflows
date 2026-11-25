@@ -145,13 +145,24 @@ const RECOVERY_FLAGS: Record<string, readonly string[]> = {
   info: ["slug", "intent", "space", "project-dir"],
 };
 
-function validateRecoveryFlags(args: string[], valid: readonly string[]): void {
+// The verb is the one word these commands take. Any other word is refused: a
+// stamp or a day count whose flag name was dropped would otherwise leave purge
+// deleting every parked attempt and restore taking the newest.
+function validateRecoveryFlags(args: string[], valid: readonly string[], verb: string): void {
   const seen = new Set<string>();
+  const validFlags = valid.map((flag) => `--${flag}`).join(", ");
+  let verbRead = false;
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
-    if (!arg.startsWith("--")) continue;
+    if (!arg.startsWith("--")) {
+      if (!verbRead) {
+        verbRead = true;
+        continue;
+      }
+      error(`worktree ${verb} does not take "${arg}". Valid flags: ${validFlags}`);
+    }
     const name = arg.slice(2);
-    if (!valid.includes(name)) error(`Unknown flag ${arg}. Valid flags: ${valid.map((flag) => `--${flag}`).join(", ")}`);
+    if (!valid.includes(name)) error(`Unknown flag ${arg}. Valid flags: ${validFlags}`);
     if (seen.has(name)) error(`Duplicate flag ${arg}.`);
     seen.add(name);
     if (name === "raw") continue;
@@ -4633,7 +4644,7 @@ export function main(argv: string[]): void {
 
   try {
     const validFlags = RECOVERY_FLAGS[subcommand];
-    if (validFlags) validateRecoveryFlags(rawArgs, validFlags);
+    if (validFlags) validateRecoveryFlags(rawArgs, validFlags, subcommand);
     switch (subcommand) {
       case "create":
         handleCreate(filteredArgs.slice(1));
