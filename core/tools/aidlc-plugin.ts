@@ -181,6 +181,9 @@ export type HeldRecord = {
   name: string;
   version: string;
   reason: string;
+  // Held for the AI-DLC version: the plugin's core ranges, so list and doctor
+  // judge them again against the version the project runs now, between syncs.
+  engineRanges?: string[];
 };
 
 export type ProjectEvidence = {
@@ -188,6 +191,10 @@ export type ProjectEvidence = {
   legacy: Set<string>;
   ownership: Map<string, OwnershipRecord>;
   held: Map<string, HeldRecord>;
+  // The AI-DLC version this project's work runs on (projectEngineVersion),
+  // and the harness, for when a held plugin composes.
+  engineVersion: string;
+  harnessName: string;
 };
 
 function absolute(path: string): string {
@@ -812,7 +819,9 @@ function projectEvidence(projectDir: string, harnessDir: string): ProjectEvidenc
   const legacy = new Set<string>();
   const ownership = new Map<string, OwnershipRecord>();
   const held = new Map<string, HeldRecord>();
-  if (!existsSync(dataDir)) return { stamps, legacy, ownership, held };
+  const engineVersion = projectEngineVersion(projectDir, harnessDir);
+  const harnessName = runtimeHarnessName(projectDir, harnessDir);
+  if (!existsSync(dataDir)) return { stamps, legacy, ownership, held, engineVersion, harnessName };
   for (const entry of readdirSync(dataDir).sort()) {
     const heldMatch = entry.match(/^plugin-held-([a-z][a-z0-9-]*)\.json$/);
     if (heldMatch) {
@@ -850,7 +859,7 @@ function projectEvidence(projectDir: string, harnessDir: string): ProjectEvidenc
     // A missing or unreadable graph cannot prove legacy composition.
   }
   for (const key of stamps.keys()) legacy.delete(key);
-  return { stamps, legacy, ownership, held };
+  return { stamps, legacy, ownership, held, engineVersion, harnessName };
 }
 
 function parseHeld(path: string): HeldRecord | null {
@@ -862,7 +871,9 @@ function parseHeld(path: string): HeldRecord | null {
       SAFE_PLUGIN_KEY.test(value.name) &&
       typeof value.version === "string" &&
       STRICT_SEMVER.test(value.version) &&
-      typeof value.reason === "string"
+      typeof value.reason === "string" &&
+      (value.engineRanges === undefined ||
+        (Array.isArray(value.engineRanges) && value.engineRanges.every((range) => typeof range === "string")))
     ) {
       return value as HeldRecord;
     }
@@ -946,7 +957,7 @@ export function comparePluginState(
     if (enabled && paused.has(plugin.key)) {
       rows.push(pausedStatus(plugin.key, plugin.version));
     } else if (enabled && held?.version === plugin.version) {
-      rows.push(heldStatus(held, stamp?.version ?? null));
+      rows.push(heldStatus(held, stamp?.version ?? null, evidence, plugin.root));
     } else if (!enabled) {
       rows.push({
         key: plugin.key,
@@ -1017,7 +1028,7 @@ export function comparePluginState(
       continue;
     }
     if (held) {
-      rows.push(heldStatus(held, evidence.stamps.get(key)?.version ?? null));
+      rows.push(heldStatus(held, evidence.stamps.get(key)?.version ?? null, evidence, null));
       continue;
     }
     rows.push({
@@ -1036,14 +1047,28 @@ export function comparePluginState(
   );
 }
 
-function heldStatus(held: HeldRecord, composedVersion: string | null): PluginStatus {
+function heldStatus(
+  held: HeldRecord,
+  composedVersion: string | null,
+  evidence: ProjectEvidence,
+  root: string | null,
+): PluginStatus {
+  // The project moved to an AI-DLC version in the ranges since the hold (an
+  // update between syncs): the record's line would name the old version.
+  const ranges = held.engineRanges ?? [];
+  const met = ranges.length > 0 &&
+    ranges.every((range) => Bun.semver.satisfies(engineReleaseId(evidence.engineVersion), range));
   return {
     key: held.name,
     installedVersion: held.version,
     composedVersion,
     state: "dependency-unmet",
     action: "attention",
-    message: held.reason,
+    message: met
+      ? `${held.name} needs AI-DLC ${ranges.join(" and ")}, which this project now runs (AI-DLC ${evidence.engineVersion}); it composes ${
+        nextCompose(evidence.harnessName, held.name, root)
+      }.`
+      : held.reason,
   };
 }
 
@@ -2630,20 +2655,44 @@ export type BaseView =
   | { kind: "missing"; why: "not-installed" | "host-disabled" | "not-in-project" | "held" }
   | { kind: "off" };
 
-export type HeldPlugin = { plugin: InstalledPlugin; reason: string };
+export type HeldPlugin = { plugin: InstalledPlugin; reason: string; engineRanges?: string[] };
 
 // What a held line needs to know about the host: its name, which harness this
 // is, for when a waiting plugin composes, and the engine version installed
 // here, for a plugin that needs AI-DLC in a range.
 export type HeldWords = { hostName: string; harnessName: string; engineVersion: string };
 
-// A preview build carries every feature of the release it previews, so a
-// plugin's core range reads the engine's release id, never the -preview tag
-// (npm range grammar would put every prerelease outside a plain range). For
-// the same reason readPluginBase refuses a preview version in a core range.
+// A plugin's core range is met by release versions. A preview build is
+// numbered for the next patch after the stable release it was built from
+// (releaseBuildVersion, nextPatchVersion), and the release it becomes is chosen
+// at promotion (2.11.0 shipped from 2.10.1-preview builds), so a preview cannot
+// be trusted to carry the features of the version in its name. It counts as
+// the stable release it was built after: 2.11.5-preview.20261113.1 reads as
+// 2.11.4. Conservative by design: a plugin that needs the next release waits
+// for it, and is never composed onto a preview that may lack what it needs.
 export function engineReleaseId(version: string): string {
   const at = version.indexOf("-");
-  return at < 0 ? version : version.slice(0, at);
+  if (at < 0) return version;
+  const [major, minor, patch] = version.slice(0, at).split(".").map(Number);
+  // A preview's patch is never 0 (its id is the next patch after the stable
+  // it was built from); a hand-made one with patch 0 counts as that release.
+  return patch > 0 ? `${major}.${minor}.${patch - 1}` : version.slice(0, at);
+}
+
+// The version of the AI-DLC files this project's work runs on: its runtime
+// stamp's frameworkVersion, the files a plugin composes onto. A native
+// `aidlc update` moves the engine before `aidlc config` moves the project, so
+// the running engine's own version is only the fallback.
+export function projectEngineVersion(projectDir: string, harnessDir: string): string {
+  try {
+    const stamp = readJson(join(harnessDataDir(projectDir, harnessDir), "aidlc-stamp.json"));
+    if (isPlainObject(stamp) && typeof stamp.frameworkVersion === "string" && STRICT_SEMVER.test(stamp.frameworkVersion)) {
+      return stamp.frameworkVersion;
+    }
+  } catch {
+    // No stamp to read: the running engine's version.
+  }
+  return AIDLC_VERSION;
 }
 
 // Claude Code and Codex list the plugins installed in them; no other host does.
@@ -2739,8 +2788,12 @@ function heldLine(
         ]
     : problem.kind === "engine"
       ? [
-        `needs AI-DLC ${problem.range}, and this install is AI-DLC ${problem.version}`,
-        `Install an AI-DLC release in that range, or a version of ${key} made for AI-DLC ${problem.version}.`,
+        `needs AI-DLC ${problem.range}, and this project runs AI-DLC ${problem.version}${
+          engineReleaseId(problem.version) === problem.version ? "" : `, which counts as ${engineReleaseId(problem.version)}`
+        }`,
+        `Move the project to an AI-DLC release in that range, or install a version of ${key} made for AI-DLC ${
+          engineReleaseId(problem.version)
+        }; then ${key} composes ${nextCompose(words.harnessName, key, plugin.root)}.`,
       ]
     : problem.kind === "deep"
       ? [`builds on ${problem.base}, which builds on ${problem.baseOfBase}`, "A plugin can build only on a base that builds on core alone."]
@@ -2859,7 +2912,13 @@ export function layerOrder(
         if (missing.length > 0) problem = { kind: "include", base: base.name, version: view.version, missing };
       }
     }
-    if (problem !== null) held.push({ plugin, reason: heldLine(plugin, problem, composedVersion(plugin.key), words) });
+    if (problem !== null) {
+      held.push({
+        plugin,
+        reason: heldLine(plugin, problem, composedVersion(plugin.key), words),
+        ...(problem.kind === "engine" ? { engineRanges: plugin.coreRanges } : {}),
+      });
+    }
     else if (base === null) bases.push(plugin);
     else layered.push(plugin);
   }
@@ -3021,7 +3080,11 @@ async function syncPluginsLocked(
           stages: ownedStageSlugs(evidence.ownership.get(name)),
         }
         : null;
-      if (hostList === null) return composed ?? { kind: "missing", why: "not-in-project" };
+      // A host with no plugin list syncs one plugin per hook, so a base outside
+      // this run that its own sync held is held, not merely absent.
+      if (hostList === null) {
+        return composed ?? { kind: "missing", why: evidence.held.has(name) ? "held" : "not-in-project" };
+      }
       const found = hostList.find((plugin) => plugin.key === name);
       if (!found) return { kind: "missing", why: "not-installed" };
       return composed ?? { kind: "missing", why: "host-disabled" };
@@ -3030,15 +3093,16 @@ async function syncPluginsLocked(
     {
       hostName: harness === "codex" ? "Codex" : "Claude Code",
       harnessName,
-      engineVersion: AIDLC_VERSION,
+      engineVersion: evidence.engineVersion,
     },
   );
   plugins = order.ordered;
-  const held: HeldRecord[] = order.held.map(({ plugin, reason }) => ({
+  const held: HeldRecord[] = order.held.map(({ plugin, reason, engineRanges }) => ({
     schemaVersion: 1,
     name: plugin.key,
     version: plugin.version,
     reason,
+    ...(engineRanges !== undefined ? { engineRanges } : {}),
   }));
   const heldNow = new Set(held.map((record) => record.name));
   // A record goes once its plugin composes; where the host lists its plugins,

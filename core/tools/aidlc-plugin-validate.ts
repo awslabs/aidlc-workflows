@@ -450,16 +450,6 @@ export function readPluginBase(
     if (range !== null && !validDependencyRange(range)) {
       return { problem: { kind: "entry", reason: `"${entry}" has a version range npm cannot read, such as "^1.2.0" or ">=1.2.0 <2.0.0"` } };
     }
-    // Sync compares a preview engine as the release it previews, so a preview
-    // version in a core range could never be met by that preview itself.
-    if (name === "core" && range !== null && /[\dxX*]-[0-9A-Za-z]/.test(range)) {
-      return {
-        problem: {
-          kind: "entry",
-          reason: `"${entry}" names a preview build: a range on core takes release versions, such as ">=2.11.4", and a preview counts as the release it previews`,
-        },
-      };
-    }
     if (name === self) return { problem: { kind: "entry", reason: `"${entry}" names this plugin itself` } };
     if (name !== "core") bases.push({ name, range });
     else if (range !== null) coreRanges.push(range);
@@ -925,6 +915,19 @@ function validateManifest(
         ? "A plugin builds on core and at most one base plugin; keep one."
         : 'Use entries such as "core" or "other-plugin@^1.2.0".',
     );
+  } else {
+    // A core range is met by release versions, a preview build counting as the
+    // stable release it was built after; a range that names a preview version
+    // compares that way too, so one that only a preview could meet never is.
+    for (const range of read.coreRanges.filter((each) => /[\dxX*]-[0-9A-Za-z]/.test(each))) {
+      addWarning(
+        findings,
+        displayFile,
+        "manifest-shape",
+        `manifest dependencies: "core@${range}" names a preview version, but a core range is met by release versions (a preview build counts as the stable release it was built after), so a range only a preview could meet holds the plugin everywhere`,
+        'Use release versions in a core range, such as "core@>=2.11.4".',
+      );
+    }
   }
 
   if (!isPlainRecord(manifest.aidlc)) {

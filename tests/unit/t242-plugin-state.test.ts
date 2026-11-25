@@ -137,6 +137,8 @@ function evidence(
     legacy: new Set(legacy),
     ownership: new Map(),
     held: new Map(),
+    engineVersion: "2.11.4",
+    harnessName: "claude",
   };
 }
 
