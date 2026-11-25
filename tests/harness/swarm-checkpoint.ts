@@ -50,10 +50,10 @@ export const ISOLATED_GIT_ENV: NodeJS.ProcessEnv = {
     : {}),
 };
 
-export function runCheckpointTool(pd: string, file: string, args: string[], input?: unknown) {
+export function runCheckpointTool(pd: string, file: string, args: string[], input?: unknown, env: NodeJS.ProcessEnv = ISOLATED_GIT_ENV) {
   const r = Bun.spawnSync([process.execPath, join(AIDLC_SRC, file), ...args], {
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
-    cwd: pd, env: { ...ISOLATED_GIT_ENV, AIDLC_PROJECT_DIR: pd, CLAUDE_PROJECT_DIR: pd },
+    cwd: pd, env: { ...env, AIDLC_PROJECT_DIR: pd, CLAUDE_PROJECT_DIR: pd },
     stdout: "pipe", stderr: "pipe",
     ...(input === undefined ? {} : { stdin: Buffer.from(JSON.stringify(input)) }),
   });
@@ -71,8 +71,8 @@ export function recordCommand(pd: string, command: string): void {
   expect(applied.code, `${applied.out}\n${applied.err}`).toBe(0);
 }
 
-export function swarm(pd: string, args: string[]) {
-  return runCheckpointTool(pd, "tools/aidlc-swarm.ts", [...args, "--project-dir", pd]);
+export function swarm(pd: string, args: string[], env?: NodeJS.ProcessEnv) {
+  return runCheckpointTool(pd, "tools/aidlc-swarm.ts", [...args, "--project-dir", pd], undefined, env);
 }
 
 export function git(pd: string, args: string[]): string {
@@ -291,8 +291,8 @@ export function fixtureWithShippedGitignore(units = ["alpha"]): string {
   }
 }
 
-export function prepare(pd: string, units = ["alpha"], resume = false) {
-  return swarm(pd, ["prepare", "--batch", "1", "--units", units.join(","), "--base", "main", ...(resume ? ["--resume-existing"] : [])]);
+export function prepare(pd: string, units = ["alpha"], resume = false, env?: NodeJS.ProcessEnv) {
+  return swarm(pd, ["prepare", "--batch", "1", "--units", units.join(","), "--base", "main", ...(resume ? ["--resume-existing"] : [])], env);
 }
 
 export function nextDirective(pd: string) {

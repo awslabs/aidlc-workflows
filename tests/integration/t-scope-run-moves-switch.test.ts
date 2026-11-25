@@ -20,7 +20,6 @@ import {
   field,
   runScope,
   SCOPE_RUN_TIMEOUT_MS,
-  recoveryAsk,
   ScopeRunRefused,
   scopeRunProblems,
   type ScopeRun,
@@ -170,7 +169,7 @@ describe("a gate open when summary confirmation turns on", () => {
     expect(summaries(asked, later[0])).toHaveLength(1);
   }, SCOPE_RUN_TIMEOUT_MS);
 
-  test("bugfix to enterprise, then an edit at the open gate: the summary is asked once, and the stage's gate comes back and is approved", () => {
+  test("bugfix to enterprise, then an edit at the open gate: after its recovery review their next Approve goes through, with no summary owed", () => {
     const { rows, asked, later, refused } = switchAtOpenGate("bugfix", "/aidlc --scope enterprise", (agent) => {
       const dir = join(activeRecord(agent.host.proj).dir, "inception", RA);
       const rel = (name: string) => join(dir, name).slice(agent.host.proj.length + 1).replaceAll("\\", "/");
@@ -182,32 +181,13 @@ describe("a gate open when summary confirmation turns on", () => {
       const stale = approve(agent);
       expect(stale).toContain("ARTIFACT_REVIEW_STALE");
       agent.followRefusal(stale);
-      // Then the edit is the stage's revision, made after the switch: its
-      // summary is owed, and the person confirms it once.
-      const owed = approve(agent);
-      const said = (JSON.parse(owed) as { message?: string }).message ?? owed;
-      expect(said).toContain("SUMMARY_ANSWER_INVALID");
-      expect(recoveryAsk(said)?.remedies).toMatchObject([{ op: "reconfirm-summary" }, { op: "redo-jump" }]);
-      agent.askPerson("guard recovery", RA, "Requirements Analysis can't go ahead as things stand", ["reconfirm-summary", "redo-jump"], "reconfirm-summary");
-      agent.must("log", "answer", "--stage", RA, "--checkpoint", "guard-recovery", "--details", "reconfirm-summary");
-      const questions = rel(`${RA}-questions.md`);
-      const answered = readFileSync(join(agent.host.proj, questions), "utf-8");
-      const summary = (answer: string) => `${answered}\n## Consolidated Summary Confirmation\n\nDoes this all look correct?\n\n- Looks correct\n- Request changes\n\n[Answer]: ${answer}\n`;
-      agent.host.write(questions, summary(""));
-      agent.must("log", "decision", "--stage", RA, "--checkpoint", "summary-confirmation", "--questions-file", questions,
-        "--decision", "Does this all look correct?", "--options", "Looks correct,Request changes");
-      agent.askPerson("summary confirmation", RA, "Does this all look correct?", ["Looks correct", "Request changes"], "Looks correct");
-      agent.host.write(questions, summary("Looks correct"));
-      agent.must("log", "answer", "--stage", RA, "--checkpoint", "summary-confirmation", "--questions-file", questions,
-        "--details", "Looks correct");
-      // The agent re-saves the stage's outputs from it, as the remedy says: the document and its record.
-      agent.host.write(rel("requirements.md"), requirements);
-      agent.host.write(rel("traceability.json"), readFileSync(join(dir, "traceability.json"), "utf-8"));
+      // That review read the edit before their next Approve: it is the
+      // stage they approve, not a revision after the switch, so no summary
+      // is owed for it.
+      expect(approve(agent)).toBe("");
     });
-    // The edit was taken as the stage's revision once, and approved once after it.
-    const backfilled = rows.filter((e) => e.event === "GATE_REJECTED" && field(e.block, "Stage") === RA);
-    expect(backfilled.map((e) => field(e.block, "Recovered"))).toEqual(["true"]);
-    expect(summaries(asked, RA)).toHaveLength(1);
+    expect(rows.filter((e) => e.event === "GATE_REJECTED" && field(e.block, "Stage") === RA)).toEqual([]);
+    expect(summaries(asked, RA)).toEqual([]);
     expect(approvals(rows, RA)).toHaveLength(1);
     expect(refused.map((r) => r.took)).toEqual(["remedy start-recovery-review"]);
     expect(later[0]).toBe("user-stories");

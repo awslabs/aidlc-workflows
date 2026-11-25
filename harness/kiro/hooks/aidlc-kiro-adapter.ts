@@ -39,7 +39,6 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
-  rmSync,
   writeFileSync,
 } from "node:fs";
 import { randomUUID } from "node:crypto";
@@ -54,9 +53,6 @@ import {
   agentsDir,
   classifyTerminalCommand,
   readNextLine,
-  readNextTokens,
-  sessionsDir,
-  validScopes,
   decodeHarnessPlainText,
   terminalCommandRelay,
   hookDebug,
@@ -336,267 +332,62 @@ const childCwd = process.env.AIDLC_PROJECT_DIR ? projectDir : process.cwd();
 // block API, so the conductor relays rather than is bypassed — measured to land
 // the command and leave the active intent untouched).
 //
-// WHY the args support BOTH payload shapes: kiro-cli delivers the expanded
-// skill body, with $ARGUMENTS substituted into the forwarding loop's step-1
-// anchor `... engine orchestrate next <ARGS>` bare (no shell capture, no pipe).
-// The body also holds prose examples of `next` (`next --stage <slug>`,
-// `next compose ...`) ahead of that anchor, so only the span followed by
-// "bare" carries the person's arguments, or the only span when there is one. The
-// repo's live kiro-cli 2.6.1 fixture carries plain prompt text, while issue
-// #776 measured Kiro IDE 1.0.309 and kiro-cli 2.18.1 --v3 delivering the raw
-// typed `/aidlc ...` text. The fallback recovers argv directly from that raw
+// WHY the args support both payload shapes: kiro-cli delivers the expanded
+// skill body, with $ARGUMENTS substituted wherever the skill writes it (Kiro
+// CLI 3.5.0 `--v2` replaced every one, inside backticks too). The aidlc skill
+// writes it once, on its own line between the two markers below, and on no
+// command: its first command is `next --entry`, which reads the line this hook
+// records. The opening marker is read with the skill's own words before it, so
+// a message that only quotes the markers is no such line. Issue #776 measured
+// Kiro IDE 1.0.309 and kiro-cli 2.18.1 --v3 delivering the raw typed
+// `/aidlc ...` text; the last fallback recovers argv directly from that raw
 // shape.
-// The step-1 line of the expanded body, from its opening words to its closing
-// ones: what lies between its `next` and the closing words is Kiro's
-// `$ARGUMENTS`, as Kiro wrote it there, not the person's own text. Kiro CLI
-// 3.2.0 `--v2` (measured on Linux) writes their words and double-quoted runs
-// joined with one space, the quotes of a run dropped, so their line breaks
-// and those quotes do not reach this hook.
-const NEXT_ANCHOR_LINE = "printed by running `";
-const NEXT_ANCHOR_CLOSE = "` bare (no shell capture, no pipe)";
+// What lies between the markers is Kiro's `$ARGUMENTS`, as Kiro wrote it
+// there, not the person's own text. Kiro CLI 3.2.0 `--v2` (measured on Linux)
+// writes their words and double-quoted runs joined with one space, the quotes
+// of a run dropped, so their line breaks and those quotes do not reach this
+// hook. The closing marker is the last one, so words of theirs that hold it
+// stay theirs.
+const TYPED_OPEN = "which goes on no command: <aidlc-typed>";
+const TYPED_CLOSE = "</aidlc-typed>";
 
-function anchoredArgs(prompt: string): string | null {
-  const close = prompt.indexOf(NEXT_ANCHOR_CLOSE);
-  const line = close < 0 ? -1 : prompt.lastIndexOf(NEXT_ANCHOR_LINE, close);
+function typedLineArgs(prompt: string): string | null {
+  const open = prompt.indexOf(TYPED_OPEN);
+  const close = open < 0 ? -1 : prompt.lastIndexOf(TYPED_CLOSE);
+  return close < open + TYPED_OPEN.length ? null : prompt.slice(open + TYPED_OPEN.length, close);
+}
+
+// The skill a project still has from an earlier release (the engine updated,
+// `aidlc config` not run there yet) put the words on step 1's command: what
+// lies between its `next` and the step's closing words. Its body holds prose
+// examples of `next` ahead of that line, so only this span is read.
+const EARLIER_STEP_OPEN = "printed by running `";
+const EARLIER_STEP_CLOSE = "` bare (no shell capture, no pipe)";
+
+function earlierStepArgs(prompt: string): string | null {
+  const close = prompt.indexOf(EARLIER_STEP_CLOSE);
+  const line = close < 0 ? -1 : prompt.lastIndexOf(EARLIER_STEP_OPEN, close);
   if (line < 0) return null;
   const open = /(?:engine\s+orchestrate|aidlc-orchestrate\.ts)\s+next ?/.exec(prompt.slice(line, close));
   return open === null ? null : prompt.slice(line + open.index + open[0].length, close);
 }
 
-// The engine call the agent is told to run: plain typed words as they are, or,
-// when they hold anything else a shell reads (a line break, a backtick, `$`,
-// `#`, a glob, an apostrophe), each argument quoted, so the call carries every
-// word and runs none. Single quotes are literal in sh and in PowerShell alike;
-// a word with an apostrophe takes double quotes when nothing in it expands
-// there, and otherwise this host's own shell form.
-// A word sh reads as typed. On Windows the call runs in PowerShell, whose
-// argument mode reads a comma as a list, a leading `@` as splatting, a leading
-// `#` as a comment and a number-like word (1kb, 0x10) as a number, so there
-// only a plain word, an option or a plain number stays bare; every other word
-// is single-quoted, which PowerShell reads literally.
-const BARE_WORD = process.platform === "win32"
-  ? /^(?:--?)?[A-Za-z_][A-Za-z0-9_.:/=+%-]*$|^[0-9]+(?:\.[0-9]+)?$/
-  : /^[A-Za-z0-9_@%+=:,./-]+$/;
-// PowerShell reads the curly quotes U+2018-U+201B as single quotes and
-// U+201C-U+201F as double quotes (text pasted from a document holds them), so
-// on Windows every word that is not bare takes the single-quoted form with each
-// single-quote-class character doubled, which PowerShell reads back as typed.
-// The person's characters are never changed.
-const WIN32_SINGLE_QUOTE = /['\u2018-\u201B]/g;
-// Native Windows `aidlc` is aidlc.cmd, so the call also crosses cmd.exe, which
-// acts on & | < > ^ in a word with no space, and the launcher then reads the
-// arguments the Windows way (CommandLineToArgvW). A word holding one of those
-// characters travels as '"word"': PowerShell keeps the literal double quotes,
-// cmd.exe reads the word as quoted, and the launcher reads it back as typed (a
-// backslash run at the end doubled). A word holding a double quote of its own
-// never takes this form: cmd.exe flips its quote state at every double quote,
-// escaped or not; and cmd.exe replaces a %NAME% pair even inside quotes. Such
-// words go through the request file instead (below), off the line altogether.
-const CMD_METACHARACTER = /[&|<>^]/;
-const CMD_NAME_PAIR = /%[^%]+%/;
-function windowsArgv(arg: string): string {
-  const trailing = /\\*$/.exec(arg)?.[0] ?? "";
-  return `"${arg}${trailing}"`;
-}
-// On Windows a word holding a double quote, or a %NAME% pair, cannot cross
-// cmd.exe as written (cmd.exe flips its quote state at every double quote,
-// escaped or not, so an & | < > ^ inside such a word would run a second
-// command, and it replaces the pair with a variable's value): the hook writes the
-// person's words itself to the request file the engine reads with no shell on
-// the way, and forwards `next <flags> --request-file <path>`. The rule this
-// keeps: no forwarded token holding a double quote ever reaches the cmd.exe
-// line. The flags stay on the line because the engine reads the file as words
-// only, never as flags; which tokens are flags, and which flag takes the next
-// token as its value, is the engine's own reading (parseNextFlags), asked per
-// token, and a token holding a double quote is always a word. compose keeps
-// its verb on the line, the engine reads the file as its task text; another
-// verb (park, team-board), or a reading the hook cannot make, sends every
-// token as words: nothing runs, and at worst the engine shows a flag back as
-// words. A file that cannot be written still leaves the words off the line;
-// the engine then asks for the request again.
-const REQUEST_FILE = "aidlc/.aidlc-request-text/request.txt";
-async function requestFileForwarding(
-  args: readonly string[],
-  cwd: string,
-): Promise<{ args: string[]; forwarded: string } | null> {
-  if (process.platform !== "win32" || !args.some((arg) => arg.includes('"') || CMD_NAME_PAIR.test(arg))) return null;
-  // A typed `--` starts the words: everything after it is the request, as the
-  // engine reads it, and the marker itself is not a word.
-  const literal = args.indexOf("--");
-  const typed = literal < 0 ? [...args] : [...args.slice(0, literal), ...args.slice(literal + 1)];
-  let flags: string[] = [];
-  let words: string[] = typed;
-  if (args[0] === "compose") {
-    flags = ["compose"];
-    words = typed.slice(1);
-  } else if (leadingOrchestratorVerb(args) === null) {
-    try {
-      const { parseNextFlags } = await import("../tools/aidlc-orchestrate.ts");
-      flags = [];
-      words = [];
-      const head = literal < 0 ? args : args.slice(0, literal);
-      // A leading plan name (`bugfix`, `classic:`) names the plan only on the
-      // line: inside the file's text the engine reads it as a word and asks
-      // for the plan again. It stays there when nothing in it needs the file.
-      let from = 0;
-      const lead = head[0];
-      if (
-        lead !== undefined && !lead.includes('"') && !CMD_NAME_PAIR.test(lead) &&
-        parseNextFlags([lead]).positionalScope !== undefined
-      ) {
-        flags.push(lead);
-        from = 1;
-      }
-      for (let i = from; i < head.length; i++) {
-        const token = head[i];
-        // On the line only when the engine on its own reads the token as a
-        // flag: a lone `-`, a `-x` or any token the engine reads as request text
-        // stays a word, in its typed place.
-        if (!token.startsWith("-") || token.includes('"') || parseNextFlags([token]).intent !== undefined) {
-          words.push(token);
-          continue;
-        }
-        flags.push(token);
-        const value = head[i + 1];
-        if (
-          value !== undefined && !value.startsWith("-") && !value.includes('"') &&
-          parseNextFlags([token, value]).intent === undefined
-        ) {
-          flags.push(value);
-          i++;
-        }
-      }
-      if (literal >= 0) words.push(...args.slice(literal + 1));
-    } catch {
-      flags = [];
-      words = typed;
-    }
-  }
-  try {
-    mkdirSync(join(cwd, "aidlc", ".aidlc-request-text"), { recursive: true });
-    writeFileSync(join(cwd, REQUEST_FILE), `${words.join(" ")}\n`, "utf-8");
-  } catch { /* the engine reports the unread file; the words still stay off the line */ }
-  const argv = [...flags, "--request-file", REQUEST_FILE];
-  return { args: argv, forwarded: forwardedArgs(argv.join(" "), argv) };
-}
-function shellWord(arg: string): string {
-  if (BARE_WORD.test(arg)) return arg;
-  if (process.platform === "win32") {
-    const word = CMD_METACHARACTER.test(arg) ? windowsArgv(arg) : arg;
-    return `'${word.replace(WIN32_SINGLE_QUOTE, (q) => q + q)}'`;
-  }
-  if (!arg.includes("'")) return `'${arg}'`;
-  if (!/["`$\\]/.test(arg)) return `"${arg}"`;
-  return `'${arg.replaceAll("'", "'\\''")}'`;
-}
-// The line as typed only when a shell reads it as the split does: in this
-// character class only a double quote quotes, so an odd count leaves one open
-// (`fix the 5" display`) and the shell stops on it.
-function forwardedArgs(raw: string, args: string[]): string {
-  if (
-    /^[A-Za-z0-9_@%+=:,./ \t"-]*$/.test(raw) &&
-    (raw.match(/"/g)?.length ?? 0) % 2 === 0 &&
-    (process.platform !== "win32" || args.every((arg) => BARE_WORD.test(arg)))
-  ) {
-    return raw;
-  }
-  return args.map(shellWord).join(" ");
-}
+// The aidlc skill's first command, which reads the person's recorded line itself.
+const ENTRY_STEP = "AI-DLC: this message is an AI-DLC request and AI-DLC has it on record. " +
+  "Run `{{INVOKE}} engine orchestrate next --entry` now and do only what it prints.";
 
-// The call the orchestrator skill asks for when a request opens with the name
-// of a plan (`/aidlc classic Build a notes app`): the name as its own argument
-// and the rest of the request quoted into one (`next classic 'Build a notes
-// app'`), which the first-next check takes as well as the line as typed. What
-// the hook names depends on the rest: only words, and a name with its colon
-// (`express: add a version flag`) is the plan on either line, so it names the
-// skill's call; only words after a bare name, which may be their own first
-// word (`classic car rental website`), and it names both when they fit
-// (firstCallMessage); a flag-shaped word after the name (`--review advisory`),
-// which only the agent can tell is a setting or part of what they want, and it
-// names the line as typed, where the engine reads the setting. A `--` keeps
-// its meaning: no grouped call. The words are read in place, so a word that is
-// a verb only first on the line (`compose`) stays theirs. The plans are the
-// engine's own (validScopes), read as its line reading reads them.
-type PlanFirstCall = { raw: string; args: string[]; named: "both" | "grouped" | "typed" };
-function planFirstCall(args: readonly string[]): PlanFirstCall | null {
-  if (args.length < 3 || args.includes("--")) return null;
-  const colon = /^([A-Za-z][\w-]*):$/.exec(args[0]);
-  let plans: ReadonlySet<string>;
-  try {
-    plans = validScopes();
-  } catch {
-    return null;
-  }
-  if (!(colon ? plans.has(colon[1].toLowerCase()) : plans.has(args[0]))) return null;
-  const onlyWords = readNextTokens(args).tokens.every((token) => token.at === 0 || token.role === "word");
-  const call = [args[0], args.slice(1).join(" ")];
-  return { raw: call.map(shellWord).join(" "), args: call, named: !onlyWords ? "typed" : colon ? "grouped" : "both" };
-}
-// The first call this hook named for the turn's request, kept in the
-// git-ignored sessions folder. Earlier releases wrote it as
-// aidlc/.aidlc-forwarding-latch, which a project may have committed before its
-// .gitignore part listed it; writing there again would keep putting the
-// person's words into git (doctor names that file and the step that untracks
-// it).
-function forwardingLatchPath(projectDir: string): string {
-  return join(sessionsDir(projectDir), ".kiro-cli-forwarding-latch.json");
-}
-// The latch is the hook's own file; a plan entry of any other shape is no call.
-function latchPlan(value: unknown): PlanFirstCall | undefined {
-  if (value === null || typeof value !== "object") return undefined;
-  const plan = value as Partial<PlanFirstCall>;
-  return typeof plan.raw === "string" && Array.isArray(plan.args) && plan.args.length === 2 &&
-      plan.args.every((arg) => typeof arg === "string") &&
-      (plan.named === "both" || plan.named === "grouped" || plan.named === "typed")
-    ? plan as PlanFirstCall
-    : undefined;
-}
-// What the hook, and the first-next check when it refuses, say the first call
-// is. Both calls repeat the request, so when they would not fit in `room` bytes
-// (what Kiro hands the agent from a hook) only the typed line is named, as for
-// any other request; the check still takes the skill's call.
-function firstCallMessage(refusal: boolean, typed: string, plan: PlanFirstCall | undefined, room: number): string {
-  const call = (line: string) => `{{INVOKE}} engine orchestrate next ${line}`;
-  const gap = refusal ? "\n" : "\n\n";
-  const one = refusal
-    ? "The first aidlc-orchestrate next call dropped or changed the user's arguments. Run exactly: "
-    : `Your first tool call is exactly the call below, every argument kept; do not run a bare \`next\`.${gap}`;
-  if (plan?.named === "both") {
-    const name = plan.args[0];
-    const both = (refusal
-      ? "The first aidlc-orchestrate next call dropped or changed the user's arguments. Run exactly one of these."
-      : "Your first tool call is one of the two calls below, every argument kept; do not run a bare `next`.") +
-      `${gap}If \`${name}\` is the plan they named:${gap}${call(plan.raw)}${gap}` +
-      `If \`${name}\` is part of what they want built:${gap}${call(typed)}\n`;
-    if (Buffer.byteLength(both, "utf-8") <= room) return both;
-  }
-  return `${one}${call(plan?.named === "grouped" ? plan.raw : typed)}\n`;
-}
-
-function extractNextInvocation(
-  prompt: string,
-): { raw: string; args: string[]; typed: string; forwarded: string } {
-  // The step-1 line's own boundary first; then the anchor's closing backtick,
-  // in the native dispatcher or the legacy filename shape. A body with a
-  // single `next` span has no example to mistake for it.
-  const payload = anchoredArgs(prompt);
-  const spans = [...prompt.matchAll(/(?:engine\s+orchestrate|aidlc-orchestrate\.ts)\s+next ?([^`\n]*)`/g)];
-  const anchor = payload !== null ? null : prompt.match(
-    /(?:engine\s+orchestrate|aidlc-orchestrate\.ts)\s+next ?([^`\n]*)` bare\b/,
-  ) ?? (spans.length === 1 ? spans[0] : null);
-  const rawInvocation = payload ?? (anchor
-    ? anchor[1]
-    : prompt.match(/^\s*\/aidlc(?![\w-])([\s\S]*)$/)?.[1]);
-  if (rawInvocation === undefined) return { raw: "", args: [], typed: prompt, forwarded: "" };
-  // An anchor Kiro left unexpanded carries no typed args.
+function extractNextInvocation(prompt: string): { raw: string; args: string[]; typed: string } {
+  const payload = typedLineArgs(prompt) ?? earlierStepArgs(prompt);
+  const rawInvocation = payload ?? prompt.match(/^\s*\/aidlc(?![\w-])([\s\S]*)$/)?.[1];
+  if (rawInvocation === undefined) return { raw: "", args: [], typed: prompt };
+  // A line Kiro left unexpanded carries no typed args.
   const raw = rawInvocation.trim() === "$ARGUMENTS" ? "" : rawInvocation.trim();
   // The `/aidlc` line: the prompt itself, or for an expanded body the line
   // rebuilt from the arguments Kiro put in it.
-  const typed = payload !== null || anchor ? `/aidlc${raw ? ` ${raw}` : ""}` : prompt;
-  // A line break inside a quoted argument reads as a space, so the call the
-  // agent runs stays on one line and matches what the guard compares.
+  const typed = payload !== null ? `/aidlc${raw ? ` ${raw}` : ""}` : prompt;
+  // A line break inside a quoted argument reads as a space.
   const args = splitKiroCommandArgs(raw).map((arg) => arg.replace(/\s*[\r\n]+\s*/g, " "));
-  return { raw, args, typed, forwarded: forwardedArgs(raw, args) };
+  return { raw, args, typed };
 }
 
 /** The text of every context line a core hook printed, as plain stdout for Kiro. */
@@ -614,21 +405,6 @@ function hookContextText(stdout: string): string {
     } catch { /* a line that is not hook JSON carries no context */ }
   }
   return parts.length > 0 ? `${sanitizeHarnessPlainText(parts.join("\n"))}\n\n` : "";
-}
-
-/**
- * The human-turn hook's first-step note for a long `/aidlc` line it kept whole
- * (its `firstStepNote` key, printed only because this adapter asks), or "".
- */
-function hookFirstStepNote(stdout: string): string {
-  for (const line of stdout.split("\n")) {
-    if (!line.trim()) continue;
-    try {
-      const note = (JSON.parse(line) as { firstStepNote?: unknown }).firstStepNote;
-      if (typeof note === "string" && note.trim()) return sanitizeHarnessPlainText(note.trim());
-    } catch { /* a line that is not hook JSON carries no note */ }
-  }
-  return "";
 }
 
 const PRE_DISPATCH_FLAGS = new Set([
@@ -715,7 +491,6 @@ if (target === "verb-intercept") {
   // turn-scoped, no time window, no wedge. Best-effort; failure fails open.
   let turn = 0;
   let preface = "";
-  let firstStepNote = "";
   try {
     const cwd = projectDir;
     mkdirSync(join(cwd, "aidlc"), { recursive: true });
@@ -762,33 +537,16 @@ if (target === "verb-intercept") {
       }),
       // This seam runs a command the person typed and hands its output over below.
       relays_terminal_output: true,
-      // A long line it keeps whole: the hook says whether the agent's first
-      // step is a bare `next`, which reads that copy (firstStepNote).
-      wants_first_step_note: true,
     });
     preface = hookContextText(recorded.stdout);
-    firstStepNote = hookFirstStepNote(recorded.stdout);
   } catch { /* presence best-effort - record-human-turn never blocks the turn */ }
   if (cmd === null) {
-    // AI-DLC kept the whole line, so the agent runs `next` with nothing after
-    // it instead of typing it all again as one command, which splits the
-    // person's quote marks and line breaks away and can pass what a Windows
-    // command line holds. No latch: the bare call is the right one, and a latch
-    // left with this turn's number (a turn counter that could not be written)
-    // would refuse it.
-    if (firstStepNote !== "") {
-      try {
-        rmSync(forwardingLatchPath(projectDir), { force: true });
-      } catch { /* best-effort, as the latch's own write */ }
-      process.stdout.write(`${preface}${firstStepNote}\n`);
-      return 0;
-    }
     // Pure, explicit engine reads do not need the model to reconstruct the
     // first tool call. Dispatch them here with the exact recovered argv and
     // inject a small, non-steering directive. Steering must arrive complete
     // through the real tool channel: the hook can truncate rules and their
     // trailing continuation token even when the engine's own budget is met.
-    // Ambiguous active-workflow freeform also uses the forwarding latch below.
+    // Anything else gets its first step below.
     const cwd = projectDir;
     if (invocation.raw.length > 0 && shouldPreDispatchNext(args, cwd)) {
       try {
@@ -831,7 +589,6 @@ if (target === "verb-intercept") {
             typeof parsed.kind === "string" && parsed.kind !== "load-steering" &&
             Buffer.byteLength(preface + packet, "utf-8") <= PROMPT_HOOK_MAX_BYTES
           ) {
-            rmSync(forwardingLatchPath(cwd), { force: true });
             if (args[0] === "--config") {
               try {
                 writeFileSync(
@@ -850,34 +607,13 @@ if (target === "verb-intercept") {
             return 0;
           }
         }
-      } catch { /* pre-dispatch is advisory; forwarding latch remains the floor */ }
+      } catch { /* pre-dispatch is advisory; the first step below remains */ }
     }
 
-    // Kiro occasionally drops the entire expanded $ARGUMENTS vector and runs a
-    // bare next even though both the agent prompt and skill say verbatim. Keep
-    // the intended first call in a turn-bound latch; guard-tool-call compares the
-    // shell-normalized argv and rejects a lossy call. A correct first next
-    // consumes the latch, so subsequent loop iterations in this turn are bare.
+    // The aidlc skill's first command carries none of the person's words: the
+    // engine reads the line recorded above.
     if (invocation.raw.length > 0) {
-      const viaFile = await requestFileForwarding(args, cwd);
-      const forwardedArgv = viaFile?.args ?? args;
-      const forwarded = viaFile?.forwarded ?? invocation.forwarded;
-      const plan = viaFile === null ? planFirstCall(args) : null;
-      try {
-        mkdirSync(sessionsDir(cwd), { recursive: true });
-        writeFileSync(
-          forwardingLatchPath(cwd),
-          JSON.stringify({
-            turn,
-            raw: forwarded,
-            args: forwardedArgv,
-            ...(plan === null ? {} : { plan }),
-          }) + "\n",
-          "utf-8",
-        );
-      } catch { /* forwarding backstop best-effort */ }
-      const room = PROMPT_HOOK_MAX_BYTES - Buffer.byteLength(preface, "utf-8");
-      process.stdout.write(preface + firstCallMessage(false, forwarded, plan ?? undefined, room));
+      process.stdout.write(`${preface}${ENTRY_STEP}\n`);
     } else if (preface) {
       process.stdout.write(preface);
     }
@@ -997,9 +733,7 @@ if (target === "guard-tool-call") {
   );
   const raw = m ? splitKiroCommandArgs(m[1].trim()) : [];
   // The engine strips launcher options anywhere before reading the subcommand,
-  // so bare-advancing classification must see the same leading token. The
-  // first-next fidelity comparison below deliberately stays byte-exact: a
-  // launcher option the user did not type is an alteration.
+  // so bare-advancing classification must see the same leading token.
   const nextArgs = stripOrchestratorLauncherOptions(raw);
   // A next carrying ANY advancing/config flag is a DELIBERATE move — only a truly
   // bare next is the spurious roll-forward. Mirrors the engine done-guard's
@@ -1035,38 +769,6 @@ if (target === "guard-tool-call") {
     if (existsSync(lp)) {
       const r = JSON.parse(readFileSync(lp, "utf-8")) as { turn?: number };
       if (typeof r.turn === "number") latchTurn = r.turn;
-    }
-  } catch { /* fail open */ }
-
-  // First-next argument fidelity. The userPromptSubmit hook records the exact
-  // expanded argv for a non-terminal /aidlc command. Reject any altered first
-  // next in the same turn, including the observed total-drop `next` call. Shell
-  // Quoting and path-safe escapes normalize through splitKiroCommandArgs
-  // before compare.
-  try {
-    const forwardingPath = forwardingLatchPath(cwd);
-    if (m !== null && existsSync(forwardingPath)) {
-      const forwarding = JSON.parse(
-        readFileSync(forwardingPath, "utf-8"),
-      ) as { turn?: number; raw?: string; args?: string[]; plan?: PlanFirstCall };
-      if (
-        forwarding.turn === counter &&
-        Array.isArray(forwarding.args)
-      ) {
-        // The call exactly as this hook asked for it is right before any
-        // re-split: PowerShell's doubled apostrophe ('can''t') does not split
-        // back to the word, and refusing it would ask for the same call again.
-        const same = (line: unknown, args: unknown): boolean =>
-          (typeof line === "string" && m[1].trim() === line) ||
-          (Array.isArray(args) && args.length === raw.length &&
-            args.every((arg, index) => arg === raw[index]));
-        const plan = latchPlan(forwarding.plan);
-        if (!same(forwarding.raw, forwarding.args) && !same(plan?.raw, plan?.args)) {
-          process.stderr.write(firstCallMessage(true, forwarding.raw ?? "", plan, PROMPT_HOOK_MAX_BYTES));
-          process.exit(2);
-        }
-        rmSync(forwardingPath, { force: true });
-      }
     }
   } catch { /* fail open */ }
 

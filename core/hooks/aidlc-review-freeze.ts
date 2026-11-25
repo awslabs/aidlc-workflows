@@ -100,6 +100,7 @@ export {
   shellCommandAltersExecutableResolution,
   shellCommandInvocationDetails,
   shellCommandInvocations,
+  shellCommandVariables,
   shellPatchTargets,
   shellWriteTargets,
   unseenPatch,

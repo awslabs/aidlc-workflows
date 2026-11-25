@@ -1017,9 +1017,10 @@ When a workflow has issues, `--doctor` also lists the structured findings in its
 | Keyword overlap | A hint more than one plan has is a warning, naming the plans (the plan proposal lists it under each) |
 | Rule drift | Surfaces live team/project headings that overlap populated org policy for contradiction review, and reports lifecycle-stale overlaps in a separate stale-suppressed row (advisory — never fails) |
 | Paired sensor coverage | Confirms every rule that names a paired Sensor resolves to a Sensor some stage actually fires (advisory — never fails) |
-| Workspace records | Reports uncommitted changes under `aidlc/` so shared records are not left only in one checkout, leaving out `aidlc/.aidlc-request-text/`, the forwarding latch earlier Kiro CLI (V2) releases wrote as `aidlc/.aidlc-forwarding-latch`, and an audit log whose only change is the entries doctor writes about its own runs (when those are all there is, the row passes and says so); while git tracks or shows a request file or the latch, or holds a removed one its ignore rules do not cover, it gives no commit command, since `git add aidlc/` would take your request in (advisory - never fails) |
+| Workspace records | Reports uncommitted changes under `aidlc/` so shared records are not left only in one checkout, leaving out `aidlc/.aidlc-request-text/`, the forwarding latch earlier Kiro CLI (V2) releases wrote as `aidlc/.aidlc-forwarding-latch`, and an audit log whose only change is the entries doctor writes about its own runs (when those are all there is, the row passes and says so); while git tracks or shows a request file or the latch, or holds a removed one its ignore rules do not cover, it gives no commit command, since `git add aidlc/` would take your request in; while a Setup git does not track row stands, it gives no command either, since `git add aidlc/` alone would leave that setup out (advisory - never fails) |
+| Setup git does not track | One row for each installed harness while git neither holds nor ignores its install record and lists files AI-DLC wrote for it: the line `aidlc config` says once when it first sets that harness up, naming the folders and files to commit so teammates who use that tool get the same setup. Silent while a request file or the forwarding latch keeps the records row from giving a command (advisory - never fails) |
 | Request folder | Only when git can see files in `aidlc/.aidlc-request-text/`: they hold your own requests, so it names the steps, never running them: add the line `aidlc/.aidlc-request-text/` to the project folder's `.gitignore` when the folder is not ignored yet (and check no later rule of yours un-ignores it), and, in the project folder, `git rm --cached -r -f -- aidlc/.aidlc-request-text/` (the files stay) when git tracks them, then commit and push the removal and the `.gitignore` change (a refresh may have left it uncommitted) so teammates' clones drop it too; a removal not committed yet keeps the row (advisory - never fails) |
-| Forwarding latch | Only when git can see `aidlc/.aidlc-forwarding-latch`, a file earlier Kiro CLI (V2) releases left: it holds the words of a request of yours (the first call the hook named for it), and a `git add aidlc/` before the `.gitignore` part listed it took it in (the hook now writes inside `aidlc/.aidlc-sessions/`): the same steps as the request folder, for that one file: the ignore line `aidlc/.aidlc-forwarding-latch` when it is not ignored yet, `git rm --cached -f -- aidlc/.aidlc-forwarding-latch` (the file stays) when git tracks it, then commit and push (advisory - never fails) |
+| Forwarding latch | Only when git can see `aidlc/.aidlc-forwarding-latch`, a file earlier Kiro CLI (V2) releases left: it holds the words of a request of yours (the first call the hook named for it), and a `git add aidlc/` before the `.gitignore` part listed it took it in (the hook no longer writes it): the same steps as the request folder, for that one file: the ignore line `aidlc/.aidlc-forwarding-latch` when it is not ignored yet, `git rm --cached -f -- aidlc/.aidlc-forwarding-latch` (the file stays) when git tracks it, then commit and push (advisory - never fails) |
 | Declared workspace repos | When `repos.json` exists, compares its declared set with the sibling repos runtime discovery sees on disk (advisory - never fails) |
 | Workspace gitignore | When `repos.json` exists, checks that the managed `.gitignore` block matches the declared repo set (advisory - never fails) |
 
@@ -1658,7 +1659,9 @@ section says `Mode: strict`, an explicit `relaxed` or `off` refuses the whole
 command, including any other supplied settings, and names that file: edit the
 memory line there to relax it for everyone. An explicit strict setting is still
 allowed. At creation the flag can be given with the scope
-(`/aidlc --scope poc --guard-policy strict "..."`).
+(`/aidlc --scope poc --guard-policy strict "..."`); under a memory
+`Mode: strict`, a `relaxed` or `off` value given there is left off, and the
+work starts at strict with the sentence naming that file said once.
 
 The retired flag `--change-control` and the retired config key `change-control`
 still resolve for one release and print one deprecation line naming their removal
@@ -3143,6 +3146,10 @@ the workspace root (see
 ```bash
 aidlc system workspace-sync [--force]
 ```
+
+If your shell has no `aidlc` command (a copied project, or a teammate's clone
+of one), run `bun .claude/tools/aidlc-workspace-sync.ts` instead, with your
+harness folder in place of `.claude`.
 
 It serializes reconciles with a workspace lock whose live owner is never reaped
 for age, then runs a read-only preflight before staging clones and generated

@@ -31303,7 +31303,7 @@ export function humanPresenceGuardDisabled(projectDir?: string): boolean {
 // The same hard signal `next`'s stop reads, for the current workflow: a stage
 // or gate event and no heartbeat at all, with no link on the way to the
 // status files. Anything unreadable proves nothing.
-function hooksNeverRanHere(projectDir?: string): boolean {
+export function hooksNeverRanHere(projectDir?: string): boolean {
   try {
     const project = resolveProjectDir(projectDir);
     return hookLiveness(project).neverFired && !hookStatusPathLinked(project);
@@ -38651,11 +38651,16 @@ const APPROVED_TOGETHER_ENDS = new Set([
 
 // A later listed stage's approval stands on the person's one reply while the
 // approval that listed it still covers it: no question, rejection or decision
-// since, and no gate for a stage outside the list. Ledger order only. The row
-// is that approval's own, so what it recorded travels with it.
+// since, no gate for a stage outside the list, and the latest review of this stage
+// since, if any, brings no finding the reply never saw (`reviewBringsFinding`, given
+// the review and the row that opened the gate the reply came at; the caller owns
+// the test, and this file must not import its owner, which imports this one).
+// Ledger order only. The row is that approval's own, so what it recorded travels
+// with it.
 export function approvedTogetherCover(
   projectDir: string,
   slug: string,
+  reviewBringsFinding: (review: AuditShardEvent, opened: AuditShardEvent) => boolean,
 ): { first: string; row: AuditShardEvent } | null {
   let rows: AuditShardEvent[];
   try {
@@ -38669,7 +38674,15 @@ export function approvedTogetherCover(
     const listed = approvesTogetherField(row.block);
     const first = auditBlockField(row.block, "Stage");
     if (!first || first === slug || !listed.includes(slug)) continue;
-    for (const later of rows.slice(i + 1)) {
+    const since = rows.slice(i + 1);
+    const review = since.findLast((later) => later.event === "REVIEW_COMPLETED" && auditBlockField(later.block, "Stage") === slug);
+    if (review !== undefined) {
+      const opened = rows.slice(0, i).findLast((earlier) =>
+        earlier.event === "STAGE_AWAITING_APPROVAL" && auditBlockField(earlier.block, "Stage") === first
+      ) ?? row;
+      if (reviewBringsFinding(review, opened)) return null;
+    }
+    for (const later of since) {
       if (APPROVED_TOGETHER_ENDS.has(later.event)) return null;
       if (later.event !== "GATE_APPROVED" && later.event !== "STAGE_AWAITING_APPROVAL") continue;
       const stage = auditBlockField(later.block, "Stage") ?? "";
@@ -41447,7 +41460,7 @@ export function sayOnceNoteLine(
  * including an older one still installed in a project, reads the top-level key
  * and rewraps it for its own host. So the line carries both, with the same text.
  * `firstStepNote` goes only to an adapter that asked the human-turn hook for
- * it, to say its own way (opencode, Kiro CLI's V2 engine).
+ * it, to say its own way (opencode).
  */
 export function hookContextLine(
   event: "SessionStart" | "UserPromptSubmit" | "PostToolUse",

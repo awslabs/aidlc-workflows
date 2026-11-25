@@ -58,18 +58,23 @@
 //     question is asked and answered as inside work, PLAN_APPROVAL_RECORDED
 //     lands beside the run's start, and Approve Plan builds and the run
 //     finishes; Request Changes, editing the files and "review the plan" go as
-//     inside work.
+//     inside work; the build's developer is pointed at its plan as it starts,
+//     as the step's note tells the conductor.
 //   - the plan's Testing Contract is the engine's to write: `next` writes a
 //     block left out, broken or out of date into that section only, before the
 //     question and after it, and after an approval, under every Guard Policy,
 //     over what an agent wrote in that section instead; never under the
 //     person's edit, over a plan sent back, over a heading or plan step, into a
 //     plan that is not UTF-8 text, or from the Stop hook's read-only probe.
+//   - after a git pull, the files a teammate's commit brought are not named as
+//     already changed, nor a checkout's files as its own remote branch holds them;
+//     after a submodule update, nor a submodule's files as the commit that branch
+//     records for it holds them, while the build's own change inside it still is.
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash, createHmac } from "node:crypto";
-import { appendFileSync, cpSync, existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, cpSync, existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
@@ -3175,6 +3180,29 @@ describe("an isolated Code Generation run in a project with no work", () => {
     asked(proj);
   });
 
+  test("the build's developer is pointed at its plan as it starts, as the step's note says", () => {
+    const proj = noWork();
+    writeOwnPlan(proj);
+    asked(proj);
+    replyAndRecord(proj, "approve", "Approve Plan");
+    const build = next(proj, SINGLE);
+    expect(build.plan_note).toContain("The developer gets the plan and its test instructions from AI-DLC as it starts");
+    const start = spawnSync(BUN, [join(proj, ".claude", "hooks", "aidlc-deliver-stage-rules.ts")], {
+      cwd: proj,
+      input: JSON.stringify({
+        hook_event_name: "SubagentStart", agent_id: "agent-1", agent_type: "aidlc-developer-agent", cwd: proj, session_id: SESSION,
+      }),
+      env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0" },
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(start.status, start.stderr).toBe(0);
+    const context = String((JSON.parse(start.stdout || "{}") as { hookSpecificOutput?: { additionalContext?: string } })
+      .hookSpecificOutput?.additionalContext ?? "");
+    expect(context).toContain("Read your plan `code-generation-plan.md` and its test instructions `unit-test-instructions.md`, " +
+      `in \`${[...SPACE_RECORD, "construction", "code-generation"].join("/")}/\``);
+  });
+
   test("with no run open the plan answer is refused as before and records nothing", () => {
     const proj = noWork(false);
     reply(proj, "approve");
@@ -5633,5 +5661,312 @@ describe("the engine writes the plan's Testing Contract itself", () => {
       expect(readFileSync(join(codeGenerationRecordDir(pd, unit), "code-generation-plan.md"), "utf-8"))
         .toBe(`# Plan for ${unit}\n\n## Summary\n\n- Builds: ${unit}\n\n## Steps\n- [ ] Implement ${unit}\n\n${contract(pd)}`);
     }
+  });
+});
+
+// After a git pull, the files a teammate's commit brought are not something
+// that ran ahead of the plan: the project is a clone whose branch tracks a
+// branch of a team remote (a bare repository here), and a teammate pushes to it.
+describe("the plan question after a git pull", () => {
+  function gitIn(dir: string, args: string[]): string {
+    const run = spawnSync("git", ["-c", "protocol.file.allow=always", ...args], {
+      cwd: dir, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@test", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@test" },
+    });
+    expect(run.status, `git ${args.join(" ")}: ${run.stdout}${run.stderr}`).toBe(0);
+    return run.stdout;
+  }
+
+  function writeFiles(dir: string, files: Record<string, string>): void {
+    for (const [path, body] of Object.entries(files)) {
+      mkdirSync(dirname(join(dir, path)), { recursive: true });
+      writeFileSync(join(dir, path), body, "utf-8");
+    }
+  }
+
+  // A repository with `files`, pushed to a new bare remote its branch tracks; the remote's path.
+  function published(dir: string, files: Record<string, string>): string {
+    writeFiles(dir, files);
+    gitIn(dir, ["init", "-q"]);
+    gitIn(dir, ["add", "--", ...Object.keys(files)]);
+    gitIn(dir, ["commit", "-qm", "the shop"]);
+    const remote = `${dir}-origin.git`;
+    created.push(remote);
+    gitIn(dir, ["init", "-q", "--bare", remote]);
+    gitIn(dir, ["remote", "add", "origin", remote]);
+    gitIn(dir, ["push", "-q", "-u", "origin", "HEAD"]);
+    return remote;
+  }
+
+  // A teammate's clone of `remote`.
+  function teammate(dir: string, remote: string): string {
+    const mate = `${dir}-mate`;
+    created.push(mate);
+    gitIn(dir, ["clone", "-q", "-b", gitIn(dir, ["rev-parse", "--abbrev-ref", "HEAD"]).trim(), remote, mate]);
+    return mate;
+  }
+
+  const SHOP = {
+    "README.md": "# shop\n",
+    "run.sh": "echo run\n",
+    "web/app.js": "render();\n",
+    "web/index.html": "<html></html>\n",
+    "web/styles.css": "body {}\n",
+  };
+
+  // The project at Code Generation's start as a clone of the team's repository, and a teammate's clone.
+  function teamProject(): { proj: string; mate: string } {
+    const proj = project();
+    const remote = published(proj, SHOP);
+    const mate = teammate(proj, remote);
+    const baseline = writeBaselineSourceSnapshot(proj, "code-generation", workspaceSourceListing(proj)!);
+    appendAuditEntry("STAGE_STARTED", { Stage: "code-generation", "Source Baseline": baseline }, proj);
+    return { proj, mate };
+  }
+
+  const alreadyChanged = (asked: Emitted): string[] =>
+    (asked.plan_approval.targets?.[0].summary ?? []).filter((line) => line.startsWith("Already changed"));
+
+  test("a teammate's move of web/ and README change, pulled before the question, are not named", () => {
+    const { proj, mate } = teamProject();
+    gitIn(mate, ["rm", "-q", "-r", "--", "web"]);
+    writeFiles(mate, { "README.md": "# shop\n\nThe web page now lives in its own repository.\n" });
+    gitIn(mate, ["commit", "-qam", "move web out"]);
+    gitIn(mate, ["push", "-q"]);
+    gitIn(proj, ["pull", "-q", "--no-rebase"]);
+    expect(alreadyChanged(askFor(proj))).toEqual([]);
+  });
+
+  test("where git keeps no executable bit, a teammate's change of a file's mode alone, pulled, is not named", () => {
+    const { proj, mate } = teamProject();
+    gitIn(proj, ["config", "core.fileMode", "false"]);
+    gitIn(mate, ["update-index", "--chmod=+x", "run.sh"]);
+    gitIn(mate, ["commit", "-qm", "run.sh is executable"]);
+    gitIn(mate, ["push", "-q"]);
+    gitIn(proj, ["pull", "-q", "--no-rebase"]);
+    expect(alreadyChanged(askFor(proj))).toEqual([]);
+  });
+
+  test("a teammate's change of a file's mode alone, pulled, is not named", () => {
+    const { proj, mate } = teamProject();
+    gitIn(mate, ["update-index", "--chmod=+x", "run.sh"]);
+    gitIn(mate, ["commit", "-qm", "run.sh is executable"]);
+    gitIn(mate, ["push", "-q"]);
+    gitIn(proj, ["pull", "-q", "--no-rebase"]);
+    expect(alreadyChanged(askFor(proj))).toEqual([]);
+  });
+
+  test("where git keeps no executable bit, a teammate's change to a script git holds as executable, pulled, is not named", () => {
+    const { proj, mate } = teamProject();
+    // Git for Windows sets this at every clone; a Windows drive under WSL too.
+    gitIn(proj, ["config", "core.fileMode", "false"]);
+    writeFiles(mate, { "run.sh": "echo run\necho done\n" });
+    chmodSync(join(mate, "run.sh"), 0o755);
+    gitIn(mate, ["add", "--", "run.sh"]);
+    gitIn(mate, ["update-index", "--chmod=+x", "run.sh"]);
+    gitIn(mate, ["commit", "-qm", "run.sh is executable and says done"]);
+    expect(gitIn(mate, ["ls-tree", "HEAD", "--", "run.sh"])).toStartWith("100755 ");
+    gitIn(mate, ["push", "-q"]);
+    gitIn(proj, ["pull", "-q", "--no-rebase"]);
+    // As such a folder reads it: no executable bit.
+    chmodSync(join(proj, "run.sh"), 0o644);
+    expect(alreadyChanged(askFor(proj))).toEqual([]);
+  });
+
+  test("a teammate's change to a script git held as executable from the start, pulled, is not named", () => {
+    const proj = project();
+    writeFiles(proj, SHOP);
+    gitIn(proj, ["init", "-q"]);
+    chmodSync(join(proj, "run.sh"), 0o755);
+    gitIn(proj, ["add", "--", ...Object.keys(SHOP)]);
+    gitIn(proj, ["update-index", "--chmod=+x", "run.sh"]);
+    gitIn(proj, ["commit", "-qm", "the shop"]);
+    const remote = `${proj}-origin.git`;
+    created.push(remote);
+    gitIn(proj, ["init", "-q", "--bare", remote]);
+    gitIn(proj, ["remote", "add", "origin", remote]);
+    gitIn(proj, ["push", "-q", "-u", "origin", "HEAD"]);
+    const mate = teammate(proj, remote);
+    const baseline = writeBaselineSourceSnapshot(proj, "code-generation", workspaceSourceListing(proj)!);
+    appendAuditEntry("STAGE_STARTED", { Stage: "code-generation", "Source Baseline": baseline }, proj);
+    writeFiles(mate, { "run.sh": "echo run\necho done\n" });
+    gitIn(mate, ["add", "--", "run.sh"]);
+    gitIn(mate, ["update-index", "--chmod=+x", "run.sh"]);
+    gitIn(mate, ["commit", "-qm", "run.sh says done"]);
+    expect(gitIn(mate, ["ls-tree", "HEAD", "--", "run.sh"])).toStartWith("100755 ");
+    gitIn(mate, ["push", "-q"]);
+    gitIn(proj, ["pull", "-q", "--no-rebase"]);
+    expect(alreadyChanged(askFor(proj))).toEqual([]);
+  });
+
+  test("a checkout recorded after the start, as its own remote holds it, is not named; a file the build then changes in it is", () => {
+    const { proj } = teamProject();
+    const parent = mkdtempSync(join(tmpdir(), "plan-gate-checkout-"));
+    created.push(parent);
+    const web = join(parent, "shop-web");
+    mkdirSync(web, { recursive: true });
+    published(web, { "app.js": "render();\n", "index.html": "<html></html>\n" });
+    const added = spawnSync(BUN, [join(AIDLC_SRC, "tools", "aidlc-utility.ts"), "intent", "add-checkout", web, "--project-dir", proj], {
+      cwd: proj, encoding: "utf-8", env: { ...process.env, AIDLC_PROJECT_DIR: proj },
+    });
+    expect(added.status, `${added.stdout}${added.stderr}`).toBe(0);
+    expect(alreadyChanged(askFor(proj))).toEqual([]);
+    writeFileSync(join(web, "app.js"), "render(wishlist);\n", "utf-8");
+    expect(alreadyChanged(next(proj))).toEqual(["Already changed before you approved: shop-web@checkout/app.js."]);
+  });
+
+  test("asking about a checkout recorded outside the project writes nothing in that checkout's git", () => {
+    const { proj } = teamProject();
+    const parent = mkdtempSync(join(tmpdir(), "plan-gate-checkout-"));
+    created.push(parent);
+    const web = join(parent, "shop-web");
+    mkdirSync(web, { recursive: true });
+    published(web, { "app.js": "render();\n", "index.html": "<html></html>\n" });
+    const added = spawnSync(BUN, [join(AIDLC_SRC, "tools", "aidlc-utility.ts"), "intent", "add-checkout", web, "--project-dir", proj], {
+      cwd: proj, encoding: "utf-8", env: { ...process.env, AIDLC_PROJECT_DIR: proj },
+    });
+    expect(added.status, `${added.stdout}${added.stderr}`).toBe(0);
+    // A file saved again unchanged: git's record of it is out of date, and reading it must not rewrite that record.
+    utimesSync(join(web, "index.html"), new Date("2030-01-01T00:00:00Z"), new Date("2030-01-01T00:00:00Z"));
+    const index = (): string => createHash("sha256").update(readFileSync(join(web, ".git", "index"))).digest("hex");
+    const before = index();
+    askFor(proj);
+    expect(index()).toBe(before);
+  });
+
+  test("a teammate's submodule in place of web/, pulled, is not named before or after it is checked out", () => {
+    const { proj, mate } = teamProject();
+    const parent = mkdtempSync(join(tmpdir(), "plan-gate-submodule-"));
+    created.push(parent);
+    const web = join(parent, "shop-web");
+    mkdirSync(web, { recursive: true });
+    const webRemote = published(web, { "app.js": "render();\n", "index.html": "<html></html>\n", "styles.css": "body {}\n" });
+    gitIn(mate, ["rm", "-q", "-r", "--", "web"]);
+    gitIn(mate, ["submodule", "add", "-q", webRemote, "web"]);
+    gitIn(mate, ["commit", "-qm", "web as a submodule"]);
+    gitIn(mate, ["push", "-q"]);
+    gitIn(proj, ["pull", "-q", "--no-rebase"]);
+    expect(alreadyChanged(askFor(proj))).toEqual([]);
+    gitIn(proj, ["submodule", "update", "-q", "--init"]);
+    expect(alreadyChanged(next(proj))).toEqual([]);
+  });
+
+  test("a file the build deletes inside a submodule that took the place of web/, pulled and updated, is named", () => {
+    const { proj, mate } = teamProject();
+    const parent = mkdtempSync(join(tmpdir(), "plan-gate-submodule-"));
+    created.push(parent);
+    const web = join(parent, "shop-web");
+    mkdirSync(web, { recursive: true });
+    const webRemote = published(web, { "app.js": "render();\n", "index.html": "<html></html>\n", "styles.css": "body {}\n" });
+    gitIn(mate, ["rm", "-q", "-r", "--", "web"]);
+    gitIn(mate, ["submodule", "add", "-q", webRemote, "web"]);
+    gitIn(mate, ["commit", "-qm", "web as a submodule"]);
+    gitIn(mate, ["push", "-q"]);
+    gitIn(proj, ["pull", "-q", "--no-rebase"]);
+    gitIn(proj, ["submodule", "update", "-q", "--init"]);
+    rmSync(join(proj, "web", "app.js"));
+    expect(alreadyChanged(askFor(proj))).toEqual(["Already changed before you approved: web/app.js."]);
+  });
+
+  test("a teammate's submodule in place of web/ without one of its files, pulled and updated, is not named", () => {
+    const { proj, mate } = teamProject();
+    const parent = mkdtempSync(join(tmpdir(), "plan-gate-submodule-"));
+    created.push(parent);
+    const web = join(parent, "shop-web");
+    mkdirSync(web, { recursive: true });
+    const webRemote = published(web, { "app.js": "render();\n", "index.html": "<html></html>\n" });
+    gitIn(mate, ["rm", "-q", "-r", "--", "web"]);
+    gitIn(mate, ["submodule", "add", "-q", webRemote, "web"]);
+    gitIn(mate, ["commit", "-qm", "web as a submodule"]);
+    gitIn(mate, ["push", "-q"]);
+    gitIn(proj, ["pull", "-q", "--no-rebase"]);
+    gitIn(proj, ["submodule", "update", "-q", "--init"]);
+    expect(alreadyChanged(askFor(proj))).toEqual([]);
+  });
+
+  // The shop keeps web as a submodule with its own team remote; a teammate's clone has it checked out.
+  function submoduleProject(checkedOut = true): { proj: string; mate: string } {
+    const proj = project();
+    const parent = mkdtempSync(join(tmpdir(), "plan-gate-submodule-"));
+    created.push(parent);
+    const web = join(parent, "shop-web");
+    mkdirSync(web, { recursive: true });
+    const webRemote = published(web, { "app.js": "render();\n", "index.html": "<html></html>\n", "README.md": "# web\n" });
+    writeFiles(proj, { "README.md": "# shop\n" });
+    gitIn(proj, ["init", "-q"]);
+    gitIn(proj, ["submodule", "add", "-q", webRemote, "web"]);
+    gitIn(proj, ["add", "--", "README.md"]);
+    gitIn(proj, ["commit", "-qm", "the shop"]);
+    const remote = `${proj}-origin.git`;
+    created.push(remote);
+    gitIn(proj, ["init", "-q", "--bare", remote]);
+    gitIn(proj, ["remote", "add", "origin", remote]);
+    gitIn(proj, ["push", "-q", "-u", "origin", "HEAD"]);
+    const mate = teammate(proj, remote);
+    gitIn(mate, ["submodule", "update", "-q", "--init"]);
+    if (!checkedOut) gitIn(proj, ["submodule", "deinit", "-q", "-f", "--", "web"]);
+    const baseline = writeBaselineSourceSnapshot(proj, "code-generation", workspaceSourceListing(proj)!);
+    appendAuditEntry("STAGE_STARTED", { Stage: "code-generation", "Source Baseline": baseline }, proj);
+    return { proj, mate };
+  }
+
+  // A teammate's commit in web, pushed to web's own remote, and the shop's pointer moved to it and pushed.
+  function teammateMovesWeb(mate: string, files: Record<string, string>): void {
+    const web = join(mate, "web");
+    writeFiles(web, files);
+    gitIn(web, ["commit", "-qam", "the wishlist"]);
+    const branch = gitIn(web, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]).trim().replace(/^origin\//, "");
+    gitIn(web, ["push", "-q", "origin", `HEAD:refs/heads/${branch}`]);
+    gitIn(mate, ["add", "--", "web"]);
+    gitIn(mate, ["commit", "-qm", "web moved on"]);
+    gitIn(mate, ["push", "-q"]);
+  }
+
+  test("a teammate's move of the web submodule, pulled and updated, is not named, and asking writes nothing in its git", () => {
+    const { proj, mate } = submoduleProject();
+    teammateMovesWeb(mate, { "app.js": "render(wishlist);\n", "README.md": "# web\n\nA wishlist.\n" });
+    gitIn(proj, ["pull", "-q", "--no-rebase"]);
+    expect(alreadyChanged(askFor(proj))).toEqual([]);
+    gitIn(proj, ["submodule", "update", "-q"]);
+    // A file saved again unchanged: git's record of it is out of date, and reading it must not rewrite that record.
+    utimesSync(join(proj, "web", "index.html"), new Date("2030-01-01T00:00:00Z"), new Date("2030-01-01T00:00:00Z"));
+    const indexFile = gitIn(join(proj, "web"), ["rev-parse", "--path-format=absolute", "--git-path", "index"]).trim();
+    const index = (): string => createHash("sha256").update(readFileSync(indexFile)).digest("hex");
+    const before = index();
+    expect(alreadyChanged(next(proj))).toEqual([]);
+    expect(index()).toBe(before);
+  });
+
+  test("where git is set to leave the web submodule out of its diffs, a teammate's move, pulled and updated, is not named", () => {
+    const { proj, mate } = submoduleProject();
+    teammateMovesWeb(mate, { "app.js": "render(wishlist);\n" });
+    gitIn(proj, ["pull", "-q", "--no-rebase"]);
+    gitIn(proj, ["submodule", "update", "-q"]);
+    gitIn(proj, ["config", "submodule.web.ignore", "all"]);
+    expect(alreadyChanged(askFor(proj))).toEqual([]);
+  });
+
+  test("a web submodule not checked out when the work started, checked out during it, is not named", () => {
+    const { proj } = submoduleProject(false);
+    gitIn(proj, ["submodule", "update", "-q", "--init"]);
+    expect(alreadyChanged(askFor(proj))).toEqual([]);
+  });
+
+  test("beside a teammate's move of the web submodule, the build's own change inside it is named", () => {
+    const { proj, mate } = submoduleProject();
+    teammateMovesWeb(mate, { "app.js": "render(wishlist);\n" });
+    gitIn(proj, ["pull", "-q", "--no-rebase"]);
+    gitIn(proj, ["submodule", "update", "-q"]);
+    writeFiles(proj, { "web/index.html": "<html><body></body></html>\n" });
+    expect(alreadyChanged(askFor(proj))).toEqual(["Already changed before you approved: web/index.html."]);
+  });
+
+  test("a web submodule checked out at another commit than the shop's remote branch records is named as before", () => {
+    const { proj, mate } = submoduleProject();
+    teammateMovesWeb(mate, { "app.js": "render(wishlist);\n" });
+    // The person moves web on themselves, with no pull of the shop.
+    gitIn(join(proj, "web"), ["fetch", "-q"]);
+    gitIn(join(proj, "web"), ["checkout", "-q", "origin/HEAD"]);
+    expect(alreadyChanged(askFor(proj))).toEqual(["Already changed before you approved (2 files): web, web/app.js."]);
   });
 });

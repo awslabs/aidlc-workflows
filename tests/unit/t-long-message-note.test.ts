@@ -6,11 +6,9 @@
 // `next` with nothing after it: the person's words go from their paste to the work without the model typing tens of
 // thousands of characters again, and nothing past a command line's limit is ever a command line. In core one place
 // (firstStepNote) owns the words and when they are said, and each tool's hook only delivers them: Claude Code and
-// Codex in the hook's context line, opencode and Kiro CLI's V2 engine through one key on the hook's output that only
-// they ask for. On V2 the note stands in for the whole-line first call, whose word split drops the person's quote
-// marks and line breaks (#3747) and can pass a Windows command line's limit (#3748), and no forwarding latch holds
-// the agent to it. Kiro IDE's adapter (Kiro IDE and Kiro CLI's V3 engine) says the same sentence its own way
-// (firstStepLine), held to these words by a test here; Copilot and Cursor drop a prompt hook's output, so
+// Codex in the hook's context line, opencode through one key on the hook's output that only it asks for. Both Kiro
+// adapters (Kiro IDE and Kiro CLI's V3 engine; Kiro CLI's V2 engine) open their own first step with the same words,
+// naming their skill's `next --entry`, held to them by a test here; Copilot and Cursor drop a prompt hook's output, so
 // nothing reaches theirs. A short message, a line with a flag or a verb, a paste holding a flag-shaped token `next`
 // does not take, work already open, a message with no whole copy, a payload with no chat, a host's turn and a turn
 // whose record is withheld (an unattended run; a swarm worker's worktree withholds it the same way) get no note and no
@@ -47,6 +45,7 @@ for (const name of ["CLAUDECODE", "CLAUDE_CODE_SESSION_ID", "CLAUDE_PID", "CLAUD
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const NOTE = "AI-DLC: this message is an AI-DLC request and AI-DLC has it on record.";
 const NOTE_STEP = "engine orchestrate next` now and do only what it prints.";
+const KIRO_IDE_STEP = "engine orchestrate next --entry` now and do only what it prints.";
 const KEY = "firstStepNote";
 const LAST = "Late decisions: these override anything above, and the ledger ships with no sync.";
 
@@ -147,8 +146,8 @@ async function kiroIdeCard(proj: string, prompt: string): Promise<Exec> {
   });
 }
 // The work a bare `next` starts from the person's line: the plan proposal step naming the whole request.
-async function bareNextTakesIt(proj: string, words: string, opts: { session?: string } = {}): Promise<Directive | null> {
-  const first = await next(proj, [], opts);
+async function bareNextTakesIt(proj: string, words: string, opts: { session?: string; args?: string[] } = {}): Promise<Directive | null> {
+  const first = await next(proj, opts.args ?? [], opts);
   expect(String(first.directive?.message ?? ""), first.out.slice(0, 400)).toContain("propose");
   expect(sha(newest(proj)?.text ?? ""), "the paste byte for byte, its line breaks included").toBe(sha(words));
   return first.directive;
@@ -183,14 +182,14 @@ describe("a long /aidlc paste: the agent is told AI-DLC has it whole and runs ne
     await bareNextTakesIt(proj, words);
   });
 
-  test("Kiro CLI V3 and Kiro IDE: the first-step note is said once, as before", async () => {
+  test("Kiro CLI V3 and Kiro IDE: the first-step line is said once, naming next --entry", async () => {
     const proj = await project("fresh");
     const words = spec(30_000);
     const card = await kiroIdeCard(proj, `/aidlc ${words}`);
     expect(notes(card.stdout), card.stdout.slice(0, 400)).toBe(1);
-    expect(card.stdout).toContain(NOTE_STEP);
+    expect(card.stdout).toContain(KIRO_IDE_STEP);
     expect(card.stdout).not.toContain(KEY);
-    await bareNextTakesIt(proj, words);
+    await bareNextTakesIt(proj, words, { args: ["--entry"] });
   });
 
   // Kiro CLI hands its V2 prompt hook the line as typed, or the aidlc skill's body with the line in place of every
@@ -200,10 +199,9 @@ describe("a long /aidlc paste: the agent is told AI-DLC has it whole and runs ne
     ["the line as typed", (words: string) => `/aidlc ${words}`],
     ["the skill's body", (words: string) => skillBody().replaceAll("$ARGUMENTS", () => words)],
   ] as Array<[string, (words: string) => string]>) {
-    test(`Kiro CLI V2, ${shape}: the agent is told to run next with nothing after it, and the guard lets that call run`, async () => {
+    test(`Kiro CLI V2, ${shape}: the agent is told to run next --entry, and the guard lets that call run`, async () => {
       const proj = await project("fresh");
-      // A call held for the turn this paste arrives on (the turn counter could not move past it), which would refuse
-      // the bare next.
+      // A call an earlier release held for the turn this paste arrives on (the turn counter could not move past it).
       const latch = join(proj, "aidlc", ".aidlc-sessions", ".kiro-cli-forwarding-latch.json");
       mkdirSync(dirname(latch), { recursive: true });
       writeFileSync(latch, `${JSON.stringify({ turn: 1, raw: "fix the sales report end date", args: ["fix", "the", "sales", "report", "end", "date"] })}\n`);
@@ -213,8 +211,8 @@ describe("a long /aidlc paste: the agent is told AI-DLC has it whole and runs ne
       expect(notes(said.stdout), said.stdout.slice(0, 400)).toBe(1);
       expect(said.stdout).not.toContain("Your first tool call is exactly the call below");
       expect(said.stdout, "the paste is not handed back to be typed again").not.toContain(LAST);
-      expect(existsSync(latch), "no call is held for the agent to match").toBe(false);
-      const call = /Run `([^`]+ engine orchestrate next)` now/.exec(said.stdout)?.[1];
+      expect(said.stdout).toContain(KIRO_IDE_STEP);
+      const call = /Run `([^`]+ engine orchestrate next --entry)` now/.exec(said.stdout)?.[1];
       expect(call, said.stdout.slice(0, 400)).toBeDefined();
       const guard = await exec([process.execPath, join(proj, ".kiro", "hooks", "aidlc-kiro-adapter.ts"), "guard-tool-call"], {
         cwd: proj,
@@ -222,14 +220,17 @@ describe("a long /aidlc paste: the agent is told AI-DLC has it whole and runs ne
         input: JSON.stringify({ hook_event_name: "preToolUse", session_id: SESSION, cwd: proj, tool_name: "shell", tool_input: { command: call } }),
       });
       expect(guard.status, guard.stderr).toBe(0);
-      await bareNextTakesIt(proj, words);
+      await bareNextTakesIt(proj, words, { args: ["--entry"] });
     });
   }
 
-  test("the note is Kiro's own first-step sentence, word for word", async () => {
+  test("the note opens as Kiro's own first-step sentence does, word for word", async () => {
     const kiro = readFileSync(join(REPO_ROOT, "harness", "kiro-ide", "hooks", "aidlc-kiro-adapter.ts"), "utf-8");
     expect(kiro).toContain(`return \`${NOTE} \${run}\`;`);
-    expect(kiro).toContain(`engine orchestrate \${step}\\\` now and do only what it prints.\`;`);
+    expect(kiro).toContain("engine orchestrate next --entry\\` now and do only what it prints.`;");
+    const cli = readFileSync(join(REPO_ROOT, "harness", "kiro", "hooks", "aidlc-kiro-adapter.ts"), "utf-8");
+    expect(cli).toContain(`"${NOTE} " +`);
+    expect(cli).toContain("engine orchestrate next --entry` now and do only what it prints.\";");
     const proj = await project("fresh");
     const line = contextLine((await say(proj, `/aidlc ${spec(30_000)}`, "claude")).stdout).context;
     expect(line.slice(line.indexOf(NOTE))).toMatch(/^AI-DLC: this message is an AI-DLC request and AI-DLC has it on record\. Run `[^`]+ engine orchestrate next` now and do only what it prints\.$/);
