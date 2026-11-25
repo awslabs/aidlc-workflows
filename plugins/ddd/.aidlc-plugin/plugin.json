@@ -1,0 +1,17 @@
+{
+  "name": "ddd",
+  "version": "0.1.0",
+  "description": "Domain-Driven Design as a first-class, inviolable control plane. Adds a domain-modeling stage that produces a structured ddd-domain-model (ubiquitous language, bounded contexts, aggregates, invariants, finite state machines, domain events) and a ddd-conformance gate stage that compiles the model into executable tests (structural rule-0 + invariants + FSM + business rules) and runs them as a hard gate. Reuses aidlc-architect-agent (lead) and aidlc-product-agent (business voice).",
+  "author": { "name": "AWS AIDLC" },
+  "dependencies": ["core"],
+  "aidlc": {
+    "contributes": {
+      "stages": "stages/",
+      "overlays": "contributions/",
+      "scopes": "scopes/",
+      "knowledge": "knowledge/",
+      "sensors": "sensors/",
+      "tools": "tools/"
+    }
+  }
+}
