@@ -417,6 +417,14 @@ describe("the stable page", () => {
     expect(page).toContain("so does a project copied before 2.11.0 or whose setup command never ran, and a project set up on 2.11.0 runs the command twice");
   });
 
+  // The guide inside the release tag is the preview's, older than this page.
+  test("the copy-channel link opens the current guide on main, not the one inside the release tag", () => {
+    const page = promotionNotes(shipped);
+    expect(page).toContain("[copy-channel instructions](https://github.com/awslabs/aidlc-workflows/blob/main/docs/guide/18-install-and-lifecycle.md#copy-channel)");
+    expect(page).not.toContain("/blob/v2.11.1/docs/guide/18-install-and-lifecycle.md");
+    expect(readFileSync(join(REPO_ROOT, "docs/guide/18-install-and-lifecycle.md"), "utf8")).toMatch(/^## Copy Channel$/m);
+  });
+
   // prepare reserves the version before it prints the page, so a bullet whose
   // Script compatibility placement is wrong is refused first; any other line
   // off the shape renders where its author put it, for the page preview and
