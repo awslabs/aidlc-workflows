@@ -202,10 +202,12 @@ function runGit(args: string[], cwd?: string, env?: NodeJS.ProcessEnv): GitResul
   const r = spawnSync("git", [...GIT_PLATFORM_ARGS, ...args], {
     cwd,
     encoding: "utf-8",
+    // Index and diff listings grow with the checkout.
+    maxBuffer: 512 * 1024 * 1024,
     env: { ...process.env, EDITOR: process.env.EDITOR ?? "false", ...env },
   });
   return {
-    ok: r.status === 0,
+    ok: r.status === 0 && !r.error,
     stdout: (r.stdout ?? "").toString(),
     stderr: (r.stderr ?? "").toString(),
     code: r.status ?? 1,
@@ -232,9 +234,12 @@ function initializedCheckout(dir: string): boolean {
   }
 }
 
-function gitlinkPaths(checkoutDir: string): string[] | null {
+function gitlinkPaths(checkoutDir: string, label: string): string[] | { error: string } {
   const listed = runGit(["ls-files", "-s", "-z"], checkoutDir);
-  if (!listed.ok) return null;
+  if (!listed.ok) {
+    const detail = listed.error || listed.stderr.trim() || `exit ${listed.code}`;
+    return { error: `cannot list the submodules of ${label} (${detail})` };
+  }
   const paths: string[] = [];
   for (const record of listed.stdout.split("\0")) {
     if (!record.startsWith("160000 ")) continue;
@@ -246,8 +251,8 @@ function gitlinkPaths(checkoutDir: string): string[] | null {
 
 function initializeBoltSubmodules(sourceDir: string, worktreeDir: string, prefix = "", depth = 1): string | null {
   if (depth > 16) return `submodules nest more than 16 levels deep under ${prefix || "the worktree"}`;
-  const paths = gitlinkPaths(worktreeDir);
-  if (paths === null) return `cannot list the submodules of ${prefix || "the worktree"}`;
+  const paths = gitlinkPaths(worktreeDir, prefix || "the worktree");
+  if ("error" in paths) return paths.error;
   const names = gitSubmoduleNames(worktreeDir, GIT_PLATFORM_ARGS);
   for (const path of paths) {
     const source = join(sourceDir, path);
@@ -300,8 +305,8 @@ function boltSubmoduleCopies(
   depth = 1,
 ): string | null {
   if (depth > 16) return `submodules nest more than 16 levels deep under ${prefix || "the worktree"}`;
-  const paths = gitlinkPaths(worktreeDir);
-  if (paths === null) return `cannot list the submodules of ${prefix || "the worktree"}`;
+  const paths = gitlinkPaths(worktreeDir, prefix || "the worktree");
+  if ("error" in paths) return paths.error;
   for (const path of paths) {
     const copy = join(worktreeDir, path);
     if (!initializedCheckout(copy)) continue;
