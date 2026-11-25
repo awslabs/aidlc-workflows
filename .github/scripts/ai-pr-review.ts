@@ -9,8 +9,10 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
+import { type Assessment as ProductAssessment, validateAssessment } from "./ai-product-decision.ts";
 import {
   acceptedRisks,
+  actorHasWrite,
   deriveDecision,
   fileAnchor,
   headContainsAnchor,
@@ -32,6 +34,7 @@ import {
 
 const MAX_CHANGED_FILES = 500;
 const MAX_REVIEW_BYTES = 100_000;
+const MAX_COMMENT_BYTES = 65_536;
 const CURRENT_AI_REVIEWS_FILE = "current-ai-reviews.json";
 const DISCUSSION_FILE = "discussion.json";
 const AI_REVIEW_MARKER = "<!-- ai-pr-review context=";
@@ -169,7 +172,7 @@ export interface DiscussionActor {
 
 export interface DiscussionEntry {
   id: number;
-  kind: "review" | "review-comment" | "ai-review";
+  kind: "review" | "review-comment" | "comment" | "ai-review";
   actor: DiscussionActor;
   body: string;
   createdAt: string;
@@ -187,6 +190,7 @@ export interface ReviewDiscussion {
   pullRequest: number;
   reviews: DiscussionEntry[];
   reviewComments: DiscussionEntry[];
+  comments: DiscussionEntry[];
 }
 
 export interface Finding {
@@ -642,7 +646,7 @@ function integer(value: unknown, label: string): number {
   return value;
 }
 
-function actor(value: unknown, association: unknown): DiscussionActor {
+function actor(value: unknown, association: unknown, maintainers: ReadonlySet<string> = new Set()): DiscussionActor {
   const user = value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
     : {};
@@ -651,7 +655,7 @@ function actor(value: unknown, association: unknown): DiscussionActor {
   return {
     login,
     association: normalizedAssociation,
-    maintainer: ["OWNER", "MEMBER", "COLLABORATOR"].includes(normalizedAssociation),
+    maintainer: maintainers.has(login),
   };
 }
 
@@ -661,15 +665,18 @@ function date(value: unknown): string {
 
 function commentEntry(
   value: Record<string, unknown>,
+  kind: "review-comment" | "comment" = "review-comment",
+  maintainers: ReadonlySet<string> = new Set(),
 ): DiscussionEntry {
   const entry: DiscussionEntry = {
-    id: integer(value.id, "review-comment id"),
-    kind: "review-comment",
-    actor: actor(value.user, value.author_association),
+    id: integer(value.id, `${kind} id`),
+    kind,
+    actor: actor(value.user, value.author_association, maintainers),
     body: text(value.body),
     createdAt: date(value.created_at),
     updatedAt: date(value.updated_at),
   };
+  if (kind === "comment") return entry;
   entry.commitId = text(value.commit_id);
   entry.path = text(value.path);
   entry.line = typeof value.line === "number" ? value.line : null;
@@ -678,9 +685,9 @@ function commentEntry(
   return entry;
 }
 
-function reviewEntry(value: Record<string, unknown>): DiscussionEntry {
+function reviewEntry(value: Record<string, unknown>, maintainers: ReadonlySet<string>): DiscussionEntry {
   const body = text(value.body);
-  const reviewActor = actor(value.user, value.author_association);
+  const reviewActor = actor(value.user, value.author_association, maintainers);
   return {
     id: integer(value.id, "review id"),
     kind: reviewActor.login === "github-actions[bot]" && body.startsWith(AI_REVIEW_MARKER)
@@ -704,12 +711,14 @@ export function normalizeDiscussion(
   head: string,
   reviewsRaw: Record<string, unknown>[],
   reviewCommentsRaw: Record<string, unknown>[],
+  commentsRaw: Record<string, unknown>[] = [],
+  maintainers: ReadonlySet<string> = new Set(),
 ): { discussion: ReviewDiscussion; currentAiReviews: DiscussionEntry[] } {
   if (!Number.isInteger(pullRequest) || pullRequest < 1) {
     throw new Error("pull request number must be a positive integer");
   }
   assertSha(head, "head");
-  const normalizedReviews = reviewsRaw.map(reviewEntry).sort(byTimeAndId);
+  const normalizedReviews = reviewsRaw.map(value => reviewEntry(value, maintainers)).sort(byTimeAndId);
   const currentAiReviews = normalizedReviews.filter(
     entry => entry.kind === "ai-review" && entry.commitId === head,
   );
@@ -726,8 +735,9 @@ export function normalizeDiscussion(
     pullRequest,
     reviews: stableReviews,
     reviewComments: reviewCommentsRaw
-      .map(value => commentEntry(value))
+      .map(value => commentEntry(value, "review-comment", maintainers))
       .sort(byTimeAndId),
+    comments: commentsRaw.map(value => commentEntry(value, "comment", maintainers)).sort(byTimeAndId),
   };
   return { discussion, currentAiReviews };
 }
@@ -739,6 +749,7 @@ export function authoritativeDiscussion(discussion: ReviewDiscussion): ReviewDis
       entry => entry.actor.maintainer || entry.kind === "ai-review",
     ),
     reviewComments: discussion.reviewComments.filter(entry => entry.actor.maintainer),
+    comments: discussion.comments.filter(entry => entry.actor.maintainer),
   };
 }
 
@@ -759,11 +770,18 @@ export function buildDiscussion(
     `repos/${repository}/pulls/${pullRequest}/comments`,
     ghExecutable,
   );
+  const comments = paginatedRecords(`repos/${repository}/issues/${pullRequest}/comments`, ghExecutable);
+  const logins = new Set([...reviews, ...reviewComments, ...comments]
+    .map(value => actor(value.user, value.author_association).login));
+  const maintainers = new Set([...logins].filter(login =>
+    actorHasWrite(repository, login, ghExecutable, { requireVerified: true })));
   const normalized = normalizeDiscussion(
     pullRequest,
     head,
     reviews,
     reviewComments,
+    comments,
+    maintainers,
   );
   writeFileSync(output, `${JSON.stringify(normalized.discussion, null, 2)}\n`);
   writeFileSync(currentAiOutput, `${JSON.stringify(normalized.currentAiReviews, null, 2)}\n`);
@@ -1822,7 +1840,11 @@ export function assertReviewBodyMarkers(body: string): void {
   }
 }
 
-export function renderReview(review: StructuredReview, contextId: string): ReviewPayload {
+export function renderReview(
+  review: StructuredReview,
+  contextId: string,
+  product?: ProductAssessment | null,
+): ReviewPayload {
   if (!/^[0-9a-f]{64}$/.test(contextId)) {
     throw new Error("context id must be a lowercase SHA-256 digest");
   }
@@ -1862,6 +1884,40 @@ export function renderReview(review: StructuredReview, contextId: string): Revie
     "Validation performed:",
     ...review.validation.map(item => `- ${markdownText(item)}`),
   ];
+  const productStart = lines.length;
+  if (product !== undefined) {
+    lines.push(
+      "",
+      "## Product Decision (advisory)",
+      "",
+      "This advice does not block merge or change the technical verdict. The maintainer decides in the PR discussion; no approval command is required.",
+      "",
+      product === null ? "Product assessment unavailable. The technical review is complete."
+        : product.status === "no-product-change" ? "No product change identified." : "Product choices for the maintainer:",
+      "",
+      ...(product ? [markdownText(product.summary)] : []),
+    );
+    for (const choice of product?.decisions ?? []) {
+      const source = choice.decision?.source;
+      const sourceAnchor = source?.kind === "review" ? "pullrequestreview-"
+        : source?.kind === "review-comment" ? "discussion_r" : "issuecomment-";
+      lines.push(
+        "",
+        `**${markdownText(choice.change)}**`,
+        "",
+        `Before: ${markdownText(choice.before)}`,
+        "",
+        `After: ${markdownText(choice.after)}`,
+        "",
+        choice.decision && source
+          ? `Prior judgment (AIDA interpretation): ${markdownText(choice.decision.summary)} ([${source.kind} #${source.id}](#${sourceAnchor}${source.id}), ${markdownText(source.by)})`
+          : `Question: ${markdownText(choice.question ?? "")}`,
+        "",
+        `Files: ${choice.paths.map(path => `<code>${codeText(path)}</code>`).join(", ")}`,
+      );
+    }
+  }
+  const productLength = lines.length - productStart;
   const appendFinding = (finding: Finding): void => {
     lines.push(
       "",
@@ -2023,7 +2079,18 @@ export function renderReview(review: StructuredReview, contextId: string): Revie
     `[AI-PR-REVIEWED] ${review.head}`,
   );
   const event: ReviewEvent = "COMMENT";
-  const body = lines.join("\n");
+  let body = lines.join("\n");
+  if (productLength > 0 && Buffer.byteLength(body, "utf8") > MAX_COMMENT_BYTES) {
+    const compact = ["", "## Product Decision (advisory)", "",
+      "Product details omitted to keep the complete technical review within the publication limit."];
+    lines.splice(productStart, productLength, ...compact);
+    body = lines.join("\n");
+    if (Buffer.byteLength(body, "utf8") > MAX_COMMENT_BYTES) {
+      lines.splice(productStart, compact.length);
+      body = lines.join("\n");
+    }
+  }
+  if (Buffer.byteLength(body, "utf8") > MAX_COMMENT_BYTES) throw new Error("technical review exceeds the publication limit");
   assertReviewBodyMarkers(body);
   return { commit_id: review.head, body, event };
 }
@@ -2104,7 +2171,19 @@ function main(): void {
     } else {
       review = enforceDecision(parseStructuredReview(lastValidateInput, base, head, manifest, metadata, scope, securityCited));
     }
-    const payload = renderReview(review, contextId);
+    let product: ProductAssessment | null | undefined;
+    if (args.includes("--product")) {
+      try {
+        const discussion = args.includes("--discussion")
+          ? JSON.parse(readFileSync(argValue(args, "--discussion"), "utf8")) as ReviewDiscussion
+          : undefined;
+        product = validateAssessment(JSON.parse(readFileSync(argValue(args, "--product"), "utf8")), manifest, discussion);
+      } catch {
+        console.error("Product assessment unavailable; publishing the technical review.");
+        product = null;
+      }
+    }
+    const payload = renderReview(review, contextId, product);
     writeFileSync(output, `${JSON.stringify(payload, null, 2)}\n`);
     if (args.includes("--decision-output")) {
       writeFileSync(
