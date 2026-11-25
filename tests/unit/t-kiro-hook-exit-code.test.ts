@@ -11,7 +11,7 @@
 
 import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import kiro from "../../harness/kiro/manifest.ts";
@@ -74,29 +74,30 @@ describe("a Kiro CLI hook's exit code reaches Kiro as the hook set it", () => {
       spawnSync("git", ["init", "-q"], { cwd: dir });
       const path = `${dirname(process.execPath)}${delimiter}${process.env.PATH ?? ""}`;
       const skill = readFileSync(join(dir, ".kiro", "skills", "aidlc", "SKILL.md"), "utf-8");
-      const prompt = asKiroRuns(shipped("verb-intercept"), dir, JSON.stringify({
+      const says = (typed: string) => asKiroRuns(shipped("verb-intercept"), dir, JSON.stringify({
         hook_event_name: "userPromptSubmit",
         cwd: dir,
         session_id: "t-kiro-hook-exit-code",
-        prompt: skill.replaceAll("$ARGUMENTS", "fix the login page, please"),
+        prompt: skill.replaceAll("$ARGUMENTS", typed),
       }), path);
-      expect(prompt.status, prompt.stderr).toBe(0);
-      expect(prompt.stdout).toContain("Your first tool call is exactly the call below");
-      const forwarded = /engine orchestrate next (.*)\n/.exec(prompt.stdout)?.[1] ?? "";
-      expect(forwarded.length).toBeGreaterThan(0);
-      const guard = (command: string) => asKiroRuns(shipped("guard-tool-call"), dir, JSON.stringify({
+      const entry = "bun .kiro/tools/aidlc.ts engine orchestrate next --entry";
+      const guard = () => asKiroRuns(shipped("guard-tool-call"), dir, JSON.stringify({
         hook_event_name: "preToolUse",
         cwd: dir,
         tool_name: "shell",
-        tool_input: { command },
+        tool_input: { command: entry },
       }), path);
-      // The agent's rewrite seen live: the whole line inside one pair of double quotes.
-      const altered = guard(`bun .kiro/tools/aidlc.ts engine orchestrate next "${forwarded}"`);
-      expect(altered.status, altered.stderr).toBe(2);
-      expect(altered.stderr).toContain("Run exactly:");
-      const asTold = guard(`bun .kiro/tools/aidlc.ts engine orchestrate next ${forwarded}`);
+      // The hook ran the status itself: the agent's first command this turn would roll the workflow forward.
+      const status = says("--status");
+      expect(status.status, status.stderr).toBe(0);
+      const refused = guard();
+      expect(refused.status, refused.stderr).toBe(2);
+      expect(refused.stderr).toContain("This was a read-only command and AIDLC already ran it this turn");
+      const request = says("fix the login page, please");
+      expect(request.status, request.stderr).toBe(0);
+      expect(request.stdout).toContain(`Run \`${entry}\` now and do only what it prints.`);
+      const asTold = guard();
       expect(asTold.status, asTold.stderr).toBe(0);
-      expect(existsSync(join(dir, "aidlc", ".aidlc-sessions", ".kiro-cli-forwarding-latch.json"))).toBe(false);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

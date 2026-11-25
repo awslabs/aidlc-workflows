@@ -240,8 +240,13 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
   const CLAUDE_SKILL = "harness/claude/skills/aidlc/SKILL.md";
   const CODEX_SKILL = "harness/codex/skills/aidlc/SKILL.md";
   const KIRO_IDE_SKILL = "harness/kiro-ide/skills/aidlc/SKILL.md";
+  const KIRO_SKILL = "harness/kiro/skills/aidlc/SKILL.md";
   // The skills whose first command is `next --entry`: their prompt hook keeps the typed line for the engine to read.
-  const ENTRY_SKILLS = [CLAUDE_SKILL, CODEX_SKILL, KIRO_IDE_SKILL];
+  const ENTRY_SKILLS = [CLAUDE_SKILL, CODEX_SKILL, KIRO_IDE_SKILL, KIRO_SKILL];
+  // Kiro CLI on V2 hands its prompt hook the skill body with `$ARGUMENTS` replaced, never the typed line, so that
+  // skill writes it once, on a line of its own that no command carries.
+  const KIRO_TYPED_LINE = "What they typed after `/aidlc`, which AI-DLC keeps on record and which goes on no command: " +
+    "<aidlc-typed>$ARGUMENTS</aidlc-typed>";
   const FIRST_COMMAND_CARRIES_NONE = "The first `next --entry` carries none of the person's words, which AI-DLC reads " +
     "from its own record.";
 
@@ -380,7 +385,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
   // Kiro IDE's agent quoted "/aidlc classic: ..." whole as one argument, so the
   // person was asked which plan to use after naming it. Every SKILL that passes
   // the request on verbatim has the agent give a named plan its own argument.
-  // On Claude Code, Codex and Kiro IDE the first command carries none of their
+  // On Claude Code, Codex and Kiro the first command carries none of their
   // words, so the engine reads the plan they named from their typed line.
   test("every shipped conductor SKILL gives a plan the person named its own argument", () => {
     const passOn = "Pass `$ARGUMENTS` through to the first `next` verbatim - the engine parses flags";
@@ -401,17 +406,20 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
   // reads their typed line from its own record. Only step 1 and the sentence
   // that says what it carries name the flag, which is never offered to the
   // person (the description and the argument hint list what they type).
-  test("the Claude, Codex and Kiro IDE skills' first command carries none of the person's words", () => {
+  test("the Claude, Codex and Kiro skills' first command carries none of the person's words", () => {
     for (const rel of ENTRY_SKILLS) {
       const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
       const lines = body.split("\n");
       const step = lines.find((line) => line.trimStart().startsWith("1. directive = the JSON printed by running"));
-      expect(step, rel).toContain("running `{{INVOKE}} engine orchestrate next --entry` bare (no shell capture, no pipe), whatever they typed:");
+      // The Kiro CLI (V2) step keeps a comma before "bare": an older V2 hook reads the words of a step line that
+      // closes "` bare (no shell capture" as the person's, and so would take `--entry` for them.
+      const bare = rel === KIRO_SKILL ? "`, bare" : "` bare";
+      expect(step, rel).toContain(`running \`{{INVOKE}} engine orchestrate next --entry${bare} (no shell capture, no pipe), whatever they typed:`);
       expect(body, rel).toContain(FIRST_COMMAND_CARRIES_NONE);
       // One command with no exception: no sentence sends anything of theirs after `next`.
       expect(body, rel).not.toContain("goes after `next`");
       expect(body, rel).not.toContain("in place of `--entry`");
-      expect(body, rel).not.toContain("$ARGUMENTS");
+      expect(lines.filter((line) => line.includes("$ARGUMENTS")), rel).toEqual(rel === KIRO_SKILL ? [KIRO_TYPED_LINE] : []);
       expect(body, rel).not.toContain("as separate arguments, never re-quoted into one string");
       expect(lines.filter((line) => line.includes("--entry")), rel).toEqual([step as string, lines.find((line) => line.includes(FIRST_COMMAND_CARRIES_NONE)) as string]);
     }

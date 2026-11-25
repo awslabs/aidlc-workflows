@@ -96,9 +96,20 @@ executable? The manual-copy path is the one place Bun is needed: install
 [release](https://github.com/awslabs/aidlc-workflows/releases/latest), copy
 the complete `runtime/<harness>/` directory into the project, and run its own
 setup once, as [Copy Channel](18-install-and-lifecycle.md#copy-channel) shows.
+On Kiro, install with the guide's manual-copy steps instead:
+[Kiro](harnesses/kiro.md#versioned-manual-copy-alternative) copies
+`runtime/kiro-ide/` and
+[Kiro CLI (V2)](harnesses/kiro.md#kiro-cli-v2-versioned-manual-copy-alternative)
+copies `runtime/kiro/`, and both say how to keep the project's own Kiro settings.
 A copy never replaces your `.gitignore` or `AGENTS.md`; AI-DLC adds its own
 lines to them. The manual-copy path does not require the native `aidlc`
 command.
+
+To move a copied project to a newer release, run its own setup command from
+that release's copy runtime, as
+[Copy Channel](18-install-and-lifecycle.md#copy-channel) shows, instead of
+copying over the project again: a second copy replaces the setup answers and
+plugin choices the project recorded.
 
 ## 2. Set up your project
 

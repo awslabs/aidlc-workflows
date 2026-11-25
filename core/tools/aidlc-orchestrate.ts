@@ -7546,10 +7546,9 @@ function nextArgsNameOnlyAPlan(args: string[]): string | null {
 // whole text beside it): `next` reads that line from AI-DLC's own copy
 // (takePersonsOwnLine), so the agent runs `next` with nothing after it and
 // does not type tens of thousands of characters again, often past what one
-// command line can carry. It opens with the words of Kiro IDE's adapter's
-// first-step line (firstStepLine, Kiro IDE and Kiro CLI on its V3 engine),
-// which names `next --entry` for every `/aidlc` line; a test holds the two to
-// those words. "" for any other line: words that
+// command line can carry. It opens with the words of the Kiro adapters'
+// first-step lines (Kiro IDE and Kiro CLI on both engines), which name
+// `next --entry`; a test holds them to those words. "" for any other line: words that
 // are not words alone (nextArgsAreOnlyWords), or that hold a flag-shaped
 // token `next` does not take, which a bare `next` hands back for the agent to
 // send again behind `--`; a record with no whole copy; no chat, whose `next`
@@ -11849,7 +11848,7 @@ function cutMessageStep(shape: ParsedFlags, message: StoredMessage, reply: boole
   );
 }
 
-// AI-DLC's first command (`next --entry`, step 1 of the Claude Code, Codex and Kiro IDE skills)
+// AI-DLC's first command (`next --entry`, step 1 of the Claude Code, Codex and Kiro skills)
 // carries none of the person's words: the bare `next` reads the words of their
 // typed line from the record (takePersonsOwnLine), and a line of tokens alone
 // runs as the command before this is asked (entryTokens). A shortcut's line
@@ -11881,6 +11880,26 @@ function entryLine(pd: string, selection: WorkflowSelection, unjoined: boolean):
   const unselected = !existsSync(engineStateFilePath(pd)) ? unselectedRecords(pd) : null;
   const waits = openRoutingQuestion(pd) !== null || openFrontQuestion(pd) !== null || (unselected?.selectable.length ?? 0) > 0;
   return waits ? [reply] : "step";
+}
+// The words of the message the human-turn hook named by id, when the agent
+// passes that id where a request's goes: they go on whole as one argument, as
+// the agent hands words to `next` and entryLine a plain message. An `/aidlc`
+// line gives its words as typed and never its flags, which its own command ran
+// once (a jump run again would redo the stage). Null for no such message, no
+// whole words, or a line naming a request (`main`'s, so one message is read).
+function namedMessageWords(pd: string, id: string): string | null {
+  const message = readMessage(pd, id);
+  if (message === null || message.words === null) return null;
+  const whole = wholeMessageText(pd, message);
+  // A box answer is marked cut for a long question too; the hook cuts its words only at MESSAGE_TEXT_MAX_CHARS.
+  const wordsCut = message.source === "picker" ? personsWordsText(message.words).length >= MESSAGE_TEXT_MAX_CHARS : whole === null;
+  if (message.cut === true && wordsCut) return null;
+  const typed = message.source === "prompt" ? typedEntryWords(personsWordsText(whole ?? message.text)) : null;
+  if (typed === null) return personsWordsText(whole ?? message.words).trim();
+  const own = parseNextFlags(splitKiroCommandArgs(typed));
+  const said = own.personWords ?? own.intent;
+  if (own.request !== undefined || said === undefined) return null;
+  return requestAsTyped(said, typed) ?? withTypedSpacing(said, typed);
 }
 // A plan's name alone, handed on by entryLine while one plan question waits,
 // is that question's answer: it runs as the command the question gave for that
@@ -12517,7 +12536,13 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     const found = readQuestion(questionDir, flags.request);
     if (!found) {
       pruneQuestions();
-      emit(repeatedAnswerDirective(questionDir, startedRequestFor(questionDir, flags.request)) ?? errorDirective(QUESTION_UNAVAILABLE));
+      const repeated = repeatedAnswerDirective(questionDir, startedRequestFor(questionDir, flags.request));
+      const words = repeated === null ? namedMessageWords(questionDir, flags.request) : null;
+      if (words !== null) {
+        routeNext([words], projectDir);
+        return;
+      }
+      emit(repeated ?? errorDirective(QUESTION_UNAVAILABLE));
       return;
     }
     // A routing question that stopped an answer is answered once that answer's
