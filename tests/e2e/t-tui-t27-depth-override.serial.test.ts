@@ -28,11 +28,15 @@
 //     word itself (it never names a config command for a value outside
 //     minimal, standard, and comprehensive): an error directive, or the print
 //     naming the words `--depth` does take and handing the line to the agent to
-//     read. The agent may carry the value on its own `next
-//     --resume` (the resume line tells it to); `next` reads the refused value
-//     first either way. Two designed shapes follow:
+//     read. The skill's first command, `next --entry`, carries none of their
+//     words: `next` reads their line from its own record and refuses the word
+//     there; an agent that carries the value on `next` itself (with or
+//     without its own `--resume`, as the resume line tells it to) meets the
+//     same refusal.
+//     Two designed shapes follow:
 //     the agent asks the person once, in
-//     prose (the turn settles) or as one picker (open until they answer), with
+//     prose (the turn settles) or as one picker (open until they answer; the
+//     host may look the picker's tool up first), with
 //     nothing changed, not even Last Updated; or it reads the word as one of
 //     the levels, the engine records that level
 //     and says it back in the setter's own line, and the work carries on in
@@ -81,7 +85,8 @@ import { randomUUID } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import { dirname, join } from "node:path";
-import { nextFlagShape, parseLiteralShellInvocation, readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { afterHostLookups, isCanonicalDepthRefusalCall, literalEngineCall, startsWithWords } from "../harness/depth-refusal-turn.ts";
 import { seededAuditDir, seededStateFile } from "../harness/fixtures.ts";
 import { type NativeToolCall, nativeToolCalls } from "../harness/t139-fidelity.ts";
 import {
@@ -230,44 +235,9 @@ const DEPTH_REFUSALS: Record<string, RegExp> = {
   print: /^`next` takes `--depth` with minimal\|standard\|comprehensive, and does not take "extreme"\./,
 };
 
-// The call that carried the person's `--depth extreme` to `next`. The agent may
-// add a flag of its own that takes no value (`--resume`, as the resume line
-// tells it to); `next` reads the refused value first and takes nothing else
-// from the line, so that call is the same refusal.
-const CANONICAL_NEXT = ["bun", ".claude/tools/aidlc.ts", "engine", "orchestrate", "next"];
 const ENGINE = ["bun", ".claude/tools/aidlc.ts", "engine"];
 const DEPTH_LEVELS = ["minimal", "standard", "comprehensive"] as const;
 type DepthLevel = (typeof DEPTH_LEVELS)[number];
-
-// A literal engine call made in this project: no directory prelude, or one
-// that is this project directory.
-function literalEngineCall(call: NativeToolCall, projectDir: string): string[] | null {
-  if (call.name !== "Bash") return null;
-  const parsed = parseLiteralShellInvocation(String(call.input.command));
-  if (!parsed) return null;
-  if (parsed.directory === null) return parsed.argv;
-  try {
-    const selected = statSync(parsed.directory, { bigint: true });
-    const expected = statSync(projectDir, { bigint: true });
-    return selected.isDirectory() && expected.isDirectory() &&
-      selected.ino !== 0n && selected.dev === expected.dev && selected.ino === expected.ino
-      ? parsed.argv
-      : null;
-  } catch {
-    return null;
-  }
-}
-
-function startsWithWords(argv: readonly string[], words: readonly string[]): boolean {
-  return JSON.stringify(argv.slice(0, words.length)) === JSON.stringify(words);
-}
-
-function isCanonicalDepthRefusalCall(call: NativeToolCall, projectDir: string): boolean {
-  const argv = literalEngineCall(call, projectDir);
-  if (argv === null || !startsWithWords(argv, CANONICAL_NEXT)) return false;
-  const modifier = argv.slice(CANONICAL_NEXT.length).filter((token) => nextFlagShape(token)?.value !== "none");
-  return JSON.stringify(modifier) === JSON.stringify(["--depth", "extreme"]);
-}
 
 // The engine's own setter for the depth the agent read the word as, and the
 // level it set; null for any other call.
@@ -541,14 +511,16 @@ describe("t-tui-t27 depth override (config-change lands + renders)", () => {
 
         if (!inferred) {
           // The agent asked once: as one open picker (the only call after the
-          // refusal, one question, nobody answers it for the person), or in
-          // prose (no call after the refusal, a reply, the turn ended). Either
-          // way nothing on disk changed, not even Last Updated (the refusal
-          // short-circuits before writeStateFile).
+          // refusal but the host's own lookup of a tool before it, one
+          // question, nobody answers it for the person), or in prose (no call
+          // after the refusal, a reply, the turn ended). Either way nothing on
+          // disk changed, not even Last Updated (the refusal short-circuits
+          // before writeStateFile).
           const afterRefusal = calls.slice(refused + 1);
           if (picker) {
-            expect(afterRefusal.map((call) => call.name)).toEqual(["AskUserQuestion"]);
-            const questions = (afterRefusal[0].input as { questions?: unknown[] }).questions ?? [];
+            const asked = afterHostLookups(afterRefusal);
+            expect(asked.map((call) => call.name)).toEqual(["AskUserQuestion"]);
+            const questions = (asked[0].input as { questions?: unknown[] }).questions ?? [];
             expect(questions.length, "one question, asked once").toBe(1);
           } else {
             expect(stops.length).toBeGreaterThan(0);
