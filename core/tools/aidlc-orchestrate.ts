@@ -11881,6 +11881,23 @@ function entryLine(pd: string, selection: WorkflowSelection, unjoined: boolean):
   const waits = openRoutingQuestion(pd) !== null || openFrontQuestion(pd) !== null || (unselected?.selectable.length ?? 0) > 0;
   return waits ? [reply] : "step";
 }
+// The words of the message the human-turn hook named by id, when the agent
+// passes that id where a request's goes: they go on whole as one argument, as
+// the agent hands words to `next` and entryLine a plain message. An `/aidlc`
+// line gives its words as typed and never its flags, which its own command ran
+// once (a jump run again would redo the stage). Null for no such message, no
+// whole words, or a line naming a request (`main`'s, so one message is read).
+function namedMessageWords(pd: string, id: string): string | null {
+  const message = readMessage(pd, id);
+  const whole = message === null ? null : wholeMessageText(pd, message);
+  if (message === null || message.words === null || (message.cut === true && whole === null)) return null;
+  const typed = message.source === "prompt" ? typedEntryWords(personsWordsText(whole ?? message.text)) : null;
+  if (typed === null) return personsWordsText(whole ?? message.words).trim();
+  const own = parseNextFlags(splitKiroCommandArgs(typed));
+  const said = own.personWords ?? own.intent;
+  if (own.request !== undefined || said === undefined) return null;
+  return requestAsTyped(said, typed) ?? withTypedSpacing(said, typed);
+}
 // A plan's name alone, handed on by entryLine while one plan question waits,
 // is that question's answer: it runs as the command the question gave for that
 // plan, so the work starts on the request it was asked about, with the
@@ -12516,7 +12533,13 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     const found = readQuestion(questionDir, flags.request);
     if (!found) {
       pruneQuestions();
-      emit(repeatedAnswerDirective(questionDir, startedRequestFor(questionDir, flags.request)) ?? errorDirective(QUESTION_UNAVAILABLE));
+      const repeated = repeatedAnswerDirective(questionDir, startedRequestFor(questionDir, flags.request));
+      const words = repeated === null ? namedMessageWords(questionDir, flags.request) : null;
+      if (words !== null) {
+        routeNext([words], projectDir);
+        return;
+      }
+      emit(repeated ?? errorDirective(QUESTION_UNAVAILABLE));
       return;
     }
     // A routing question that stopped an answer is answered once that answer's
