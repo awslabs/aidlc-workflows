@@ -139,7 +139,7 @@ An omitted `effort:` key inherits the session effort, and a pinned one overrides
 
 ### The layered rule files
 
-This implementation reads behavioral rules from the active space memory layer at `aidlc/spaces/<active-space>/memory/`, pulled into Claude's context via the `.claude/rules/aidlc.md` @-import stub, which imports the engine's git-ignored copy of those files at `aidlc/active-memory/` (written at session start and on a space switch, so a switch changes no tracked file). One file per layer of the inheritance chain:
+This implementation reads behavioral rules from the active space memory layer at `aidlc/spaces/<active-space>/memory/`, pulled into Claude's context via the `.claude/rules/aidlc.md` @-import stub, which imports the engine's git-ignored copy of those files at `aidlc/.aidlc-engine/active-memory/` (written at session start and on a space switch, so a switch changes no tracked file). One file per layer of the inheritance chain:
 
 ```
 aidlc/spaces/<active-space>/memory/
@@ -194,7 +194,7 @@ Commit: aidlc/ workspace (memory layer, intents registry, per-intent
         aidlc-state.md, audit/ shards, and stage artifacts)
 Gitignore:
   - aidlc/active-space, aidlc/spaces/*/intents/active-intent  (per-user cursors)
-  - aidlc/.aidlc-clone-id, aidlc/.aidlc-sessions/             (machine-local)
+  - aidlc/.aidlc-engine/clone-id, aidlc/.aidlc-engine/sessions/             (machine-local)
   - aidlc/spaces/*/intents/*/runtime-graph.json              (re-derivable)
   - aidlc/spaces/*/intents/*/.aidlc-*
 ```

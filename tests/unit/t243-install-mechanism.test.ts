@@ -95,7 +95,7 @@ import {
   writeOperation,
 } from "../../core/tools/aidlc-transaction.ts";
 import { AIDLC_VERSION } from "../../core/tools/aidlc-version.ts";
-import { writeSessionPidEntry } from "../../core/tools/aidlc-lib.ts";
+import { aidlcOwnedSourceKey, mainCheckoutChangeRefusal, sourcePathKey, writeSessionPidEntry } from "../../core/tools/aidlc-lib.ts";
 import { copyChannelDispatcherCommands } from "../../core/tools/aidlc.ts";
 import { doctorCommandLines, vscodeVisibleOutput } from "../harness/vscode-output-trim.ts";
 import {
@@ -4831,7 +4831,7 @@ describe("t243 project initialization", () => {
     test("a new project: the first config names the setup once, before its last line, and the next config says nothing", () => {
       const project = repository("aidlc-t243-setup-new-");
       const first = configure(project, CLAUDE_RELEASE, "claude");
-      expect(first).toContain(line("Claude Code", ".claude/, aidlc/ and .gitignore"));
+      expect(first).toContain(line("Claude Code", ".claude/, aidlc/, .gitattributes and .gitignore"));
       expect(times(first), first).toBe(1);
       expect(first.indexOf(SAID)).toBeLessThan(first.indexOf("configured "));
       // A refresh of a setup that is already here, tracked or not, says nothing.
@@ -4843,7 +4843,7 @@ describe("t243 project initialization", () => {
       const project = repository("aidlc-t243-setup-own-files-", { ".gitignore": "node_modules/\n" });
       writeFileSync(join(project, ".mcp.json"), `${JSON.stringify({ mcpServers: { mine: { command: "mine" } } })}\n`);
       const out = configure(project, CLAUDE_RELEASE, "claude");
-      expect(out).toContain(line("Claude Code", ".claude/, aidlc/ and .gitignore"));
+      expect(out).toContain(line("Claude Code", ".claude/, aidlc/, .gitattributes and .gitignore"));
       expect(out).not.toContain(".mcp.json");
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -4861,13 +4861,13 @@ describe("t243 project initialization", () => {
       const project = repository("aidlc-t243-setup-jsonc-", { "opencode.jsonc": "{\n  // the team's own\n}\n" });
       const out = configure(project, OPENCODE_RELEASE, "opencode");
       expect(git(project, "status", "--porcelain")).toContain(" M opencode.jsonc");
-      expect(out).toContain(line("opencode", ".aidlc/, .opencode/, aidlc/, .gitignore, AGENTS.md and opencode.jsonc"));
+      expect(out).toContain(line("opencode", ".aidlc/, .opencode/, aidlc/, .gitattributes, .gitignore, AGENTS.md and opencode.jsonc"));
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
     test("a project in a folder of a bigger repository: the paths named are the project's own", () => {
       const repo = repository("aidlc-t243-setup-monorepo-", { "apps/shop/README.md": "# Shop\n" });
       const out = configure(join(repo, "apps", "shop"), CLAUDE_RELEASE, "claude");
-      expect(out).toContain(line("Claude Code", ".claude/, aidlc/ and .gitignore"));
+      expect(out).toContain(line("Claude Code", ".claude/, aidlc/, .gitattributes and .gitignore"));
       expect(out).not.toContain("apps/shop/.claude");
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -5027,7 +5027,8 @@ describe("t243 project initialization", () => {
       const contribution = {
         policy: "managed-block",
         marker: "gitignore",
-        hash: sha256Bytes(block),
+        // Recorded in its LF form, as git commits it.
+        hash: sha256Bytes(block.replaceAll("\r\n", "\n")),
       };
       const baseline = JSON.parse(readFileSync(manifestPath, "utf-8")) as {
         files: Record<string, string>;
@@ -6277,9 +6278,9 @@ describe("t243 project initialization", () => {
     const source = temp("aidlc-t240-polluted-runtime-");
     cpSync(KIRO_IDE_RELEASE, source, { recursive: true });
     const state = [
-      "aidlc/.aidlc-clone-id",
-      "aidlc/.aidlc-sessions/.kiro-ide-current-session",
-      "aidlc/.aidlc-sessions/kiro-terminal/0123abcd/turn",
+      "aidlc/.aidlc-engine/clone-id",
+      "aidlc/.aidlc-engine/sessions/.kiro-ide-current-session",
+      "aidlc/.aidlc-engine/sessions/kiro-terminal/0123abcd/turn",
       "aidlc/spaces/default/intents/.aidlc-engine/hooks-health/plan-approval-guard.last",
       "aidlc/spaces/default/intents/.aidlc-engine/hooks-health/kiro-adapter.drops",
     ];
@@ -6301,16 +6302,16 @@ describe("t243 project initialization", () => {
     const baseline = JSON.parse(readFileSync(manifest, "utf-8")) as { files: Record<string, string> };
     expect(Object.keys(baseline.files).filter((rel) => state.includes(rel))).toEqual([]);
 
-    const cloneId = join(project, "aidlc", ".aidlc-clone-id");
+    const cloneId = join(project, "aidlc", ".aidlc-engine", "clone-id");
     writeFileSync(cloneId, "project clone id\n");
-    baseline.files["aidlc/.aidlc-clone-id"] = sha256Bytes(readFileSync(cloneId));
+    baseline.files["aidlc/.aidlc-engine/clone-id"] = sha256Bytes(readFileSync(cloneId));
     writeFileSync(manifest, `${JSON.stringify(baseline, null, 2)}\n`);
     const refreshed = config(KIRO_IDE_RELEASE);
     expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
     expect(readFileSync(cloneId, "utf-8")).toBe("project clone id\n");
     expect(
       (JSON.parse(readFileSync(manifest, "utf-8")) as { files: Record<string, string> })
-        .files["aidlc/.aidlc-clone-id"],
+        .files["aidlc/.aidlc-engine/clone-id"],
     ).toBeUndefined();
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
@@ -9276,6 +9277,7 @@ describe("t243 projection channel", () => {
           "sha256:3cc1cbd212d2ca0dbf1e525eb9a40d4694a585eb7864d8b877f8fe8bd99122dc",
           "sha256:839f98012dd457ed13dcf19547b992130a2c44ef7afa73fb3faf000137a087d7",
           "sha256:c4dbcd2ecd6243a4759c148f38bd764042f2563f6a679f732c25471cd308ec77",
+          "sha256:46ea9f0d1e974b79d5ce7954dfe8b31304d6a6fd05985483c300e1a4445b99bd",
         ],
       },
       codex: {
@@ -9289,6 +9291,7 @@ describe("t243 projection channel", () => {
           "sha256:345fbe9fe620718510ecfe9d478233ccf4a5318522884b50fc5540559ace3eed",
           "sha256:c2b1232b28a8b5474f7ef8363452f75399366ef227c59d75fa85d7aa2edca7ac",
           "sha256:42e2a975d46b6fd2a582fa539f6df3260a1f2722dd0a113bd312dff7dc2da204",
+          "sha256:2017c7e71f587efbc3bddae9ddf264c08a0f353d8de6fe9f001f41f8ce5cf0fc",
         ],
         "AGENTS.md": [
           "sha256:30a9f5f43d87cd29b63e75333b8ef6695f8f4e11909fd6af64e2b6cf0b8cb292",
@@ -9313,6 +9316,7 @@ describe("t243 projection channel", () => {
           "sha256:6de1298dfa4c2b6916f66d372b844faf23481c8f258eedd595c1423dab8e106d",
           "sha256:6d3bf5865f1836575715ea93d0042b9d08bcab918cc9a17a142848fe44e88bc7",
           "sha256:04d7ca868197529d9839b62c902870157743c93a6c7fd134bcebcccc8a1d263f",
+          "sha256:2aca14c7a5b75f3a4a12192b1e760f8b91b2287244f0d45aa7c4f947ed9d1e3e",
         ],
       },
       kiro: {
@@ -9327,6 +9331,7 @@ describe("t243 projection channel", () => {
           "sha256:6df8b41c1c9011d8b6d386d389f96bbfa27812386f434103c260bf58641d6b5d",
           "sha256:91f5070ac1b7f2effcf608447a67261ab00dd92495385bf2277b53ca1723c6f0",
           "sha256:d0d2e38fbc662a86e2c8e3047ace37df838b9652710c6d6ae01232c8a6180422",
+          "sha256:e23a316e00870ad313efbcb3b2022d3ab1865fd9f35620263eac4c09938631fa",
         ],
         "AGENTS.md": [
           "sha256:4f7133cc1a9bb1243245c25c28fad57c3660b35e251ea36cea3aa2db431bf55f",
@@ -9346,6 +9351,7 @@ describe("t243 projection channel", () => {
           "sha256:6de1298dfa4c2b6916f66d372b844faf23481c8f258eedd595c1423dab8e106d",
           "sha256:6d3bf5865f1836575715ea93d0042b9d08bcab918cc9a17a142848fe44e88bc7",
           "sha256:04d7ca868197529d9839b62c902870157743c93a6c7fd134bcebcccc8a1d263f",
+          "sha256:2aca14c7a5b75f3a4a12192b1e760f8b91b2287244f0d45aa7c4f947ed9d1e3e",
         ],
       },
       "kiro-ide": {
@@ -9361,6 +9367,7 @@ describe("t243 projection channel", () => {
           "sha256:f9d49a8c823df8174ea7d8a83209380202e5673b5ee8c1ff6b9cce90bcfd550e",
           "sha256:e7c17271c65f778895fe75352413c03da8a3c37c37bca2b8bcb1c447f4c8b8f3",
           "sha256:0f3d8cce1070c43f883aeda63341bf00e7d689916ca5f810734784fedfd6009a",
+          "sha256:96b1943a4a01d61fd7774f40d88af6374d1b0c24a2a60aa3d1758c22faa9a8c3",
         ],
         "AGENTS.md": [
           "sha256:4d539288363565feb6cf1a8d2468d1aca4373d46d354936d89e609f9862b2b9f",
@@ -9380,6 +9387,7 @@ describe("t243 projection channel", () => {
           "sha256:6de1298dfa4c2b6916f66d372b844faf23481c8f258eedd595c1423dab8e106d",
           "sha256:6d3bf5865f1836575715ea93d0042b9d08bcab918cc9a17a142848fe44e88bc7",
           "sha256:04d7ca868197529d9839b62c902870157743c93a6c7fd134bcebcccc8a1d263f",
+          "sha256:2aca14c7a5b75f3a4a12192b1e760f8b91b2287244f0d45aa7c4f947ed9d1e3e",
         ],
       },
       cursor: {
@@ -9392,6 +9400,7 @@ describe("t243 projection channel", () => {
           "sha256:ae1878ec98301ceb4510e711cf79f58dfb44cb486744007acd03ae5e61860665",
           "sha256:55d4cfabe04aca4193d53032c003002d3c9c7de4eef90be0afb411d8a6f7e340",
           "sha256:880993e2876c4e1ce73f0354928eb98c7f234a127aeecbd4268aadc508e918ab",
+          "sha256:f59b6f9e718d9977af37a9d3b643d751ce60e919ffa736e9d43df4574c5df7dd",
         ],
         "AGENTS.md": [
           "sha256:78c906200a55665f3a3ce410272c71d4bdcb5764174407da0f69d8ad6d143184",
@@ -9401,6 +9410,7 @@ describe("t243 projection channel", () => {
           "sha256:6de1298dfa4c2b6916f66d372b844faf23481c8f258eedd595c1423dab8e106d",
           "sha256:6d3bf5865f1836575715ea93d0042b9d08bcab918cc9a17a142848fe44e88bc7",
           "sha256:04d7ca868197529d9839b62c902870157743c93a6c7fd134bcebcccc8a1d263f",
+          "sha256:2aca14c7a5b75f3a4a12192b1e760f8b91b2287244f0d45aa7c4f947ed9d1e3e",
         ],
         "install.ts": [
           "sha256:338e1d36257108ce908eb42992e87e5df7cf96003a45e04a72189e4d79110aba",
@@ -9416,6 +9426,7 @@ describe("t243 projection channel", () => {
           "sha256:345fbe9fe620718510ecfe9d478233ccf4a5318522884b50fc5540559ace3eed",
           "sha256:c2b1232b28a8b5474f7ef8363452f75399366ef227c59d75fa85d7aa2edca7ac",
           "sha256:42e2a975d46b6fd2a582fa539f6df3260a1f2722dd0a113bd312dff7dc2da204",
+          "sha256:2017c7e71f587efbc3bddae9ddf264c08a0f353d8de6fe9f001f41f8ce5cf0fc",
         ],
         "AGENTS.md": [
           "sha256:d791057d6b667517197a450bc6ba633c36e148d62e09c90a8992d787c914a44f",
@@ -9425,6 +9436,7 @@ describe("t243 projection channel", () => {
           "sha256:6de1298dfa4c2b6916f66d372b844faf23481c8f258eedd595c1423dab8e106d",
           "sha256:6d3bf5865f1836575715ea93d0042b9d08bcab918cc9a17a142848fe44e88bc7",
           "sha256:04d7ca868197529d9839b62c902870157743c93a6c7fd134bcebcccc8a1d263f",
+          "sha256:2aca14c7a5b75f3a4a12192b1e760f8b91b2287244f0d45aa7c4f947ed9d1e3e",
         ],
         "opencode.json": [
           "sha256:3be60b2be72b7a423fdaa90fd7d0d9d19613875c05ad5f1a2b6e20fcb54cd1e5",
@@ -9443,6 +9455,7 @@ describe("t243 projection channel", () => {
           "sha256:2091d36da7f7306179da27227857564334f3a455327f365984db6c94a4cc6412",
           "sha256:0ece34fe64acc940324082a0ed97621ff2472ddc0e611e745a6d7388e532fcea",
           "sha256:6c5a7b3d0059a0fe5067de62e20fb2733215ee43391cdadec3206b6fd05fe6d6",
+          "sha256:f4e6d0aba6fc6118e64a6957aad7c626c254b232843600815fc91f9fa8f67ec5",
         ],
         "AGENTS.md": [
           "sha256:9550b31b8f3f32992c1ae1035bfa57a782f04821530214a2f2e1fd1690e209ab",
@@ -9472,6 +9485,7 @@ describe("t243 projection channel", () => {
           "sha256:b87a3ec2c39cb24074c6fa37f626e9d150d435d18069fbd0c762fdbd70719c5c",
           "sha256:a885fe6b7137ba16e0c24ce168b30ef5c780fe9991fc2d6bdff10cc15ad83c05",
           "sha256:7b09e1c003a983ea0c328b7935b2305f35efb8a0927a0bc9f0f7c21c6b3e13d4",
+          "sha256:bef1bc44f92b13555334c03b5339410ebc10d2dd99b14ee9f465ad8ad17379ff",
         ],
       },
     };
@@ -9850,7 +9864,7 @@ describe("t243 projection channel", () => {
 //
 // The dispatcher checks a pinned release's binary and every runtime file on its
 // first call in a session, records the pass beside the session's pid entry
-// (aidlc/.aidlc-sessions/pids/<pid>.release-check), and on later calls of that
+// (aidlc/.aidlc-engine/sessions/pids/<pid>.release-check), and on later calls of that
 // chat in that process skips only the hashing. The session is the walk's
 // nearest mapped ancestor; here this test's parent process, mapped as
 // session-start maps a host. Every miss falls to the full check.
@@ -9882,7 +9896,7 @@ describe("t243 a pinned release is checked once per session", () => {
     return {
       machine,
       project,
-      pidDir: join(project, "aidlc", ".aidlc-sessions", "pids"),
+      pidDir: join(project, "aidlc", ".aidlc-engine", "sessions", "pids"),
       damage: () => writeFileSync(file, Buffer.concat([original, Buffer.from("\ndamaged\n")])),
       repair: () => writeFileSync(file, original),
     };
@@ -10050,5 +10064,195 @@ describe("t243 a pinned release is checked once per session", () => {
         return (text.match(/hashes: false/g) ?? []).map(() => name);
       });
     expect(sites).toEqual(["aidlc-lifecycle.ts"]);
+  });
+});
+
+// AI-DLC's .gitattributes part marks its record of each piece of work as
+// generated for GitHub's and GitLab's request diffs. It goes first in the
+// person's own file, so a line of theirs below it wins, and every byte of
+// theirs stays as it was; a file config cannot merge into is left as it is
+// without stopping config. Like .gitignore and AGENTS.md it is one of AI-DLC's
+// own files where AI-DLC counts the project's source. Kiro ships no part.
+describe("t243 AI-DLC's .gitattributes part", () => {
+  const PART = [
+    "# BEGIN AI-DLC:gitattributes",
+    "# AI-DLC: marks its record of each piece of work as generated, which GitHub and GitLab fold in request diffs; a line of yours below this part wins",
+    "aidlc/spaces/*/intents/** linguist-generated gitlab-generated",
+    "# END AI-DLC:gitattributes",
+  ];
+  const part = (nl = "\n"): string => `${PART.join(nl)}${nl}`;
+  const BOM = "\uFEFF";
+  function git(cwd: string, args: string[]): void {
+    const result = spawnSync("git", args, { cwd, encoding: "utf-8" });
+    expect(result.status, `git ${args.join(" ")}: ${result.stderr}`).toBe(0);
+  }
+  const RECORD = "aidlc/spaces/default/intents/260101-work/audit/a.md";
+  const RULES = "aidlc/spaces/default/memory/team.md";
+  const KIRO_RELEASE = join(REPO_ROOT, "dist-release", "kiro");
+  function gitProject(prefix: string): string {
+    const project = temp(prefix);
+    expect(spawnSync("git", ["init", "-q", "-b", "main", project]).status).toBe(0);
+    return project;
+  }
+  function configure(project: string, release = CLAUDE_RELEASE, harness = "claude", ...extra: string[]): void {
+    const configured = run(INIT, [
+      "config", "--project-dir", project, "--from", release, "--harness", harness, "--yes", "--mcp", "none", ...extra,
+    ], project);
+    expect(configured.status, configured.stdout + configured.stderr).toBe(0);
+  }
+  const attributes = (project: string): string => readFileSync(join(project, ".gitattributes"), "utf-8");
+  const attr = (cwd: string, path: string): string => {
+    const result = spawnSync("git", ["check-attr", "linguist-generated", "gitlab-generated", "--", path], { cwd, encoding: "utf-8" });
+    expect(result.status, `git check-attr: ${result.stderr}`).toBe(0);
+    return result.stdout;
+  };
+  const both = (path: string, value: string): string =>
+    `${path}: linguist-generated: ${value}\n${path}: gitlab-generated: ${value}\n`;
+  // The release before this part: none at the root, none in root-blocks, none declared.
+  function releaseWithoutPart(release: string, harnessDir: string): string {
+    const earlier = join(temp("aidlc-t243-ga-release-"), "release");
+    cpSync(release, earlier, { recursive: true });
+    rmSync(join(earlier, ".gitattributes"));
+    rmSync(join(earlier, harnessDir, "tools", "data", "root-blocks", "gitattributes"));
+    const descriptorPath = join(earlier, harnessDir, "tools", "data", "aidlc-projection.json");
+    const descriptor = JSON.parse(readFileSync(descriptorPath, "utf-8")) as { rootIntegrations: Array<{ path: string }> };
+    descriptor.rootIntegrations = descriptor.rootIntegrations.filter((integration) => integration.path !== ".gitattributes");
+    writeFileSync(descriptorPath, `${JSON.stringify(descriptor, null, 2)}\n`);
+    return earlier;
+  }
+
+  test("a project without one gets the four lines: the record reads as generated, the rules and the code do not", () => {
+    const project = gitProject("aidlc-t243-ga-new-");
+    configure(project);
+    expect(attributes(project)).toBe(part());
+    expect(attr(project, RECORD)).toBe(both(RECORD, "set"));
+    expect(attr(project, RULES)).toBe(both(RULES, "unspecified"));
+    expect(attr(project, "src/app.ts")).toBe(both("src/app.ts", "unspecified"));
+    const again = run(INIT, ["config", "--project-dir", project, "--from", CLAUDE_RELEASE, "--harness", "claude", "--mcp", "none", "--dry-run", "--json"], project);
+    const actions = (JSON.parse(again.stdout.trim().split("\n").at(-1) ?? "{}") as { data: { actions: Array<{ path: string; action: string }> } }).data.actions;
+    expect(actions).toContainEqual({ path: ".gitattributes", action: "preserve" });
+  });
+
+  test("the person's own file: AI-DLC's part comes first, every byte of theirs after it, and their own line below it wins", () => {
+    for (const [name, theirs, expected] of [
+      ["CRLF, no last newline", "* text=auto\r\naidlc/** -linguist-generated -gitlab-generated", `${part("\r\n")}\r\n* text=auto\r\naidlc/** -linguist-generated -gitlab-generated`],
+      ["a byte order mark", `${BOM}# ours\naidlc/** -linguist-generated -gitlab-generated\n`, `${BOM}${part()}\n# ours\naidlc/** -linguist-generated -gitlab-generated\n`],
+    ] as const) {
+      const project = gitProject("aidlc-t243-ga-theirs-");
+      writeFileSync(join(project, ".gitattributes"), theirs);
+      configure(project);
+      expect(attributes(project), name).toBe(expected);
+      expect(attr(project, RECORD), name).toBe(both(RECORD, "unset"));
+      configure(project);
+      expect(attributes(project), name).toBe(expected);
+    }
+  });
+
+  test("a .gitattributes config cannot merge into is left as it is and config goes on; --force rewrites an edited part", () => {
+    const edited = part().replace("aidlc/spaces/*/intents/**", "aidlc/spaces/*/intents/*/audit/**");
+    const cases: Array<[string, (project: string) => void]> = [
+      ["not UTF-8", (project) => writeFileSync(join(project, ".gitattributes"), Buffer.from([0x2a, 0x20, 0xff, 0xfe, 0x0a]))],
+      ["broken markers", (project) => writeFileSync(join(project, ".gitattributes"), "# BEGIN AI-DLC:gitattributes\n*.png binary\n")],
+      ["an edited part", (project) => {
+        configure(project);
+        writeFileSync(join(project, ".gitattributes"), edited);
+      }],
+    ];
+    if (process.platform !== "win32") {
+      cases.push(["a symlink", (project) => {
+        writeFileSync(join(project, "attributes.txt"), "*.png binary\n");
+        symlinkSync("attributes.txt", join(project, ".gitattributes"));
+      }]);
+    }
+    for (const [name, arrange] of cases) {
+      const project = gitProject("aidlc-t243-ga-odd-");
+      arrange(project);
+      const before = readFileSync(join(project, ".gitattributes"));
+      const link = lstatSync(join(project, ".gitattributes")).isSymbolicLink();
+      const configured = run(INIT, ["config", "--project-dir", project, "--from", CLAUDE_RELEASE, "--harness", "claude", "--yes", "--mcp", "none"], project);
+      expect(configured.status, `${name}: ${configured.stdout}${configured.stderr}`).toBe(0);
+      expect(configured.stdout, name).not.toContain(".gitattributes");
+      expect(readFileSync(join(project, ".gitattributes")).equals(before), name).toBe(true);
+      expect(lstatSync(join(project, ".gitattributes")).isSymbolicLink(), name).toBe(link);
+      if (name === "an edited part") {
+        configure(project, CLAUDE_RELEASE, "claude", "--force");
+        expect(attributes(project)).toBe(part());
+      }
+    }
+  });
+
+  test("two of ours in one project give one part; Kiro alone writes none, and beside one of ours there is one part", () => {
+    const pair = gitProject("aidlc-t243-ga-pair-");
+    configure(pair);
+    configure(pair, CODEX_RELEASE, "codex");
+    expect(attributes(pair)).toBe(part());
+    const kiro = gitProject("aidlc-t243-ga-kiro-");
+    configure(kiro, KIRO_RELEASE, typedHarnessName("kiro"));
+    expect(existsSync(join(kiro, ".gitattributes"))).toBe(false);
+    configure(kiro, KIRO_RELEASE, typedHarnessName("kiro"));
+    expect(existsSync(join(kiro, ".gitattributes"))).toBe(false);
+    configure(kiro);
+    expect(attributes(kiro)).toBe(part());
+    configure(kiro, KIRO_RELEASE, typedHarnessName("kiro"));
+    expect(attributes(kiro)).toBe(part());
+  });
+
+  test("the file is one of AI-DLC's own where AI-DLC counts source, as .gitignore is, written or committed", () => {
+    const project = gitProject("aidlc-t243-ga-owned-");
+    configure(project);
+    expect(attributes(project)).toBe(part());
+    const owned = (path: string): boolean => aidlcOwnedSourceKey(project)(sourcePathKey("", path));
+    expect(owned(".gitattributes")).toBe(true);
+    git(project, ["config", "user.name", "lead"]);
+    git(project, ["config", "user.email", "lead@example.test"]);
+    git(project, ["add", ".gitattributes"]);
+    git(project, ["commit", "-q", "-m", "AI-DLC's .gitattributes"]);
+    expect(owned(".gitattributes")).toBe(true);
+    expect(owned(".gitignore")).toBe(true);
+    expect(mainCheckoutChangeRefusal(project, [".gitattributes"], [], () => null)).toBe(
+      ".gitattributes is one of AI-DLC's own files, which change only through AI-DLC's own steps.",
+    );
+  });
+
+  test("the getting-started commit and push give the host a record that reads as generated in its own copy", () => {
+    const project = gitProject("aidlc-t243-ga-host-");
+    configure(project);
+    mkdirSync(join(project, dirname(RECORD)), { recursive: true });
+    writeFileSync(join(project, RECORD), "# Audit\n");
+    git(project, ["config", "user.name", "lead"]);
+    git(project, ["config", "user.email", "lead@example.test"]);
+    const listed = [".claude", "aidlc", ".gitattributes", ".gitignore", ".mcp.json", "aidlc.settings.json"]
+      .filter((path) => existsSync(join(project, path)));
+    expect(listed).toContain(".gitattributes");
+    git(project, ["add", ...listed]);
+    git(project, ["commit", "-q", "-m", "Set up AI-DLC"]);
+    const host = temp("aidlc-t243-ga-bare-");
+    git(host, ["init", "-q", "--bare", "-b", "main"]);
+    git(project, ["push", "-q", host, "main"]);
+    // The host's own copy is a clone of it: check-attr --source on a bare repository needs git 2.40 or later.
+    const copy = temp("aidlc-t243-ga-copy-");
+    git(copy, ["clone", "-q", host, "."]);
+    expect(attr(copy, RECORD)).toBe(both(RECORD, "set"));
+    expect(attr(copy, RULES)).toBe(both(RULES, "unspecified"));
+  });
+
+  test("a release that stops shipping it takes AI-DLC's part out, and the person's file is byte for byte theirs", () => {
+    const later = releaseWithoutPart(CLAUDE_RELEASE, ".claude");
+    for (const [name, theirs, arrange] of [
+      ["none of theirs", null, null],
+      ["CRLF, no last newline", "* text=auto\r\n*.png binary", null],
+      ["a byte order mark", `${BOM}*.png binary\n`, null],
+      ["a blank last line", "*.png binary\n\n", null],
+      ["a file that starts with a blank line", "\n*.png binary\n", null],
+      ["a part they moved below their own line", "*.png binary\n", () => `*.png binary\n${part()}`],
+    ] as const) {
+      const project = gitProject("aidlc-t243-ga-retired-");
+      if (theirs !== null) writeFileSync(join(project, ".gitattributes"), theirs);
+      configure(project);
+      if (arrange !== null) writeFileSync(join(project, ".gitattributes"), arrange());
+      configure(project, later);
+      if (theirs === null) expect(existsSync(join(project, ".gitattributes")), name).toBe(false);
+      else expect(attributes(project), name).toBe(theirs);
+    }
   });
 });

@@ -671,7 +671,7 @@ function createdPlanApproval(proj: string): string | null {
 
 /** Move a stored request back in time, as one asked earlier in the sitting is. */
 function askedMinutesAgo(proj: string, id: string, minutes: number): void {
-  const path = join(proj, "aidlc", ".aidlc-sessions", "questions", `${id}.json`);
+  const path = join(proj, "aidlc", ".aidlc-engine", "sessions", "questions", `${id}.json`);
   const question = JSON.parse(readFileSync(path, "utf-8")) as { createdAt: string };
   question.createdAt = new Date(Date.now() - minutes * 60_000).toISOString();
   writeFileSync(path, `${JSON.stringify(question)}\n`, "utf-8");
@@ -880,7 +880,7 @@ describe("asked before the piece of work exists", () => {
       // Teammates' work is committed; this clone's cursor and sessions are not.
       for (const scope of ["poc", "feature"]) expect(utility(proj, ["intent-create", "--scope", scope]).status).toBe(0);
       rmSync(join(proj, "aidlc", "spaces", "default", "intents", "active-intent"), { force: true });
-      rmSync(join(proj, "aidlc", ".aidlc-sessions"), { recursive: true, force: true });
+      rmSync(join(proj, "aidlc", ".aidlc-engine", "sessions"), { recursive: true, force: true });
       const dispatch = runOrchestrateNext(ORCHESTRATE, proj, taskless ? ["compose"] : ["compose", "fix the date parser"], {
         env: { ...process.env, ...CLEAR },
       });

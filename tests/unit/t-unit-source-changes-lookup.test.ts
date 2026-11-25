@@ -23,12 +23,15 @@ import {
 } from "../harness/source-work-layouts.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { broughtFileNames } from "../../dist/claude/.claude/tools/aidlc-brought-files.ts";
+import { teammateTakes } from "../harness/early-start.ts";
+import { cleanupTeamBuild, GIT_ENV } from "../harness/team-build.ts";
 import { sourceBaselineAuditFields, workspaceBaselineStageSlugs } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 // The stage's checks are not this file's subject.
 process.env.AIDLC_DISABLE_SENSORS = "1";
 
 setDefaultTimeout(600_000);
+afterEach(cleanupTeamBuild);
 const created: string[] = [];
 afterEach(() => {
   while (created.length > 0) cleanupTestProject(created.pop());
@@ -308,5 +311,23 @@ describe("places the lookup cannot list as a manifest claims them", () => {
     const ran = lookupWithTool(proj, []);
     expect(ran.status, ran.out).toBe(0);
     expect(ran.json).toEqual({ since: "stage", changed: [], not_listed: [".worktrees/feature"] });
+  });
+});
+
+// A Unit started early, switched at the take onto the dependency's pushed
+// branch, at a plan whose Units start at Code Generation: the lookup lists
+// what this build and the person changed, never what that branch brought.
+describe("lookup source-changes for an early start", () => {
+  test("lists the build's own files and the person's, not the dependency's", () => {
+    const build = teammateTakes({ early: true });
+    mkdirSync(join(build.code, "src"), { recursive: true });
+    writeFileSync(join(build.code, "src", "reporting.ts"), "export const reporting = 1;\n");
+    writeFileSync(join(build.code, "NOTES.md"), "mine\n");
+    const looked = spawnSync(process.execPath, [join(build.dana, ".claude", "tools", "aidlc-state.ts"), "lookup", "source-changes", build.unit], {
+      cwd: build.dana, encoding: "utf-8", env: GIT_ENV,
+    });
+    expect(looked.status, `${looked.stdout}${looked.stderr}`).toBe(0);
+    const answer = JSON.parse(looked.stdout.trim().split("\n").at(-1) ?? "{}") as { changed?: Array<{ path: string }> };
+    expect(answer.changed?.map((entry) => entry.path).sort()).toEqual(["NOTES.md", "src/reporting.ts"]);
   });
 });

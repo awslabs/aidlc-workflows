@@ -59,7 +59,7 @@ function env(): Record<string, string | undefined> {
 
 // The words a printed step hands on: the request file its `command` names.
 function handedOn(proj: string, message: string | undefined, command: string): string {
-  const named = new RegExp(`${command} --request-file (aidlc/\\.aidlc-request-text/[^ \`]+)`).exec(String(message));
+  const named = new RegExp(`${command} --request-file (aidlc/\\.aidlc-engine/request-text/[^ \`]+)`).exec(String(message));
   expect(named, String(message)).not.toBeNull();
   return readFileSync(join(proj, ...named![1].split("/")), "utf-8");
 }
@@ -190,7 +190,7 @@ describe("the request is recorded in the person's own words", () => {
     const step = next(proj, ["add a --review advisory option"]);
     const id = String(step.message).match(/--request ([0-9a-f]{8})/)?.[1];
     expect(id, String(step.message)).toBeDefined();
-    const kept = JSON.parse(readFileSync(join(proj, "aidlc", ".aidlc-sessions", "questions", `${id}.json`), "utf-8")) as {
+    const kept = JSON.parse(readFileSync(join(proj, "aidlc", ".aidlc-engine", "sessions", "questions", `${id}.json`), "utf-8")) as {
       settings?: { newWork?: string[] };
     };
     expect(kept.settings?.newWork).toEqual(["--review", "advisory"]);
@@ -425,7 +425,7 @@ describe("the agent's words stay where the line is not the person's request", ()
 // word they typed: only the command, flags as typed, and the file's path.
 describe("AI-DLC's first command carries none of the person's words", () => {
   const REQUEST = 'Fix the bug where formatPrice(0) returns an empty string instead of "$0.00"';
-  const FILE = "aidlc/.aidlc-request-text/request.txt";
+  const FILE = "aidlc/.aidlc-engine/request-text/request.txt";
   const RUN = "bun .claude/tools/aidlc-orchestrate.ts next";
   const NO_LINE_STEP = "AI-DLC has no copy of what the person typed in this chat. Write the words of their request, " +
     `exactly as they typed them, with your file tool to \`${FILE}\`, then run \`${RUN} --request-file ${FILE}\` and ` +
@@ -464,7 +464,7 @@ describe("AI-DLC's first command carries none of the person's words", () => {
   }
   // The step followed: their words in the file, what else they typed on the command.
   function handOver(flags: string[], extra: Record<string, string | undefined> = {}): { kind?: string; message?: string } {
-    mkdirSync(join(proj, "aidlc", ".aidlc-request-text"), { recursive: true });
+    mkdirSync(join(proj, "aidlc", ".aidlc-engine", "request-text"), { recursive: true });
     writeFileSync(join(proj, ...FILE.split("/")), REQUEST, "utf-8");
     return run([...flags, "--request-file", FILE], extra);
   }
@@ -605,7 +605,7 @@ describe("AI-DLC's first command carries none of the person's words", () => {
       for (const args of [["--request-file", FILE], ["--scope", "bugfix", "--request-file", FILE], ["--status"], ["--", REQUEST]]) {
         const [entered, passed] = enteredAndPassed(args, (at) => {
           if (work === "over work in hand") seedStateFile(at, join(FIXTURES_DIR, "state-mid-inception.md"));
-          mkdirSync(join(at, "aidlc", ".aidlc-request-text"), { recursive: true });
+          mkdirSync(join(at, "aidlc", ".aidlc-engine", "request-text"), { recursive: true });
           writeFileSync(join(at, ...FILE.split("/")), REQUEST, "utf-8");
         }, UNATTENDED);
         expect(shape(entered), args.join(" ")).toBe(shape(passed));
@@ -1241,7 +1241,7 @@ describe("AI-DLC's first command carries none of the person's words", () => {
     const older = run(["--propose", "bugfix", "--request", id as string]);
     expect(older.kind).toBe("ask");
     laterSecond();
-    rmSync(join(proj, "aidlc", ".aidlc-sessions", "questions", `${id}.json`));
+    rmSync(join(proj, "aidlc", ".aidlc-engine", "sessions", "questions", `${id}.json`));
     startIn(older, "bugfix");
     const third = { AIDLC_SESSION_OVERRIDE: THIRD_CHAT };
     typed("Yes, go ahead with that", third, proj, THIRD_CHAT);
@@ -1481,7 +1481,7 @@ describe("AI-DLC's first command carries none of the person's words", () => {
       if (way === "next again") {
         step = run([]);
       } else {
-        mkdirSync(join(proj, "aidlc", ".aidlc-request-text"), { recursive: true });
+        mkdirSync(join(proj, "aidlc", ".aidlc-engine", "request-text"), { recursive: true });
         writeFileSync(join(proj, ...FILE.split("/")), PASTE, "utf-8");
         step = run(["--request-file", FILE]);
       }
@@ -1627,7 +1627,7 @@ describe("On Codex, AI-DLC's first command reads the person's line from its own 
   // Two ordinary requests.
   const REQUESTS = ["fix the greeter so it doesn't greet nobody by name", "fix the greeter (it says hello instead of greeting the person by name)"];
   const [REQUEST] = REQUESTS;
-  const FILE = "aidlc/.aidlc-request-text/request.txt";
+  const FILE = "aidlc/.aidlc-engine/request-text/request.txt";
   const created: string[] = [];
   beforeEach(() => resetAidlcEnv());
   afterEach(() => {
@@ -1729,7 +1729,7 @@ describe("On Codex, AI-DLC's first command reads the person's line from its own 
       const step = next(entered, ["--entry"]);
       expect(String(JSON.parse(step).message)).toStartWith("AI-DLC has no copy of what the person typed in this chat. Write the words");
       expect(step).toContain(`bun .codex/tools/aidlc-orchestrate.ts next --request-file ${FILE}`);
-      mkdirSync(join(entered, "aidlc", ".aidlc-request-text"), { recursive: true });
+      mkdirSync(join(entered, "aidlc", ".aidlc-engine", "request-text"), { recursive: true });
       writeFileSync(join(entered, ...FILE.split("/")), REQUEST, "utf-8");
       expect(same(next(entered, ["--request-file", FILE]))).toBe(same(next(onTheCommand, REQUEST.split(" "))));
     }
@@ -1747,7 +1747,7 @@ describe("A Claude Code shortcut's first command carries none of the person's wo
   const REQUESTS = ["fix the greeter so it doesn't greet nobody by name", "fix the greeter (it says hello instead of greeting the person by name)"];
   const [REQUEST, OTHER] = REQUESTS;
   const OTHER_CHAT = "01995000-7a11-7000-8000-0000000000d2";
-  const FILE = "aidlc/.aidlc-request-text/request.txt";
+  const FILE = "aidlc/.aidlc-engine/request-text/request.txt";
   const RUN = "bun .claude/tools/aidlc-orchestrate.ts next";
   const SHORTCUTS: Array<[string, string[]]> = [
     ["/aidlc-bugfix", ["--scope", "bugfix"]],
@@ -1847,7 +1847,7 @@ describe("A Claude Code shortcut's first command carries none of the person's wo
   const askedAbout = (proj: string, step: string): string => {
     const id = /--request ([0-9a-f]{8})/.exec(step)?.[1];
     expect(id, step).toBeDefined();
-    return (JSON.parse(readFileSync(join(proj, "aidlc", ".aidlc-sessions", "questions", `${id}.json`), "utf-8")) as { text: string }).text;
+    return (JSON.parse(readFileSync(join(proj, "aidlc", ".aidlc-engine", "sessions", "questions", `${id}.json`), "utf-8")) as { text: string }).text;
   };
   const inHand = (fixture: string) => (proj: string): void => seedStateFile(proj, join(FIXTURES_DIR, fixture));
 
@@ -1970,7 +1970,7 @@ describe("A Claude Code shortcut's first command carries none of the person's wo
         const [entered, onTheCommand] = [project(), project()];
         for (const proj of [entered, onTheCommand]) before(proj, `${shortcut} ${REQUEST}`);
         expect(message(next(entered, ["--entry", ...tail], extra)), shortcut).toBe(noLineStep(tail));
-        mkdirSync(join(entered, "aidlc", ".aidlc-request-text"), { recursive: true });
+        mkdirSync(join(entered, "aidlc", ".aidlc-engine", "request-text"), { recursive: true });
         writeFileSync(join(entered, ...FILE.split("/")), REQUEST, "utf-8");
         expect(shape(next(entered, [...tail, "--request-file", FILE], extra)), shortcut).toBe(shape(next(onTheCommand, [...tail, REQUEST], extra)));
       }

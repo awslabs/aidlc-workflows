@@ -7,16 +7,132 @@
 // A record a newer AI-DLC wrote is never brought down: newerStateStep names
 // the release it needs and the person's step, for next, report, doctor and the
 // unit commands alike.
+// Which State Version a record carries is owned here too: the versions this
+// build reads (classifyStateVersion) and the two writes that raise a record to
+// 9: team work's Home Location (recordHomeLocation) and the approval of a Unit
+// plan with a `repos:` line under a Unit, an empty list too (unitPlanApproved).
 import { existsSync, renameSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { appendAuditEntryUnlocked } from "./aidlc-audit.ts";
-import { classifyStateVersion, findStageBySlug, nextInScopeStage } from "./aidlc-lib.ts";
+import { findStageBySlug, nextInScopeStage, setOrInsertField } from "./aidlc-lib.ts";
 import { isReadOnlyEngineProbe, withAuditLock, writeFileAtomic } from "./aidlc-locks.ts";
 import { auditBlockField, getField, readAuditShardEvents, setField, writeStateFile } from "./aidlc-record-core.ts";
 import { packageManagerForExecutable } from "./aidlc-install-paths.ts";
 import { releaseHostLabel } from "./aidlc-release.ts";
-import { aidlcInvocation, compiledExecutable, runtimeHarnessName, typedHarnessName } from "./aidlc-runtime-paths.ts";
+import { aidlcInvocation, compiledExecutable, entrySkillInvocation, runtimeHarnessName, typedHarnessName } from "./aidlc-runtime-paths.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
+import { parseBoltDag } from "./aidlc-unit-dag.ts";
+import { HOME_LOCATION_FIELD } from "./aidlc-unit-teams.ts";
+
+// -----------------------------------------------------------------------------
+// State-schema-version classification (shared by runtime + doctor)
+// -----------------------------------------------------------------------------
+// The persisted `aidlc-state.md` carries a `- **State Version**: N` line naming
+// the state-graph schema the workflow was created under. v8 renamed the Inception
+// `application-design` stage to `domain-design` and inserted `contract-design`,
+// so a pre-v8 state file's stage rows no longer match the compiled graph. The
+// engine's state read brings a version a step covers up in place
+// (bringStateUpToDate, below); a state no step covers must be refused up front by
+// BOTH runtime commands (aidlc-orchestrate.ts `next`/`report`) and by
+// `aidlc --doctor`, and both callers must classify the state identically; otherwise the doctor and the
+// runtime disagree on whether a state is "malformed" vs "future" vs "past".
+// classifyStateVersion() is the single source of truth for that classification,
+// so a new schema bump only touches the versions in this file.
+
+/** The current state-graph schema version. Bump when the graph adds/renames/removes rows. */
+export const CURRENT_STATE_VERSION = "8";
+
+// Team work that records where its home is says 9, written with that record
+// (recordHomeLocation): 2.11 has no Home Location and would build its Units on
+// main's older team flow, so the version is what it stops at. So does work
+// whose approved Unit plan has a `repos:` line under a Unit, an empty list too
+// (unitPlanApproved): 2.11's Unit plan reader refuses the line whatever it
+// lists, and its step has the agent write the approved plan again without it.
+// Every other record keeps CURRENT_STATE_VERSION, and this build reads both.
+export const TEAM_STATE_VERSION = "9";
+
+export type StateVersionClassification =
+  | { kind: "ok"; version: string }
+  | { kind: "unparseable"; message: string }
+  | { kind: "past"; version: string; message: string }
+  | { kind: "future"; version: string; message: string };
+
+/**
+ * Classify a state-file's `State Version` field.
+ *
+ * `unparseable` covers: missing field, empty value, non-numeric token, or
+ * trailing content after the numeric token (e.g. `State Version: 8 garbage`).
+ * `past`/`future` cover explicit numeric versions on either side of the current
+ * one. `ok` is the current version with no trailing content.
+ *
+ * The parser uses horizontal whitespace only (`[ \t]*`) to avoid a `\s*` regex
+ * that would span the newline after an empty value and capture the leading `-`
+ * of the next state bullet as a bogus version. The tail is anchored to the end
+ * of the line, so trailing content on the value line is rejected: a schema
+ * token must be a bare integer on its own line.
+ */
+export function classifyStateVersion(stateContent: string): StateVersionClassification {
+  const unparseableMessage =
+    "Incompatible workflow state: the State Version field is missing, empty, " +
+    "or unparseable in aidlc-state.md, so this state cannot be matched to the " +
+    `current v${CURRENT_STATE_VERSION} stage graph and cannot be advanced safely. ` +
+    "Put its `- **State Version**:` line back as it was (git has it if the file " +
+    `was committed), then try again. Run \`${entrySkillInvocation()} --doctor\` for the full diagnosis.`;
+  // Anchor the tail with `[ \t]*$`: the schema token is a bare integer with
+  // no trailing content on the line, so `State Version: 8 garbage` fails to
+  // match and falls into the unparseable branch.
+  const versionMatch = stateContent.match(/^- \*\*State Version\*\*:[ \t]*(\S+)[ \t]*$/m);
+  if (versionMatch === null) return { kind: "unparseable", message: unparseableMessage };
+  const v = versionMatch[1];
+  if (!/^\d+$/.test(v)) return { kind: "unparseable", message: unparseableMessage };
+  if (v === CURRENT_STATE_VERSION || v === TEAM_STATE_VERSION) return { kind: "ok", version: v };
+  if (Number(v) > Number(TEAM_STATE_VERSION)) {
+    return {
+      kind: "future",
+      version: v,
+      message:
+        `Incompatible workflow state: State Version ${v} is newer than the ` +
+        `current v${CURRENT_STATE_VERSION} stage graph this build understands, so ` +
+        "it cannot be advanced safely. Upgrade the framework to a build that ships " +
+        `state schema v${v} (or newer), or finish this workflow on the shell that ` +
+        `produced it. Run \`${entrySkillInvocation()} --doctor\` for the full diagnosis.`,
+    };
+  }
+  return {
+    kind: "past",
+    version: v,
+    message:
+      `Incompatible workflow state: State Version ${v} predates the current ` +
+      `v${CURRENT_STATE_VERSION} stage graph. v8 renamed the Inception ` +
+      "`application-design` stage to `domain-design` and inserted " +
+      "`contract-design`, so this state's stage rows no longer match the graph " +
+      "and cannot be advanced safely. Finish this workflow on the prior shell. " +
+      `Run \`${entrySkillInvocation()} --doctor\` for the full diagnosis.`,
+  };
+}
+
+// The home recorded on a piece of work, and with it the version an older
+// AI-DLC stops at: 8 becomes 9 in the same write. A 7 is brought up by its own
+// step (bringStateUpToDate), and a version this build does not know is kept.
+export function recordHomeLocation(content: string, home: string): string {
+  return raisedFromCurrent(setOrInsertField(content, "## Runtime State", HOME_LOCATION_FIELD, home));
+}
+
+// The approval of Units Generation, with the Unit plan as approved: one with a
+// `repos:` line under any Unit (an empty list too, which 2.11 refuses all the
+// same) raises 8 to 9 in the approval's own write, team or solo. A version is
+// never written down, so a later plan with none leaves a 9 as it is.
+export function unitPlanApproved(content: string, unitPlan: string): string {
+  const parsed = parseBoltDag(unitPlan);
+  return parsed.ok && parsed.units.some((unit) => unit.repos !== undefined) ? raisedFromCurrent(content) : content;
+}
+
+function raisedFromCurrent(text: string): string {
+  const verdict = classifyStateVersion(text);
+  return verdict.kind === "ok" && verdict.version === CURRENT_STATE_VERSION
+    ? setField(text, "State Version", TEAM_STATE_VERSION)
+    : text;
+}
 
 export const STATE_UPGRADED_EVENT = "STATE_UPGRADED";
 
@@ -170,7 +286,8 @@ export function stateUpgradeRecord(
 //
 // The first release that writes each State Version newer than this build
 // reads, so the person hears which AI-DLC their teammate's work needs. 2.12
-// writes 9 on team work (#2783). The schema names the first release that
+// writes 9 on team work and on work whose approved Unit plan has a `repos:`
+// line under a Unit (#2783). The schema names the first release that
 // writes it, never the one that did, so it is said "or newer".
 export const STATE_VERSION_RELEASES: Readonly<Record<string, string>> = Object.freeze({ "9": "2.12" });
 
@@ -231,8 +348,22 @@ function releaseHost(): string {
  * the terminal unit commands, and the installs AI-DLC does not update itself).
  */
 export function newerStateStep(projectDir: string, version: string, newWork = false): string {
-  const lead = newerWorkLead(version, newWork);
-  const needs = newerStateRelease(version);
+  return newerWorkStep(projectDir, newerWorkLead(version, newWork), newerStateRelease(version));
+}
+
+// The same step for a plan whose format number is above this release's: the
+// release is named by no table, so it is "a newer AI-DLC".
+export function newerPlanStep(projectDir: string): string {
+  return newerWorkStep(projectDir, "This plan was set up with a newer AI-DLC", "a newer AI-DLC");
+}
+
+// The same step for a Unit's record a newer AI-DLC wrote (its unit.json is
+// of a version above this release's): the take writes nothing over it.
+export function newerRecordStep(projectDir: string, unit: string, repo: string): string {
+  return newerWorkStep(projectDir, `${unit}'s record in ${repo} was written by a newer AI-DLC`, "a newer AI-DLC");
+}
+
+function newerWorkStep(projectDir: string, lead: string, needs: string): string {
   const install = newerWorkInstall(projectDir);
   const refresh = `\`${newerWorkRefresh(projectDir)}\``;
   switch (install.kind) {

@@ -563,7 +563,7 @@ describe("a fresh start for the steps", () => {
       "Message Id": pick!,
     }, proj);
     reply(proj, "log every part");
-    rmSync(join(proj, "aidlc", ".aidlc-sessions", "messages", `${pick}.json`));
+    rmSync(join(proj, "aidlc", ".aidlc-engine", "sessions", "messages", `${pick}.json`));
     expect(next(proj).plan_approval).toEqual({ status: "revise", feedback: "Request Changes\nlog every part" });
   });
 
@@ -1392,7 +1392,7 @@ describe("the developer is handed its plan as it starts", () => {
     expect(without).toContain("AIDLC_DISPATCH_RULES_BEGIN");
     // opencode.json's own instructions list loads the memory files into every
     // request, as the chat's session start recorded: the rules are not copied in.
-    writeFileSync(join(proj, "opencode.json"), JSON.stringify({ instructions: [".aidlc/onboarding.md", "aidlc/active-memory/**/*.md"] }));
+    writeFileSync(join(proj, "opencode.json"), JSON.stringify({ instructions: [".aidlc/onboarding.md", "aidlc/.aidlc-engine/active-memory/**/*.md"] }));
     sessionStartOn(proj, "opencode");
     const included = rewritten(proj, "opencode", CONDUCTOR_MESSAGE);
     expect(included).toBe(head);

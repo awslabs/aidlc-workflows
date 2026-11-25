@@ -209,7 +209,7 @@ function openWork(): string {
   writeFileSync(seededStateFile(proj),
     readFileSync(join(FIXTURES_DIR, "state-brownfield-feature.md"), "utf-8")
       .replace("- **Change Control**: strict (from scope feature)", "- **Guard Policy**: strict (set by you)"), "utf-8");
-  const sessions = join(proj, "aidlc", ".aidlc-sessions");
+  const sessions = join(proj, "aidlc", ".aidlc-engine", "sessions");
   mkdirSync(sessions, { recursive: true });
   writeFileSync(join(sessions, ".current-session"), `${SESSION}\n`, "utf-8");
   const health = hooksHealthDir(proj);
@@ -219,7 +219,7 @@ function openWork(): string {
 }
 
 function questionCopies(proj: string): string[] {
-  const dir = join(proj, "aidlc", ".aidlc-sessions", "questions");
+  const dir = join(proj, "aidlc", ".aidlc-engine", "sessions", "questions");
   if (!existsSync(dir)) return [];
   return readdirSync(dir)
     .filter((name) => name.endsWith(".json"))

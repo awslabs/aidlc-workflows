@@ -1,6 +1,6 @@
 // covers: subcommand:aidlc-swarm:prepare, subcommand:aidlc-audit:audit-fork, function:delegatedWorktreeIntent,
 // function:bindCodeGenerationWorktreeApproval, function:validateCodeGenerationForkApproval,
-// function:gitSubmoduleNames, audit:AUDIT_FORKED, audit:WORKTREE_DISCARDED
+// function:gitSubmoduleNames, function:withWorkPinned, audit:AUDIT_FORKED, audit:WORKTREE_DISCARDED
 //
 // A side-by-side (swarm) build must start on a project whose AI-DLC records are not committed yet (every fresh
 // project), on a long-lived repo whose committed audit already holds a fork row for the Unit, and on the person's own
@@ -14,9 +14,10 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
-  activeIntentUuid, auditBlockField, boltSlugForUnit, readAuditShardEvents, workspaceSourceListing,
+  activeIntentUuid, auditBlockField, boltSlugForUnit, readAuditShardEvents, resolveWorkflowSelection, workspaceSourceListing,
   writeBaselineSourceSnapshot,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { withWorkPinned } from "../../dist/claude/.claude/tools/aidlc-locks.ts";
 import {
   AIDLC_SRC, DEFAULT_INTENT_UUID, DEFAULT_RECORD_DIR, seedAidlcMemory, seedBoltDagBatches, seededAuditDir,
   seededStateFile, setupWorktreeFixture,
@@ -38,8 +39,8 @@ const SHIPPED_GITIGNORE = [
   "# BEGIN AI-DLC:gitignore",
   "aidlc/active-space",
   "aidlc/spaces/*/intents/active-intent",
-  "aidlc/.aidlc-clone-id",
-  "aidlc/.aidlc-sessions/",
+  "aidlc/.aidlc-engine/clone-id",
+  "aidlc/.aidlc-engine/sessions/",
   "aidlc/spaces/*/intents/.aidlc-*",
   "**/aidlc/spaces/*/intents/**/.aidlc-engine/",
   "**/aidlc/spaces/*/intents/**/.aidlc-sensors/",
@@ -348,6 +349,16 @@ describe("a side-by-side build starts whatever the base commit holds of the reco
     const child = wt(pd, "alpha");
     expect(existsSync(join(child, REGISTRY))).toBe(false);
     expect(activeIntentUuid(child)).toBeNull();
+  });
+
+  test("a fresh project's child reads its own delegated record inside a step that acts on another work by name", () => {
+    const pd = project("records-untracked");
+    expectPrepared(pd, prepare(pd, UNITS));
+    const child = wt(pd, "alpha");
+    const own = resolveWorkflowSelection(child);
+    expect(own.intent).toBe(DEFAULT_RECORD_DIR);
+    const scoped = withWorkPinned({ space: "default", intent: "another-8000000000000002" }, () => resolveWorkflowSelection(child));
+    expect({ space: scoped.space, intent: scoped.intent }).toEqual({ space: own.space, intent: own.intent });
   });
 
   test("the registry committed and the record dir untracked", () => {

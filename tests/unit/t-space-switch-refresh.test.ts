@@ -37,7 +37,7 @@ const HARNESS_DIRS = {
   opencode: ".aidlc",
   codex: ".codex",
 } as const;
-const COPY = "aidlc/active-memory";
+const COPY = "aidlc/.aidlc-engine/active-memory";
 const TEAM = "aidlc/spaces/teamb/memory";
 const copyHeader = (space: string, rel: string): string =>
   `<!-- AI-DLC keeps this copy in step with aidlc/spaces/${space}/memory/${rel}. Edit that file; this copy is replaced. -->\n`;

@@ -18,11 +18,13 @@ import {
   writeSync,
 } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { unitBuildLog } from "./aidlc-record-core.ts";
 import {
   acquireAuditLock,
   addPendingPersonLines,
   assertNoSymlinkInChainOrThrow,
   auditFilePath,
+  withAuditLock,
   auditBlockField,
   auditShardBlocks,
   auditShardHostSegment,
@@ -34,6 +36,7 @@ import {
   claimAttemptFields,
   cloneIdFileContent,
   cloneIdPath,
+  ensureWorkspaceEngineFolder,
   ENGINE_DIR,
   entrySkillInvocation,
   errorMessage,
@@ -90,6 +93,7 @@ const VALID_EVENT_TYPES = new Set([
   // looked, and what it did: the agent's first report refused, the approval
   // question put to the person, or Guard Policy off standing aside.
   "SOURCE_WORK_NOT_FOUND",
+  "SHARED_INPUT_AMENDED",
   // Phase lifecycle
   "PHASE_STARTED",
   "PHASE_COMPLETED",
@@ -217,7 +221,15 @@ const VALID_EVENT_TYPES = new Set([
   // that asked for the packages (`log install`).
   "SYSTEM_INSTALL_BLOCKED",
   "SYSTEM_INSTALL_ALLOWED",
+  // Where nothing is built at Code Generation (a Unit's approved build, the
+  // lead's project waiting on the teams), a change let through on the person's
+  // turn, naming their message (hook-emitted).
+  "ASKED_CHANGE_ALLOWED",
   "SYSTEM_INSTALL_REQUESTED",
+  // The message the agent named as asking for a change to a Unit built and
+  // approved, which that approval spent (`log change`): the guard's twin of
+  // SYSTEM_INSTALL_REQUESTED.
+  "UNIT_CHANGE_REQUESTED",
   // A guard's deterministic off-switch was set while a workflow existed, so a
   // tool call passed without enforcement. One row per streak: the hook appends
   // only when the newest row in its shard is not already this event.
@@ -282,9 +294,16 @@ const VALID_EVENT_TYPES = new Set([
   "BOLT_FAILED",
   "AUTONOMY_MODE_SET",
   "UNIT_OWNERSHIP_SET",
+  "UNITS_ASSIGNED",
+  "UNIT_TAKEN_IN",
+  "UNIT_PUSHED",
   "UNIT_GATE_RHYTHM_SET",
+  "LEAD_SIGN_OFF_SET",
+  "LEAD_HERE_SET",
   "CONSTRUCTION_POLICY_SET",
   "UNIT_MERGED",
+  "UNIT_SENT_BACK",
+  "UNIT_MERGE_TAKEN_BACK",
   // Worktree lifecycle:
   //   WORKTREE_* emitted by aidlc-worktree.ts
   //   STATE_*    emitted by aidlc-state.ts state-fork/state-merge
@@ -346,7 +365,7 @@ const VALID_EVENT_TYPES = new Set([
 
 // The hook-owned session events above: a host's chat starting, resuming,
 // compacting or ending. They are the host's bookkeeping, never an act on what
-// the person said (latestOwnRow in aidlc-orchestrate.ts reads past them).
+// the person said (latestOwnRow in aidlc-unit.ts reads past them).
 export const SESSION_EVENT_TYPES: ReadonlySet<string> = new Set([
   "SESSION_STARTED", "SESSION_RESUMED", "SESSION_COMPACTED", "SESSION_ENDED",
 ]);
@@ -360,6 +379,7 @@ const EVENT_HEADINGS: Record<string, string> = {
   STAGE_DEFINITION_CHANGED: "Stage Definition Changed",
   STAGE_OUTPUT_AMENDED: "Stage Output Amended",
   SOURCE_WORK_NOT_FOUND: "Source Work Not Found",
+  SHARED_INPUT_AMENDED: "Shared Input Amended",
   STAGE_JUMPED: "Stage Jump",
   STAGE_SKIPPED: "Stage Skip",
   PHASE_STARTED: "Phase Start",
@@ -422,7 +442,9 @@ const EVENT_HEADINGS: Record<string, string> = {
   STAGE_RULES_BLOCKED: "Stage Rules Blocked",
   SYSTEM_INSTALL_BLOCKED: "System Install Blocked",
   SYSTEM_INSTALL_ALLOWED: "System Install Allowed",
+  ASKED_CHANGE_ALLOWED: "Asked Change Allowed",
   SYSTEM_INSTALL_REQUESTED: "System Install Requested",
+  UNIT_CHANGE_REQUESTED: "Unit Change Requested",
   GUARD_DISABLED: "Guard Disabled",
   DOCUMENT_INDEXED: "Document Indexed",
   DOCUMENT_UPDATED: "Document Updated",
@@ -451,9 +473,16 @@ const EVENT_HEADINGS: Record<string, string> = {
   BOLT_FAILED: "Bolt Failed",
   AUTONOMY_MODE_SET: "Autonomy Mode Set",
   UNIT_OWNERSHIP_SET: "Unit Ownership Set",
+  UNITS_ASSIGNED: "Units Assigned",
+  UNIT_TAKEN_IN: "Unit Taken In",
+  UNIT_PUSHED: "Unit Pushed",
   UNIT_GATE_RHYTHM_SET: "Unit Gate Rhythm Set",
+  LEAD_SIGN_OFF_SET: "Lead Sign-off Set",
+  LEAD_HERE_SET: "Lead Here Set",
   CONSTRUCTION_POLICY_SET: "Construction Policy Set",
   UNIT_MERGED: "Unit Merged",
+  UNIT_SENT_BACK: "Unit Sent Back",
+  UNIT_MERGE_TAKEN_BACK: "Unit Merge Taken Back",
   WORKTREE_CREATED: "Worktree Created",
   WORKTREE_MERGED: "Worktree Merged",
   WORKTREE_DISCARDED: "Worktree Discarded",
@@ -591,6 +620,7 @@ export const CLI_PROTECTED_EVENT_TYPES = new Set([
   // The check's own record of a first refusal opens the gate on the next
   // report; a forged one would skip the agent's refusal.
   "SOURCE_WORK_NOT_FOUND",
+  "SHARED_INPUT_AMENDED",
   "HUMAN_TURN",
   "HOST_TURN",
   "QUESTION_UNANSWERED",
@@ -619,7 +649,12 @@ export const CLI_PROTECTED_EVENT_TYPES = new Set([
   "SWARM_TAKEN_OVER",
   "AUTONOMY_MODE_SET",
   "UNIT_OWNERSHIP_SET",
+  "UNITS_ASSIGNED",
+  "UNIT_TAKEN_IN",
+  "UNIT_PUSHED",
   "UNIT_GATE_RHYTHM_SET",
+  "LEAD_SIGN_OFF_SET",
+  "LEAD_HERE_SET",
   // The applied Construction policy decides which stage starts are attempt
   // boundaries for Unit receipts, so only its typed setters may record it.
   "CONSTRUCTION_POLICY_SET",
@@ -635,6 +670,8 @@ export const CLI_PROTECTED_EVENT_TYPES = new Set([
   "UNIT_COMPLETED",
   "UNIT_SKIPPED",
   "UNIT_MERGED",
+  "UNIT_SENT_BACK",
+  "UNIT_MERGE_TAKEN_BACK",
   // DocumentKB provenance: the knowledge tool emits these through the library
   // inside its catalog transaction. A CLI-forged DOCUMENT_INDEXED whose
   // Digest+Source match a real row would make the tool's idempotent
@@ -678,7 +715,11 @@ export const CLI_PROTECTED_EVENT_TYPES = new Set([
   // The person's go-ahead for a system install, and the message named as asking
   // for one; a forged one would make an install nobody asked for look like theirs.
   "SYSTEM_INSTALL_ALLOWED",
+  // Likewise for a change the guard let through on their turn, and the message
+  // named as asking for a change to a built Unit.
+  "ASKED_CHANGE_ALLOWED",
   "SYSTEM_INSTALL_REQUESTED",
+  "UNIT_CHANGE_REQUESTED",
   // Ceremony provenance belongs to the setting verb, not a public audit append.
   "CEREMONY_SET",
 ]);
@@ -722,7 +763,11 @@ const MERGE_PROTECTED_EVENT_TYPES = new Set([
   "SWARM_TAKEN_OVER",
   "AUTONOMY_MODE_SET",
   "UNIT_OWNERSHIP_SET",
+  "UNITS_ASSIGNED",
+  "UNIT_TAKEN_IN",
   "UNIT_GATE_RHYTHM_SET",
+  "LEAD_SIGN_OFF_SET",
+  "LEAD_HERE_SET",
   "CONSTRUCTION_POLICY_SET",
   // Routing-trusted unit lifecycle receipts.
   "UNIT_STARTED",
@@ -1183,7 +1228,12 @@ interface ClaimAuditRules {
 // its .aidlc/worktree-meta.json) has no rules: it keeps only its local record,
 // since audit-merge copies the delta's rows pin takes into the main checkout's
 // tracked shard, and a second copy in the worktree's own would meet that one
-// when the Bolt lands.
+// when the Bolt lands. A Unit's build with no claim stamp keeps its whole log
+// the same way (auditFilePath): its tracked shard takes a copy of every row
+// until the build is pushed or finished (unitBuildLog), and from then on no
+// rules, as in a Bolt worktree: never a `takes` that drops a row, which
+// startLocalRecordUnlocked would rewrite the committed shard down to. Each push
+// and each commit of the record carry in the rows since (foldBuildOwnLog).
 function claimOfLocalRecord(
   projectDir: string,
   shardPath: string,
@@ -1192,7 +1242,11 @@ function claimOfLocalRecord(
   if (tracked === null) return null;
   if (insideBoltWorktree(projectDir)) return { tracked, rules: null };
   const stamp = readApplicableTeamUnitScopeStamp(projectDir);
-  if (!stamp) return null;
+  if (!stamp) {
+    const build = unitBuildLog(dirname(dirname(dirname(shardPath))));
+    if (build === null) return null;
+    return { tracked, rules: build.kept ? null : COPY_EVERY_ROW };
+  }
   // Loaded only here: a checkout with no claim never pays for the Unit tool.
   const { claimAuditRules } = require("./aidlc-unit.ts") as {
     claimAuditRules(
@@ -1201,6 +1255,46 @@ function claimOfLocalRecord(
     ): ClaimAuditRules;
   };
   return { tracked, rules: claimAuditRules(projectDir, stamp) };
+}
+
+const COPY_EVERY_ROW: ClaimAuditRules = { takes: (block) => block.trim().length > 0, baseHolds: () => false };
+
+// A Unit's build's own log, started at its take as its tracked shard stands
+// (the rows written before its state named the build), so every later row of
+// the build is written there (auditFilePath). One that cannot start leaves the
+// build writing in its tracked shard, as a build taken before this did.
+export function startBuildOwnLog(projectDir: string, intent: string, space: string): void {
+  try {
+    withAuditLock(projectDir, () => {
+      const tracked = auditFilePath(projectDir, intent, space);
+      if (trackedTwin(tracked) !== null) return;
+      const own = join(dirname(dirname(tracked)), ENGINE_DIR, "audit", basename(tracked));
+      startLocalRecordUnlocked(projectDir, own, { tracked, rules: COPY_EVERY_ROW });
+      if (!existsSync(own)) writeAuditBlockAtPath(projectDir, own, "");
+    }, intent, space);
+  } catch {
+    // The build writes on in its tracked shard.
+  }
+}
+
+// At a push of a Unit's build and before a commit of its record: the rows of its
+// own log its tracked shard does not hold yet, carried in as whole blocks, in
+// order (a row both hold is read once, copiedAuditBlocks). A build with no own
+// log has nothing to carry.
+export function foldBuildOwnLog(projectDir: string): void {
+  withAuditLock(projectDir, () => {
+    const own = auditFilePath(projectDir);
+    const tracked = trackedTwin(own);
+    if (tracked === null || unitBuildLog(dirname(dirname(dirname(own)))) === null) return;
+    const text = readShardText(projectDir, own);
+    if (text === null) return;
+    const held = new Set(auditShardBlocks(readShardText(projectDir, tracked) ?? "").map(unheaded));
+    const missing = auditShardBlocks(text)
+      .filter((block) => auditBlockField(block, "Timestamp") !== null && !held.has(unheaded(block)));
+    if (missing.length > 0) {
+      writeAuditBlockAtPath(projectDir, tracked, missing.map((block) => `${unheaded(block)}\n---\n`).join(""));
+    }
+  });
 }
 
 // The tracked shard beside a local record, or null when the path is not one.
@@ -1998,6 +2092,8 @@ function handleAuditFork(args: string[], projectDir: string): void {
       verifyWorktreeIdentity();
       assertNoSymlinkInChainOrThrow(wtReal, relative(wtPath, wtClone));
       if (!existsSync(wtClone)) {
+        // The worktree's engine folder, its .gitignore first (a code repo has none of AI-DLC's ignore lines).
+        ensureWorkspaceEngineFolder(wtPath);
         mkdirSync(dirname(wtClone), { recursive: true });
         verifyWorktreeIdentity();
         assertNoSymlinkInChainOrThrow(wtReal, relative(wtPath, wtClone));
@@ -2131,6 +2227,7 @@ function handleAuditFork(args: string[], projectDir: string): void {
         : readRegularFileNoFollowOrThrow(cloneIdPath(projectDir), "clone id");
       verifyWorktreeIdentity();
       assertNoSymlinkInChainOrThrow(wtReal, relative(wtPath, wtCloneIdPath));
+      ensureWorkspaceEngineFolder(wtPath);
       mkdirSync(dirname(wtCloneIdPath), { recursive: true });
       verifyWorktreeIdentity();
       assertNoSymlinkInChainOrThrow(wtReal, relative(wtPath, wtCloneIdPath));

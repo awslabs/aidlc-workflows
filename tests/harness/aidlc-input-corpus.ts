@@ -429,7 +429,7 @@ export function copilotSkillPrompt(proj: string, args: string, skill = "aidlc", 
 export interface StoredRecord { text: string; words: string | null; settings: Array<{ key: string; value: string }>; applied: string[] }
 /** The message record the hook wrote for `prompt` (or the newest one). */
 export function messageRecord(proj: string, prompt: string): StoredRecord | null {
-  const dir = join(proj, "aidlc", ".aidlc-sessions", "messages");
+  const dir = join(proj, "aidlc", ".aidlc-engine", "sessions", "messages");
   if (!existsSync(dir)) return null;
   const records = readdirSync(dir).filter((f) => f.endsWith(".json"))
     .map((f) => JSON.parse(readFileSync(join(dir, f), "utf-8")) as StoredRecord & { at: string });

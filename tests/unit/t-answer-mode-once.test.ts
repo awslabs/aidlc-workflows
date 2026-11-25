@@ -27,13 +27,14 @@ import {
   remainingOperationTimeoutMs,
 } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import {
   answerModeFromReply,
   answerModeStageStartedFields,
   resolveStageAnswerMode,
 } from "../../core/tools/aidlc-lib.ts";
+import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
   auditBlockField,
   getField,
@@ -198,6 +199,70 @@ describe("answer mode across a piece of work", () => {
     expect(run(LOG, ["answer", "--stage", second, "--details", "A, C, B"], proj).status).toBe(0);
     expect(hasPendingDecision(proj, second, "STAGE_STARTED")).toBe(false);
     expect(runStageAnswerMode(proj)).toMatchObject({ mode: "file", reused_from: first });
+  });
+
+  // A live run on Codex (the second teammate): a build carried on from someone
+  // else said "Answering the way you chose earlier: Guide me." to a person who
+  // chose nothing; the choice was the first teammate's.
+  test("on a build carried on from someone else, the line names who chose; the one who chose hears it as before", () => {
+    const { proj, state } = project();
+    const first = currentStage(state);
+    Bun.spawnSync({ cmd: ["git", "init", "-q"], cwd: proj });
+    Bun.spawnSync({ cmd: ["git", "config", "user.name", "Wes Web"], cwd: proj });
+    askModeQuestion(proj, first, "Guide me");
+    advance(proj, state);
+    // Wes's clone: a decision of his named, then the whole shard is another clone's.
+    appendAuditEntry("GATE_APPROVED", { Stage: first, "Git Name": "Wes Web" }, proj);
+    const audit = join(dirname(state), "audit");
+    const [shard] = readdirSync(audit).filter((name) => name.endsWith(".md"));
+    renameSync(join(audit, shard), join(audit, "aidlc-weshost-0123456789ab.md"));
+    // Not a Unit's build: main's line, whoever looks.
+    Bun.spawnSync({ cmd: ["git", "config", "user.name", "Wren Web"], cwd: proj });
+    expect(runStageAnswerMode(proj).notice).toBe(
+      "Answering the way you chose earlier: Guide me. Say if you'd rather edit the file or chat.",
+    );
+    // A Unit's build, carried on by Wren from Wes's take.
+    const text = readFileSync(state, "utf-8");
+    writeFileSync(state, text.replace(/^(- \*\*Project\*\*: .*)$/m, "$1\n- **Unit Build**: checkout-ui"));
+    expect(runStageAnswerMode(proj).notice).toBe(
+      "Answering the way Wes Web chose for this build: Guide me. Say if you'd rather edit the file or chat.",
+    );
+    // Wes, who chose, hears it as before.
+    Bun.spawnSync({ cmd: ["git", "config", "user.name", "Wes Web"], cwd: proj });
+    expect(runStageAnswerMode(proj).notice).toBe(
+      "Answering the way you chose earlier: Guide me. Say if you'd rather edit the file or chat.",
+    );
+  });
+
+  // Live runs (Claude Code on Windows Server, Kiro CLI): a teammate told
+  // 'Later stages will use this way too' was asked again at her second Unit,
+  // a build of its own.
+  test("a person's second Unit's build takes the answer from their first build of the same work; a teammate's choice is never theirs", () => {
+    const { proj, state: firstState } = project();
+    const asBuild = (path: string, unit: string): void => {
+      writeFileSync(path, readFileSync(path, "utf-8").replace(/^(- \*\*Project\*\*: .*)$/m,
+        `$1\n- **Unit Build**: ${unit}\n- **Home Work**: 8f2c1a34-5b6d-4e7f-9a0b-1c2d3e4f5a6b`));
+    };
+    Bun.spawnSync({ cmd: ["git", "init", "-q"], cwd: proj });
+    Bun.spawnSync({ cmd: ["git", "config", "user.name", "Bea Web"], cwd: proj });
+    asBuild(firstState, "checkout-ui");
+    askModeQuestion(proj, currentStage(firstState), "Guide me");
+    const created = run(UTILITY, [
+      "intent-create", "--scope", "classic", "--arguments", "second unit fixture", "--label", "second-unit",
+    ], proj);
+    expect(created.status, created.stderr).toBe(0);
+    const intents = join(proj, "aidlc", "spaces", "default", "intents");
+    const second = join(intents, readFileSync(join(intents, "active-intent"), "utf-8").trim(), "aidlc-state.md");
+    expect(second).not.toBe(firstState);
+    asBuild(second, "check-page");
+    expect(runStageAnswerMode(proj).notice).toBe(
+      "Answering the way you chose earlier: Guide me. Say if you'd rather edit the file or chat.",
+    );
+    // The first build's answer made in another clone, a teammate's: asked again.
+    const audit = join(dirname(firstState), "audit");
+    const [shard] = readdirSync(audit).filter((name) => name.endsWith(".md"));
+    renameSync(join(audit, shard), join(audit, "aidlc-weshost-0123456789ab.md"));
+    expect(runStageAnswerMode(proj).ask).toBe(true);
   });
 
   test("a new choice the person makes later is the one the following stages use", () => {

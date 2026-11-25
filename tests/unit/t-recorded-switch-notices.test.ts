@@ -212,7 +212,7 @@ function writeLocal(proj: string, bypasses: string[]): string {
   return path;
 }
 
-const recordFile = (proj: string) => join(proj, "aidlc", ".aidlc-sessions", "recorded-switches.json");
+const recordFile = (proj: string) => join(proj, "aidlc", ".aidlc-engine", "sessions", "recorded-switches.json");
 
 describe("a check switched off for the project is always said, never refused", () => {
   test("asked for in the chat: off at once, and the person hears their own words", () => {
@@ -435,7 +435,7 @@ describe("a check switched off for the project is always said, never refused", (
   test("a damaged record changes only the words, never whether the switch counts", () => {
     const proj = project();
     writeLocal(proj, [NAME]);
-    mkdirSync(join(proj, "aidlc", ".aidlc-sessions"), { recursive: true });
+    mkdirSync(join(proj, "aidlc", ".aidlc-engine", "sessions"), { recursive: true });
     writeFileSync(recordFile(proj), "{ not json");
     expect(resolveProjectFlag(NAME, NONE, proj)).toBe("1");
     expect(switchesOffLines(proj, NONE)[0]).not.toContain(NOT_FROM_CHAT);

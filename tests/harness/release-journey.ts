@@ -141,7 +141,7 @@ export function doctorChecks(project: ReleaseJourneyProject, env: NodeJS.Process
 
 /** The lines AI-DLC's human-turn hook recorded as the person's, oldest first. */
 export function recordedPersonLines(proj: string): string[] {
-  const dir = join(proj, "aidlc", ".aidlc-sessions", "messages");
+  const dir = join(proj, "aidlc", ".aidlc-engine", "sessions", "messages");
   if (!existsSync(dir)) return [];
   return readdirSync(dir).filter((name) => name.endsWith(".json"))
     .map((name) => JSON.parse(readFileSync(join(dir, name), "utf8")) as { at?: string; text?: string })
@@ -152,7 +152,7 @@ export function recordedPersonLines(proj: string): string[] {
 interface RequestRecord { text?: string }
 
 function requestRecords(proj: string): RequestRecord[] {
-  const dir = join(proj, "aidlc", ".aidlc-sessions", "questions");
+  const dir = join(proj, "aidlc", ".aidlc-engine", "sessions", "questions");
   if (!existsSync(dir)) return [];
   return readdirSync(dir).filter((name) => name.endsWith(".json"))
     .map((name) => JSON.parse(readFileSync(join(dir, name), "utf8")) as RequestRecord);

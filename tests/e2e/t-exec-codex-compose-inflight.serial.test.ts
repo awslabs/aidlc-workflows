@@ -141,7 +141,8 @@ function setupCodexProject(): { proj: string; home: string; root: string } {
   const intentsDir = join(proj, "aidlc", "spaces", "default", "intents");
   const record = join(intentsDir, DEFAULT_RECORD_DIR);
   mkdirSync(record, { recursive: true });
-  writeFileSync(join(proj, "aidlc", ".aidlc-clone-id"), `${FIXTURE_CLONE_ID}\n`, "utf-8");
+  mkdirSync(join(proj, "aidlc", ".aidlc-engine"), { recursive: true });
+  writeFileSync(join(proj, "aidlc", ".aidlc-engine", "clone-id"), `${FIXTURE_CLONE_ID}\n`, "utf-8");
   writeFileSync(join(proj, "aidlc", "active-space"), "default\n", "utf-8");
   writeFileSync(join(intentsDir, "active-intent"), `${DEFAULT_RECORD_DIR}\n`, "utf-8");
   writeFileSync(

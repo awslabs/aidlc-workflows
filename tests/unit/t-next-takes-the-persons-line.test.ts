@@ -112,7 +112,7 @@ async function next(
 }
 
 function questionFiles(proj: string): string[] {
-  const dir = join(proj, "aidlc", ".aidlc-sessions", "questions");
+  const dir = join(proj, "aidlc", ".aidlc-engine", "sessions", "questions");
   return existsSync(dir) ? readdirSync(dir).filter((name) => name.endsWith(".json")) : [];
 }
 
@@ -172,14 +172,14 @@ describe("next takes the person's own /aidlc line when the agent's command carri
       expect(step.directive.message ?? "", step.out).toContain("next --scope workshop -- <their words>");
       let args = ["--scope", "workshop", "--", words];
       if (form === "request-file") {
-        mkdirSync(join(proj, "aidlc", ".aidlc-request-text"), { recursive: true });
-        writeFileSync(join(proj, "aidlc", ".aidlc-request-text", "request.txt"), words, "utf-8");
-        args = ["--scope", "workshop", "--request-file", "aidlc/.aidlc-request-text/request.txt"];
+        mkdirSync(join(proj, "aidlc", ".aidlc-engine", "request-text"), { recursive: true });
+        writeFileSync(join(proj, "aidlc", ".aidlc-engine", "request-text", "request.txt"), words, "utf-8");
+        args = ["--scope", "workshop", "--request-file", "aidlc/.aidlc-engine/request-text/request.txt"];
       }
       const { directive, out } = await next(proj, "kiro-ide", args);
       expect(directive.kind, `${form}: ${out}`).toBe("print");
       expect(directive.message ?? "", form).toContain("intent create --scope workshop --request");
-      const dir = join(proj, "aidlc", ".aidlc-sessions", "questions");
+      const dir = join(proj, "aidlc", ".aidlc-engine", "sessions", "questions");
       const texts = questionFiles(proj).map((name) => (JSON.parse(readFileSync(join(dir, name), "utf-8")) as { text: string }).text);
       expect(texts, form).toEqual([words]);
     }
@@ -211,7 +211,7 @@ describe("next takes the person's own /aidlc line when the agent's command carri
     const { directive, out } = await next(proj, "kiro-ide", ["--scope", "bugfix"]);
     expect(directive.kind, out).toBe("print");
     expect(directive.message ?? "").toContain("`express` is the name of a plan and also the first word");
-    expect(directive.message ?? "").toContain("next --scope express --request-file aidlc/.aidlc-request-text/line-after-plan");
+    expect(directive.message ?? "").toContain("next --scope express --request-file aidlc/.aidlc-engine/request-text/line-after-plan");
     expect(directive.message ?? "").toContain(`(the task: ${JSON.stringify(WORDS)})`);
     expect(directive.message ?? "").toContain(`which keeps every word of theirs (${JSON.stringify(`express ${WORDS}`)})`);
     expect(questionFiles(proj)).toHaveLength(0);
@@ -226,14 +226,14 @@ describe("next takes the person's own /aidlc line when the agent's command carri
     const read = await next(proj, "kiro-ide", []);
     expect(read.directive.kind, read.out).toBe("print");
     expect(read.directive.message ?? "").toContain("`bugfix` is the name of a plan and also the first word");
-    expect(read.directive.message ?? "").toContain("next --scope bugfix --request-file aidlc/.aidlc-request-text/line-after-plan");
+    expect(read.directive.message ?? "").toContain("next --scope bugfix --request-file aidlc/.aidlc-engine/request-text/line-after-plan");
     expect(read.directive.message ?? "").toContain('(the task: "fix the login")');
     expect(read.directive.message ?? "").toContain('which keeps every word of theirs ("bugfix fix the login")');
     expect(questionFiles(proj)).toHaveLength(0);
     const { directive, out } = await next(proj, "kiro-ide", ["--scope", "bugfix", "--", "fix the login"]);
     expect(directive.kind, out).toBe("print");
     expect(directive.message ?? "").toContain("intent create --scope bugfix --request");
-    const dir = join(proj, "aidlc", ".aidlc-sessions", "questions");
+    const dir = join(proj, "aidlc", ".aidlc-engine", "sessions", "questions");
     const texts = questionFiles(proj).map((name) => (JSON.parse(readFileSync(join(dir, name), "utf-8")) as { text: string }).text);
     expect(texts).toEqual(["fix the login"]);
   });
@@ -361,7 +361,7 @@ async function workOpen(): Promise<string> {
 }
 
 function questionTexts(proj: string): string[] {
-  const dir = join(proj, "aidlc", ".aidlc-sessions", "questions");
+  const dir = join(proj, "aidlc", ".aidlc-engine", "sessions", "questions");
   return questionFiles(proj).map((name) => (JSON.parse(readFileSync(join(dir, name), "utf-8")) as { text: string }).text);
 }
 

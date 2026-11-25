@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-unit:share, subcommand:aidlc-unit:status, subcommand:aidlc-state:practices-promote, subcommand:aidlc-state:practices-branch, file:core/memory/org.md
+// covers: subcommand:aidlc-unit:share, subcommand:aidlc-unit:status, subcommand:aidlc-state:practices-promote, subcommand:aidlc-state:practices-branch, subcommand:aidlc-orchestrate:report, file:core/memory/org.md
 //
 // A lead affirmed the Way of Working sentence "`main` is the base branch and
 // also the merge target in both repos, `alerts-api` and `alerts-web`", and team
@@ -12,7 +12,9 @@
 // the step that needs the branch says so, and practices-branch records what it
 // read, the line or that the words name no branch, so a team whose team.md says
 // `develop` in a sentence is never moved to `main`, and branch-free words are
-// read once and ask the person nothing.
+// read once and ask the person nothing. Where the work's code is in repos of
+// its own, the gate says which branch Approve names when this checkout is on
+// another.
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
@@ -187,13 +189,34 @@ describe("the integration branch is one exact line under Way of Working", () => 
 
 // The stage's own path: the lead's draft carries the person's sentence and the
 // line, Approve promotes it into team.md, and team work reads main from it.
-describe("Practices Discovery writes the line into team.md", () => {
-  test("Approve with D2's sentence and the line gives main from team.md", () => {
-    const proj = createTestProject();
-    created.push(proj);
-    seedAidlcMemory(proj);
-    gitRepo(proj);
-    writeFileSync(seededStateFile(proj), `# AI-DLC State Tracking
+// Where the work's code is in repos of its own, this project's repo holds only
+// AI-DLC's records and plan, so the line is where they go: the GitHub re-run
+// (#2783, case 12) drafted main for a lead on team-records who keeps the records
+// there, and the gate never said which branch Approve named.
+const ANY_BRANCH_LINE = "as the branch for AI-DLC's records and plan";
+const branchLine = (branch: string, current: string): string =>
+  `Approve names ${branch} as the branch for AI-DLC's records and plan, and this checkout is on ${current}.`;
+
+function inRepo(proj: string, args: string[]): void {
+  const r = spawnSync("git", ["-c", "user.name=lead", "-c", "user.email=lead@example.test", ...args], { cwd: proj, encoding: "utf-8" });
+  expect(r.status, r.stderr).toBe(0);
+}
+
+// A lead-only Practices Discovery waiting at its gate, its draft's Way of
+// Working holding `line`; `repos` records a code repo of the work's own, as a
+// workspace with one cloned in when the work began.
+function practicesProject(line: string, options: { git?: boolean; repos?: boolean } = {}): { proj: string; draftDir: string } {
+  const proj = createTestProject();
+  created.push(proj);
+  seedAidlcMemory(proj);
+  if (options.git !== false) gitRepo(proj);
+  if (options.repos === true) {
+    const registryPath = join(proj, "aidlc", "spaces", "default", "intents", "intents.json");
+    const registry = JSON.parse(readFileSync(registryPath, "utf-8")) as Array<Record<string, unknown>>;
+    registry[0].repos = ["web"];
+    writeFileSync(registryPath, `${JSON.stringify(registry, null, 2)}\n`);
+  }
+  writeFileSync(seededStateFile(proj), `# AI-DLC State Tracking
 
 ## Project Information
 - **Project**: integration branch line
@@ -221,33 +244,94 @@ describe("Practices Discovery writes the line into team.md", () => {
 - **Lifecycle Phase**: INCEPTION
 - **Status**: In Progress
 `);
-    const shard = seededAuditShard(proj);
-    mkdirSync(dirname(shard), { recursive: true });
-    writeFileSync(shard, [
-      "", "## STAGE_STARTED", "**Timestamp**: 2026-07-17T14:01:00Z", "**Event**: STAGE_STARTED",
-      "**Stage**: practices-discovery", "**Agent**: aidlc-pipeline-deploy-agent", "", "---", "",
-    ].join("\n"), { flag: "a" });
-    const draftDir = join(seededRecordDir(proj), "inception", "practices-discovery");
-    mkdirSync(draftDir, { recursive: true });
-    writeFileSync(join(draftDir, "team-practices.md"), [
-      "# Team Practices", "", "## Way of Working", "", D2, "", "- **Integration branch**: main", "",
-      "## Testing Posture", "", "- **Methodology**: test-after", "- **Ordering**: one sentence.", "",
-    ].join("\n"));
-    writeFileSync(join(draftDir, "discovered-rules.md"), "# Discovered Rules\n\n## Mandated\n\nNone.\n\n## Forbidden\n\nNone.\n");
-    const options = { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" as const, cwd: proj };
-    const gate = spawnSync(BUN, [ORCH, "report", "--stage", "practices-discovery", "--result", "awaiting-approval", "--project-dir", proj], options);
-    expect(gate.status, `${gate.stdout}${gate.stderr}`).toBe(0);
+  const shard = seededAuditShard(proj);
+  mkdirSync(dirname(shard), { recursive: true });
+  writeFileSync(shard, [
+    "", "## STAGE_STARTED", "**Timestamp**: 2026-07-17T14:01:00Z", "**Event**: STAGE_STARTED",
+    "**Stage**: practices-discovery", "**Agent**: aidlc-pipeline-deploy-agent", "", "---", "",
+  ].join("\n"), { flag: "a" });
+  const draftDir = join(seededRecordDir(proj), "inception", "practices-discovery");
+  mkdirSync(draftDir, { recursive: true });
+  writeTeamPractices(draftDir, line);
+  writeFileSync(join(draftDir, "discovered-rules.md"), "# Discovered Rules\n\n## Mandated\n\nNone.\n\n## Forbidden\n\nNone.\n");
+  return { proj, draftDir };
+}
+
+function writeTeamPractices(draftDir: string, line: string): void {
+  writeFileSync(join(draftDir, "team-practices.md"), [
+    "# Team Practices", "", "## Way of Working", "", D2, "", line, "",
+    "## Testing Posture", "", "- **Methodology**: test-after", "- **Ordering**: one sentence.", "",
+  ].join("\n"));
+}
+
+const toolOptions = () => ({ timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" as const });
+
+// The gate's report, as the stage opens it (or shows it again after a revision).
+function gate(proj: string, result: "awaiting-approval" | "rejected" | "revised" = "awaiting-approval"): { narration: string } {
+  const words = result === "rejected" ? ["--user-input", "Request Changes"] : [];
+  const r = spawnSync(BUN, [ORCH, "report", "--stage", "practices-discovery", "--result", result, ...words, "--project-dir", proj], {
+    ...toolOptions(), cwd: proj,
+  });
+  expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
+  const reply = JSON.parse(r.stdout.trim().split("\n").pop() ?? "{}") as { narration?: string };
+  return { narration: reply.narration ?? "" };
+}
+
+describe("Practices Discovery writes the line into team.md", () => {
+  test("Approve with D2's sentence and the line gives main from team.md", () => {
+    const { proj, draftDir } = practicesProject("- **Integration branch**: main");
+    // The person named no branch and is on it: the gate says nothing of it.
+    expect(gate(proj).narration).not.toContain(ANY_BRANCH_LINE);
     const promoted = spawnSync(BUN, [
       STATE, "practices-promote",
       "--team-practices", join(draftDir, "team-practices.md"),
       "--discovered-rules", join(draftDir, "discovered-rules.md"),
       "--affirming-user", "the person", "--project-dir", proj,
-    ], options);
+    ], { ...toolOptions(), cwd: proj });
     expect(promoted.status, `${promoted.stdout}${promoted.stderr}`).toBe(0);
 
     const team = readFileSync(join(proj, MEMORY, "team.md"), "utf-8");
     expect(team).toContain(D2);
     expect(team).toContain("- **Integration branch**: main");
     expect(branchOf(proj)).toBe("main");
+  });
+
+  test("a draft naming main while this checkout is on the team's records branch: the gate says which branch Approve names, and not once the draft names it", () => {
+    const { proj, draftDir } = practicesProject("- **Integration branch**: main", { repos: true });
+    inRepo(proj, ["checkout", "-q", "-b", "team-records"]);
+    const shown = gate(proj).narration;
+    expect(shown).toContain(branchLine("main", "team-records"));
+    expect(shown.split(ANY_BRANCH_LINE).length - 1, shown).toBe(1);
+
+    // Request Changes: the draft is revised to the branch the person keeps the records on.
+    gate(proj, "rejected");
+    writeTeamPractices(draftDir, "- **Integration branch**: team-records");
+    expect(gate(proj, "revised").narration).not.toContain(ANY_BRANCH_LINE);
+  });
+
+  test("the gate says nothing of the branch where it is this checkout's, the work has no repos of its own, or the draft does not decide it", () => {
+    const silent = (proj: string, why: string): void => {
+      expect(gate(proj).narration, why).not.toContain(ANY_BRANCH_LINE);
+    };
+    const onRecords = (line: string, options: { git?: boolean; repos?: boolean } = { repos: true }): string => {
+      const { proj } = practicesProject(line, options);
+      if (options.git !== false) inRepo(proj, ["checkout", "-q", "-b", "team-records"]);
+      return proj;
+    };
+    silent(onRecords("- **Integration branch**: team-records"), "the draft names this checkout's branch");
+    silent(onRecords("Integration branch: `team-records`."), "the same name, written in a code span with a full stop");
+    silent(onRecords("- **Integration branch**: main", {}), "a project whose code is its own repo");
+    silent(onRecords("- **Integration branch**: main", { git: false, repos: true }), "no git repo");
+
+    const narrower = onRecords("- **Integration branch**: main");
+    writeFileSync(join(narrower, MEMORY, "project.md"), wayOfWorking("- **Integration branch**: release/next"));
+    silent(narrower, "project.md's own line decides, not the draft");
+
+    const detached = onRecords("- **Integration branch**: main");
+    writeFileSync(join(detached, "README.md"), "x\n");
+    inRepo(detached, ["add", "README.md"]);
+    inRepo(detached, ["commit", "-q", "-m", "start"]);
+    inRepo(detached, ["checkout", "-q", "--detach"]);
+    silent(detached, "a detached HEAD names no branch");
   });
 });

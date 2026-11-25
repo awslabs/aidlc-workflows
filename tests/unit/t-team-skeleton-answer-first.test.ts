@@ -46,12 +46,12 @@ const ENV: NodeJS.ProcessEnv = {
 };
 delete ENV.AWS_AIDLC_DEFAULT_SCOPE;
 
-const HANDOUT_LINE = "No team has taken a Unit yet, so this session builds them here, starting with the alpha " +
-  "Unit. To hand Units to teams instead, share this work through git; each team then runs `/aidlc` in its own " +
-  "clone to take one.";
-const SKELETON_HANDOUT_LINE = "No team has taken a Unit yet, so this session builds them here, starting with the " +
-  "alpha Unit, the walking skeleton the others build on. To hand the others to teams, share this work through " +
-  "git once it is built and approved; each team then runs `/aidlc` in its own clone to take one.";
+const HANDOUT_LINE = "Nobody has taken a Unit yet, so this session builds them here, starting with the alpha " +
+  "Unit. To leave the Units open for a person or a team to take instead, share this work through git; whoever takes " +
+  "one then runs `/aidlc` in their own clone.";
+const SKELETON_HANDOUT_LINE = "Nobody has taken a Unit yet, so this session builds them here, starting with the " +
+  "alpha Unit, the walking skeleton the others build on. To leave the others open for a person or a team to take, " +
+  "share this work through git once it is built and approved; whoever takes one then runs `/aidlc` in their own clone.";
 const OFF_GATE_REFUSAL = "is not the skeleton-gate stage";
 
 const NO = "We do not build a thin end-to-end slice first: every Unit starts as soon as what it depends on is done.";
@@ -227,7 +227,7 @@ describe("the team's walking-skeleton answer is read before a team step decides"
     expect(after.gate).toBe(true);
   });
 
-  test("a jump past the first Construction stage, then Several teams: a no names no walking skeleton", () => {
+  test("a jump past the first Construction stage, then Several teams or people: a no names no walking skeleton", () => {
     const proj = project("delivery-planning", null, NO);
     jumpThenTeams(proj);
     expectSettleStep(next(proj), "code-generation");

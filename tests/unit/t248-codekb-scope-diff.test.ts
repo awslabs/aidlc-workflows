@@ -962,9 +962,9 @@ describe("t248 codekb freshness: AI-DLC's own files", () => {
 
   test("the left-out paths come from the installed harness; a sibling repo leaves nothing out", () => {
     const proj = installedProject();
-    expect(aidlcRootIntegrations(proj).map((integration) => integration.path).sort()).toEqual([".gitignore", ".mcp.json"]);
+    expect(aidlcRootIntegrations(proj).map((integration) => integration.path).sort()).toEqual([".gitattributes", ".gitignore", ".mcp.json"]);
     const excluded = codekbFingerprintExcludes(proj, proj);
-    for (const path of ["aidlc", ".claude", ".kiro", ".opencode", ".gitignore", ".mcp.json", "aidlc.settings.json"]) {
+    for (const path of ["aidlc", ".claude", ".kiro", ".opencode", ".gitattributes", ".gitignore", ".mcp.json", "aidlc.settings.json"]) {
       expect(excluded).toContain(path);
     }
     expect(excluded).not.toContain("AGENTS.md");

@@ -86,7 +86,7 @@ import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { hostname } from "node:os";
 import { appendFileSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
-import { join, relative } from "node:path";
+import { basename, join, relative } from "node:path";
 import { type EngineInvocation, renderEngineInvocation } from "../../core/tools/aidlc-guard-operation.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { boltName, createIntent, legacyParkedRefPrefix, legacyWorktreePath, parkedRefPrefix, worktreePath } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -98,6 +98,7 @@ import {
   FIXTURES_DIR,
   cleanupTestProject,
   createTestProject,
+  intentsDirOf,
   seedAuditFile,
   seedStateFile,
   seededRecordDir,
@@ -141,7 +142,7 @@ function wtRecordRoot(proj: string, slug: string): string {
 }
 
 /** Replicate aidlc-record-core's auditShardName for a worktree: <host>-<clone-id>.md,
- *  where the clone-id is read from <wt>/aidlc/.aidlc-clone-id. We write a fixed
+ *  where the clone-id is read from <wt>/aidlc/.aidlc-engine/clone-id. We write a fixed
  *  token there first so the doctor (a separate process) resolves the SAME shard
  *  name — its worktreeAuditFilePath(...) → auditShardName(wtPath) reads the same
  *  on-disk token. (The lib's auditShardName is memoized per-process, so calling
@@ -150,7 +151,8 @@ function seedWtAuditShard(proj: string, slug: string, contents: string): void {
   const wtRoot = worktreePath(proj, fixtureIntentId8(proj), slug);
   mkdirSync(join(wtRoot, "aidlc"), { recursive: true });
   const token = "ffffffffffff";
-  writeFileSync(join(wtRoot, "aidlc", ".aidlc-clone-id"), `${token}\n`, "utf-8");
+  mkdirSync(join(wtRoot, "aidlc", ".aidlc-engine"), { recursive: true });
+  writeFileSync(join(wtRoot, "aidlc", ".aidlc-engine", "clone-id"), `${token}\n`, "utf-8");
   const host =
     hostname()
       .toLowerCase()
@@ -718,6 +720,27 @@ describe("t83 doctor parked attempts", () => {
     expect(ambiguous).not.toHaveProperty("purge_operation");
     expect(ambiguous).not.toHaveProperty("restore_command");
     expect(ambiguous).not.toHaveProperty("purge_command");
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  // The first repo added to work that kept its code in the workspace folder
+  // lists the workspace in repos.json at "." under a name, and the work records
+  // it by that name: its parked attempts are still the workspace's own, once.
+  test("a workspace the work records by name at \".\" has each parked attempt once, and its restore needs no --repo", () => {
+    const proj = freshProject();
+    initRepo(proj);
+    const own = basename(proj);
+    writeFileSync(join(proj, "aidlc", "repos.json"), `${JSON.stringify({ repos: [{ name: own, path: "." }] })}\n`);
+    const registry = join(intentsDirOf(proj), "intents.json");
+    const rows = JSON.parse(readFileSync(registry, "utf-8")) as Array<Record<string, unknown>>;
+    writeFileSync(registry, `${JSON.stringify(rows.map((row) => ({ ...row, repos: [own] })), null, 2)}\n`);
+    const stamp = "20240101T000000Z";
+    parkHead(proj, "saved", stamp, "snapshot");
+    recordParkedAttempt(proj, "saved", `${parkedRefPrefix(fixtureIntentId8(proj), "saved")}${stamp}`);
+    appendAuditEntry("WORKTREE_CREATED", { "Bolt slug": "saved", Repo: own }, proj, DEFAULT_RECORD_DIR, DEFAULT_SPACE);
+    const attempts = JSON.parse(runDoctor(proj, ["--json"]).out).data.parked_attempts;
+    expect(attempts).toHaveLength(1);
+    expect(attempts[0]).toMatchObject({ slug: "saved", stamp, mode: "snapshot", repo: null });
+    runRecoveryOperation(proj, { route: "worktree", args: ["restore", "--slug", "saved", "--parked", stamp, "--intent", DEFAULT_RECORD_DIR, "--space", DEFAULT_SPACE] });
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("a parked snapshot lists recovery actions without changing health severity", () => {

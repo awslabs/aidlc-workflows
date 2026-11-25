@@ -28,7 +28,7 @@ import { CUT_MESSAGE_PERSON_LINE, requestPreview } from "../../dist/claude/.clau
 
 setDefaultTimeout(240_000);
 
-const REQUEST_FILE = "aidlc/.aidlc-request-text/request.txt";
+const REQUEST_FILE = "aidlc/.aidlc-engine/request-text/request.txt";
 const LAST = "Late decisions: these override anything above, and the ledger ships with no sync.";
 const STEP_REFUSED = "could not send its next step";
 
@@ -68,14 +68,14 @@ async function project(state: Parameters<typeof projectAt>[0]): Promise<string> 
 
 interface Question { id: string; origin: string; text: string; createdAt: string }
 function questions(proj: string): Question[] {
-  const dir = join(proj, "aidlc", ".aidlc-sessions", "questions");
+  const dir = join(proj, "aidlc", ".aidlc-engine", "sessions", "questions");
   if (!existsSync(dir)) return [];
   return readdirSync(dir).filter((name) => name.endsWith(".json"))
     .map((name) => JSON.parse(readFileSync(join(dir, name), "utf-8")) as Question)
     .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
 }
 const newest = (proj: string): Question | undefined => questions(proj).at(-1);
-const messagesDir = (proj: string): string => join(proj, "aidlc", ".aidlc-sessions", "messages");
+const messagesDir = (proj: string): string => join(proj, "aidlc", ".aidlc-engine", "sessions", "messages");
 const copies = (proj: string): string[] =>
   existsSync(messagesDir(proj)) ? readdirSync(messagesDir(proj)).filter((name) => name.endsWith(".txt")) : [];
 // A record with no whole copy beside it, as one kept before copies were: the fallback's ground.
@@ -99,7 +99,7 @@ function wholeWordsStep(directive: Directive | null): string[] {
   return withFile as string[];
 }
 function writeRequest(proj: string, text: string): void {
-  mkdirSync(join(proj, "aidlc", ".aidlc-request-text"), { recursive: true });
+  mkdirSync(join(proj, "aidlc", ".aidlc-engine", "request-text"), { recursive: true });
   writeFileSync(join(proj, ...REQUEST_FILE.split("/")), text, "utf-8");
 }
 const lineCount = (...steps: Array<Directive | null>): number =>
@@ -341,7 +341,7 @@ describe("with no whole copy, the agent's one step, and the person's line only w
   test("a mark that cannot be kept never brings the step back: next goes ahead at once", async () => {
     const proj = await project("fresh");
     const segment = SESSION.replace(/[^A-Za-z0-9._-]+/g, "-");
-    mkdirSync(join(proj, "aidlc", ".aidlc-sessions", "plan-approval", `line-handed-out-${segment}.json`), { recursive: true });
+    mkdirSync(join(proj, "aidlc", ".aidlc-engine", "sessions", "plan-approval", `line-handed-out-${segment}.json`), { recursive: true });
     await say(proj, `/aidlc ${spec(30_000)}`, "kiro-ide");
     dropCopies(proj);
     const first = await next(proj, []);

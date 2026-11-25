@@ -26,6 +26,7 @@ import { spawnSync } from "node:child_process";
 import { appendFileSync, cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
+import { ensureWorkspaceEngineFolder } from "../../core/tools/aidlc-runtime-paths.ts";
 import { workspaceManifestChecks } from "../../core/tools/aidlc-workspace-doctor.ts";
 import { workspaceManifestChecks as nativeManifestChecks } from "../../dist-release/claude/.claude/tools/aidlc-workspace-doctor.ts";
 import {
@@ -239,6 +240,16 @@ describe("t256 workspace-doctor - advisory manifest rows", () => {
     expect(request?.fix).toMatch(/^add the line `aidlc\/\.aidlc-request-text\/` to the project folder's \.gitignore, .*, then in the project folder, take the tracked ones out of git, keeping the files: `git rm --cached -r -f -- aidlc\/\.aidlc-request-text\/`/);
   });
 
+  test("a request in the engine folder is kept out of git by the folder itself, so no row names it", () => {
+    const ws = freshGitWorkspace();
+    ensureWorkspaceEngineFolder(ws);
+    mkdirSync(join(ws, "aidlc", ".aidlc-engine", "request-text"), { recursive: true });
+    writeFileSync(join(ws, "aidlc", ".aidlc-engine", "request-text", "request.txt"), "my words\n", "utf-8");
+    const rows = workspaceManifestChecks(ws);
+    expect(rows.some((r) => r.label.startsWith("Request folder:"))).toBe(false);
+    expect(rows[0].label).toContain("no uncommitted changes under aidlc/");
+  });
+
   test("a project below its repository root, and a request named with a space and Korean, are never asked to be committed", () => {
     const repo = freshGitWorkspace();
     const project = join(repo, "app");
@@ -375,6 +386,18 @@ describe("t256 workspace-doctor - advisory manifest rows", () => {
     expect(after.status, after.stdout + after.stderr).toBe(before.status);
     expect(after.stdout).toContain(row!.label);
   }, 60_000);
+
+  test("a repos.local.json that cannot be read is a warning, not a passing row", () => {
+    const ws = freshGitWorkspace();
+    writeManifest(ws, MANIFEST);
+    mkdirSync(join(ws, "aidlc"), { recursive: true });
+    writeFileSync(join(ws, "aidlc", "repos.local.json"), '{ "repos": [ { "name": "checkout-api", "path": "../mine" }, ] }\n', "utf-8");
+    const row = workspaceManifestChecks(ws).find((result) => result.label.startsWith("Your repos.local.json:"));
+    expect(row?.pass).toBe(false);
+    expect(row?.severity).toBe("warn");
+    expect(row?.label).toContain("repos.local.json is not valid JSON");
+    expect(row?.label).toContain("Your own paths in it are not used until it reads.");
+  });
 
   test("visibility ignores negated rules but checks tracked records and nested ignore sources", () => {
     const ws = freshGitWorkspace();
@@ -569,7 +592,7 @@ describe("t256 workspace-doctor - advisory manifest rows", () => {
 
   test("schema-invalid repos.json is not reported as synchronized", () => {
     for (const body of [
-      '{ "repos": [{ "name": "checkout-api" }] }',
+      '{ "org": 7, "repos": [{ "name": "checkout-api" }] }',
       '{ "org": "acme", "repos": [{ "name": "../escaped" }] }',
       '{ "org": "acme", "repos": [{ "name": "api", "branch": "" }] }',
       '{ "org": "acme", "repos": [{ "name": "api" }, { "name": "api" }] }',
@@ -618,8 +641,11 @@ describe("t256 workspace-doctor - doctor's own audit log entries", () => {
     return row as { pass: boolean; severity?: string; label: string };
   }
 
-  const OWN_ENTRIES_ONLY = "Workspace records: no uncommitted changes under aidlc/ other than doctor's own entries in the audit log";
+  const OWN_ENTRIES_ONLY = "Workspace records: no uncommitted changes under aidlc/ other than the entries each look adds to this clone's audit log";
   const STAGE_ROW = "\n## Stage Started\n**Timestamp**: 2026-10-20T01:00:00Z\n**Event**: STAGE_STARTED\n**Stage**: requirements-analysis\n\n---\n";
+  // A decision of the person's: its row carries their Git Name.
+  const DECISION_ROW = "\n## Gate Approved\n**Timestamp**: 2026-10-20T02:00:00Z\n**Event**: GATE_APPROVED\n**Stage**: requirements-analysis\n" +
+    "**User Input**: Approve\n**Git Name**: sam\n\n---\n";
 
   test("a clean project run through doctor twice is not told to commit doctor's own entries", () => {
     const { ws, g } = committedProject();
@@ -638,10 +664,25 @@ describe("t256 workspace-doctor - doctor's own audit log entries", () => {
     let row = workspaceManifestChecks(ws)[0];
     expect(row).toMatchObject({ pass: false, severity: "warn" });
     expect(row.label).toContain("Workspace records: 1 uncommitted change(s) under aidlc/");
-    appendFileSync(seededAuditShard(ws), STAGE_ROW, "utf-8");
+    appendFileSync(seededAuditShard(ws), DECISION_ROW, "utf-8");
     row = workspaceManifestChecks(ws)[0];
     expect(row.label).toContain("Workspace records: 2 uncommitted change(s) under aidlc/");
     expect(row.label).toContain("`git add aidlc/`, `git commit`, `git push`");
+  });
+
+  // A live run (Claude Code): right after the lead's push, doctor asked for a
+  // commit of the rows the look before it wrote.
+  test("the rows a look adds to this clone's audit log are not counted; a decision of the person's there, or a rewritten log, is", () => {
+    const { ws, g } = committedProject();
+    const shard = seededAuditShard(ws);
+    appendFileSync(shard, STAGE_ROW, "utf-8");
+    expect(workspaceManifestChecks(ws)[0]).toEqual({ pass: true, label: OWN_ENTRIES_ONLY });
+    appendFileSync(shard, DECISION_ROW, "utf-8");
+    expect(workspaceManifestChecks(ws)[0].label).toContain("Workspace records: 1 uncommitted change(s) under aidlc/");
+    // What is committed, rewritten rather than added to.
+    g("checkout", "--", shard.slice(ws.length + 1).replaceAll("\\", "/"));
+    writeFileSync(shard, readFileSync(shard, "utf-8").replace("# AI-DLC Audit Log", "# AI-DLC Audit Log, edited"), "utf-8");
+    expect(workspaceManifestChecks(ws)[0].label).toContain("Workspace records: 1 uncommitted change(s) under aidlc/");
   });
 
   test("a clone whose audit log doctor started, beside a teammate's, is not told to commit it", () => {
@@ -653,7 +694,7 @@ describe("t256 workspace-doctor - doctor's own audit log entries", () => {
     expect(g("status", "--porcelain").stdout).toContain(`?? ${seededAuditShard(ws).slice(ws.length + 1).replaceAll("\\", "/")}`);
     expect(readFileSync(seededAuditShard(ws), "utf-8")).toStartWith("# AI-DLC Audit Log\n");
     expect(workspaceManifestChecks(ws)[0], own).toEqual({ pass: true, label: OWN_ENTRIES_ONLY });
-    appendFileSync(seededAuditShard(ws), STAGE_ROW, "utf-8");
+    appendFileSync(seededAuditShard(ws), DECISION_ROW, "utf-8");
     expect(workspaceManifestChecks(ws)[0].label).toContain("Workspace records: 1 uncommitted change(s) under aidlc/");
   });
 
@@ -720,7 +761,7 @@ describe("t256 workspace-doctor - the setup git does not track", () => {
   test("a new setup: doctor shows the line config said, and the records row names no command", () => {
     const { ws } = repository();
     const said = noted(configure(ws, "claude"));
-    expect(said).toContain("for Claude Code in this project yet: .claude/, aidlc/ and .gitignore.");
+    expect(said).toContain("for Claude Code in this project yet: .claude/, aidlc/, .gitattributes and .gitignore.");
     const rows = workspaceManifestChecks(ws);
     expect(setupRows(rows)).toEqual([{ pass: false, severity: "warn", label: said }]);
     expect(rows[0].label).toMatch(RECORDS_TO_COMMIT);
@@ -742,7 +783,7 @@ describe("t256 workspace-doctor - the setup git does not track", () => {
     const rows = workspaceManifestChecks(ws);
     expect(rows[0]).toEqual({ pass: true, label: "Workspace records: no uncommitted changes under aidlc/" });
     expect(setupRows(rows).map((row) => row.label)).toEqual([
-      `${SAID} for Claude Code in this project yet: .claude/ and .gitignore. Commit them so teammates who use Claude Code get the same setup.`,
+      `${SAID} for Claude Code in this project yet: .claude/, .gitattributes and .gitignore. Commit them so teammates who use Claude Code get the same setup.`,
     ]);
     // A record of the person's work beside it: counted, with no command that leaves the setup out.
     writeFileSync(join(ws, "aidlc", "note.md"), "a record\n", "utf-8");
@@ -753,7 +794,7 @@ describe("t256 workspace-doctor - the setup git does not track", () => {
     const { ws } = repository();
     const claude = noted(configure(ws, "claude"));
     const codex = noted(configure(ws, "codex"));
-    expect(codex).toContain("for Codex CLI in this project yet: .agents/, .codex/, aidlc/, .gitignore and AGENTS.md.");
+    expect(codex).toContain("for Codex CLI in this project yet: .agents/, .codex/, aidlc/, .gitattributes, .gitignore and AGENTS.md.");
     expect(setupRows(workspaceManifestChecks(ws)).map((row) => row.label)).toEqual([claude, codex]);
   });
 

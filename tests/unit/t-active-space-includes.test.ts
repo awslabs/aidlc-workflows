@@ -1,7 +1,7 @@
 // covers: function:refreshActiveMemory, function:refreshActiveMemoryCopy, function:activeMemoryCopyDrift, function:addRootBlocks, function:kiroIdeSteering, hook:aidlc-session-start
 //
 // t-active-space-includes: every harness's native rule include reads ONE fixed,
-// git-ignored location, aidlc/active-memory/ (ACTIVE_MEMORY_DIR), and
+// git-ignored location, aidlc/.aidlc-engine/active-memory/ (ACTIVE_MEMORY_DIR), and
 // the engine writes the active space's memory files into it. So a space switch
 // changes no tracked file: the includes are the same for every teammate, and
 // each person's copy follows their own gitignored active-space cursor.
@@ -63,7 +63,9 @@ const distSurface = (h: string, ...parts: string[]): string =>
   join(REPO_ROOT, "dist", h, ...parts);
 const portablePaths = (paths: string[]): string[] =>
   paths.map((path) => path.replaceAll("\\", "/"));
-const COPY = "aidlc/active-memory";
+const COPY = "aidlc/.aidlc-engine/active-memory";
+// Where an earlier release's includes read the copy.
+const EARLIER_COPY = "aidlc/active-memory";
 const MEMORY_FILES = [
   "org.md",
   "team.md",
@@ -235,6 +237,28 @@ describe("t-active-space-includes: refreshActiveMemory writes the space's memory
     expect(activeMemoryCopyDrift(root, "teamB").sort()).toEqual(["notes.md", "org.md", "phases/ideation.md", "team.md"]);
   });
 
+  // Right after `aidlc update` a chat already open runs this release on the
+  // earlier release's harness files: the copy goes where their include reads
+  // it until the refresh re-points it, and then the earlier copy goes (only
+  // what AI-DLC wrote there).
+  test("an earlier release's include gets the copy where it reads it; once none names it, that copy goes", () => {
+    const root = setup();
+    const stub = join(root, ".claude", "rules", "aidlc.md");
+    mkdirSync(join(root, ".claude", "rules"), { recursive: true });
+    writeFileSync(stub, `@../../${EARLIER_COPY}/org.md\n`);
+    expect(portablePaths(refreshActiveMemory(root, "teamB"))).toEqual([EARLIER_COPY]);
+    expect(readFileSync(join(root, ...EARLIER_COPY.split("/"), "org.md"), "utf-8")).toBe(copied("teamB", "org.md", "# org teamB\n"));
+    expect(existsSync(join(root, ...COPY.split("/")))).toBe(false);
+
+    writeFileSync(join(root, ...EARLIER_COPY.split("/"), "mine.md"), "a file of mine\n");
+    writeFileSync(stub, `@../../${COPY}/org.md\n`);
+    expect(portablePaths(refreshActiveMemory(root, "teamB"))).toEqual([COPY]);
+    expect(copyFile(root, "org.md")).toBe(copied("teamB", "org.md", "# org teamB\n"));
+    expect(existsSync(join(root, ...EARLIER_COPY.split("/"), "org.md"))).toBe(false);
+    expect(readFileSync(join(root, ...EARLIER_COPY.split("/"), "mine.md"), "utf-8")).toBe("a file of mine\n");
+    expect(readFileSync(join(root, "aidlc", ".aidlc-engine", ".gitignore"), "utf-8")).toBe("*\n");
+  });
+
   test("an edit of a memory file reaches the copy at the next refresh, and the source is never touched", () => {
     const root = setup();
     refreshActiveMemory(root, "teamB");
@@ -278,8 +302,8 @@ describe("t-active-space-includes: refreshActiveMemory writes the space's memory
   test("a copy folder that leads out of the project is not written through", () => {
     const root = setup();
     const outside = freshRoot();
-    mkdirSync(join(root, "aidlc"), { recursive: true });
-    symlinkSync(outside, join(root, "aidlc", "active-memory"), process.platform === "win32" ? "junction" : "dir");
+    mkdirSync(join(root, "aidlc", ".aidlc-engine"), { recursive: true });
+    symlinkSync(outside, join(root, ...COPY.split("/")), process.platform === "win32" ? "junction" : "dir");
     expect(refreshActiveMemory(root, "teamB")).toEqual([]);
     expect(readdirSync(outside)).toEqual([]);
   });
@@ -337,7 +361,7 @@ describe("t-active-space-includes: a space switch changes no tracked file", () =
     git(root, "init", "-q");
     git(root, "add", "-A");
     git(root, "commit", "-q", "-m", "install");
-    expect(git(root, "ls-files", "--", "aidlc/active-memory")).toBe("");
+    expect(git(root, "ls-files", "--", COPY)).toBe("");
     const created = engine(root, ["space", "create", "teamb"], env);
     expect(created.status, created.out).toBe(0);
     writeFileSync(join(root, "aidlc", "spaces", "teamb", "memory", "team.md"), "# Team\n\nEvery queue has a dead-letter alarm.\n");
@@ -424,9 +448,10 @@ describe("t-active-space-includes: Kiro IDE steering carries the active space's 
   });
 });
 
-// A copy runtime leaves the team's .gitignore and AGENTS.md out and ships
-// AI-DLC's part of each in the harness folder (root-blocks). Where config never
-// ran, the engine adds that part after the team's content, once.
+// A copy runtime leaves the team's .gitignore, .gitattributes and AGENTS.md out
+// and ships AI-DLC's part of each in the harness folder (root-blocks). Where
+// config never ran, the engine adds that part once, where config's own rule
+// puts it: after the team's content, and first in .gitattributes.
 describe("t-active-space-includes: AI-DLC's part of the team's root files", () => {
   const blocks = join(distSurface("copilot", ".aidlc"), "tools", "data", "root-blocks");
   const gitignorePart = (): string =>
@@ -443,11 +468,22 @@ describe("t-active-space-includes: AI-DLC's part of the team's root files", () =
     const root = copiedProject();
     writeFileSync(join(root, ".gitignore"), "node_modules\n.env.local\n");
     writeFileSync(join(root, "AGENTS.md"), "# Shop\n\nOur own notes for agents.\n");
-    expect(addRootBlocks(root).sort()).toEqual([".gitignore", "AGENTS.md"]);
+    expect(addRootBlocks(root).sort()).toEqual([".gitattributes", ".gitignore", "AGENTS.md"]);
     expect(readFileSync(join(root, ".gitignore"), "utf-8")).toBe(`node_modules\n.env.local\n\n${gitignorePart()}`);
     expect(readFileSync(join(root, "AGENTS.md"), "utf-8")).toBe(`# Shop\n\nOur own notes for agents.\n\n${agentsPart()}`);
     expect(addRootBlocks(root)).toEqual([]);
     expect(readFileSync(join(root, ".gitignore"), "utf-8")).toBe(`node_modules\n.env.local\n\n${gitignorePart()}`);
+  });
+
+  // In .gitattributes git takes the last line that matches a path, so AI-DLC's part goes first and the team's lines,
+  // byte for byte, after it; a byte order mark stays the file's first bytes.
+  test("puts AI-DLC's .gitattributes part first in the team's file, after its byte order mark, and adds it once", () => {
+    const root = copiedProject();
+    const attributesPart = `# BEGIN AI-DLC:gitattributes\n${readFileSync(join(blocks, "gitattributes"), "utf-8").trim()}\n# END AI-DLC:gitattributes\n`;
+    writeFileSync(join(root, ".gitattributes"), "\uFEFF*.png binary\n");
+    expect(addRootBlocks(root)).toContain(".gitattributes");
+    expect(readFileSync(join(root, ".gitattributes"), "utf-8")).toBe(`\uFEFF${attributesPart}\n*.png binary\n`);
+    expect(addRootBlocks(root)).toEqual([]);
   });
 
   test("a project without the files gets only AI-DLC's part", () => {
@@ -515,7 +551,7 @@ describe("t-active-space-includes: AI-DLC's part of the team's root files", () =
     const edited = gitignorePart().replace("# END AI-DLC:gitignore", "our-own-line\n# END AI-DLC:gitignore");
     writeFileSync(join(changed, ".gitignore"), edited);
     writeFileSync(join(changed, "AGENTS.md"), "# Shop\n");
-    expect(addRootBlocks(changed)).toEqual(["AGENTS.md"]);
+    expect(addRootBlocks(changed).sort()).toEqual([".gitattributes", "AGENTS.md"]);
     expect(readFileSync(join(changed, ".gitignore"), "utf-8")).toBe(edited);
 
     const configured = copiedProject();
@@ -531,7 +567,8 @@ describe("t-active-space-includes: AI-DLC's part of the team's root files", () =
     const installed = "node_modules\n\n# BEGIN AIDLC CURSOR\naidlc/active-space\n# END AIDLC CURSOR\n";
     writeFileSync(join(root, ".gitignore"), installed);
     writeFileSync(join(root, "AGENTS.md"), "<!-- BEGIN AIDLC CURSOR -->\n# AI-DLC\n<!-- END AIDLC CURSOR -->\n");
-    expect(addRootBlocks(root)).toEqual([]);
+    // The installer writes no .gitattributes, so AI-DLC's part goes there.
+    expect(addRootBlocks(root)).toEqual([".gitattributes"]);
     expect(readFileSync(join(root, ".gitignore"), "utf-8")).toBe(installed);
   });
 
@@ -553,7 +590,7 @@ describe("t-active-space-includes: AI-DLC's part of the team's root files", () =
     symlinkSync(outside, join(root, "linked"), "dir");
     writeFileSync(join(outside, "AGENTS.md"), "# elsewhere\n");
     symlinkSync(join(outside, "AGENTS.md"), join(root, "AGENTS.md"));
-    expect(addRootBlocks(root)).toEqual([".gitignore"]);
+    expect(addRootBlocks(root).sort()).toEqual([".gitattributes", ".gitignore"]);
     expect(existsSync(join(outside, "escaped"))).toBe(false);
     expect(readdirSync(outside).sort()).toEqual(["AGENTS.md"]);
     expect(readFileSync(join(outside, "AGENTS.md"), "utf-8")).toBe("# elsewhere\n");

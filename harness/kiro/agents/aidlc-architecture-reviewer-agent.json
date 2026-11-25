@@ -33,7 +33,7 @@
   },
   "resources": [
     "file://.kiro/knowledge/aidlc-shared/*.md",
-    "file://aidlc/active-memory/**/*.md"
+    "file://aidlc/.aidlc-engine/active-memory/**/*.md"
   ],
   "hooks": {
     "preToolUse": [

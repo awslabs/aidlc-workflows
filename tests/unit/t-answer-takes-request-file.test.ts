@@ -17,10 +17,10 @@ import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOp
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const LOG = join(import.meta.dir, "..", "..", "dist", "claude", ".claude", "tools", "aidlc-log.ts");
-const FILE = "aidlc/.aidlc-request-text/request.txt";
+const FILE = "aidlc/.aidlc-engine/request-text/request.txt";
 const ANSWER_FILE = ".aidlc-engine/answer-text/answer.txt";
 const WORDS = `I'll edit the file: "R & D" $(touch PWNED) %PATH% !bang | pipe < in > out ^caret`;
-const USAGE = "--request-file needs a file directly inside aidlc/.aidlc-request-text/ in this project";
+const USAGE = "--request-file needs a file directly inside aidlc/.aidlc-engine/request-text/ in this project";
 const DIR_LINK = process.platform === "win32" ? "junction" : "dir";
 
 const projects: string[] = [];
@@ -45,7 +45,7 @@ function log(p: string, args: string[]): { status: number; out: string } {
 }
 
 function writeRequest(p: string, text: string): void {
-  mkdirSync(join(p, "aidlc", ".aidlc-request-text"), { recursive: true });
+  mkdirSync(join(p, "aidlc", ".aidlc-engine", "request-text"), { recursive: true });
   writeFileSync(join(p, FILE), `${text}\n`, "utf-8");
 }
 
@@ -109,10 +109,10 @@ describe("t-answer-takes-request-file: log answer reads the request file next re
     writeRequest(p, WORDS);
     for (const file of [
       "README.md",
-      "aidlc/.aidlc-request-text/../../README.md",
+      "aidlc/.aidlc-engine/request-text/../../README.md",
       join(p, FILE),
-      "aidlc/.aidlc-request-text",
-      "aidlc/.aidlc-request-text/sub/request.txt",
+      "aidlc/.aidlc-engine/request-text",
+      "aidlc/.aidlc-engine/request-text/sub/request.txt",
     ]) {
       const r = log(p, ["answer", "--stage", "feasibility", "--request-file", file]);
       expect(r.status, `${file}: ${r.out}`).not.toBe(0);
@@ -148,7 +148,7 @@ describe("t-answer-takes-request-file: log answer reads the request file next re
     mkdirSync(elsewhere, { recursive: true });
     writeFileSync(join(elsewhere, "request.txt"), "secret\n", "utf-8");
     mkdirSync(join(p, "aidlc"), { recursive: true });
-    symlinkSync(elsewhere, join(p, "aidlc", ".aidlc-request-text"), DIR_LINK);
+    symlinkSync(elsewhere, join(p, "aidlc", ".aidlc-engine", "request-text"), DIR_LINK);
     const r = log(p, ["answer", "--stage", "feasibility", "--request-file", FILE]);
     expect(r.status, r.out).not.toBe(0);
     expect(r.out).not.toContain("secret");

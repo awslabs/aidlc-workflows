@@ -57,7 +57,7 @@ const HARNESS_CAPABILITIES = {
       dist: ".claude/CLAUDE.md",
       harnessDist: ".claude/CLAUDE.md",
     },
-    rootFiles: [".gitignore", ".mcp.json"],
+    rootFiles: [".gitattributes", ".gitignore", ".mcp.json"],
     skillsRoot: ".claude/skills",
     plugin: {
       kind: "store",
@@ -78,7 +78,7 @@ const HARNESS_CAPABILITIES = {
       dist: "AGENTS.md",
       harnessDist: ".codex/onboarding.md",
     },
-    rootFiles: [".gitignore", "AGENTS.md"],
+    rootFiles: [".gitattributes", ".gitignore", "AGENTS.md"],
     skillsRoot: ".agents/skills",
     plugin: {
       kind: "store",
@@ -99,7 +99,7 @@ const HARNESS_CAPABILITIES = {
       dist: "AGENTS.md",
       harnessDist: "AGENTS.md",
     },
-    rootFiles: [".gitignore", ".vscode/settings.json", "AGENTS.md"],
+    rootFiles: [".gitattributes", ".gitignore", ".vscode/settings.json", "AGENTS.md"],
     skillsRoot: ".github/skills",
     plugin: {
       kind: "store",
@@ -120,7 +120,7 @@ const HARNESS_CAPABILITIES = {
       dist: "AGENTS.md",
       harnessDist: ".cursor/rules/aidlc-onboarding.mdc",
     },
-    rootFiles: [".gitignore", "AGENTS.md", "install.ts"],
+    rootFiles: [".gitattributes", ".gitignore", "AGENTS.md", "install.ts"],
     skillsRoot: ".cursor/skills",
     plugin: {
       kind: "cursor",
@@ -183,7 +183,7 @@ const HARNESS_CAPABILITIES = {
       dist: "AGENTS.md",
       harnessDist: ".aidlc/onboarding.md",
     },
-    rootFiles: [".gitignore", "AGENTS.md", "opencode.json"],
+    rootFiles: [".gitattributes", ".gitignore", "AGENTS.md", "opencode.json"],
     skillsRoot: ".aidlc/skills",
     plugin: {
       kind: "store",

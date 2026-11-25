@@ -197,3 +197,56 @@ export function isProjectSubmodule(projectDir: string, name: string): boolean {
 export function submoduleLeavesProjectRepo(projectDir: string, name: string): boolean {
   return hasRealGitEntry(projectDir) && isProjectSubmodule(projectDir, name);
 }
+
+// Whether git keeps `name` in this repo's git folder now (rev-parse --git-path).
+function gitPathExists(dir: string, name: string): boolean {
+  const path = git(dir, ["rev-parse", "--git-path", name])?.trim();
+  return path !== undefined && path !== "" && existsSync(resolve(dir, path));
+}
+
+// A rebase git stopped in a repo, waiting for the person.
+export function rebaseUnderWay(dir: string): boolean {
+  return ["rebase-merge", "rebase-apply"].some((name) => gitPathExists(dir, name));
+}
+
+// The git operation of theirs under way in a repo, in plain words with git's
+// own way to finish it and to put it aside; null when none is.
+export function gitOperationUnderWay(dir: string): { what: string; finish: string; abort: string } | null {
+  if (rebaseUnderWay(dir)) return { what: "a rebase", finish: "git rebase --continue", abort: "git rebase --abort" };
+  if (gitPathExists(dir, "MERGE_HEAD")) return { what: "a merge", finish: "git commit", abort: "git merge --abort" };
+  if (gitPathExists(dir, "CHERRY_PICK_HEAD")) return { what: "a cherry-pick", finish: "git cherry-pick --continue", abort: "git cherry-pick --abort" };
+  if (gitPathExists(dir, "REVERT_HEAD")) return { what: "a revert", finish: "git revert --continue", abort: "git revert --abort" };
+  return null;
+}
+
+// AI-DLC's record as a commit of it takes it: aidlc/, and a repos.json still at
+// the project root unless the person's .gitignore lists it (the share's rule).
+export function recordPaths(dir: string): string[] {
+  return git(dir, ["check-ignore", "-q", "--", "repos.json"]) === null ? ["aidlc/", "repos.json"] : ["aidlc/"];
+}
+
+// Why AI-DLC's record cannot be committed here now, or null when it can: the
+// one check `unit commit-record` and every offer of it read, so an offer is
+// never put that the commit would refuse. With `paths` (AI-DLC's own files
+// after an update, ownFilesToCommit) it is those, none under aidlc/, so a
+// Unit's build does not stop them.
+export type RecordCommitBlock =
+  | { why: "no-git" | "unit-build" | "detached" | "nothing" }
+  | { why: "under-way"; underWay: { what: string; finish: string; abort: string } };
+export function recordCommitBlock(dir: string, unitBuild: boolean, paths?: readonly string[]): RecordCommitBlock | null {
+  if (git(dir, ["rev-parse", "--git-dir"]) === null) return { why: "no-git" };
+  if (unitBuild && paths === undefined) return { why: "unit-build" };
+  const underWay = gitOperationUnderWay(dir);
+  if (underWay !== null) return { why: "under-way", underWay };
+  if (git(dir, ["symbolic-ref", "--quiet", "HEAD"]) === null) return { why: "detached" };
+  if (paths !== undefined) return paths.length > 0 ? null : { why: "nothing" };
+  const changed = recordChanged(dir);
+  return changed === null ? { why: "no-git" } : changed ? null : { why: "nothing" };
+}
+
+// Whether AI-DLC's record here (recordPaths) has anything git would commit;
+// null when git cannot say.
+export function recordChanged(dir: string): boolean | null {
+  const changed = git(dir, ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--", ...recordPaths(dir)]);
+  return changed === null ? null : changed !== "";
+}

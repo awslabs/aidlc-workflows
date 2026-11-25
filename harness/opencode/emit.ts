@@ -82,11 +82,11 @@ function emitSubagentMd(raw: string, srcPath: string, tierCap: EmitContext["tier
 // install, so a space switch rewrites no persona file.
 function projectActiveMemoryReferences(raw: string): string {
   return raw
-    .replaceAll("aidlc/spaces/<active-space>/memory/", "aidlc/active-memory/")
-    .replaceAll(".aidlc/rules/aidlc-org.md", "aidlc/active-memory/org.md")
-    .replaceAll(".aidlc/rules/aidlc-team.md", "aidlc/active-memory/team.md")
-    .replaceAll(".aidlc/rules/aidlc-project.md", "aidlc/active-memory/project.md")
-    .replaceAll(".aidlc/rules/", "aidlc/active-memory/");
+    .replaceAll("aidlc/spaces/<active-space>/memory/", "aidlc/.aidlc-engine/active-memory/")
+    .replaceAll(".aidlc/rules/aidlc-org.md", "aidlc/.aidlc-engine/active-memory/org.md")
+    .replaceAll(".aidlc/rules/aidlc-team.md", "aidlc/.aidlc-engine/active-memory/team.md")
+    .replaceAll(".aidlc/rules/aidlc-project.md", "aidlc/.aidlc-engine/active-memory/project.md")
+    .replaceAll(".aidlc/rules/", "aidlc/.aidlc-engine/active-memory/");
 }
 
 function embedShippedEntrypoints(raw: string, distRoot: string): string {

@@ -527,6 +527,11 @@ function scratchProject(): string {
     "aidlc-lock-line.ts",
     "aidlc-review-manifest.ts",
     "aidlc-guard-fences.ts",
+    // repos.json, and the rule that a repo the person mapped counts as the project.
+    "aidlc-workspace-manifest.ts",
+    "aidlc-workspace-repos.ts",
+    // The lib lists a Unit's build with the registry through this.
+    "aidlc-unit-teams.ts",
     // The hook reads the plan approval setting when it refuses (the setting
     // decides the refusal's last clause); the setting resolver and what it imports.
     "aidlc-guard-switch.ts",
@@ -545,6 +550,14 @@ function scratchProject(): string {
     "aidlc-log.ts",
     // aidlc-log.ts writes and removes the Kiro reviewer copy through this.
     "aidlc-kiro-review-copy.ts",
+    // aidlc-log.ts reads the lead's rules for a Kiro reviewer's brief from
+    // aidlc-steering.ts, which brings the stage graph and the schemas it reads.
+    "aidlc-steering.ts",
+    "aidlc-graph.ts",
+    "aidlc-plugin-rules.ts",
+    "aidlc-rule-schema.ts",
+    "aidlc-sensor-schema.ts",
+    "aidlc-stage-schema.ts",
     "aidlc-message-store.ts",
     // aidlc-message-store.ts reads what an archive replaced through this.
     "aidlc-doctor-bundle.ts",
@@ -977,14 +990,35 @@ describe("t265b hook lifecycle", () => {
   test("runtime integrity refuses session-record writes even when Plan Approval is disabled", () => {
     const proj = scratchProject();
     try {
-      const payload = WRITE(join(proj, "aidlc", ".aidlc-sessions", "presence-bypass-s"));
-      for (const disabled of ["0", "1"]) {
-        const result = runHook(proj, payload, {
-          AIDLC_DISABLE_PLAN_APPROVAL_GUARD: disabled,
-          AIDLC_SKIP_HUMAN_PRESENCE_GUARD: disabled,
-        });
-        expect(result.code).toBe(2);
-        expect(result.stderr).toContain("AIDLC runtime records and hooks belong to the harness");
+      // The sessions folder, and the place an earlier release kept it.
+      for (const folder of [join("aidlc", ".aidlc-engine", "sessions"), join("aidlc", ".aidlc-sessions")]) {
+        const payload = WRITE(join(proj, folder, "presence-bypass-s"));
+        for (const disabled of ["0", "1"]) {
+          const result = runHook(proj, payload, {
+            AIDLC_DISABLE_PLAN_APPROVAL_GUARD: disabled,
+            AIDLC_SKIP_HUMAN_PRESENCE_GUARD: disabled,
+          });
+          expect(result.code, folder).toBe(2);
+          expect(result.stderr).toContain("AIDLC runtime records and hooks belong to the harness");
+        }
+      }
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  // A chat that loaded an earlier release's text writes the person's request to
+  // the folder that release named; a chat on this release, to the engine
+  // folder. Both reach the engine while a plan waits; source still does not.
+  test("a request file passes while a plan waits, in the engine folder and in the earlier folder", () => {
+    const proj = scratchProject();
+    try {
+      seedState(proj);
+      seedUnit(proj, null, { plan: true, answer: null });
+      expect(runHook(proj, WRITE(join(proj, "src", "x.ts"))).code).toBe(2);
+      for (const folder of [join("aidlc", ".aidlc-engine", "request-text"), join("aidlc", ".aidlc-request-text")]) {
+        const result = runHook(proj, WRITE(join(proj, folder, "request.txt")));
+        expect(result.code, `${folder}\n${result.stderr}`).toBe(0);
       }
     } finally {
       rmSync(proj, { recursive: true, force: true });
@@ -2437,6 +2471,47 @@ describe("t265b hook lifecycle", () => {
     });
   }
 
+  // A repo the person maps beside the workspace is the project too (insideProject), as in the workspace itself:
+  // while the plan waits, their edit of a file there the plan does not name runs at once, and one the plan names
+  // waits. The plan names a mapped repo's file by the repo's name and its path in it, never by its folder.
+  for (const list of ["repos.json", "repos.local.json"] as const) {
+    test(`while the plan waits, the person's edit in a repo mapped beside the workspace runs; one the plan names waits (${list})`, () => {
+      const proj = scratchProject();
+      const folder = `${proj}-billing-code`;
+      try {
+        seedState(proj);
+        const statePath = join(proj, RECORD_REL, "aidlc-state.md");
+        seedUnit(proj, null, { plan: true, answer: null });
+        const planFile = join(proj, RECORD_REL, "construction", "code-generation", "code-generation-plan.md");
+        writeFileSync(planFile, `${readFileSync(planFile, "utf-8")}- [ ] Step 2: change \`billing/src/charge.ts\`\n`, "utf-8");
+        mkdirSync(join(folder, "src"), { recursive: true });
+        writeFileSync(join(folder, "README.md"), "# billing\n\nTeh refunds service.\n");
+        writeFileSync(join(folder, "src", "charge.ts"), "export const charge = 1;\n");
+        mkdirSync(join(proj, "aidlc"), { recursive: true });
+        const placed = { name: "billing", path: `../${folder.split(/[\\/]/).at(-1)}` };
+        writeFileSync(join(proj, "aidlc", "repos.json"),
+          `${JSON.stringify({ repos: [list === "repos.json" ? placed : { name: "billing" }] }, null, 2)}\n`);
+        if (list === "repos.local.json") writeFileSync(join(proj, "aidlc", "repos.local.json"), `${JSON.stringify({ repos: [placed] }, null, 2)}\n`);
+        writeActiveDirectiveMarker(proj, {
+          kind: "ask",
+          ask_type: "plan-approval",
+          stage: "code-generation",
+          state_sha256: stateDigest(readFileSync(statePath, "utf-8")),
+        });
+        const notes = runHook(proj, WRITE(join(proj, "docs", "notes.md")));
+        expect(notes.code, notes.stderr).toBe(0);
+        const readme = runHook(proj, WRITE(join(folder, "README.md")));
+        expect(readme.code, readme.stderr).toBe(0);
+        const named = runHook(proj, WRITE(join(folder, "src", "charge.ts")));
+        expect(named.code, named.stderr).toBe(2);
+        expect(named.stderr).toContain("Nothing is built or changed while the plan waits for your approval.");
+      } finally {
+        rmSync(proj, { recursive: true, force: true });
+        rmSync(folder, { recursive: true, force: true });
+      }
+    });
+  }
+
   // On the kiro-ide row the person's MCP servers reach the chat, and the Kiro
   // adapter marks such a call `aidlc_external_tool: "mcp"`, outside the agent's
   // input. At any point of Code Generation it runs like their other asks (Kiro
@@ -2835,7 +2910,7 @@ describe("t265b hook lifecycle", () => {
       seedState(proj);
       writeFileSync(join(proj, ".claude", "tools", "aidlc-orchestrate.ts"), "// installed tool fixture\n");
       mkdirSync(join(proj, "other"), { recursive: true });
-      const file = "aidlc/.aidlc-request-text/pick-1.txt";
+      const file = "aidlc/.aidlc-engine/request-text/pick-1.txt";
       for (const [refused, named] of [
         [`cd other && bun .claude/tools/aidlc.ts engine orchestrate next --request-file ${file}`, `next --request-file ${file}`],
         [`cd other; bun .claude/tools/aidlc-orchestrate.ts next --resume --request-file ${file}`, `next --resume --request-file ${file}`],
@@ -3314,9 +3389,9 @@ describe("t265b hook lifecycle", () => {
       const nullDevice = process.platform === "win32" ? "NUL" : "/dev/null";
       for (const probe of [
         `printf code > ${nullDevice}`,
-        "ls aidlc/.aidlc-sessions/ 2>/dev/null",
+        "ls aidlc/.aidlc-engine/sessions/ 2>/dev/null",
         'grep -rl "plan-approval" .claude/tools/ 2>/dev/null | head',
-        "cat aidlc/.aidlc-sessions/current-session 2>/dev/null; echo ---",
+        "cat aidlc/.aidlc-engine/sessions/current-session 2>/dev/null; echo ---",
       ]) {
         expect(runHook(proj, BASH(probe)).code, probe).toBe(0);
       }
@@ -5267,7 +5342,8 @@ describe("t265b hook lifecycle", () => {
       // (audit/<host>-<clone>.md) - the hook gates its emit on that exact file
       // existing. Pin the clone-id (t221's idiom) so the seeded shard and the
       // hook's resolved shard agree.
-      writeFileSync(join(proj, "aidlc", ".aidlc-clone-id"), `${FIXTURE_CLONE_ID}\n`, "utf-8");
+      mkdirSync(join(proj, "aidlc", ".aidlc-engine"), { recursive: true });
+      writeFileSync(join(proj, "aidlc", ".aidlc-engine", "clone-id"), `${FIXTURE_CLONE_ID}\n`, "utf-8");
       const auditDir = join(proj, RECORD_REL, "audit");
       mkdirSync(auditDir, { recursive: true });
       const host =

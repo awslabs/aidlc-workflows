@@ -631,7 +631,7 @@ describe("t295 flags section", () => {
     // AI-DLC's managed .gitignore block already lists the local file. Plus the
     // gitignored record of how the switch was set, which words the line that
     // tells the person it is off.
-    const record = "aidlc/.aidlc-sessions/recorded-switches.json";
+    const record = "aidlc/.aidlc-engine/sessions/recorded-switches.json";
     expect(changedSince(before)).toEqual(["aidlc.settings.local.json", record]);
     expect(resolvedFlags(project)?.bypasses).toEqual([name]);
     // What the plan-approval guard reads on its next check.

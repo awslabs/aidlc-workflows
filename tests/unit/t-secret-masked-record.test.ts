@@ -64,7 +64,7 @@ function committedHolding(proj: string, secret: string): string[] {
 }
 /** Files under the git-ignored session area that hold `secret`. */
 function keptLocally(proj: string, secret: string): string[] {
-  const listed = spawnSync("git", ["ls-files", "-o", "-i", "--exclude-standard", "-z", "aidlc/.aidlc-sessions"], { cwd: proj, encoding: "utf-8" });
+  const listed = spawnSync("git", ["ls-files", "-o", "-i", "--exclude-standard", "-z", "aidlc/.aidlc-engine/sessions"], { cwd: proj, encoding: "utf-8" });
   return listed.stdout.split("\0").filter(Boolean).filter((rel) => readFileSync(join(proj, rel), "utf-8").includes(secret));
 }
 const times = (text: string, part: string): number => text.split(part).length - 1;

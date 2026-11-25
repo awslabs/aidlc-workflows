@@ -67,6 +67,8 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { appendAuditEntry } from "./aidlc-audit.ts";
+import { markedPart, mergeBlock } from "./aidlc-distribution.ts";
+import { aidlcRootParts } from "./aidlc-includes.ts";
 import {
   agentFileText,
   type AuditShardEvent,
@@ -1221,10 +1223,17 @@ function unitFullyLanded(
  *  bytes with checkout filters deliberately off. Both read CRLF text as LF, so
  *  core.autocrlf is no change; where .gitattributes converts otherwise (LFS
  *  pointers, encodings), unchanged content can report `drifted`, so say so up
- *  front. */
+ *  front. AI-DLC's own part of that file, as a release shipped it, converts
+ *  nothing, so a file that holds nothing else says nothing. */
 function byteFormWarning(query: RepoQuery, head: string): string | null {
-  const attributes = git(query.dir, ["cat-file", "-e", `${head}:.gitattributes`]).status === 0;
-  if (!attributes) return null;
+  const attributes = git(query.dir, ["cat-file", "blob", `${head}:.gitattributes`]);
+  if (attributes.status !== 0) return null;
+  const part = aidlcRootParts(query.dir).blocks.get(".gitattributes");
+  const text = attributes.stdout;
+  if (
+    part && markedPart(".gitattributes", text, part.marker)?.person === "" &&
+    mergeBlock(".gitattributes", text, part.shipped, part.marker, part.legacy).currentBlockShipped === true
+  ) return null;
   return (
     ".gitattributes may convert bytes between the working tree and the repository; " +
     "reviewed evidence records working-tree bytes while this report reads repository " +

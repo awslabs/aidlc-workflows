@@ -194,7 +194,7 @@ describe("t-native-engine-caller-lines: a native engine in a project with two to
     const bound = (trees: string[]): boolean => {
       const proj = project(trees);
       aidlc(proj, ["engine", "intent", "create", "--scope", "poc", "--label", "lunch-poll", "--arguments", "build a lunch poll"], TREES["kiro-ide"].mark);
-      return existsSync(join(proj, "aidlc", ".aidlc-sessions", `${KIRO_CHAT}.binding.json`));
+      return existsSync(join(proj, "aidlc", ".aidlc-engine", "sessions", `${KIRO_CHAT}.binding.json`));
     };
     expect(bound(["kiro-ide"])).toBe(true);
     expect(bound(["claude", "kiro-ide"])).toBe(true);

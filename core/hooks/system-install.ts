@@ -22,13 +22,12 @@ import {
   acquireAuditLock,
   auditBlockField,
   errorMessage,
-  personsWordsText,
   readAuditShardEvents,
   recordGuardBlockedRow,
   recordHookDrop,
   releaseAuditLock,
 } from "../tools/aidlc-lib.ts";
-import { proveMessage, readMessage, requestMessageStep, standingPersonTurn } from "../tools/aidlc-message-store.ts";
+import { proveMessage, recordStandingTurnRow, requestMessageStep, standingPersonTurn } from "../tools/aidlc-message-store.ts";
 import { askedQuestionFields, questionShows } from "../tools/aidlc-questions.ts";
 import { aidlcDispatcherInvocation, quoteCommandArgument } from "../tools/aidlc-runtime-paths.ts";
 import {
@@ -181,42 +180,6 @@ function requestedInstall(projectDir: string, installs: readonly SystemInstall[]
   }
 }
 
-// The go-ahead's row: the command, and the message whose turn stood behind it
-// with the person's words. It says that turn stood, never that they approved.
-function recordAllowed(
-  projectDir: string,
-  hook: string,
-  command: string,
-  turn: { block: string },
-  fields: Record<string, string>,
-): void {
-  const id = auditBlockField(turn.block, "Message Id");
-  let reply: string | null = null;
-  try {
-    const message = id === null ? null : readMessage(projectDir, id);
-    reply = message === null ? null : personsWordsText(message.words ?? message.text);
-  } catch {
-    reply = null;
-  }
-  if (!acquireAuditLock(projectDir, 5, 50)) {
-    recordHookDrop(projectDir, hook, "audit lock contended; SYSTEM_INSTALL_ALLOWED row dropped (the install was let through)");
-    return;
-  }
-  try {
-    appendAuditEntryUnlocked("SYSTEM_INSTALL_ALLOWED", {
-      ...fields,
-      Command: command,
-      ...(id !== null ? { "Message Id": id } : {}),
-      ...(reply ? { "Person Reply": reply } : {}),
-    }, projectDir);
-  } catch (error) {
-    // The row is the record, never the decision: the install is still let through.
-    recordHookDrop(projectDir, hook, `SYSTEM_INSTALL_ALLOWED row not recorded: ${errorMessage(error)}`);
-  } finally {
-    releaseAuditLock(projectDir);
-  }
-}
-
 // The go-ahead the agent now asks for is a question to the person, on the
 // record with its id (aidlc-questions.ts) beside the hold's row; their
 // go-ahead's row closes it. Record-only: a lost row holds nothing.
@@ -258,7 +221,8 @@ export function unaskedSystemInstall(
   const fields = { Stage: context.stage, ...(context.session ? { Session: context.session } : {}) };
   const turn = standingPersonTurn(projectDir, "plain", { requests: true }) ?? requestedInstall(projectDir, installs);
   if (turn !== null) {
-    recordAllowed(projectDir, context.hook, command, turn, fields);
+    // The go-ahead's row: the command, and the message whose turn stood behind it with the person's words.
+    recordStandingTurnRow(projectDir, context.hook, "SYSTEM_INSTALL_ALLOWED", turn, { ...fields, Command: command });
     return null;
   }
   const plans = approvedPlanWords(projectDir);

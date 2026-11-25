@@ -58,8 +58,8 @@ const TEST_ENTRYPOINTS = new Set([
 const scratch: string[] = [];
 // A request the launcher cannot carry goes through the file `next` reads.
 const REQUEST_FILE_STEP =
-  "with your file tool to aidlc/.aidlc-request-text/request.txt in this project, and run the same command with " +
-  "--request-file aidlc/.aidlc-request-text/request.txt in place of the request's words";
+  "with your file tool to aidlc/.aidlc-engine/request-text/request.txt in this project, and run the same command with " +
+  "--request-file aidlc/.aidlc-engine/request-text/request.txt in place of the request's words";
 
 afterEach(() => {
   for (const dir of scratch.splice(0)) {
@@ -171,6 +171,9 @@ function copyCore(root: string, relativePath: string): void {
       // aidlc-lib.ts reads a plugin command leading a line with this.
       "aidlc-plugin-commands.ts",
       "aidlc-color.ts",
+      "aidlc-workspace-manifest.ts",
+      "aidlc-unit-teams.ts",
+      "aidlc-workspace-repos.ts",
     ]) {
       copyFileSync(
         join(REPO_ROOT, "core", "tools", dependency),

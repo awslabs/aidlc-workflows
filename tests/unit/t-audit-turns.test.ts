@@ -136,7 +136,7 @@ describe("audit turns", () => {
   test("a record that is a link is not followed", () => {
     const pd = project();
     const sent = message(pd, "original words");
-    const record = join(pd, "aidlc", ".aidlc-sessions", "messages", `${sent.id}.json`);
+    const record = join(pd, "aidlc", ".aidlc-engine", "sessions", "messages", `${sent.id}.json`);
     const outside = join(dirname(pd), `outside-${sent.id}.json`);
     writeFileSync(outside, readFileSync(record));
     writeFileSync(record, "");

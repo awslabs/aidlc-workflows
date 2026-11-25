@@ -9,6 +9,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { AIDLC_SRC, seededRecordDir, seededStateFile } from "./fixtures.ts";
 import { git, makeSeed, ORCH, parallelDependencyBody, runMergeTool } from "./team-unit-merge.ts";
+import { ENV, homeState, makeHome, run } from "./team-build.ts";
 
 export const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 export const UNITS_GENERATION_REVIEWER = "aidlc-architecture-reviewer-agent";
@@ -127,6 +128,28 @@ export function reviewReady(checkout: string, stage: string, reviewer = UNITS_GE
     checkout,
   );
   expect(done.status, done.out).toBe(0);
+}
+
+// The Units Generation approval's own setup, as team-build runs the engine: its checks are not what is tested.
+export const AT_THE_UNITS_GATE: NodeJS.ProcessEnv = { ...ENV, AIDLC_DISABLE_SENSORS: "1" };
+
+/**
+ * Work one person builds across repos as Inception leaves it at the Units
+ * Generation gate: it records its repos, `dependencies` is its Unit plan, the
+ * plan is reviewed READY and put to the person. Returns the workspace.
+ */
+export function soloAtTheUnitsGate(dependencies: string): string {
+  const state = homeState()
+    .replace(/^- \[x\] units-generation /m, "- [-] units-generation ")
+    .replace(/^- \[x\] delivery-planning /m, "- [ ] delivery-planning ")
+    .replace(/^- \[-\] functional-design /m, "- [ ] functional-design ")
+    .replace("- **Lifecycle Phase**: CONSTRUCTION", "- **Lifecycle Phase**: INCEPTION")
+    .replace("- **Current Stage**: functional-design", "- **Current Stage**: units-generation");
+  const home = makeHome({ state, dependencies });
+  reviewReady(home.dir, "units-generation");
+  const opened = run(ORCH, ["report", "--stage", "units-generation", "--result", "awaiting-approval"], home.dir, AT_THE_UNITS_GATE);
+  expect(opened.status, opened.out).toBe(0);
+  return home.dir;
 }
 
 /** Units Generation reviewed, put to the person and approved. */

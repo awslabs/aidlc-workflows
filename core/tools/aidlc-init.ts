@@ -48,6 +48,7 @@ import {
   aidlcHookRegistrations,
   aidlcHookTarget,
   assertProjectionPathHasNoSymlinks,
+  HARNESS_IDENTITY_KEYS,
   hostToolPath,
   emptyJsonObject,
   insertJsoncSetting,
@@ -61,6 +62,7 @@ import {
   kiroUpgradedAgentFile,
   kiroUpgradeIntact,
   legacyAidlcHookTarget,
+  leftAsIsWhenUnmergeable,
   mergeBlock,
   mergeJsonEntries,
   newlineOf,
@@ -78,12 +80,14 @@ import {
   sha256Bytes,
   sha256File,
   sha256FileMatching,
+  sha256Lf,
   sha256Matching,
   shippedRootIntegrationPath,
   unionBlocks,
   validateProjectionDescriptor,
   walkFiles,
   withOwnTitleLine,
+  withoutBlock,
   withoutBom,
   withSpace,
 } from "./aidlc-distribution.ts";
@@ -163,8 +167,10 @@ import {
   resolveInvokingSessionId,
   resolveProjectDir,
   resumedLine,
+  runningWorkflows,
   sameFileIdentity,
   withAuditLock,
+  workflowDisplayName,
   writeFileAtomic,
 } from "./aidlc-lib.ts";
 import {
@@ -180,6 +186,7 @@ import { droppedPluginRegistrations } from "./aidlc-plugin-emit.ts";
 import { addPluginProducesKinds } from "./aidlc-plugin-produces-kinds.ts";
 import { regenerateRunnerSurfaces } from "./aidlc-runner-gen.ts";
 import { KIRO_IDE_STEERING, kiroIdeSteering, refreshActiveMemory } from "./aidlc-includes.ts";
+import { moveReposManifestIntoAidlc, reposMovedAtTerminalLine } from "./aidlc-workspace-manifest.ts";
 import {
   activeWorkflowPluginDependencies,
   canonicalScopeTableRegion,
@@ -5481,27 +5488,6 @@ function generatedOverlayCandidate(rel: string, harnessDir: string): boolean {
     rel.startsWith(".github/agents/");
 }
 
-// Keys the installed source owns: a refresh takes them from the new tree, not
-// the project's copy. `name` and `kiroLayout` belong here with `distribution`:
-// a project moved to another row that kept its old name or layout would still
-// read as the old row to every reader that keys on them.
-const HARNESS_IDENTITY_KEYS = new Set([
-  "schemaVersion",
-  "distribution",
-  "name",
-  "kiroLayout",
-  "productName",
-  "configNextStep",
-  "hookActivation",
-  "newChatStep",
-  "directiveMaxBytes",
-  "harnessDir",
-  "rulesSubdir",
-  "statusLine",
-  "agentFinishRecorded",
-  "hostShell",
-]);
-
 const CLAUDE_SHIPPED_KEYS = [
   "companyAnnouncements",
   "permissions",
@@ -10377,10 +10363,11 @@ function planManagedFiles(
           (priorHash !== undefined && modelStamped.has(rel) && composedRecords.has(rel));
         // A file staged from the project's own CRLF checkout (Codex's
         // config.toml, Kiro CLI's mcp.json) keeps the record it equals once
-        // line endings are set aside, so a clone's refresh leaves it as committed.
+        // line endings are set aside, so a clone's refresh leaves it as
+        // committed; any other is recorded in its LF form (sha256Lf).
         const recordHash = priorHash !== undefined && hash !== priorHash && sha256FileMatching(source, [priorHash]) === priorHash
           ? priorHash
-          : hash;
+          : sha256Lf(readFileSync(source));
         const nextHash = retainBaseline
           ? regenerated.has(rel) && targetRegular && unmodified ? composedRecords.get(rel) ?? recordHash : priorHash
           : composedRecords.get(rel) ?? recordHash;
@@ -10786,12 +10773,16 @@ function planRootIntegrations(
     const targetPath = join(projectDir, targetRel);
     const targetExists = pathPresent(targetPath);
     const targetRegular = targetExists && lstatSync(targetPath).isFile();
+    // A file config leaves as it is (leftAsIsWhenUnmergeable) is never a stop:
+    // one config cannot merge AI-DLC's part into stays as it is, as session
+    // start leaves it (addRootBlocks), and config records nothing new for it.
+    const conflict = (path: string, detail: string): void => {
+      actions.push(leftAsIsWhenUnmergeable(integration.path)
+        ? { path, action: "preserve", detail: `left as it is: ${detail}` }
+        : { path, action: "conflict", detail });
+    };
     if (targetExists && !targetRegular && !force) {
-      actions.push({
-        path: targetRel,
-        action: "conflict",
-        detail: "root integration is not a regular file",
-      });
+      conflict(targetRel, "root integration is not a regular file");
       continue;
     }
     const currentBytes = targetRegular ? readFileSync(targetPath) : Buffer.alloc(0);
@@ -10800,13 +10791,7 @@ function planRootIntegrations(
     // replaced, so config writes none (session start leaves it alone too,
     // aidlc-includes.ts). One config would leave as it is stays as it is.
     const lossless = Buffer.from(current, "utf-8").equals(currentBytes);
-    const notUtf8 = (): void => {
-      actions.push({
-        path: targetRel,
-        action: "conflict",
-        detail: `${targetRel} is not valid UTF-8; convert its encoding before config`,
-      });
-    };
+    const notUtf8 = (): void => conflict(targetRel, `${targetRel} is not valid UTF-8; convert its encoding before config`);
     const priorContribution = prior?.rootContributions[integration.path];
     if (integration.policy === "managed-block") {
       const marker = integration.marker || basename(integration.path);
@@ -10856,15 +10841,14 @@ function planRootIntegrations(
           .map((contribution) => contribution?.policy === "managed-block" ? contribution.hash : undefined),
       );
       if (merged.error) {
-        actions.push({ path: integration.path, action: "conflict", detail: merged.error });
+        conflict(integration.path, merged.error);
         continue;
       }
       if (missingCopy && !force && merged.value !== current) {
-        actions.push({
-          path: integration.path,
-          action: "conflict",
-          detail: `${typedHarnessName(missingCopy.distribution)} is missing its shipped block copy (${missingCopy.harnessDir}/tools/data/root-blocks/${marker}); run ${configCommand(`--harness ${typedHarnessName(missingCopy.distribution)}`)} first`,
-        });
+        conflict(
+          integration.path,
+          `${typedHarnessName(missingCopy.distribution)} is missing its shipped block copy (${missingCopy.harnessDir}/tools/data/root-blocks/${marker}); run ${configCommand(`--harness ${typedHarnessName(missingCopy.distribution)}`)} first`,
+        );
         continue;
       }
       let value = merged.value as string;
@@ -10932,13 +10916,13 @@ function planRootIntegrations(
         } else if (priorHash || !merged.currentBlockShipped) {
           // A part that is exactly what a release shipped (one a copy added
           // before config ran) is AI-DLC's own even without a record.
-          actions.push({
-            path: integration.path,
-            action: "conflict",
-            detail: priorHash ? "managed block was locally modified" : "managed block has no ownership baseline",
-          });
+          conflict(integration.path, priorHash ? "managed block was locally modified" : "managed block has no ownership baseline");
           continue;
         }
+      }
+      if (!lossless && value !== current) {
+        notUtf8();
+        continue;
       }
       contributions[integration.path] = {
         policy: "managed-block",
@@ -10947,8 +10931,6 @@ function planRootIntegrations(
       };
       if (value === current) {
         actions.push({ path: integration.path, action: "preserve", detail: keptTitle ? KEPT_TITLE_LINE_DETAIL : undefined });
-      } else if (!lossless) {
-        notUtf8();
       } else {
         operations.push(writeOperation(integration.path, value, expected(targetPath)));
         actions.push({
@@ -11333,8 +11315,7 @@ function planRemovedRootIntegrations(
         actions.push({ path, action: "conflict", detail: "retired managed block was locally modified" });
         continue;
       }
-      let value = `${text.slice(0, beginAt)}${text.slice(blockEnd)}`;
-      value = value.replace(/^\r?\n/, "").replace(/\r?\n\r?\n$/, "\n");
+      const value = withoutBlock(path, text, beginAt, blockEnd);
       if (!value) {
         operations.push({ kind: "remove", path: targetRel, expected: expected(targetPath) });
         actions.push({ path, action: "remove", detail: NO_LONGER_SHIPPED });
@@ -12719,6 +12700,24 @@ function openWorkflowLine(
     : null;
 }
 
+// The running work here that is not this person's, by the name config prints:
+// another person's build a pull brought, or the lead's plan in a teammate's
+// clone (workOfAnother, status's Also open rule). The routing is loaded only
+// when work runs, by a dynamic import: a require of it is refused where a
+// module it loads has a top-level await (a compiled install). A read that
+// fails keeps every name.
+async function othersOpenWork(projectDir: string): Promise<Set<string>> {
+  const running = runningWorkflows(projectDir);
+  if (running.length === 0) return new Set();
+  try {
+    const { workOfAnother } = await import("./aidlc-orchestrate.ts");
+    return new Set(running.filter((run) => workOfAnother(projectDir, run))
+      .map(({ space, dirName, slug }) => workflowDisplayName(space, { dirName, slug })));
+  } catch {
+    return new Set();
+  }
+}
+
 // A refresh that brings in release files is done while work is open too: one
 // line says so, and when it moved the project to another release, how to go
 // back. Natively a pin brings the earlier release back; a copied project takes
@@ -12740,13 +12739,16 @@ function refreshDoneLines(
     // Open work that needs a plugin this change turned off, by plugin.
     pluginsOff: ReadonlyArray<{ plugin: string; workflow: string }>;
   },
+  // The open work that is not this person's (othersOpenWork), left unsaid.
+  theirs: ReadonlySet<string>,
 ): string[] {
-  const open = activeWorkflowDescriptions(projectDir);
+  const open = activeWorkflowDescriptions(projectDir).filter((name) => !theirs.has(name));
   if (open.length === 0) return [];
   const listed = (items: readonly string[]): string =>
     items.length <= 1 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
-  const stopped = [...new Set(change.pluginsOff.map((item) => item.workflow))].sort();
-  const plugins = [...new Set(change.pluginsOff.map((item) => item.plugin))].sort();
+  const pluginsOff = change.pluginsOff.filter((item) => !theirs.has(item.workflow));
+  const stopped = [...new Set(pluginsOff.map((item) => item.workflow))].sort();
+  const plugins = [...new Set(pluginsOff.map((item) => item.plugin))].sort();
   const going = open.filter((name) => !stopped.includes(name));
   const carriesOn = stopped.length === 0
     ? `Your open work (${open.join(", ")}) carries on.`
@@ -15006,6 +15008,11 @@ export async function main(
       : null;
     if (openLine) changes.push(openLine);
     if (!recordOnly) {
+      // The repo list moves into aidlc/ only while this release's own files go
+      // in: an earlier release's tools (a pin, a --from) read it only at the root.
+      if (stamp.frameworkVersion === AIDLC_VERSION && moveReposManifestIntoAidlc(projectDir).tracked) {
+        changes.push(reposMovedAtTerminalLine());
+      }
       changes.push(...refreshDoneLines(projectDir, {
         added: existing.distribution || switchingFrom ? undefined : descriptor.harnessDir,
         switched: switchingFrom !== undefined,
@@ -15016,7 +15023,7 @@ export async function main(
         releaseBaseUrl: releaseSettings.baseUrl,
         harness: descriptor.distribution,
         pluginsOff,
-      }));
+      }, await othersOpenWork(projectDir)));
       changes.push(...treesLeftBehindLines(
         projectDir,
         { distribution: stamp.distribution, harnessDir: descriptor.harnessDir, version: stamp.frameworkVersion },

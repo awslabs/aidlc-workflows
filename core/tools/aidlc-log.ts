@@ -9,9 +9,10 @@
 import { constructionPolicyRecovery } from "./aidlc-guard-operation.ts";
 import { projectDirFlag, settleClaudeTurnsFirst } from "./aidlc-claude-turn-pending.ts";
 import { CHANGE_NOTICES_NOTE, otherWorkNote, reviewRequestNote, reviewVerdictNote } from "./aidlc-directive.ts";
+import { kiroLeadRulesBrief, leadRulesBriefLine } from "./aidlc-steering.ts";
 import { spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmdirSync, rmSync } from "node:fs";
 import { dirname, isAbsolute, join, posix, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
@@ -80,6 +81,7 @@ import {
   readVerificationCommandFile,
   readAnswerTextFile,
   REQUEST_TEXT_DIR,
+  REQUEST_TEXT_DIRS,
   isReadOnlyEngineProbe,
   protectedQuestionRelativePath,
   mintProtectedQuestion,
@@ -334,6 +336,7 @@ import {
 import { aidlcDispatcherInvocation, aidlcEngineCommand, aidlcToolInvocation, compiledExecutable, entrySkillInvocation, quoteCommandArgument, swarmUnitTestCommand } from "./aidlc-runtime-paths.ts";
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { chatTookStepHere } from "./aidlc-record-core.ts";
+import { namesRepoOfItsOwn, ownRepoStep, unitPastCodeGeneration } from "./aidlc-unit-teams.ts";
 import { personGitNameField } from "./aidlc-git-name.ts";
 import {
   APPROVAL_GATE_CHOICES,
@@ -350,11 +353,14 @@ const DECISION_CHECKPOINTS: readonly string[] = [
 // recorded here.
 const ANSWER_CHECKPOINTS: readonly string[] = [...DECISION_CHECKPOINTS, "guard-recovery"];
 
-// A manifest that names a repo the piece of work does not record is not a
-// manifest to rewrite: the code was written where the person put it, so the
-// way on is to record that repo (`intent add-repo` says what that means for
-// the plan). Any other invalid manifest is the agent's to write properly.
+// Why a Unit's source manifest is refused, with the way on for each. A repo
+// the piece of work does not record keeps its files where the code was
+// written: the work records it (`intent add-repo` says what that means for the
+// plan), or, for a repository of its own in work that records no repos from
+// here, the manifest names its files as the review reads them. Any other
+// invalid manifest is the agent's to write properly.
 function unitManifestRefusal(
+  pd: string,
   unit: string,
   manifestPath: string,
   manifest: { reason: string; unrecordedRepo?: string; projectSubmodule?: string },
@@ -366,6 +372,9 @@ function unitManifestRefusal(
   }
   if (manifest.unrecordedRepo !== undefined) {
     const repo = manifest.unrecordedRepo;
+    // Work that records no repo from here: the step that has the review cover
+    // that code where it is, never the add it refuses, and nothing asked.
+    if (namesRepoOfItsOwn(pd, repo)) return ownRepoStep(pd, unit, repo, "review");
     return `unit "${unit}"'s source manifest at ${manifestPath} names repo ${JSON.stringify(repo)}, which this piece of work does not record. ` +
       `Run \`${aidlcDispatcherInvocation(`intent add-repo ${quoteCommandArgument(repo)} --reason '<why this work changes it>'`)}\` and say the line it prints once, ` +
       "then request the review again. Do not rewrite the manifest to drop a repo the code was written in.";
@@ -2224,12 +2233,12 @@ export function readRequestFileResult(
 ): { text: string; spend(): void; restore(): void } | { refusal: string; overCap?: { spend(): void } } {
   const relativePath = file.replaceAll("\\", "/");
   const parts = relativePath.split("/");
-  const folder = REQUEST_TEXT_DIR.split("/");
   const name = parts[parts.length - 1];
-  if (
-    isAbsolute(file) || parts.length !== folder.length + 1 ||
-    folder.some((part, i) => parts[i] !== part) || name === "" || name === "." || name === ".."
-  ) {
+  const dir = REQUEST_TEXT_DIRS.find((candidate) => {
+    const folder = candidate.split("/");
+    return parts.length === folder.length + 1 && folder.every((part, i) => parts[i] === part);
+  });
+  if (isAbsolute(file) || dir === undefined || name === "" || name === "." || name === "..") {
     return { refusal: REQUEST_FILE_USAGE };
   }
   const unread = `AI-DLC could not read the request in ${relativePath}. Send your request again.`;
@@ -2239,6 +2248,14 @@ export function readRequestFileResult(
       removeRecordFileNoFollow(projectDir, relativePath);
     } catch {
       // Left in its gitignored folder; the next request replaces it.
+    }
+    // An earlier release's folder goes once its last request is read.
+    if (dir !== REQUEST_TEXT_DIR) {
+      try {
+        rmdirSync(join(projectDir, ...dir.split("/")));
+      } catch {
+        // Not empty, or already gone.
+      }
     }
   };
   let text: string;
@@ -3206,6 +3223,27 @@ function handleInstall(args: string[]): void {
     ...(words ? { "Person Reply": words } : {}),
   });
   console.log(JSON.stringify({ requested: positional }));
+}
+
+// Its twin for a Unit built and approved here: the person asked for a change
+// to its code in the message that approved it, which that approval spends. The
+// agent names the message, the tool proves it as any request's and records it
+// with the Unit, and the plan-approval guard reads the record. It reads no words.
+function handleChange(args: string[]): void {
+  const { positional, flags } = parseFlags(args);
+  if (positional.length > 0 || flags.message === undefined) error(`Usage: ${logUsage("change").split("\n")[0]}`);
+  const pd = resolveProjectDir(projectDir);
+  const unit = unitPastCodeGeneration(existsSync(stateFilePath(pd)) ? readFileSync(stateFilePath(pd), "utf-8") : null);
+  if (unit === null) error("Nothing holds a change here: log change is for a Unit that is built and approved and not pushed yet.");
+  const proof = proveMessage(pd, flags.message, "request", { request: true });
+  if ("refusal" in proof) error(proof.refusal);
+  const words = personsWordsText(proof.message.words ?? proof.message.text);
+  emitAudit(pd, "UNIT_CHANGE_REQUESTED", {
+    Unit: unit,
+    "Message Id": proof.message.id,
+    ...(words ? { "Person Reply": words } : {}),
+  });
+  console.log(JSON.stringify({ requested: unit }));
 }
 
 function handleLink(args: string[]): void {
@@ -4245,6 +4283,7 @@ function handleReview(args: string[]): void {
       const manifestPath = `${relativeRecordDir(pd, intent, space) ?? "aidlc"}/construction/${flags.unit}/${flags.stage}/source-manifest.json`;
       refuseReview(
         `Cannot record REVIEW_REQUESTED for "${flags.stage}": ${unitManifestRefusal(
+          pd,
           flags.unit as string,
           manifestPath,
           manifest,
@@ -5065,6 +5104,11 @@ function handleReview(args: string[]): void {
     // record beside the plan does not read as a missing approval.
     const planChange = flags.stage === "code-generation"
       ? approvedPlanChangeReviewLine(pd, { unit: flags.unit ?? null }) : null;
+    // On Kiro CLI (V2) the reviewer of a team's build that follows the lead's
+    // rules gets them only through its brief.
+    // A request is not a step: a brief handed out before may still name the file.
+    const leadBrief = kiroLeadRulesBrief(pd, { removeUnused: false });
+    const leadLine = leadBrief !== null && "file" in leadBrief ? leadRulesBriefLine(leadBrief.file) : null;
     console.log(JSON.stringify({
       emitted: "REVIEW_REQUESTED",
       stage: flags.stage,
@@ -5085,6 +5129,7 @@ function handleReview(args: string[]): void {
           ...(reviewFile === null ? [] : [`Your review file is ${reviewFile} (its folder already exists).`]),
           ...(otherWork.length > 0 ? [otherWorkNote(otherWork, "review")] : []),
           ...(planChange === null ? [] : [planChange]),
+          ...(leadLine === null ? [] : [leadLine]),
         ],
       ),
       ...(retried ? { retry: "pending-request" } : {}),
@@ -5185,6 +5230,7 @@ function handleReview(args: string[]): void {
         const manifestPath = `${relativeRecordDir(pd, intent, space) ?? "aidlc"}/construction/${flags.unit}/${flags.stage}/source-manifest.json`;
         refuseReview(
           `Cannot record review for "${flags.stage}": ${unitManifestRefusal(
+            pd,
             flags.unit as string,
             manifestPath,
             manifest,
@@ -5841,6 +5887,11 @@ function logUsage(subcommand: string | undefined): string {
       "  Records that the person's message asked to install these system packages, so the install check runs that " +
         "install. Required: a package and --message.",
     ],
+    change: [
+      `${invoke("change")} --message <id>`,
+      "  Records that the person's message asked for a change to the Unit built and approved here, so that change goes " +
+        "through before its push. Required: --message.",
+    ],
     link: [
       `${invoke("link")} --stage <slug> --link <agent> [--repo <repo>] [--artifact <path>] [--single]`,
       "  Records that a declared pipeline link returned. Runs in the active workspace (no --intent or --space).",
@@ -5905,6 +5956,9 @@ export function main(argv: string[]): void {
       case "install":
         handleInstall(filteredArgs.slice(1));
         break;
+      case "change":
+        handleChange(filteredArgs.slice(1));
+        break;
       case "review":
         // One review command runs the review accounting per unit, each pass
         // recomputing the whole-tree source identity. Share one computation
@@ -5914,7 +5968,7 @@ export function main(argv: string[]): void {
         );
         break;
       default:
-        error(`Unknown subcommand: ${subcommand}. Valid: decision, answer, answers, link, review, install`);
+        error(`Unknown subcommand: ${subcommand}. Valid: decision, answer, answers, link, review, install, change`);
     }
     spendRequestFile();
     // The stage's work went on through the record, not through `next`: on the

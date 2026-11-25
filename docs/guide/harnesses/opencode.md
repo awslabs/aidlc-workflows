@@ -79,7 +79,7 @@ For an air-gapped package, use
 `Set-ExecutionPolicy` line.
 
 `aidlc config` projects `.aidlc/`, `.opencode/`, the workspace shell,
-`AGENTS.md`, the managed `.gitignore` block, and AI-DLC's entries in
+`AGENTS.md`, the managed `.gitignore` and `.gitattributes` blocks, and AI-DLC's entries in
 `opencode.json`. Those entries discover the skill and method files, let
 AI-DLC's own direct `aidlc engine *` commands run without a prompt, and ask
 once before `rm -r...` and `git push`; every other shell command follows your
@@ -118,7 +118,7 @@ project follows [Copy Channel](../18-install-and-lifecycle.md#copy-channel).
    Step 2 adds AI-DLC's three load-bearing parts to it, or writes the file
    when there is none: `skills.paths` (skill discovery from `.aidlc/skills`),
    `instructions` (both native onboarding at `.aidlc/onboarding.md` and the
-   method glob `aidlc/active-memory/**/*.md`, the engine's git-ignored
+   method glob `aidlc/.aidlc-engine/active-memory/**/*.md`, the engine's git-ignored
    copy of the active space's method that `/aidlc space <name>` rewrites), and
    permission rules for AIDLC bash entrypoints plus edits under
    `.aidlc/tools/` and `.aidlc/hooks/`. If you keep an `opencode.jsonc`
@@ -137,8 +137,9 @@ project follows [Copy Channel](../18-install-and-lifecycle.md#copy-channel).
    ```
 
    It adds AI-DLC's lines to your `AGENTS.md` and `.gitignore`, after
-   everything already there, and AI-DLC's entries to your `opencode.json`
-   (or creates them), before your first workflow
+   everything already there, to the top of your `.gitattributes`, and
+   AI-DLC's entries to your `opencode.json` (or creates them), before your
+   first workflow
    (per-clone audit shards are committed deliberately; cursors and
    machine-local runtime stay ignored).
 

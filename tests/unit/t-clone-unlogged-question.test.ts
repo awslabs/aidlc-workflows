@@ -106,8 +106,8 @@ async function clonedWork(harness: "codex" | "claude"): Promise<string> {
   writeFileSync(join(dir, `${STAGE}-questions.md`),
     "# Questions\n\n## Q1\n\nShould a blank title be refused?\n\nA) Refuse it\nB) Save it as Untitled\n\n[Answer]: A\n", "utf-8");
   rmSync(join(intentsDirOf(proj, "default"), "active-intent"), { force: true });
-  rmSync(join(proj, "aidlc", ".aidlc-sessions"), { recursive: true, force: true });
-  rmSync(join(proj, "aidlc", ".aidlc-clone-id"), { force: true });
+  rmSync(join(proj, "aidlc", ".aidlc-engine", "sessions"), { recursive: true, force: true });
+  rmSync(join(proj, "aidlc", ".aidlc-engine", "clone-id"), { force: true });
   rmSync(join(seededRecordDir(proj), ".aidlc-engine"), { recursive: true, force: true });
   await laterSecond();
   return proj;
@@ -115,7 +115,7 @@ async function clonedWork(harness: "codex" | "claude"): Promise<string> {
 
 /** The id of the message the hook kept for `text`. */
 function messageId(proj: string, text: string): string {
-  const dir = join(proj, "aidlc", ".aidlc-sessions", "messages");
+  const dir = join(proj, "aidlc", ".aidlc-engine", "sessions", "messages");
   const ids = readdirSync(dir).filter((name) => name.endsWith(".json"))
     .map((name) => JSON.parse(readFileSync(join(dir, name), "utf-8")) as { id: string; text: string })
     .filter((message) => message.text === text).map((message) => message.id);
@@ -230,7 +230,7 @@ describe("an answer given in the file counts in a clone whose agent logs the que
     install(proj, "codex");
     await buildState(proj, "work-open");
     rmSync(join(intentsDirOf(proj, "default"), "active-intent"), { force: true });
-    rmSync(join(proj, "aidlc", ".aidlc-sessions"), { recursive: true, force: true });
+    rmSync(join(proj, "aidlc", ".aidlc-engine", "sessions"), { recursive: true, force: true });
     const audit = join(seededRecordDir(proj), "audit");
     for (const shard of existsSync(audit) ? readdirSync(audit) : []) rmSync(join(audit, shard), { force: true });
     const typed = `$aidlc ${WORDS}`;

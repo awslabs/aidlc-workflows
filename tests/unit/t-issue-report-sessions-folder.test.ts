@@ -23,3 +23,15 @@ test("ledger cursors leave no path in the result", () => {
   expect(text).not.toContain("jdoe");
   expect(result.transcriptCursors).toEqual({ count: 2, tools: ["claude", "codex"] });
 });
+
+// AI-DLC keeps its own files in aidlc/.aidlc-engine/ now: the report reads the
+// sessions folder there, and the earlier place in a project not moved yet.
+test("the sessions folder is read in aidlc/.aidlc-engine/ once AI-DLC's files moved there", () => {
+  const project = mkdtempSync(join(tmpdir(), "sessions-test-"));
+  const base = join(project, "aidlc", ".aidlc-engine", "sessions");
+  mkdirSync(base, { recursive: true });
+  // The pin marker stays at the earlier place, so that folder is there too.
+  mkdirSync(join(project, "aidlc", ".aidlc-sessions"), { recursive: true });
+  writeFileSync(join(base, "usage-ledger.json"), JSON.stringify({ cursors: { "/home/u/.claude/projects/p/a.jsonl": {} } }));
+  expect(readSessionsFolder(project).transcriptCursors).toEqual({ count: 1, tools: ["claude"] });
+});

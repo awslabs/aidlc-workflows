@@ -588,6 +588,9 @@ function scratchProject(): string {
     "aidlc-guard-operation.ts",
     "aidlc-reply-reader.ts",
     "aidlc-audit.ts",
+    "aidlc-workspace-manifest.ts",
+    "aidlc-unit-teams.ts",
+    "aidlc-workspace-repos.ts",
   ]) {
     cpSync(join(AIDLC_SRC, "tools", t), join(dir, ".claude", "tools", t));
   }
@@ -623,8 +626,9 @@ function seedUnitScope(
     `# AI-DLC State Tracking\n\n## Runtime State\n- **Unit Ownership**: team\n${settings}`,
     "utf-8",
   );
+  mkdirSync(join(proj, "aidlc", ".aidlc-engine", "units"), { recursive: true });
   writeFileSync(
-    join(proj, "aidlc", ".aidlc-unit-scope.json"),
+    join(proj, "aidlc", ".aidlc-engine", "units", "claimed.json"),
     `${JSON.stringify({
       version: 1,
       space: "default",
@@ -647,7 +651,8 @@ function seedUnitScope(
 function seedAuditShard(proj: string): string {
   const auditDir = join(proj, "aidlc", "spaces", "default", "intents", "audit");
   mkdirSync(auditDir, { recursive: true });
-  writeFileSync(join(proj, "aidlc", ".aidlc-clone-id"), "t221clone\n", "utf-8");
+  mkdirSync(join(proj, "aidlc", ".aidlc-engine"), { recursive: true });
+  writeFileSync(join(proj, "aidlc", ".aidlc-engine", "clone-id"), "t221clone\n", "utf-8");
   const host =
     hostname()
       .toLowerCase()
@@ -1033,7 +1038,7 @@ describe("t221 (b) dispatch-record lifecycle (shipped hook, subprocess)", () => 
     expect(refused.code).toBe(2);
     expect(refused.stderr).toContain("make that change from the project's main checkout");
     // The named step works: the main checkout carries no Unit stamp, and the write goes through there.
-    rmSync(join(proj, "aidlc", ".aidlc-unit-scope.json"));
+    rmSync(join(proj, "aidlc", ".aidlc-engine", "units", "claimed.json"));
     expect(runHook(proj, write).code).toBe(0);
   });
 
@@ -1305,7 +1310,8 @@ describe("t221 (b) a checkout recorded for the work (shipped hook, subprocess)",
   test("a Unit taken into this checkout still writes only its own folder: the write bound reads as before", () => {
     const { proj } = shopWithWeb();
     writeFileSync(seededStateFile(proj), `${readFileSync(seededStateFile(proj), "utf-8").trimEnd()}\n- **Unit Ownership**: team\n`);
-    writeFileSync(join(proj, "aidlc", ".aidlc-unit-scope.json"), `${JSON.stringify({
+    mkdirSync(join(proj, "aidlc", ".aidlc-engine", "units"), { recursive: true });
+    writeFileSync(join(proj, "aidlc", ".aidlc-engine", "units", "claimed.json"), `${JSON.stringify({
       version: 1,
       space: "default",
       intent_uuid: "00000000-0000-4000-8000-000000000221",

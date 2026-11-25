@@ -237,7 +237,7 @@ function makeProj(): string {
     join(proj, ".gitignore"),
     [
       "aidlc/active-space",
-      "aidlc/.aidlc-clone-id",
+      "aidlc/.aidlc-engine/clone-id",
       "aidlc/spaces/*/intents/active-intent",
       "aidlc/spaces/*/intents/*/runtime-graph.json",
       "aidlc/spaces/*/intents/*/.aidlc-*",
@@ -304,17 +304,18 @@ describe("t49 Bolt fork/merge runtime-graph + failure modes (migrated from t49-b
     const payWt = worktreePath(batchProj, fixtureIntentId8(batchProj), "pay");
     // Pin the worktree append to the SAME per-clone shard audit-fork wrote (and
     // audit-merge later reads): copy the MAIN clone-id token into the worktree's
-    // gitignored aidlc/.aidlc-clone-id so auditShardName(payWt) resolves the
+    // gitignored aidlc/.aidlc-engine/clone-id so auditShardName(payWt) resolves the
     // main-token shard. Without this the worktree mints its OWN clone-id → the
     // SENSOR rows land in a sibling shard audit-merge never reads, and the rows
     // never reach main (audit-merge merges only the single main-token shard's
     // post-fork delta).
     const mainCloneId = readFileSync(
-      join(batchProj, "aidlc", ".aidlc-clone-id"),
+      join(batchProj, "aidlc", ".aidlc-engine", "clone-id"),
       "utf-8",
     );
     mkdirSync(join(payWt, "aidlc"), { recursive: true });
-    writeFileSync(join(payWt, "aidlc", ".aidlc-clone-id"), mainCloneId, "utf-8");
+    mkdirSync(join(payWt, "aidlc", ".aidlc-engine"), { recursive: true });
+    writeFileSync(join(payWt, "aidlc", ".aidlc-engine", "clone-id"), mainCloneId, "utf-8");
     auditAppend(payWt, "SENSOR_FIRED", [
       ["Sensor", "required-sections"],
       ["Stage", "code-generation"],

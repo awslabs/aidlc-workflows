@@ -93,7 +93,7 @@ function next(tools: string, proj: string, args: string[], env: NodeJS.ProcessEn
 const upToIds = (d: Directive): string => JSON.stringify(d).replace(/[0-9a-f]{8}/g, "<id>");
 
 function questionTexts(proj: string): string[] {
-  const dir = join(proj, "aidlc", ".aidlc-sessions", "questions");
+  const dir = join(proj, "aidlc", ".aidlc-engine", "sessions", "questions");
   if (!existsSync(dir)) return [];
   return readdirSync(dir).filter((name) => name.endsWith(".json"))
     .map((name) => (JSON.parse(readFileSync(join(dir, name), "utf-8")) as { text: string }).text);

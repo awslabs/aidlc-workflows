@@ -690,7 +690,7 @@ describe("t248 deterministic steering delivery", () => {
     const keyPath = join(
       proj,
       "aidlc",
-      ".aidlc-sessions",
+      ".aidlc-engine", "sessions",
       ".aidlc-steering-token-key",
     );
     expect(existsSync(keyPath)).toBe(true);
@@ -732,7 +732,7 @@ describe("t248 deterministic steering delivery", () => {
     const otherKeyPath = join(
       other,
       "aidlc",
-      ".aidlc-sessions",
+      ".aidlc-engine", "sessions",
       ".aidlc-steering-token-key",
     );
     const otherEncodedKey = readFileSync(otherKeyPath, "utf-8").trim();
@@ -1145,7 +1145,7 @@ describe("t248 deterministic steering delivery", () => {
       expectSteeringPayload(marker.steering_payload);
       expect(marker.steering_payload_receipt).toMatch(RECEIPT_PATTERN);
       const key = Buffer.from(
-        readFileSync(join(proj, "aidlc", ".aidlc-sessions", ".aidlc-steering-token-key"), "utf-8").trim(),
+        readFileSync(join(proj, "aidlc", ".aidlc-engine", "sessions", ".aidlc-steering-token-key"), "utf-8").trim(),
         "base64url",
       );
       expect(marker.steering_payload_receipt).toBe(receiptFor(marker.steering_payload, key));

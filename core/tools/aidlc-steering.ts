@@ -5,14 +5,21 @@
 // attach the exact bundle to a subagent brief, so the conductor-to-worker hop
 // cannot drift from the engine-to-conductor hop.
 
-import { lstatSync, readFileSync } from "node:fs";
-import { isAbsolute, join, resolve } from "node:path";
+import { existsSync, lstatSync, readFileSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import {
   DEFAULT_SPACE,
+  engineDir,
   errorMessage,
+  readStateFile,
+  removeRecordFileNoFollow,
   resolveWorkflowSelection,
   toPosix,
+  writeEngineFileNoFollow,
 } from "./aidlc-lib.ts";
+import { isReadOnlyEngineProbe } from "./aidlc-locks.ts";
+import { runtimeHarnessName } from "./aidlc-runtime-paths.ts";
+import { leadRuleFiles } from "./aidlc-unit-teams.ts";
 import {
   copyFrameworkPhaseRules,
   frameworkMemorySeedDir,
@@ -23,7 +30,9 @@ import { withoutCommentBlocks } from "./aidlc-markdown.ts";
 
 // `seed`: the framework's copy of a phase rule file, for a space that may lack
 // its own (see restoreSpacePhaseRules).
-export type RuleEntry = { rel: string; abs: string; seed?: string };
+// `lead`: one of the lead's files a team's build follows, read where it is
+// (leadRuleFiles), its text null when it cannot be read now.
+export type RuleEntry = { rel: string; abs: string; seed?: string; lead?: { text: string | null } };
 export type RuleContent = { path: string; text: string };
 
 // These are explanatory preambles in the shipped empty team/project templates,
@@ -83,7 +92,7 @@ export function rulesContentEntries(
   const seedPhases = configuredMemoryDir || space === DEFAULT_SPACE
     ? null
     : join(frameworkMemorySeedDir(), "phases");
-  return (node.rules_in_context ?? []).map((rule) => {
+  const entries = (node.rules_in_context ?? []).map((rule) => {
     const marker = "/memory/";
     const index = rule.path.indexOf(marker);
     if (index < 0) {
@@ -102,6 +111,104 @@ export function rulesContentEntries(
     }
     return entry;
   });
+  // A team's build that follows the lead's rules too reads each of the lead's
+  // files (their agreed practices, their project rules) where it is, just
+  // before the team's own file of the same name, so theirs are on top. One
+  // read from the lead's copy is named as the lead's: in a team's own
+  // workspace the team's own file has the same path.
+  let leads: ReturnType<typeof leadRuleFiles>;
+  try {
+    leads = leadRuleFiles(projectDir, readStateFile(projectDir));
+  } catch {
+    leads = [];
+  }
+  let out = entries;
+  for (const lead of leads) {
+    const rel = lead.fromCopy ? `the lead's ${lead.path}` : lead.path;
+    if (out.some((entry) => entry.rel === rel)) continue;
+    const name = lead.path.slice(lead.path.lastIndexOf("/") + 1);
+    const own = out.findIndex((entry) => entry.rel.endsWith(`/memory/${name}`));
+    const at = own >= 0 ? own : out.length;
+    out = [...out.slice(0, at), { rel, abs: join(projectDir, lead.path), lead: { text: lead.text } }, ...out.slice(at)];
+  }
+  return out;
+}
+
+// On Kiro CLI's agent JSON the brief cannot be rewritten, and a worker's
+// preload has no room for more (Kiro reads at most 100,000 characters of an
+// agent's resources), so the lead's rules a team's build follows go in one
+// file of the work's own record that every brief names (leadRulesBriefLine);
+// the Kiro adapter holds a dispatch whose brief does not. One name, so a line
+// handed out before the lead changed a rule still reads the current text. A
+// file of the active space's own memory is preloaded already and left out.
+// Null when the build follows none that can be read now (the step says so
+// once, leadRulesUnreadLine); `unsaved` when the file could not be written.
+const LEAD_RULES_FILE = "lead-rules.md";
+
+export type LeadRulesBrief = { file: string } | { unsaved: true } | null;
+
+export function leadRulesBrief(projectDir: string, options: { removeUnused?: boolean } = {}): LeadRulesBrief {
+  let leads: ReturnType<typeof leadRuleFiles>;
+  let dir: string;
+  let own: string;
+  try {
+    leads = leadRuleFiles(projectDir, readStateFile(projectDir));
+    dir = engineDir(projectDir);
+    own = `aidlc/spaces/${resolveWorkflowSelection(projectDir).space}/memory/`;
+  } catch {
+    return null;
+  }
+  const kept = leads.filter((lead) => lead.fromCopy || !lead.path.startsWith(own));
+  const where = new Map(kept.map((lead) => [lead.path, lead.fromCopy ? "as the plan the lead shared has it" : lead.path]));
+  const { content } = readRuleBundle(kept.map((lead) => ({ rel: lead.path, abs: join(projectDir, lead.path), lead: { text: lead.text } })));
+  const file = join(dir, LEAD_RULES_FILE);
+  if (content.length === 0) {
+    // A build that follows none of them now keeps no copy of them; one that
+    // cannot read them just now keeps the last. Only a step removes it: a
+    // brief handed out before may still name it at dispatch.
+    if (options.removeUnused === true && kept.every((lead) => lead.text !== null) && existsSync(file)) {
+      try {
+        removeRecordFileNoFollow(dirname(dir), `${basename(dir)}/${LEAD_RULES_FILE}`);
+      } catch {
+        // Removed when the build next reads them.
+      }
+    }
+    return null;
+  }
+  const text = content.map((rule) =>
+    `<!-- The lead's ${rule.path.slice(rule.path.lastIndexOf("/") + 1)} (${where.get(rule.path)}). -->\n${rule.text.trimEnd()}\n`
+  ).join("\n");
+  let current: string | null;
+  try {
+    current = readFileSync(file, "utf-8");
+  } catch {
+    current = null;
+  }
+  if (current !== text) {
+    try {
+      writeEngineFileNoFollow(projectDir, LEAD_RULES_FILE, text);
+    } catch {
+      return { unsaved: true };
+    }
+  }
+  return { file: toPosix(relative(resolve(projectDir), resolve(file))) };
+}
+
+/** The line every worker brief carries for the file leadRulesBrief wrote. */
+export function leadRulesBriefLine(rel: string): string {
+  return `Before you start, read ${rel} with your file tool, to its last line: the lead's rules this Unit's build follows; ` +
+    "where they and your team's own rules differ, your team's own rules win.";
+}
+
+/** Said once on Kiro CLI (V2) when the lead's rules were read but their file
+ *  could not be written: the specialists go on without them. */
+export const LEAD_RULES_UNSAVED_LINE =
+  "The lead's rules could not be saved for your team's specialists just now, so their work in this step follows your team's own rules.";
+
+/** leadRulesBrief on Kiro CLI (V2) only, outside a read-only probe: every
+ *  other harness's dispatch hook hands the lead's rules over itself. */
+export function kiroLeadRulesBrief(projectDir: string, options: { removeUnused?: boolean } = { removeUnused: true }): LeadRulesBrief {
+  return runtimeHarnessName(projectDir) === "kiro" && !isReadOnlyEngineProbe() ? leadRulesBrief(projectDir, options) : null;
 }
 
 function missingFile(path: string): boolean {
@@ -142,6 +249,14 @@ export function readRuleBundle(
     if (seen.has(entry.rel)) continue;
     seen.add(entry.rel);
     let text: string;
+    // A lead's file that cannot be read now never stops the step: the step
+    // goes on under the team's own rules, and says so once (routeNext).
+    if (entry.lead !== undefined) {
+      if (entry.lead.text === null) continue;
+      const rules = withoutCommentBlocks(entry.lead.text);
+      if (holdsRule(rules)) content.push({ path: entry.rel, text: rules });
+      continue;
+    }
     try {
       text = readRuleText(entry.abs);
     } catch (error) {

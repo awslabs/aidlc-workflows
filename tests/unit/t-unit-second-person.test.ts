@@ -1,0 +1,779 @@
+// covers: subcommand:aidlc-unit:lead-sign-off, subcommand:aidlc-unit:sign-off, function:switchSoloToTeams, function:builtFromAnotherMachine
+//
+// A second person on solo work, and the lead's sign-off (#2410, item 8). Solo
+// work built one Unit at a time from another machine is offered to a teammate
+// opening it: take an open Unit as their own, carry on the whole work, or
+// follow along. Taking one never writes the home's state: the take goes on the
+// claim, and the home's own session switches to teams at its next step,
+// keeping everything done and asking nothing again. The lead's sign-off is off
+// by default; switched on, a team's result waits for the lead's own word.
+
+import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
+import { spawn, spawnSync } from "node:child_process";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import { readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { AIDLC_SRC, fixtureIntentId8, seededStateFile } from "../harness/fixtures.ts";
+import { asLeadsOwnCheckout } from "../harness/team-unit-merge.ts";
+import {
+  claimPayload,
+  cleanupTeamBuild,
+  cloneCode,
+  cloneOf,
+  codeGenerated,
+  ENV,
+  git,
+  HOME_RECORD,
+  homeState,
+  hook,
+  makeHome,
+  mergeOnHost,
+  next,
+  ORCH,
+  personsChat,
+  planFrom,
+  planRefOf,
+  planWordAt,
+  recordHost,
+  refundsTaken,
+  run,
+  STATE,
+  UTILITY,
+  stateOf,
+  takeIn,
+  teamWorkspace,
+  tempDir,
+  UNIT,
+} from "../harness/team-build.ts";
+
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+afterEach(cleanupTeamBuild);
+
+const field = (content: string, name: string) => new RegExp(`^- \\*\\*${name}\\*\\*: ?(.*)$`, "m").exec(content)?.[1]?.trim();
+
+// The looks at the work's claims a step ran, from git's own trace.
+const looks = (trace: string): number => existsSync(trace)
+  ? readFileSync(trace, "utf-8").split("\n").filter((line) => line.includes('"event":"start"'))
+    .map((line) => (JSON.parse(line) as { argv: string[] }).argv)
+    .filter((argv) => (argv.includes("ls-remote") || argv.includes("fetch")) && argv.some((arg) => arg.includes("refs/aidlc/claims/"))).length
+  : 0;
+
+// Solo work on machine A, one Unit at a time, refunds under way there (and,
+// with `refundsDone`, refunds finished and reporting under way unless
+// `reportingStarted` is false), pushed. Its code is the workspace's own repo: a
+// teammate's take of solo work goes onto the build-out on one repo too.
+function soloAtA(refundsDone = false, reportingStarted = true) {
+  const home = makeHome({ repos: {} });
+  const row = (event: string, stage: string, unit: string) => appendAuditEntry(event, { Stage: stage, Unit: unit, "Run floor": "0" }, home.dir);
+  row("UNIT_STARTED", "functional-design", "refunds");
+  if (refundsDone) {
+    row("UNIT_COMPLETED", "code-generation", "refunds");
+    // Approved at its checkpoint, as the walk records it.
+    appendAuditEntry("GATE_APPROVED", {
+      Stage: "code-generation", Unit: "refunds", "Gate Scope": "unit-end", "User Input": "Approve", "Run floor": "0",
+    }, home.dir);
+    if (reportingStarted) row("UNIT_STARTED", "functional-design", "reporting");
+  }
+  git(home.dir, ["add", "-A"]);
+  git(home.dir, ["commit", "-q", "-m", "solo work under way"]);
+  git(home.dir, ["push", "-q", "origin", "main"]);
+  return home;
+}
+
+// Follow along: the dispatcher's status for the work, in the teammate's clone.
+const followAlong = (clone: string) =>
+  spawnSync(process.execPath, [join(AIDLC_SRC, "tools", "aidlc.ts"), "engine", "status", "--space", "default", "--intent", HOME_RECORD], {
+    cwd: clone, env: { ...ENV, CLAUDE_PROJECT_DIR: clone, AIDLC_PROJECT_DIR: clone }, encoding: "utf-8",
+  });
+
+describe("a teammate opens solo work built from another machine", () => {
+  test("is offered the whole work to carry on, an open Unit to take, or to follow along", () => {
+    const home = soloAtA();
+    const bob = cloneOf(home.remote, "bob");
+    const ask = next(bob);
+    expect(ask.ask_type, JSON.stringify(ask)).toBe("unit-take");
+    expect(ask.question).toBe(
+      "fixture is being built from another machine, on refunds (Functional Design). Carry on the whole work here, " +
+        "take an open Unit as your own, or follow along?",
+    );
+    const choices = ask.choices as Array<{ label: string; command: string }>;
+    expect(choices.map((choice) => choice.label)).toEqual(["Carry on fixture here", "Take checkout-ui", "Follow along"]);
+    expect(choices[1].command).toEndWith(`take checkout-ui --home ${HOME_RECORD}`);
+    // Follow along is the dispatcher's `engine status`: a copied project spells
+    // the dispatcher `bun .claude/tools/aidlc.ts`, an installed one `aidlc`, and
+    // both run this same route.
+    const follow = /^(?:bun \S+\/tools\/aidlc\.ts|aidlc) (engine status .*)$/.exec(choices[2].command)?.[1];
+    expect(follow, choices[2].command).toBe(`engine status --space default --intent ${HOME_RECORD}`);
+    const shown = spawnSync(process.execPath, [join(AIDLC_SRC, "tools", "aidlc.ts"), ...follow!.split(" ")], {
+      cwd: bob, env: { ...ENV, CLAUDE_PROJECT_DIR: bob, AIDLC_PROJECT_DIR: bob }, encoding: "utf-8",
+    });
+    expect(shown.status, shown.stdout + shown.stderr).toBe(0);
+  });
+
+  // The 2026-11-07 review: Follow along's status named the walk's first Unit
+  // stage while the other machine was further on in another Unit.
+  test("following along, status names the Unit and stage the other machine is on, as the question does", () => {
+    const home = soloAtA(true, true);
+    appendAuditEntry("UNIT_STARTED", { Stage: "nfr-requirements", Unit: "reporting", "Run floor": "0" }, home.dir);
+    // What `state unit start` writes beside its row.
+    writeFileSync(seededStateFile(home.dir), homeState([
+      "- **Active Unit**: reporting", "- **Unit Stage**: nfr-requirements", "- **Unit State**: in-progress",
+    ]));
+    git(home.dir, ["add", "-A"]);
+    git(home.dir, ["commit", "-q", "-m", "reporting further on"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const bob = cloneOf(home.remote, "bob");
+    expect(String(next(bob).question)).toStartWith("fixture is being built from another machine, on reporting (NFR Requirements). ");
+    const shown = followAlong(bob);
+    expect(shown.status, shown.stdout + shown.stderr).toBe(0);
+    expect(shown.stdout).toContain("Current Step:   nfr-requirements for unit reporting\n");
+  });
+
+  test("following along after the other machine finished a stage, status names no step it finished", () => {
+    const home = makeHome({ repos: {} });
+    const row = (event: string, stage: string, unit: string) => appendAuditEntry(event, { Stage: stage, Unit: unit, "Run floor": "0" }, home.dir);
+    row("UNIT_STARTED", "functional-design", "refunds");
+    row("UNIT_COMPLETED", "functional-design", "refunds");
+    row("UNIT_STARTED", "nfr-requirements", "refunds");
+    row("UNIT_COMPLETED", "nfr-requirements", "refunds");
+    git(home.dir, ["add", "-A"]);
+    git(home.dir, ["commit", "-q", "-m", "solo work under way"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const bob = cloneOf(home.remote, "bob");
+    expect(String(next(bob).question)).toStartWith("fixture is being built from another machine, on refunds. ");
+    const shown = followAlong(bob);
+    expect(shown.status, shown.stdout + shown.stderr).toBe(0);
+    expect(shown.stdout).not.toContain("Current Step:");
+  });
+
+  test("a stage the other machine finished since is not named: the Unit alone is", () => {
+    const home = makeHome({ repos: {} });
+    const row = (event: string, stage: string, unit: string) => appendAuditEntry(event, { Stage: stage, Unit: unit, "Run floor": "0" }, home.dir);
+    row("UNIT_STARTED", "functional-design", "refunds");
+    row("UNIT_COMPLETED", "functional-design", "refunds");
+    git(home.dir, ["add", "-A"]);
+    git(home.dir, ["commit", "-q", "-m", "solo work under way"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const ask = next(cloneOf(home.remote, "bob"));
+    expect(String(ask.question), JSON.stringify(ask)).toStartWith("fixture is being built from another machine, on refunds. ");
+  });
+
+  test("the stage it names is the one the other machine started last, never one skipped after it", () => {
+    const home = makeHome({ repos: {} });
+    const row = (event: string, stage: string, unit: string) => appendAuditEntry(event, { Stage: stage, Unit: unit, "Run floor": "0" }, home.dir);
+    row("UNIT_STARTED", "functional-design", "refunds");
+    row("UNIT_STARTED", "code-generation", "refunds");
+    row("UNIT_SKIPPED", "infrastructure-design", "refunds");
+    git(home.dir, ["add", "-A"]);
+    git(home.dir, ["commit", "-q", "-m", "solo work under way"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const ask = next(cloneOf(home.remote, "bob"));
+    expect(String(ask.question), JSON.stringify(ask)).toStartWith("fixture is being built from another machine, on refunds (Code Generation).");
+  });
+
+  test("between its Units, the offer names no Unit the other machine already finished", () => {
+    const home = soloAtA(true, false);
+    const bob = cloneOf(home.remote, "bob");
+    const ask = next(bob);
+    expect(ask.ask_type, JSON.stringify(ask)).toBe("unit-take");
+    expect(ask.question).toBe(
+      "fixture is being built from another machine. Carry on the whole work here, take an open Unit as your own, or follow along?",
+    );
+    const shown = followAlong(bob);
+    expect(shown.status, shown.stdout + shown.stderr).toBe(0);
+    expect(shown.stdout).not.toContain("Current Step:");
+  });
+
+  test("their own words get the same offer, once in a chat, never the other person's step", () => {
+    const home = soloAtA();
+    const bob = cloneOf(home.remote, "bob");
+    const chat = personsChat("chat-bob-1");
+    const ask = next(bob, chat, ["I'd like to help Alice with the toolbox"]);
+    expect(ask.ask_type, JSON.stringify(ask)).toBe("unit-take");
+    expect(String(ask.question)).toStartWith("fixture is being built from another machine, on refunds");
+    // Asked once: their next words in this chat are read for what they mean.
+    expect(next(bob, chat, ["what is there to do?"]).ask_type).not.toBe("unit-take");
+  });
+
+  test("with the work selected in their chat before any offer, their next /aidlc puts the offer first, once", () => {
+    const home = soloAtA();
+    const bob = cloneOf(home.remote, "bob");
+    const chat = personsChat("chat-bob-1");
+    // Their pick of the work selects it in this chat, as its print says.
+    const picked = next(bob, chat, ["--pick", HOME_RECORD]);
+    const select = /`([^`]* intent switch [^`]*)`/.exec(String(picked.message))?.[1];
+    expect(select, JSON.stringify(picked)).toBeString();
+    const switched = spawnSync(process.execPath, [join(AIDLC_SRC, "tools", "aidlc.ts"), ...select!.split(" ").slice(2)], {
+      cwd: bob, env: { ...chat, CLAUDE_PROJECT_DIR: bob, AIDLC_PROJECT_DIR: bob }, encoding: "utf-8",
+    });
+    expect(switched.status, switched.stdout + switched.stderr).toBe(0);
+    const ask = next(bob, chat);
+    expect(ask.ask_type, JSON.stringify(ask)).toBe("unit-take");
+    expect((ask.choices as Array<{ label: string }>).map((choice) => choice.label))
+      .toEqual(["Carry on fixture here", "Take checkout-ui", "Follow along"]);
+    expect(next(bob, chat).ask_type).not.toBe("unit-take");
+  });
+
+  test("a bare /aidlc typed after their agent selected the work puts the offer first, never the other person's step", () => {
+    // A live run: in a second chat the agent selected the other person's work;
+    // the teammate's bare /aidlc then walked that person's Unit, as the entry
+    // word alone over work in hand reads as picking it back up.
+    const home = soloAtA();
+    const bob = cloneOf(home.remote, "bob");
+    const chat = personsChat("chat-bob-2");
+    const select = /`([^`]* intent switch [^`]*)`/.exec(String(next(bob, chat, ["--pick", HOME_RECORD]).message))?.[1];
+    expect(select).toBeString();
+    const switched = spawnSync(process.execPath, [join(AIDLC_SRC, "tools", "aidlc.ts"), ...select!.split(" ").slice(2)], {
+      cwd: bob, env: { ...chat, CLAUDE_PROJECT_DIR: bob, AIDLC_PROJECT_DIR: bob }, encoding: "utf-8",
+    });
+    expect(switched.status, switched.stdout + switched.stderr).toBe(0);
+    expect(hook(bob, chat, { hook_event_name: "UserPromptSubmit", session_id: "chat-bob-2", prompt: "/aidlc" }).status).toBe(0);
+    const ask = next(bob, chat);
+    expect(ask.ask_type, JSON.stringify(ask).slice(0, 400)).toBe("unit-take");
+    expect(String(ask.question)).toStartWith("fixture is being built from another machine, on refunds");
+  });
+
+  test("the same person on their own second machine is not asked: their work carries on as before", () => {
+    const home = soloAtA();
+    // The lead's laptop: the same git identity as the one who committed the work.
+    const laptop = cloneOf(home.remote, "lead");
+    expect(next(laptop).ask_type).not.toBe("unit-take");
+    // The machine the work is built on, in a chat with no work selected yet.
+    rmSync(join(home.dir, "aidlc", "spaces", "default", "intents", "active-intent"));
+    expect(next(home.dir).ask_type).not.toBe("unit-take");
+  });
+
+  test("taking it writes nothing of the home's: the take is on the claim, the build in a folder of its own", () => {
+    const home = soloAtA();
+    const bob = cloneOf(home.remote, "bob");
+    const homeStateBefore = readFileSync(seededStateFile(bob), "utf-8");
+    const took = run(UNIT, ["take", "checkout-ui", "--home", HOME_RECORD], bob);
+    expect(took.status, took.out).toBe(0);
+    expect(took.json).toMatchObject({ space: "default" });
+    // The Unit is theirs, never "for the bob team": solo work's build goes in
+    // the lead's own space, so the claim names that space and who took it.
+    expect(String(took.json?.notice)).toStartWith("checkout-ui is yours. You build it under your team's rules");
+    expect(readFileSync(seededStateFile(bob), "utf-8")).toBe(homeStateBefore);
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "checkout-ui")).toMatchObject({ owner: "default", taken_by: "bob" });
+    const other = run(UNIT, ["take", "refunds", "--home", HOME_RECORD], cloneOf(home.remote, "carol"));
+    expect(other.status).not.toBe(0);
+    expect(other.out).toContain("refunds is being built on the other machine; take another Unit, or follow along.");
+  });
+
+  test("the teammate's second clone is never switched to teams as if it were the home, and hears no take of their own", () => {
+    const home = soloAtA();
+    const took = run(UNIT, ["take", "checkout-ui", "--home", HOME_RECORD], cloneOf(home.remote, "bob"));
+    expect(took.status, took.out).toBe(0);
+    const again = cloneOf(home.remote, "bob");
+    const before = readFileSync(seededStateFile(again), "utf-8");
+    const chat = personsChat("chat-bob-again");
+    const select = /`([^`]* intent switch [^`]*)`/.exec(String(next(again, chat, ["--pick", HOME_RECORD]).message))?.[1];
+    expect(select).toBeString();
+    const switched = spawnSync(process.execPath, [join(AIDLC_SRC, "tools", "aidlc.ts"), ...select!.split(" ").slice(2)], {
+      cwd: again, env: { ...chat, CLAUDE_PROJECT_DIR: again, AIDLC_PROJECT_DIR: again }, encoding: "utf-8",
+    });
+    expect(switched.status, switched.stdout + switched.stderr).toBe(0);
+    const step = next(again, chat);
+    expect(JSON.stringify(step)).not.toContain("bob took checkout-ui; this session carries on");
+    expect(readFileSync(seededStateFile(again), "utf-8")).toBe(before);
+    expect(readAuditShardEvents(again).filter((row) => row.event === "UNIT_OWNERSHIP_SET")).toEqual([]);
+  });
+
+  test("the home's own session switches to teams at its next step, keeps its work and its approvals, and asks nothing again", () => {
+    const home = soloAtA(true);
+    const bob = cloneOf(home.remote, "bob");
+    const took = run(UNIT, ["take", "checkout-ui", "--home", HOME_RECORD], bob);
+    expect(took.status, took.out).toBe(0);
+    // The teammate's build approves the way the home does: once per Unit, at its checkpoint.
+    const bobState = readFileSync(join(bob, "aidlc", "spaces", "default", "intents", String(took.json?.record), "aidlc-state.md"), "utf-8");
+    expect(field(bobState, "Construction Iteration")).toBe("unit-major");
+    expect(field(bobState, "Construction Checkpoints")).toBe("enabled");
+    // The lead fetches nothing by hand: the home looks for a teammate's take itself.
+    const step = next(home.dir);
+    expect((step.change_notices ?? []) as string[]).toContain(
+      "bob took checkout-ui; this session carries on with the rest, one Unit at a time, and you can ask to sign off each taken Unit's result yourself before it counts as done.",
+    );
+    // The step itself carries their sign-off, for an agent that reads no board.
+    expect(String(step.change_notices_note)).toContain("lead-sign-off on --request-file aidlc/.aidlc-engine/request-text/unit-lead-sign-off.txt");
+    const state = stateOf(home.dir);
+    expect(field(state, "Unit Ownership")).toBe("team");
+    expect(field(state, "Home Location")).toBe(home.remote);
+    expect(field(state, "Unit Gate Rhythm")).toBe("unit-end");
+    const rows = readAuditShardEvents(home.dir);
+    expect(rows.filter((row) => row.event === "UNIT_GATE_RHYTHM_SET")).toHaveLength(1);
+    // refunds was built here, never merged anywhere: the record says nothing it did not do.
+    expect(rows.filter((row) => row.event === "UNIT_MERGED")).toEqual([]);
+    // The work goes on with reporting, under way here; nothing is asked again.
+    // Its only repo is the workspace folder, which teammates clone, so the one
+    // offer to write repos.json is never made (Arden 2026-11-06).
+    expect(step.kind, JSON.stringify(step)).toBe("run-stage");
+    expect(step.unit).toBe("reporting");
+    const after = next(home.dir);
+    expect(after.ask_type, JSON.stringify(after)).toBeUndefined();
+    expect(JSON.stringify(after)).not.toContain("repos.json");
+  });
+
+  // The switch runs the approval setter itself: on the builder's other
+  // machine, which may not read as where the work's plan was made, it is still
+  // the work's own rhythm, never a lead's word to ask about.
+  test("on the builder's other machine, the switch to teams keeps once at the end and says the take", () => {
+    const home = soloAtA(true);
+    const took = run(UNIT, ["take", "checkout-ui", "--home", HOME_RECORD], cloneOf(home.remote, "bob"));
+    expect(took.status, took.out).toBe(0);
+    const laptop = cloneOf(home.remote, "lead");
+    const step = next(laptop);
+    expect((step.change_notices ?? []) as string[], JSON.stringify(step).slice(0, 900)).toContain(
+      "bob took checkout-ui; this session carries on with the rest, one Unit at a time, and you can ask to sign off each taken Unit's result yourself before it counts as done.",
+    );
+    expect(JSON.stringify(step)).not.toContain("Do you lead fixture from here?");
+    const state = stateOf(laptop);
+    expect(field(state, "Unit Ownership")).toBe("team");
+    expect(field(state, "Unit Gate Rhythm")).toBe("unit-end");
+    expect(readAuditShardEvents(laptop).filter((row) => row.event === "UNIT_GATE_RHYTHM_SET")).toHaveLength(1);
+  });
+});
+
+describe("the lead's own chat hears a teammate's take once a chat starts and between Units", () => {
+  const chat: NodeJS.ProcessEnv = { ...ENV, AIDLC_SESSION_OVERRIDE: "lead-chat" };
+  const typed = (dir: string) =>
+    expect(hook(dir, chat, { hook_event_name: "UserPromptSubmit", session_id: "lead-chat", prompt: "/aidlc" }).status).toBe(0);
+
+  test("a walk of several messages inside one Unit makes no look; a take made meanwhile is said before the next Unit starts", () => {
+    const home = soloAtA();
+    typed(home.dir);
+    next(home.dir, chat);
+    expect(run(UNIT, ["take", "checkout-ui", "--home", HOME_RECORD], cloneOf(home.remote, "bob")).status).toBe(0);
+    const trace = join(tempDir("trace"), "trace2.json");
+    const traced = { ...chat, GIT_TRACE2_EVENT: trace };
+    const notice = "bob took checkout-ui; this session carries on with the rest, one Unit at a time, and you can ask to sign off each taken Unit's result yourself before it counts as done.";
+    for (let message = 0; message < 3; message++) {
+      typed(home.dir);
+      const step = next(home.dir, traced);
+      expect((step.change_notices ?? []) as string[], JSON.stringify(step)).not.toContain(notice);
+    }
+    expect(looks(trace)).toBe(0);
+    expect(field(stateOf(home.dir), "Unit Ownership")).not.toBe("team");
+    // refunds is built: before the next Unit starts, the take is looked for and said.
+    appendAuditEntry("UNIT_COMPLETED", { Stage: "code-generation", Unit: "refunds", "Run floor": "0" }, home.dir);
+    const step = next(home.dir, traced);
+    expect((step.change_notices ?? []) as string[], JSON.stringify(step)).toContain(notice);
+    expect(step.unit ?? null, JSON.stringify(step)).not.toBe("checkout-ui");
+    expect(field(stateOf(home.dir), "Unit Ownership")).toBe("team");
+  });
+
+  test("a new chat looks once when it starts", () => {
+    const home = soloAtA(true);
+    typed(home.dir);
+    next(home.dir, chat);
+    expect(run(UNIT, ["take", "checkout-ui", "--home", HOME_RECORD], cloneOf(home.remote, "bob")).status).toBe(0);
+    const other: NodeJS.ProcessEnv = { ...ENV, AIDLC_SESSION_OVERRIDE: "lead-chat-2" };
+    const step = next(home.dir, other);
+    expect((step.change_notices ?? []) as string[], JSON.stringify(step)).toContain(
+      "bob took checkout-ui; this session carries on with the rest, one Unit at a time, and you can ask to sign off each taken Unit's result yourself before it counts as done.",
+    );
+  });
+
+  test("before the session starts its next Unit: a Unit a teammate took meanwhile is never started here", () => {
+    const home = makeHome({ repos: {} });
+    appendAuditEntry("UNIT_STARTED", { Stage: "functional-design", Unit: "refunds", "Run floor": "0" }, home.dir);
+    appendAuditEntry("UNIT_COMPLETED", { Stage: "code-generation", Unit: "refunds", "Run floor": "0" }, home.dir);
+    git(home.dir, ["add", "-A"]);
+    git(home.dir, ["commit", "-q", "-m", "refunds built here"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    typed(home.dir);
+    // A teammate takes a Unit while the lead is between Units: the boundary's one look sees it.
+    const unit = "checkout-ui";
+    expect(run(UNIT, ["take", unit, "--home", HOME_RECORD], cloneOf(home.remote, "bob")).status).toBe(0);
+    const step = next(home.dir, chat);
+    expect((step.change_notices ?? []) as string[], JSON.stringify(step)).toContain(
+      `bob took ${unit}; this session carries on with the rest, one Unit at a time, and you can ask to sign off each taken Unit's result yourself before it counts as done.`,
+    );
+    expect(step.unit ?? null, JSON.stringify(step)).not.toBe(unit);
+  });
+});
+
+describe("a solo home looks for a teammate's take only once its Unit walk has begun", () => {
+  const servers: Array<() => void> = [];
+  afterEach(() => {
+    while (servers.length > 0) servers.pop()!();
+  });
+  const traced = (): { trace: string; env: NodeJS.ProcessEnv } => {
+    const trace = join(tempDir("trace"), "trace2.json");
+    return { trace, env: { ...ENV, GIT_TRACE2_EVENT: trace, AIDLC_SESSION_OVERRIDE: "solo-chat" } };
+  };
+  const betweenUnits = () => {
+    const home = makeHome({ repos: {} });
+    appendAuditEntry("UNIT_STARTED", { Stage: "functional-design", Unit: "refunds", "Run floor": "0" }, home.dir);
+    appendAuditEntry("UNIT_COMPLETED", { Stage: "code-generation", Unit: "refunds", "Run floor": "0" }, home.dir);
+    git(home.dir, ["add", "-A"]);
+    git(home.dir, ["commit", "-q", "-m", "refunds built here"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    return home;
+  };
+
+  test("at an Inception stage: two steps, no look", () => {
+    const home = makeHome({
+      repos: {},
+      state: homeState().replace("- [x] delivery-planning", "- [-] delivery-planning").replace("- [-] functional-design", "- [ ] functional-design")
+        .replace(/^- \*\*Current Stage\*\*: .*$/m, "- **Current Stage**: delivery-planning"),
+    });
+    const { trace, env } = traced();
+    expect(next(home.dir, env).stage).toBe("delivery-planning");
+    next(home.dir, env);
+    expect(looks(trace)).toBe(0);
+  });
+
+  test("between Units: one look before the next Unit starts", () => {
+    const home = betweenUnits();
+    const { trace, env } = traced();
+    next(home.dir, env);
+    expect(looks(trace)).toBe(1);
+  });
+
+  // A live run: one person, three Units, git's own trace: a look at every step
+  // around a Unit boundary (4 in 75 seconds) and every step after the last Unit
+  // (Build and Test and on), 22 in all, where one per boundary was the aim.
+  test("several steps at one Unit boundary make one look", () => {
+    const home = betweenUnits();
+    const { trace, env } = traced();
+    for (let step = 0; step < 4; step++) next(home.dir, env);
+    expect(looks(trace)).toBe(1);
+  });
+
+  test("once every Unit of the plan is built here, no step looks", () => {
+    const home = makeHome({ repos: {} });
+    for (const unit of ["refunds", "checkout-ui", "reporting"]) {
+      appendAuditEntry("UNIT_STARTED", { Stage: "functional-design", Unit: unit, "Run floor": "0" }, home.dir);
+      appendAuditEntry("UNIT_COMPLETED", { Stage: "code-generation", Unit: unit, "Run floor": "0" }, home.dir);
+    }
+    git(home.dir, ["add", "-A"]);
+    git(home.dir, ["commit", "-q", "-m", "every Unit built here"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const { trace, env } = traced();
+    for (let step = 0; step < 3; step++) next(home.dir, env);
+    expect(looks(trace)).toBe(0);
+  });
+
+  // The remotes as the person named them: origin renamed, and a second remote
+  // (a mirror, or upstream beside a fork) when a second name is given.
+  const remotesNamed = (dir: string, [first, second]: readonly string[]) => {
+    if (first !== "origin") git(dir, ["remote", "rename", "origin", first]);
+    if (second === undefined) return;
+    const other = tempDir("other-host");
+    git(other, ["init", "-q", "--bare", "-b", "main"]);
+    git(dir, ["remote", "add", second, other]);
+  };
+
+  test("two remotes and neither named origin: each step runs as it does with no remote, with no look and nothing said about remotes", () => {
+    const alone = betweenUnits();
+    git(alone.dir, ["remote", "remove", "origin"]);
+    const expected = next(alone.dir, traced().env);
+    const home = betweenUnits();
+    remotesNamed(home.dir, ["github", "gitlab"]);
+    const { trace, env } = traced();
+    const step = next(home.dir, env);
+    expect([step.kind, step.stage, step.unit]).toEqual([expected.kind, expected.stage, expected.unit]);
+    expect(JSON.stringify(step)).not.toContain("Multiple git remotes");
+    expect(looks(trace)).toBe(0);
+    expect(field(stateOf(home.dir), "Unit Ownership")).not.toBe("team");
+  });
+
+  test("one remote of any name, or origin beside another: a teammate's take is still heard at the next step", () => {
+    for (const names of [["github"], ["origin", "gitlab"]]) {
+      const home = soloAtA(true);
+      expect(run(UNIT, ["take", "checkout-ui", "--home", HOME_RECORD], cloneOf(home.remote, "bob")).status).toBe(0);
+      remotesNamed(home.dir, names);
+      expect((next(home.dir).change_notices ?? []) as string[], names.join(" and ")).toContain(
+        "bob took checkout-ui; this session carries on with the rest, one Unit at a time, and you can ask to sign off each taken Unit's result yourself before it counts as done.",
+      );
+    }
+  });
+
+  // Skipping is the solo look's alone: where the person asks for team work, the line stays.
+  test("team work that chose teams before, with two remotes and neither named origin, keeps its line where the person asks for team work", () => {
+    const home = makeHome({ repos: {}, state: homeState(["- **Unit Ownership**: team"]) });
+    remotesNamed(home.dir, ["github", "gitlab"]);
+    const shared = run(UNIT, ["share"], home.dir);
+    expect(shared.status, shared.out).not.toBe(0);
+    expect(shared.json?.error).toBe("Multiple git remotes are configured (github, gitlab); configure origin for Unit claims.");
+  });
+
+  // Teams chosen on a remote record its address, so the share finds that remote by it.
+  test("team work chosen on a remote, its remotes renamed to two with neither named origin: the plan's share finds the home's remote", () => {
+    const home = makeHome({ repos: {} });
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    remotesNamed(home.dir, ["github", "gitlab"]);
+    const shared = run(UNIT, ["share", "--plan"], home.dir);
+    expect(shared.status, shared.out).toBe(0);
+    expect(shared.json).toMatchObject({ shared: true, plan: { address: home.remote } });
+    expect(git(home.remote, ["for-each-ref", "--format=%(refname)", "refs/aidlc/plans"])).not.toBe("");
+  });
+
+  // The command lines still running that name a host stand-in's port.
+  const runningFor = (port: string): string[] =>
+    (spawnSync("ps", ["-eo", "args"], { encoding: "utf-8" }).stdout ?? "").split("\n").filter((line) => line.includes(`127.0.0.1:${port}`));
+
+  test("a remote that does not answer holds the step a few seconds at most, nothing is said, and off Windows nothing of the look keeps running", async () => {
+    // The bound is the cost of the look, not the speed of the box: the same step against a remote that answers at
+    // once is the baseline, and the silent one may take the look's ceiling more, and a little. Its own home, since a
+    // second step at the same Unit boundary makes no look.
+    const LOOK_CEILING_MS = 5_000; // QUIET_LOOK_CEILING_MS in core/tools/aidlc-unit.ts
+    const timed = (dir: string) => {
+      const { env } = traced();
+      const started = Date.now();
+      const step = next(dir, { ...env, GIT_ALLOW_PROTOCOL: "file:http" });
+      return { step, ms: Date.now() - started };
+    };
+    const baseline = timed(betweenUnits().dir);
+    const home = betweenUnits();
+    const asked = join(tempDir("silent-host"), "asked.txt");
+    const child = spawn(process.execPath, ["-e", `
+      const server = Bun.serve({ port: 0, fetch: () => {
+        require("node:fs").appendFileSync(${JSON.stringify(asked)}, "asked\\n");
+        return new Promise(() => {});
+      } });
+      console.log(server.port);
+    `], { stdio: ["ignore", "pipe", "inherit"] });
+    servers.push(() => child.kill());
+    const port = await new Promise<string>((resolve) => child.stdout!.once("data", (chunk: Buffer) => resolve(chunk.toString().trim())));
+    git(home.dir, ["remote", "set-url", "origin", `http://127.0.0.1:${port}/org/ws.git`]);
+    const silent = timed(home.dir);
+    const times = `silent step ${silent.ms} ms, baseline step ${baseline.ms} ms`;
+    console.log(`look timing: ${times}`);
+    expect(silent.ms - baseline.ms, `${times}: ${JSON.stringify(silent.step)}`).toBeLessThan(LOOK_CEILING_MS + 2_000);
+    // A look with no limit at all fails here by itself, whatever the baseline.
+    expect(silent.ms, times).toBeLessThan(30_000);
+    expect(existsSync(asked)).toBe(true);
+    expect(JSON.stringify(silent.step.change_notices ?? [])).not.toContain("could not be reached");
+    // On Windows what the look started ends at its own limits (git() in aidlc-unit.ts).
+    if (process.platform !== "win32") expect(runningFor(port)).toEqual([]);
+  });
+});
+
+describe("the lead's sign-off", () => {
+  test("asked for in the lead's own words: the setting is on, and the record keeps their words whole", () => {
+    const { home } = refundsTaken();
+    const on = run(UNIT, ["lead-sign-off", "on", "--person-words", "I want to sign off Bob's tool myself before it counts as done"], home.dir);
+    expect(on.status, on.out).toBe(0);
+    expect(field(stateOf(home.dir), "Lead Sign-off")).toBe("on");
+    const set = readAuditShardEvents(home.dir).filter((row) => row.event === "LEAD_SIGN_OFF_SET");
+    expect(set).toHaveLength(1);
+    expect(set[0].block).toContain("**Person Words**: I want to sign off Bob's tool myself before it counts as done");
+  });
+
+  test("off by default: a merged Unit is done with no sign-off asked", () => {
+    const { home, hosts, alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    mergeOnHost(hosts["checkout-api"], "refunds", "squash");
+    mergeOnHost(hosts.billing, "refunds", "squash");
+    git(home.dir, ["fetch", "-q", "origin"]);
+    expect(next(home.dir).ask_type).not.toBe("unit-signoff");
+    expect(planWordAt(home, "refunds")).toMatchObject({ done: true });
+  });
+
+  test("on, in a worktree of the lead's checkout without the clones: the ask says those repos are not cloned there", () => {
+    const { home, hosts, alice, record } = refundsTaken();
+    expect(run(UNIT, ["lead-sign-off", "on"], home.dir).status).toBe(0);
+    git(home.dir, ["add", "-A"]);
+    git(home.dir, ["commit", "-q", "-m", "sign-off on"]);
+    codeGenerated(alice, record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    mergeOnHost(hosts["checkout-api"], "refunds", "squash");
+    mergeOnHost(hosts.billing, "refunds", "squash");
+    const tree = join(tempDir("lead-worktree"), "lead-worktree");
+    git(home.dir, ["worktree", "add", "-q", "-b", "lead-worktree", tree, "main"]);
+    expect(run(UTILITY, ["intent", "switch", HOME_RECORD], tree).status).toBe(0);
+    const ask = next(tree);
+    expect(ask.ask_type, JSON.stringify(ask).slice(0, 600)).toBe("unit-signoff");
+    expect(ask.question).toBe(
+      "refunds came back from alice, not read here: checkout-api and billing are not cloned in this workspace. Sign it off?",
+    );
+  });
+
+  test("on: the result waits for the lead's own word, asked once as it arrives", () => {
+    const { home, hosts, alice, record } = refundsTaken();
+    const on = run(UNIT, ["lead-sign-off", "on"], home.dir);
+    expect(on.status, on.out).toBe(0);
+    codeGenerated(alice, record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    git(home.dir, ["fetch", "-q", "origin"]);
+    const ask = next(home.dir);
+    expect(ask.ask_type, JSON.stringify(ask)).toBe("unit-signoff");
+    expect(ask.question).toBe(
+      "refunds came back from alice: checkout-api not merged yet, billing not merged yet (0 of 2 merged). Sign it off?",
+    );
+    mergeOnHost(hosts["checkout-api"], "refunds", "squash");
+    mergeOnHost(hosts.billing, "refunds", "squash");
+    const guarded: NodeJS.ProcessEnv = { ...ENV, AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "" };
+    const unasked = run(UNIT, ["sign-off", "refunds", "--person-words", "sign it off"], home.dir, guarded);
+    expect(String(unasked.json?.error)).toStartWith("The sign-off is the person's own word: ask them first, then run this with their words.");
+    appendAuditEntry("HUMAN_TURN", { "Person Reply": "let me look at the PRs first" }, home.dir);
+    const board = next(home.dir);
+    expect(String(board.narration)).toContain("- refunds, payments space: built by alice, checkout-api merged, billing merged (2 of 2 merged), waiting for your sign-off");
+    // Not asked again; the board keeps the sign-off theirs to give, and names the lead's other moves.
+    const signOff = (board.offers as Array<{ question: string; choices: Array<{ label: string; command?: string }> }>)
+      .find((offer) => offer.question === "refunds came back from alice. Sign it off?");
+    expect(signOff?.choices.map((choice) => choice.label)).toEqual(["Sign it off", "Not now"]);
+    expect(String(signOff?.choices[0].command)).toEndWith("aidlc-unit.ts sign-off refunds --request-file aidlc/.aidlc-engine/request-text/unit-sign-off-refunds.txt");
+    for (const command of ["sign-off <unit>", "amend <unit> --input <file>", "lead-sign-off on", "release <unit>"]) {
+      expect(String(board.board_note)).toContain(command);
+    }
+    expect(planWordAt(home, "refunds")?.done).toBeUndefined();
+    const signed = run(UNIT, ["sign-off", "refunds", "--person-words", "looks right, sign it off"], home.dir);
+    expect(signed.status, signed.out).toBe(0);
+    // Every repo it changed has merged: it is done now, not once they merge.
+    expect(String(signed.json?.notice)).toBe("Signed off refunds; every repo it changed has merged, so it is done.");
+    next(home.dir);
+    expect(planWordAt(home, "refunds")).toMatchObject({ done: true });
+  });
+});
+
+// Right after the lead turns the sign-off on, it is in the main checkout's
+// state and not committed: a worktree of that checkout, or another computer of
+// the lead's, has no word on it. The plan's word stands there, never taken off
+// by one of their writes.
+describe("the lead's sign-off, from another checkout of the lead's", () => {
+  // The lead's own checkout (its approval in its own shard), committed and
+  // pushed; the sign-off then turned on there and not committed; refunds
+  // pushed by alice and merged in both repos.
+  function signOffOnHereOnly(on = true) {
+    const taken = refundsTaken();
+    const { home, hosts, alice, record } = taken;
+    asLeadsOwnCheckout(home.dir);
+    git(home.dir, ["add", "-A"]);
+    git(home.dir, ["commit", "-q", "-m", "the lead's checkout"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    if (on) expect(run(UNIT, ["lead-sign-off", "on"], home.dir).status).toBe(0);
+    codeGenerated(alice, record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    mergeOnHost(hosts["checkout-api"], "refunds", "squash");
+    mergeOnHost(hosts.billing, "refunds", "squash");
+    return taken;
+  }
+  const settingAt = (home: ReturnType<typeof refundsTaken>["home"]): string | undefined =>
+    (JSON.parse(git(recordHost(home), ["show", `${planRefOf(home.id8)}:plan.json`])) as { settings: Record<string, string> }).settings["Lead Sign-off"];
+  // Where the lead carries the work on, with both repos cloned there and their word that they lead it.
+  function asLead(dir: string): string {
+    for (const name of ["checkout-api", "billing"]) expect(run(UTILITY, ["intent", "add-repo", name], dir).status).toBe(0);
+    expect(run(UTILITY, ["intent", "switch", HOME_RECORD], dir).status).toBe(0);
+    expect(run(UNIT, ["lead-here", "--person-words", "I lead this work, carry it on here"], dir).status).toBe(0);
+    return dir;
+  }
+  const worktreeOf = (home: ReturnType<typeof refundsTaken>["home"]): string => {
+    const tree = join(tempDir("lead-worktree"), "lead-worktree");
+    git(home.dir, ["worktree", "add", "-q", "-b", "lead-worktree", tree, "main"]);
+    return asLead(tree);
+  };
+  const laptopOf = (home: ReturnType<typeof refundsTaken>["home"]): string => asLead(cloneOf(home.remote, "lead"));
+
+  for (const [where, other] of [["a worktree of the lead's checkout", worktreeOf], ["another computer of the lead's", laptopOf]] as const) {
+    test(`${where}: the plan keeps it on, the sign-off is asked there, and refunds is done only after it`, () => {
+      const { home, hosts } = signOffOnHereOnly();
+      const dir = other(home);
+      // The lead's own word that they lead it here: the sign-off is theirs.
+      expect(run(ORCH, ["team-board"], dir).out).toContain("(2 of 2 merged), waiting for your sign-off");
+      const ask = next(dir);
+      expect(ask.ask_type, JSON.stringify(ask).slice(0, 600)).toBe("unit-signoff");
+      expect(ask.question).toBe("refunds came back from alice: checkout-api merged, billing merged (2 of 2 merged). Sign it off?");
+      expect(settingAt(home)).toBe("on");
+      expect(planWordAt(home, "refunds")?.done).toBeUndefined();
+      const signed = run(UNIT, ["sign-off", "refunds", "--person-words", "looks right, sign it off"], dir);
+      expect(signed.status, signed.out).toBe(0);
+      expect(run(ORCH, ["team-board"], dir).out).toContain("(2 of 2 merged), not recorded yet: the next step here records it and opens reporting");
+      next(dir);
+      expect(planWordAt(home, "refunds")).toMatchObject({ done: true });
+      expect(settingAt(home)).toBe("on");
+      // reporting waited on refunds: a team takes it now.
+      const carol = teamWorkspace(hosts, "carol", ["billing"]);
+      const took = takeIn("reports", ["reporting", ...planFrom(home)], carol);
+      expect(took.status, took.out).toBe(0);
+      // The main checkout meets the change another checkout wrote, as for any lead write from there.
+      expect(next(home.dir).ask_type).toBe("lead-plan-change");
+    });
+  }
+
+  test("the main checkout's share again, the sign-off on and nothing new to share, writes nothing", () => {
+    const { home } = refundsTaken();
+    expect(run(UNIT, ["lead-sign-off", "on"], home.dir).status).toBe(0);
+    const tip = git(recordHost(home), ["rev-parse", planRefOf(home.id8)]);
+    const shared = run(UNIT, ["share", "--plan"], home.dir);
+    expect(shared.status, shared.out).toBe(0);
+    expect(shared.out).toContain("The plan in checkout-api already has everything here.");
+    expect(git(recordHost(home), ["rev-parse", planRefOf(home.id8)])).toBe(tip);
+  });
+
+  test("the plan shared again from a worktree of the lead's checkout keeps it on", () => {
+    const { home } = signOffOnHereOnly();
+    const shared = run(UNIT, ["share", "--plan"], worktreeOf(home));
+    expect(shared.status, shared.out).toBe(0);
+    expect(settingAt(home)).toBe("on");
+  });
+
+  test("a teammate's clone of the lead's workspace, the lead's work selected: no sign-off asked, nothing counted or written", () => {
+    const { home, hosts } = signOffOnHereOnly();
+    const tip = git(recordHost(home), ["rev-parse", planRefOf(home.id8)]);
+    const carl = cloneOf(home.remote, "carl");
+    for (const name of ["checkout-api", "billing"]) cloneCode(hosts[name as keyof typeof hosts], carl, name, "carl");
+    expect(run(UTILITY, ["intent", "switch", HOME_RECORD], carl).status).toBe(0);
+    const step = next(carl);
+    expect(step.ask_type, JSON.stringify(step).slice(0, 600)).not.toBe("unit-signoff");
+    expect(planWordAt(home, "refunds")?.done).toBeUndefined();
+    expect(git(recordHost(home), ["rev-parse", planRefOf(home.id8)])).toBe(tip);
+  });
+
+  test("a teammate's clone of the lead's workspace reads the sign-off as the lead's, on the board, the team board and status", () => {
+    const { home, hosts } = signOffOnHereOnly();
+    const carl = cloneOf(home.remote, "carl");
+    for (const name of ["checkout-api", "billing"]) cloneCode(hosts[name as keyof typeof hosts], carl, name, "carl");
+    expect(run(UTILITY, ["intent", "switch", HOME_RECORD], carl).status).toBe(0);
+    const row = "- refunds, payments space: built by alice, checkout-api merged, billing merged (2 of 2 merged), waiting for the lead's sign-off";
+    expect(String(next(carl).narration)).toContain(row);
+    expect(run(ORCH, ["team-board"], carl).out).toContain(row);
+    expect(run(UTILITY, ["status"], carl).out).toContain(row);
+    // The lead's own checkout reads it as theirs.
+    expect(run(ORCH, ["team-board"], home.dir).out).toContain("(2 of 2 merged), waiting for your sign-off");
+  });
+
+  // A teammate's clone of the lead's workspace, the lead's work selected, no lead-here.
+  const mateOf = (home: ReturnType<typeof refundsTaken>["home"], hosts: ReturnType<typeof refundsTaken>["hosts"]): string => {
+    const mate = cloneOf(home.remote, "carl");
+    for (const name of ["checkout-api", "billing"]) cloneCode(hosts[name as keyof typeof hosts], mate, name, "carl");
+    expect(run(UTILITY, ["intent", "switch", HOME_RECORD], mate).status).toBe(0);
+    return mate;
+  };
+  const MERGED_ROW = "- refunds, payments space: built by alice, checkout-api merged, billing merged (2 of 2 merged)";
+
+  test("a teammate's clone says no step of its own records the merge, with the sign-off off; the lead's checkout does", () => {
+    const { home, hosts } = signOffOnHereOnly(false);
+    const board = String(next(mateOf(home, hosts)).narration);
+    expect(board).toContain(`${MERGED_ROW}\n`);
+    expect(board).not.toContain("not recorded yet");
+    expect(run(ORCH, ["team-board"], home.dir).out).toContain(`${MERGED_ROW}, not recorded yet: the next step here records it and opens reporting`);
+  });
+
+  test("a teammate's clone where a teammate asked to sign off, the lead's record not committed: nothing is written, and no step of its own records it", () => {
+    const { home, hosts } = signOffOnHereOnly();
+    const mate = mateOf(home, hosts);
+    next(mate);
+    const signed = run(UNIT, ["sign-off", "refunds", "--person-words", "looks right, sign it off"], mate);
+    expect(String(signed.json?.error), signed.out).toBe("refunds's sign-off is the lead's word, and fixture's plan was not made here, so I have not " +
+      "written it. Do you lead fixture from here?");
+    const board = String(next(mate).narration);
+    expect(board).toContain(`${MERGED_ROW}, waiting for the lead's sign-off`);
+    expect(board).not.toContain("not recorded yet");
+  });
+
+  test("the lead's own off takes it off the plan, from the main checkout and from another computer of theirs", () => {
+    const { home } = signOffOnHereOnly();
+    expect(run(UNIT, ["lead-sign-off", "off"], home.dir).status).toBe(0);
+    expect(settingAt(home)).toBe("off");
+    expect(run(UNIT, ["lead-sign-off", "on"], home.dir).status).toBe(0);
+    expect(settingAt(home)).toBe("on");
+    const laptop = laptopOf(home);
+    expect(run(UNIT, ["lead-sign-off", "off"], laptop).status).toBe(0);
+    expect(settingAt(home)).toBe("off");
+  });
+});

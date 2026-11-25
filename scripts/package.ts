@@ -168,6 +168,8 @@ function stampVersionModule(content: string): string {
 // Neutral and native onboarding skeletons (scripts/onboarding.ts).
 const ONBOARDING_SKELETON = join(CORE_ROOT, "templates", "onboarding.md");
 const HARNESS_ONBOARDING_SKELETON = join(CORE_ROOT, "templates", "onboarding-harness.md");
+// AI-DLC's .gitattributes part, the same for every harness that declares it.
+const GITATTRIBUTES_PART = join(CORE_ROOT, "templates", "dot-gitattributes");
 const HARNESS_TOKEN = /\{\{HARNESS_DIR\}\}/g;
 const INVOKE_TOKEN = /\{\{INVOKE\}\}/g;
 const TOOL_PREFIX_TOKEN = /\{\{TOOL_PREFIX\}\}/g;
@@ -431,7 +433,7 @@ function transform(
       posixPath.includes("/agents/") &&
       posixPath.endsWith("-agent.md")
     ) {
-      s = s.replaceAll("aidlc/spaces/<active-space>/memory/", "aidlc/active-memory/");
+      s = s.replaceAll("aidlc/spaces/<active-space>/memory/", "aidlc/.aidlc-engine/active-memory/");
     }
     return Buffer.from(s, "utf-8");
   }
@@ -987,6 +989,12 @@ function buildTree(
       }
     }
     writeFileSync(outPath, out);
+  }
+  // AI-DLC's .gitattributes part has one source, in core; it lands at the root
+  // of a projection whose manifest declares it (writeProjectionData stops on a
+  // root file no entry names).
+  if (m.rootIntegrations.some((integration) => integration.path === ".gitattributes")) {
+    writeFileSync(join(outRoot, ".gitattributes"), readFileSync(GITATTRIBUTES_PART));
   }
 
   // 2b. Split neutral project instructions from each harness's native setup.

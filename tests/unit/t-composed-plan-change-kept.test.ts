@@ -346,7 +346,7 @@ function personSays(proj: string, words: string, at = new Date()): string {
  *  and returns a time between them and now for the person's reply. */
 function before(proj: string, request: string): Date {
   const earlier = new Date(Date.now() - 60_000).toISOString();
-  const question = join(proj, "aidlc", ".aidlc-sessions", "questions", `${request}.json`);
+  const question = join(proj, "aidlc", ".aidlc-engine", "sessions", "questions", `${request}.json`);
   writeFileSync(question, JSON.stringify({ ...JSON.parse(readFileSync(question, "utf-8")), createdAt: earlier }));
   keptAt(proj, earlier);
   return new Date(Date.now() - 30_000);

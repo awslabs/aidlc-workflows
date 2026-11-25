@@ -56,6 +56,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
+import { addRootBlocks } from "../../core/tools/aidlc-includes.ts";
 import { copyChannelDispatcherCommands, copyChannelToolScripts, machineReachingTools, resolveAction } from "../../core/tools/aidlc.ts";
 import { RECORDABLE_PROJECT_BYPASSES } from "../../core/tools/aidlc-settings.ts";
 import { CONFIG_SECTIONS } from "../../core/tools/aidlc-command.ts";
@@ -154,7 +155,7 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
     expect(standing).toMatch(/^alwaysApply: true$/m);
     // The rules read the engine's git-ignored copy of the active space's memory.
     for (const f of ["org.md", "team.md", "project.md"]) {
-      expect(standing).toContain(`aidlc/active-memory/${f}`);
+      expect(standing).toContain(`aidlc/.aidlc-engine/active-memory/${f}`);
     }
     expect(standing).not.toContain("memory/phases/");
 
@@ -166,7 +167,7 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       expect(rule, phase).toMatch(/^description: .+ phase practices$/mi);
       expect(rule, phase).toMatch(/^alwaysApply: false$/m);
       expect(rule, phase).toContain(
-        `aidlc/active-memory/phases/${phase}.md`,
+        `aidlc/.aidlc-engine/active-memory/phases/${phase}.md`,
       );
       expect(rule, phase).not.toContain("memory/org.md");
     }
@@ -538,6 +539,11 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       expect(readFileSync(join(project, ".gitignore"), "utf-8")).toContain(
         "aidlc/active-space",
       );
+      // The installer keeps AGENTS.md and .gitignore under its own markers and writes no .gitattributes; the
+      // first session adds AI-DLC's part of that one.
+      expect(existsSync(join(project, ".gitattributes"))).toBe(false);
+      expect(addRootBlocks(project)).toEqual([".gitattributes"]);
+      expect(readFileSync(join(project, ".gitattributes"), "utf-8")).toStartWith("# BEGIN AI-DLC:gitattributes\n");
 
       const before = readFileSync(join(cursorDir, "hooks.json"), "utf-8");
       const rerun = spawnSync("bun", [join(CURSOR_ROOT, "install.ts"), project], {
@@ -772,8 +778,8 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       // space's files (the switch wrote it), so the installer rewrites nothing.
       expect(
         readFileSync(join(project, ".cursor", "rules", "aidlc.mdc"), "utf-8"),
-      ).toContain("aidlc/active-memory/org.md");
-      expect(readFileSync(join(project, "aidlc", "active-memory", "org.md"), "utf-8"))
+      ).toContain("aidlc/.aidlc-engine/active-memory/org.md");
+      expect(readFileSync(join(project, "aidlc", ".aidlc-engine", "active-memory", "org.md"), "utf-8"))
         .toStartWith("<!-- AI-DLC keeps this copy in step with aidlc/spaces/team-b/memory/org.md.");
       expect(
         readFileSync(join(project, ".cursor", "rules", "aidlc-onboarding.mdc"), "utf-8"),
@@ -784,7 +790,7 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
           "utf-8",
         );
         expect(installedRule, phase).toContain(
-          `aidlc/active-memory/phases/${phase}.md`,
+          `aidlc/.aidlc-engine/active-memory/phases/${phase}.md`,
         );
         expect(installedRule, phase).not.toContain("aidlc/spaces/");
       }
@@ -993,7 +999,7 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       expect(reinstall.status, reinstall.stderr).toBe(0);
       for (const file of [phaseRule, agent]) {
         const restored = readFileSync(file, "utf-8");
-        expect(restored, file).toContain("aidlc/active-memory/");
+        expect(restored, file).toContain("aidlc/.aidlc-engine/active-memory/");
         expect(restored, file).not.toContain("aidlc/spaces/default/memory/");
         expect(restored, file).not.toContain("aidlc/spaces/team-b/memory/");
       }
@@ -1330,7 +1336,7 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       expect(config.status, config.stdout + config.stderr).toBe(0);
       expect(readFileSync(join(project, "install.ts"), "utf-8")).toBe(own);
       expect(readdirSync(project).sort()).toEqual(
-        [".cursor", ".git", ".gitignore", "AGENTS.md", "aidlc", "install.ts", "package.json"],
+        [".cursor", ".git", ".gitattributes", ".gitignore", "AGENTS.md", "aidlc", "install.ts", "package.json"],
       );
     } finally {
       rmSync(root, { recursive: true, force: true });

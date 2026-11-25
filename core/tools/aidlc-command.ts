@@ -188,6 +188,7 @@ export const NEXT_VALUELESS_FLAGS: ReadonlySet<string> = new Set([
   "--change",
   "--every-unit",
   "--unit-plan",
+  "--units",
   // Retired, still taken so the token never becomes task text.
   "--init",
   "--force",
@@ -205,6 +206,8 @@ export function nextFlagTakesFollowing(flag: string, following: string | undefin
 export type UnitGrammar = {
   /** The verb takes the Unit's name, its one word that is not an option. */
   name: boolean;
+  /** The one word it takes that is not a Unit's name, as its usage shows it (`lead-sign-off on|off`). */
+  word?: string;
   /** The options the verb reads that take a value, as aidlc-lib.ts parseArgs keys them. */
   options: readonly string[];
   /** The options it reads that take none, so the word after one is never its value. */
@@ -221,10 +224,28 @@ export type UnitGrammar = {
  */
 export const UNIT_GRAMMAR: Readonly<Record<string, UnitGrammar>> = {
   adopt: { name: true, options: [], usage: "unit adopt <unit>" },
+  amend: {
+    name: true,
+    options: ["input", "answer", "file", "message", "request-file", "person-words"],
+    usage: "unit amend <unit> --input <file> --answer <approve|reject> [--file <text the lead approves>] " +
+      "[--message <id>] (--request-file <file> | --person-words <text>)",
+  },
+  assign: {
+    name: false,
+    options: ["here", "request-file", "person-words"],
+    usage: "unit assign --here <unit>[,<unit>...] [--request-file <file> | --person-words <text>]",
+  },
+  "catch-up": { name: false, options: [], usage: "unit catch-up" },
   claim: {
     name: true,
     options: ["team", "request-file", "rhythm"],
     usage: "unit claim <unit> [--team <label> | --request-file <file>] [--rhythm per-stage|unit-end]",
+  },
+  "commit-record": {
+    name: false,
+    options: ["commit-message-file", "leave"],
+    switches: ["update"],
+    usage: "unit commit-record [--update [--leave <path>]...] [--commit-message-file <file>]",
   },
   gate: {
     name: true,
@@ -238,26 +259,87 @@ export const UNIT_GRAMMAR: Readonly<Record<string, UnitGrammar>> = {
     usage: "unit land <unit> [--step git|state|audit|all] [--target <branch>] [--strategy merge] " +
       "[--accept-released-attempt --user-input <acknowledgment>]",
   },
+  "lead-here": {
+    name: false,
+    options: ["message", "request-file", "person-words"],
+    switches: ["off"],
+    usage: "unit lead-here [--off] [--message <id>] (--request-file <file> | --person-words <text>)",
+  },
+  "lead-sign-off": {
+    name: false,
+    word: "on|off",
+    options: ["request-file", "person-words"],
+    usage: "unit lead-sign-off on|off [--request-file <file> | --person-words <text>]",
+  },
   "merge-status": { name: true, options: [], usage: "unit merge-status <unit>" },
+  merged: {
+    name: true,
+    options: ["repo", "pull-request", "message", "request-file", "person-words"],
+    usage: "unit merged <unit> --repo <repo> [--pull-request <n>] [--message <id>] (--request-file <file> | --person-words <text>)",
+  },
   participate: { name: false, options: [], usage: "unit participate" },
   pin: { name: true, options: [], usage: "unit pin <unit>" },
+  "plan-change": { name: false, word: "keep|take-out", options: ["tip"], usage: "unit plan-change keep|take-out --tip <plan commit>" },
+  propose: {
+    name: false,
+    options: ["input", "file", "request-file", "person-words"],
+    usage: "unit propose --input <file it was approved with> [--file <changed text>] " +
+      "[--request-file <file> | --person-words <text>]",
+  },
   publish: {
     name: true,
     options: ["include"],
     switches: ["commit"],
     usage: "unit publish <unit> [--commit [--include <path>]...]",
   },
+  push: {
+    name: false,
+    options: ["branch", "remote", "commit-message-file"],
+    switches: ["later", "finish-merge", "merge-main", "undo-merge", "put-aside", "replace", "to-fork"],
+    usage: "unit push [--branch <name>] [--remote <repo>=<remote>[,<repo>=<remote>...]] [--commit-message-file <file>] " +
+      "[--later] [--finish-merge] [--merge-main [--put-aside]] [--undo-merge] [--replace] [--to-fork]",
+  },
+  rebase: { name: false, options: [], usage: "unit rebase" },
   release: { name: true, options: ["expect-nonce"], usage: "unit release <unit> [--expect-nonce <claim-nonce>]" },
-  share: { name: false, options: [], usage: "unit share" },
+  "send-back": {
+    name: true,
+    options: ["message", "request-file", "person-words"],
+    usage: "unit send-back <unit> [--message <id>] (--request-file <file> | --person-words <text>)",
+  },
+  share: {
+    name: false,
+    options: ["commit-message-file", "repo", "tip", "stands"],
+    switches: ["plan", "branch", "back", "carry-words", "off-branch", "visible"],
+    usage: "unit share [--plan [--repo <name or address>] [--carry-words] [--stands <unit>=here|plan[,<unit>=here|plan...]] " +
+      "[--visible | --off-branch [--tip <plan commit>]]] [--branch | --back] [--commit-message-file <file>]",
+  },
+  "sign-off": {
+    name: true,
+    options: ["message", "request-file", "person-words"],
+    usage: "unit sign-off <unit> [--message <id>] (--request-file <file> | --person-words <text>)",
+  },
   status: { name: false, options: [], usage: "unit status" },
+  take: {
+    name: true,
+    options: ["plan", "home", "space", "home-space", "from", "request-file", "person-words"],
+    switches: ["early", "lead-rules"],
+    usage: "unit take <unit> (--plan <work id> --from <plan repository address> | --home <record> [--home-space <space>]) [--space <name>] " +
+      "[--early] [--lead-rules] [--request-file <file> | --person-words <text>]",
+  },
+  "turned-down": {
+    name: true,
+    options: ["repo", "message", "request-file", "person-words"],
+    usage: "unit turned-down <unit> --repo <repo> [--message <id>] (--request-file <file> | --person-words <text>)",
+  },
 };
 
 /**
- * The `unit` noun's verbs, each with whether it takes the Unit's name. The
- * dispatcher's `unit` route and the `next` line both read this list.
+ * The `unit` noun's verbs, each with whether it takes one word that is not an
+ * option (the Unit's name, or the verb's own word). The dispatcher's `unit`
+ * route and the `next` line both read this list.
  */
 export const UNIT_VERBS: ReadonlyMap<string, boolean> = new Map(
-  Object.entries(UNIT_GRAMMAR).map(([verb, grammar]) => [verb, grammar.name]),
+  Object.entries(UNIT_GRAMMAR).map(([verb, grammar]) => [verb, grammar.name || grammar.word !== undefined]),
 );
 
 /**

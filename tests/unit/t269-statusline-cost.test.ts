@@ -12,7 +12,7 @@
 //       the transcript), tokens-only when the cost is unknown, and "" on a
 //       missing ledger / any failure.
 //
-// Fixtures write a real usage-ledger.json under <tmp>/aidlc/.aidlc-sessions/ via
+// Fixtures write a real usage-ledger.json under <tmp>/aidlc/.aidlc-engine/sessions/ via
 // the shipped updateLedger, so the ledger path resolution is exercised for real.
 //
 // MECHANISM: none. Deterministic, in-process, fixture-based; zero tokens, zero

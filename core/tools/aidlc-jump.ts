@@ -847,12 +847,13 @@ async function handleExecute(args: string[]): Promise<void> {
     stageIndex(targetSlug) > stageIndex(unitStages[unitStages.length - 1]);
   if (pastUnitStages) {
     try {
-      (await import("./aidlc-unit.ts")).refreshClaimRefs(pd);
+      // This work's claims, by the one quiet fetch the board reads.
+      (await import("./aidlc-unit.ts")).refreshHomeClaims(pd, { now: true });
     } catch {
       // The claims as this checkout last saw them.
     }
   }
-  const keepsUnitStages = pastUnitStages && cachedClaimFanoutActive(pd);
+  const keepsUnitStages = pastUnitStages && cachedClaimFanoutActive(pd, content);
   // A Construction that runs one unit at a time: what this jump does to each
   // unit, read before the jump writes the state, for the jump's own line.
   // The orchestrator owns the walk; it is loaded only here, so the jump's

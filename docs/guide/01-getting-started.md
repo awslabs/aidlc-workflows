@@ -101,8 +101,8 @@ On Kiro, install with the guide's manual-copy steps instead:
 `runtime/kiro-ide/` and
 [Kiro CLI (V2)](harnesses/kiro.md#kiro-cli-v2-versioned-manual-copy-alternative)
 copies `runtime/kiro/`, and both say how to keep the project's own Kiro settings.
-A copy never replaces your `.gitignore` or `AGENTS.md`; AI-DLC adds its own
-lines to them. The manual-copy path does not require the native `aidlc`
+A copy never replaces your `.gitignore`, `.gitattributes` or `AGENTS.md`;
+AI-DLC adds its own lines to them. The manual-copy path does not require the native `aidlc`
 command.
 
 To move a copied project to a newer release, run its own setup command from
@@ -189,8 +189,8 @@ Then it asks one more question, about Claude Code's status line:
   Writing project files ... done  (.claude/ and aidlc/, 316 files)
   Recording model preset ... done  (aidlc.settings.json in this project)
   Note: git does not track AI-DLC's setup for Claude Code in this project yet: .claude/, aidlc/,
-        .gitignore, .mcp.json and aidlc.settings.json. Commit them so teammates who use Claude Code
-        get the same setup.
+        .gitattributes, .gitignore, .mcp.json and aidlc.settings.json. Commit them so teammates who
+        use Claude Code get the same setup.
 
   Setup complete. Start your first workflow:
 
@@ -301,7 +301,7 @@ servers on (add `--mcp defaults` for that):
 
 ```text
 $ aidlc config --harness claude --mcp defaults --yes
-  Note: git does not track AI-DLC's setup for Claude Code in this project yet: .claude/, aidlc/, .gitignore and .mcp.json. Commit them so teammates who use Claude Code get the same setup.
+  Note: git does not track AI-DLC's setup for Claude Code in this project yet: .claude/, aidlc/, .gitattributes, .gitignore and .mcp.json. Commit them so teammates who use Claude Code get the same setup.
 configured /home/you/ci-demo for Claude Code X.Y.Z; next: open Claude Code in this project (if it is already open in this folder, exit it and start it again) and run `/aidlc --doctor`
 ```
 
@@ -362,6 +362,7 @@ The rest is the same, with `Claude Code selected` in place of `detected`.
 ```text
 $ git status --short
 ?? .claude/
+?? .gitattributes
 ?? .gitignore
 ?? .mcp.json
 ?? aidlc.settings.json
@@ -373,13 +374,14 @@ $ git status --short
 | `.claude/` | Claude Code's AI-DLC files: the `/aidlc` skill, agents, stages, hooks, tools, and `settings.json` (hooks, permissions, the welcome message) | Yes |
 | `aidlc/` | AI-DLC's records: `aidlc/spaces/default/memory/` holds the rules (the framework's defaults, and your team's and project's own), and each piece of work gets its record here | Yes |
 | `.gitignore` | AI-DLC's own marked block, added to yours if you had one | Yes |
+| `.gitattributes` | AI-DLC's own marked block, added at the top of yours if you had one: it marks each piece of work's record under `aidlc/spaces/*/intents/` as generated, so pull and merge requests show it folded and the code open; a line of yours below it wins | Yes |
 | `.mcp.json` | The MCP servers, when you chose them | Yes |
 | `aidlc.settings.json` | The model preset | Yes |
 | `aidlc.settings.local.json`, `.claude/settings.local.json` | Your own choices (here, the status line) | No, git-ignored |
 
-Commit the first five so your team gets the same setup (in a git repository, the
+Commit the first six so your team gets the same setup (in a git repository, the
 first `aidlc config` for a harness names them in a `Note:` line):
-`git add .claude aidlc .gitignore .mcp.json aidlc.settings.json && git commit -m "Set up AI-DLC"`.
+`git add .claude aidlc .gitattributes .gitignore .mcp.json aidlc.settings.json && git commit -m "Set up AI-DLC"`.
 Run `aidlc config` again at any time to refresh the files from your installed
 release; it keeps what you edited
 ([Configure or Refresh a Project](18-install-and-lifecycle.md#configure-or-refresh-a-project)).
@@ -402,7 +404,7 @@ Project (.claude, Claude Code)
         fix: This is expected before your first Claude Code chat in this folder. ...
   warn  Workspace records: 8 uncommitted change(s) under aidlc/ (advisory - the shared records travel by git; commit & push so teammates get them)
         fix: add --verbose to see the details, correct the named condition, then run doctor again
-  warn  git does not track AI-DLC's setup for Claude Code in this project yet: .claude/, aidlc/, .gitignore, .mcp.json and aidlc.settings.json. Commit them so teammates who use Claude Code get the same setup.
+  warn  git does not track AI-DLC's setup for Claude Code in this project yet: .claude/, aidlc/, .gitattributes, .gitignore, .mcp.json and aidlc.settings.json. Commit them so teammates who use Claude Code get the same setup.
         fix: add --verbose to see the details, correct the named condition, then run doctor again
   ok    49 checks passed
 
@@ -771,15 +773,16 @@ secrets in the committed `.mcp.json`.
 
 ## Updating
 
-`aidlc update` updates the machine runtime. It does not rewrite configured
-projects. Refresh each project; open work carries on:
+`aidlc update` updates the machine runtime, and each project catches up the
+next time you open it; open work carries on:
 
 ```bash
 aidlc update
-cd /path/to/your-project
-aidlc doctor
-aidlc config
 ```
+
+`aidlc doctor` in a project shows whether it is on the running release. A
+copied project (the copy channel) refreshes when you run config from the new
+release's files.
 
 Config preserves project-owned content, and a refresh while a workflow is open
 is done and says whether that work carries on. Projects using plugins should run

@@ -175,7 +175,7 @@ describe("t311 session binding writers", () => {
     // The stub names the engine's copy of the active space's memory and never
     // changes; the copy follows the session that started last.
     const stub = join(proj, ".claude", "rules", "aidlc.md");
-    const copyOrg = join(proj, "aidlc", "active-memory", "org.md");
+    const copyOrg = join(proj, "aidlc", ".aidlc-engine", "active-memory", "org.md");
     for (const [space, text] of [["default", "# default org\n"], ["team-b", "# team-b org\n"]]) {
       mkdirSync(join(proj, "aidlc", "spaces", space, "memory"), { recursive: true });
       writeFileSync(join(proj, "aidlc", "spaces", space, "memory", "org.md"), text);
@@ -189,7 +189,7 @@ describe("t311 session binding writers", () => {
     expect(readAllAuditShards(proj, first.dirName, "default")).toContain(
       "**Event**: SESSION_STARTED",
     );
-    expect(readFileSync(stub, "utf-8")).toContain("aidlc/active-memory/");
+    expect(readFileSync(stub, "utf-8")).toContain("aidlc/.aidlc-engine/active-memory/");
     expect(readFileSync(stub, "utf-8")).not.toContain("aidlc/spaces/default/memory/org.md");
     expect(readFileSync(copyOrg, "utf-8")).toBe(
       "<!-- AI-DLC keeps this copy in step with aidlc/spaces/default/memory/org.md. Edit that file; this copy is replaced. -->\n# default org\n",
@@ -203,7 +203,7 @@ describe("t311 session binding writers", () => {
     expect(readAllAuditShards(proj, team.dirName, "team-b")).toContain(
       "**Event**: SESSION_STARTED",
     );
-    expect(readFileSync(stub, "utf-8")).toContain("aidlc/active-memory/");
+    expect(readFileSync(stub, "utf-8")).toContain("aidlc/.aidlc-engine/active-memory/");
     expect(readFileSync(copyOrg, "utf-8")).toBe(
       "<!-- AI-DLC keeps this copy in step with aidlc/spaces/team-b/memory/org.md. Edit that file; this copy is replaced. -->\n# team-b org\n",
     );

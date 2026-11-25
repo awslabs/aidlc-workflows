@@ -248,7 +248,7 @@ describe("where a Unit is in hand, a stop parks as before", () => {
     const parked = parkAsked(lead);
     expect(parked.kind, JSON.stringify(parked)).toBe("parked");
     expect(stateField(lead, "Parked At Stage")).toBe(FD);
-    expect(existsSync(join(lead, "aidlc", ".aidlc-unit-parked"))).toBe(false);
+    expect(existsSync(join(lead, "aidlc", ".aidlc-engine", "units", "parked"))).toBe(false);
   });
 
   test("a pause parks alpha in this checkout and leaves the work's state as it was", () => {
@@ -257,7 +257,7 @@ describe("where a Unit is in hand, a stop parks as before", () => {
     const parked = parkAsked(team);
     expect(parked.kind, JSON.stringify(parked)).toBe("parked");
     expect(String(parked.reason)).toContain('Unit "alpha" is parked in this checkout');
-    expect(existsSync(join(team, "aidlc", ".aidlc-unit-parked"))).toBe(true);
+    expect(existsSync(join(team, "aidlc", ".aidlc-engine", "units", "parked"))).toBe(true);
     expect(readFileSync(seededStateFile(team), "utf-8")).toBe(before);
   });
 
@@ -271,7 +271,7 @@ describe("where a Unit is in hand, a stop parks as before", () => {
     ));
     expect(stopped.kind, JSON.stringify(stopped)).toBe("parked");
     expect(String(stopped.reason)).toContain(`Approved "${FD}" for unit "alpha". Unit "alpha" is parked in this checkout`);
-    expect(existsSync(join(team, "aidlc", ".aidlc-unit-parked"))).toBe(true);
+    expect(existsSync(join(team, "aidlc", ".aidlc-engine", "units", "parked"))).toBe(true);
     expect(stateField(team, "Parked")).toBe("");
   });
 });

@@ -1,8 +1,9 @@
 // covers: subcommand:aidlc-unit:publish, subcommand:aidlc-unit:land
 
 // A checkout config never ran in (every fresh team clone) gets AI-DLC's part
-// of .gitignore and AGENTS.md, and on opencode its entries in opencode.json,
-// from the session-start hook (addRootBlocks). Publish and land used to refuse
+// of .gitignore and AGENTS.md, a .gitattributes holding only its part (a file
+// git does not track until the team commits it), and on opencode its entries
+// in opencode.json, from the session-start hook (addRootBlocks). Publish and land used to refuse
 // that tree as dirty, and agents then committed or stashed the files to get
 // through. AI-DLC's own write no longer counts; a change of the person's still
 // stops both with the same line as before, and neither commits nor stashes
@@ -39,9 +40,13 @@ const TEAM_OPENCODE = '{\n  "$schema": "https://opencode.ai/config.json",\n  "mo
 
 type Runtime = "copilot" | "opencode";
 const ROOT_FILES: Record<Runtime, string[]> = {
-  copilot: [".gitignore", "AGENTS.md"],
-  opencode: [".gitignore", "AGENTS.md", "opencode.json"],
+  copilot: [".gitattributes", ".gitignore", "AGENTS.md"],
+  opencode: [".gitattributes", ".gitignore", "AGENTS.md", "opencode.json"],
 };
+// The root files the team committed: the seed holds no .gitattributes, so the
+// session start creates it and git has no copy of it to write again.
+const committedRootFiles = (runtime: Runtime): string[] =>
+  ROOT_FILES[runtime].filter((path) => path !== ".gitattributes");
 
 type Seed = { seed: string; remote: string };
 // The AGENTS.md the team committed, and whether the projection lists it as a
@@ -141,7 +146,7 @@ describe("publish and land are not stopped by AI-DLC's own part of the root file
       expect(stashes(checkout)).toBe("");
       // The candidate is the committed tree: the team's files without AI-DLC's part.
       for (const path of ROOT_FILES[runtime]) {
-        expect(git(checkout, ["rev-parse", `${candidateOid}:${path}`])).toBe(git(checkout, ["rev-parse", `HEAD:${path}`]));
+        expect(git(checkout, ["ls-tree", candidateOid, "--", path])).toBe(git(checkout, ["ls-tree", "HEAD", "--", path]));
       }
       expect(git(checkout, ["show", `${candidateOid}:.gitignore`])).not.toContain("BEGIN AI-DLC");
     });
@@ -154,12 +159,12 @@ describe("publish and land are not stopped by AI-DLC's own part of the root file
       beforePublish: (clone) => {
         // Git writes the files again in the line endings the checkout keeps.
         git(clone, ["config", "core.autocrlf", "true"]);
-        for (const path of ROOT_FILES.opencode) rmSync(join(clone, path));
-        git(clone, ["checkout", "--", ...ROOT_FILES.opencode]);
+        for (const path of committedRootFiles("opencode")) rmSync(join(clone, path));
+        git(clone, ["checkout", "--", ...committedRootFiles("opencode")]);
         expect(git(clone, ["status", "--porcelain"])).toBe("");
         sessionStarts(clone, "opencode");
         before = snapshot(clone, ROOT_FILES.opencode);
-        for (const path of ROOT_FILES.opencode) expect(before[path]).toContain("\r\n");
+        for (const path of committedRootFiles("opencode")) expect(before[path]).toContain("\r\n");
       },
     });
     expect(Object.keys(before)).toEqual(ROOT_FILES.opencode);
@@ -264,8 +269,9 @@ describe("publish and land are not stopped by AI-DLC's own part of the root file
     expect(gitignore).toContain("coverage/");
     expect(gitignore.endsWith(part)).toBe(true);
     expect(git(seed, ["diff", "--name-only"])).toBe(".gitignore\nAGENTS.md");
-    // AI-DLC's local files stay ignored after the landing: the finalize step met none of them.
-    expect(git(seed, ["ls-files", "--others", "--exclude-standard"])).toBe("");
+    // AI-DLC's local files stay ignored after the landing: the finalize step met none of them. The one
+    // file git does not track is the .gitattributes the session start created, until the team commits it.
+    expect(git(seed, ["ls-files", "--others", "--exclude-standard"])).toBe(".gitattributes");
     expect(stashes(seed)).toBe("");
   });
 
@@ -387,8 +393,8 @@ describe("publish and land are not stopped by AI-DLC's own part of the root file
     prepareCandidate(remote, "alpha", "team-a", {
       beforePublish: (clone) => {
         git(clone, ["config", "core.autocrlf", "true"]);
-        for (const path of ROOT_FILES.copilot) rmSync(join(clone, path));
-        git(clone, ["checkout", "--", ...ROOT_FILES.copilot]);
+        for (const path of committedRootFiles("copilot")) rmSync(join(clone, path));
+        git(clone, ["checkout", "--", ...committedRootFiles("copilot")]);
         sessionStarts(clone);
         before = snapshot(clone, ROOT_FILES.copilot);
         expect(before["AGENTS.md"]).toContain("<!-- BEGIN AI-DLC:agents -->\r\n");

@@ -40,7 +40,7 @@ import {
   workspaceSourceListing,
   writeBaselineSourceSnapshot,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
-import { AIDLC_SRC, FIXTURES_DIR } from "../harness/fixtures.ts";
+import { AIDLC_SRC, FIXTURES_DIR, REPO_ROOT } from "../harness/fixtures.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -374,6 +374,29 @@ describe("t312 aidlc-attest resolve/anchor", () => {
     report = JSON.parse(attest(["resolve", c4], project).stdout);
     expect(report.warnings.join("\n")).toContain(".gitattributes may convert bytes");
     expect(report.warnings.join("\n")).toContain("can report drifted");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // AI-DLC's own part of the project's .gitattributes marks its record for the
+  // hosts' request diffs and converts no bytes, so it alone adds no warning.
+  test("a .gitattributes holding only AI-DLC's part adds no byte-form warning; a line of theirs does", () => {
+    const { project } = fixture();
+    const configured = spawnSync(process.execPath, [
+      join(REPO_ROOT, "core", "tools", "aidlc-init.ts"), "config", "--project-dir", project,
+      "--from", join(REPO_ROOT, "dist-release", "claude"), "--harness", "claude", "--yes", "--mcp", "none",
+    ], { cwd: project, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
+    expect(configured.status, `${configured.stdout}${configured.stderr}`).toBe(0);
+    expect(readFileSync(join(project, ".gitattributes"), "utf-8")).toStartWith("# BEGIN AI-DLC:gitattributes\n");
+    const ours = commitAll(project, "AI-DLC");
+    expect(JSON.parse(attest(["resolve", ours], project).stdout).warnings.join("\n")).not.toContain(".gitattributes may convert bytes");
+    // A converting line put inside AI-DLC's part is the person's too.
+    const shipped = readFileSync(join(project, ".gitattributes"), "utf-8");
+    writeFileSync(join(project, ".gitattributes"), shipped.replace("# END AI-DLC:gitattributes", "*.bin filter=lfs -text\n# END AI-DLC:gitattributes"));
+    const inside = commitAll(project, "a line inside the part");
+    expect(JSON.parse(attest(["resolve", inside], project).stdout).warnings.join("\n")).toContain(".gitattributes may convert bytes");
+    writeFileSync(join(project, ".gitattributes"), shipped);
+    appendFileSync(join(project, ".gitattributes"), "*.bin filter=lfs diff=lfs merge=lfs -text\n");
+    const theirs = commitAll(project, "attributes");
+    expect(JSON.parse(attest(["resolve", theirs], project).stdout).warnings.join("\n")).toContain(".gitattributes may convert bytes");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // A manifest the review accepted with a byte order mark is the same manifest

@@ -100,8 +100,17 @@ describe("t282 state-version doctor gate", () => {
     expect(out).not.toMatch(/state version current/);
   });
 
+  // Team work that records where its home is says 9 (an older AI-DLC stops at
+  // it); this build reads it as current and the row names the version it read.
+  test("a v9 state, team work's, passes the state-version row and says 9", () => {
+    const { out } = runDoctor("9");
+    expect(out).toMatch(/State Version: 9/);
+    expect(out).not.toMatch(/State Version: 8/);
+    expect(out).not.toMatch(/state version compatible/);
+  });
+
   // Doctor must classify malformed and future numeric versions the SAME way the
-  // runtime guard does (both call the shared classifyStateVersion in aidlc-lib).
+  // runtime guard does (both call the shared classifyStateVersion in aidlc-state-upgrade).
   // Malformed values must NOT receive stale-version wording, and future values
   // must receive upgrade guidance (not archive-and-reinit).
   test("a MALFORMED (non-numeric) state fails the readable row, not the past-version row", () => {
@@ -112,17 +121,17 @@ describe("t282 state-version doctor gate", () => {
     expect(status).not.toBe(0);
   });
 
-  test("a FUTURE (v9) state fails the compatible row with the step that carries it on, not archive-and-reinit", () => {
-    const { status, out } = runDoctor("9");
+  test("a FUTURE (v10) state fails the compatible row with the step that carries it on, not archive-and-reinit", () => {
+    const { status, out } = runDoctor("10");
     expect(out).toMatch(/state version compatible/);
     expect(out).not.toMatch(/state version current/);
     // The release that writes it and this install's one step, in plain words.
-    expect(out).toContain("This plan was set up with AI-DLC 2.12 or newer");
+    expect(out).toContain("This plan was set up with a newer AI-DLC");
     expect(out).toContain("To carry on");
     expect(out).not.toMatch(/Upgrade the framework|state schema/);
-    // The past-version's archive path template ('mv aidlc aidlc.v9-archive')
-    // MUST NOT appear — that would be the wrong remediation for a future state.
-    expect(out).not.toMatch(/aidlc\.v9-archive/);
+    // The past-version's archive path template ('mv aidlc aidlc.v10-archive')
+    // MUST NOT appear: that would be the wrong remediation for a future state.
+    expect(out).not.toMatch(/aidlc\.v10-archive/);
     expect(status).not.toBe(0);
   });
 
@@ -195,6 +204,14 @@ describe("t282 runtime state-version guard (next / report)", () => {
     expect(r.kind).not.toBe("error");
   });
 
+  test("a v9 state, team work's, is NOT blocked by `next` or `report`", () => {
+    for (const sub of ["next", "report"]) {
+      const r = runOrchestrate(sub, "9");
+      expect(r.out, sub).not.toMatch(/is newer than the current/);
+      expect(r.out, sub).not.toMatch(/Incompatible workflow state/);
+    }
+  });
+
   // Runtime must align with `--doctor`, which rejects a state whose version is
   // missing, empty, or unparseable - not only an explicit stale one. Assertions
   // pin the EXACT remediation branch, not generic wording, so a future regression
@@ -242,13 +259,14 @@ describe("t282 runtime state-version guard (next / report)", () => {
     expect(r.out).toMatch(UNPARSEABLE);
   });
 
-  // A FUTURE numeric schema (v9) is one this build cannot read, but it does
-  // not "predate" v8: a copied project hears the release that writes it and its
-  // own step to carry on (t-newer-work-update-offer owns the native offer).
-  test("`next` on a FUTURE (v9) state names the newer release and the step, not a past-version refusal", () => {
-    const r = runOrchestrate("next", "9");
+  // A FUTURE numeric schema (v10; this build reads 8 and 9) is one this build
+  // cannot read, but it does not "predate" v8: a copied project hears that a
+  // newer AI-DLC wrote it and its own step to carry on (t-newer-work-update-offer
+  // owns the native offer).
+  test("`next` on a FUTURE (v10) state names the newer release and the step, not a past-version refusal", () => {
+    const r = runOrchestrate("next", "10");
     expect(r.kind).toBe("print");
-    expect(r.out).toContain("This plan was set up with AI-DLC 2.12 or newer");
+    expect(r.out).toContain("This plan was set up with a newer AI-DLC");
     expect(r.out).not.toMatch(/predates the current|Upgrade the framework/);
   });
 

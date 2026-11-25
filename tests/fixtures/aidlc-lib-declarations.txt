@@ -89,7 +89,6 @@ CONSTRUCTION_STAFFING_ASK
 CREATION_RECEIPT_FILE
 CURRENT_FINGERPRINTS
 CURRENT_SESSION_FILE
-CURRENT_STATE_VERSION
 CeremonyKey
 CeremonyPolicy
 CeremonyResolution
@@ -359,7 +358,6 @@ REPOSITORY_ANALYSIS_MINUTES
 REPO_BASELINE_ADDITION_FIELD
 REPO_NAME_REGEX
 REPO_SCOPE_ASK
-REQUEST_TEXT_DIR
 RESERVED_RECORD_NAMES
 RESERVED_RECORD_NAME_LIST
 RETIRED_NEXT_FLAGS
@@ -478,7 +476,6 @@ StableArtifactStat
 StageAnswerMode
 StageEntry
 StaleReviewProgress
-StateVersionClassification
 SummaryAuthorization
 SummaryConfirmationEvidence
 SummaryConfirmationStage
@@ -662,7 +659,6 @@ claimPayloadAtTip
 claimRegistryRemote
 claimRegistryTips
 classifyRuntimeCompileCommand
-classifyStateVersion
 classifyTerminalCommand
 claudeQueuedMessageOrigin
 claudeTranscriptOrigin
@@ -1169,7 +1165,6 @@ nextStageInvocation
 nextTokenKind
 noReviewerFinishedSinceReview
 noReviewerNotice
-normalizeDriveLetter
 normalizeGenerationPath
 normalizeGitObjectId
 normalizeGuardRecoveryText

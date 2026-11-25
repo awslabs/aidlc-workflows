@@ -27,7 +27,7 @@ what they say, in their own words and in context, and do it.
 - When they ask to turn a check off for this piece of work, in their own words
   or by picking a guard's turn-it-off choice, run the setter yourself (that
   choice's `command`, or `{{INVOKE}} engine config set guard.<fence> off --message <id>`, with `<id>` the message they asked in).
-  Never hand them a command to type.
+- Never hand them a command to type.
 - When they ask for a review of a stage or of a Unit ("review Unit 1 again",
   "have the reviewer look at the design", or yes to "Do you want me to have the
   new approach checked before you decide?"), record it through AI-DLC the first
@@ -336,7 +336,7 @@ recovery protocol's Session resume says, never as Request Changes.
   or a line break goes in a file instead, so no shell reads it at all: write it
   with your file tool to `<record>/.aidlc-engine/answer-text/answer.txt` and
   pass `--details-file .aidlc-engine/answer-text/answer.txt`; the engine reads
-  the file and removes it. A file you wrote to `aidlc/.aidlc-request-text/` for
+  the file and removes it. A file you wrote to `aidlc/.aidlc-engine/request-text/` for
   `next` works the same way with `--request-file <that file>`.
 - **They also asked to stop for now:** record their choice with `--park`, or run
   `park --person-asked`, and tell them how to resume.

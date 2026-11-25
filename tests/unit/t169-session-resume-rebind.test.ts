@@ -4,7 +4,7 @@
 // CURSOR is durable + shared across sessions. So resuming an A-chat after the
 // cursor moved to B would silently inject B's context (vision section 3, the
 // central multi-space hazard). The guard is a per-session->intent stamp at
-// aidlc/.aidlc-sessions/<session_id>:
+// aidlc/.aidlc-engine/sessions/<session_id>:
 //   - On a STARTED-class event, session-start STAMPS the working intent's UUID
 //     keyed by session_id.
 //   - On RESUMED, if the stamped UUID differs from the shared cursor AND still

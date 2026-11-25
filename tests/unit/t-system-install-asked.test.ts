@@ -430,7 +430,7 @@ const APPROVE_AND_INSTALL = "Approve. Then install python3-pytest with apt and r
 
 // The Code Generation gate approved in the person's words; `last`: the work's
 // last stage, so the approval finishes it.
-function approvedWith(policy: Policy, words: string, last: boolean): { proj: string; id: string } {
+function approvedWith(policy: Policy, words: string, last: boolean): { proj: string; id: string; approved: string } {
   const proj = openCodeGenerationGate(policy === "locked" ? "relaxed" : policy, "on", last);
   created.push(proj);
   if (policy === "locked") lockStrict(proj);
@@ -447,7 +447,7 @@ function approvedWith(policy: Policy, words: string, last: boolean): { proj: str
   );
   expect(approved.status, approved.stdout + approved.stderr).toBe(0);
   expect(getField(readFileSync(seededStateFile(proj), "utf-8"), "Status")).toBe(last ? "Completed" : "Running");
-  return { proj, id: id as string };
+  return { proj, id: id as string, approved: approved.stdout };
 }
 
 const logInstall = (proj: string, args: string) =>
@@ -517,6 +517,27 @@ test("log install records nothing for a message that is not the person's on this
   }
   expect(rows(proj, "SYSTEM_INSTALL_REQUESTED")).toHaveLength(0);
   heldForThePerson(proj);
+});
+
+// Its twin for a Unit built and approved (t-unit-push-way-back): where no Unit
+// waits for its push here, it records nothing and says what it is for.
+test("log change where no Unit is built and approved records nothing, and says what it is for", () => {
+  const { proj, id, approved } = approvedWith("strict", APPROVE_AND_INSTALL, false);
+  // An approval outside a Unit's build names no change step.
+  expect(approved).not.toContain("log change");
+  const logChange = (args: string) =>
+    runNamed(proj, `bun .claude/tools/aidlc.ts engine log change ${args}`, { AIDLC_SESSION_OVERRIDE: SESSION });
+  const none = logChange(`--message ${id}`);
+  expect(none.status).not.toBe(0);
+  expect(none.stdout + none.stderr).toContain(
+    "Nothing holds a change here: log change is for a Unit that is built and approved and not pushed yet.",
+  );
+  for (const args of ["", `refunds --message ${id}`]) {
+    const usage = logChange(args);
+    expect(usage.status).not.toBe(0);
+    expect(usage.stdout + usage.stderr).toContain("log change --message <id>");
+  }
+  expect(rows(proj, "UNIT_CHANGE_REQUESTED")).toHaveLength(0);
 });
 
 test("the next decision of theirs ends it: after a later approval the same install waits again", () => {

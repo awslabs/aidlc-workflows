@@ -86,10 +86,10 @@ function fixture() {
   // The engine's copy of the active space's memory, as the switch writes it.
   mkdirSync(join(root, "aidlc", "spaces", "teamb", "memory"), { recursive: true });
   mkdirSync(join(root, "aidlc", "spaces", "default", "memory"), { recursive: true });
-  mkdirSync(join(root, "aidlc", "active-memory"), { recursive: true });
+  mkdirSync(join(root, "aidlc", ".aidlc-engine", "active-memory"), { recursive: true });
   writeFileSync(join(root, "aidlc", "spaces", "teamb", "memory", "org.md"), "# teamb\n");
   writeFileSync(join(root, "aidlc", "spaces", "default", "memory", "org.md"), "# default\n");
-  const config = join(root, "aidlc", "active-memory", "org.md");
+  const config = join(root, "aidlc", ".aidlc-engine", "active-memory", "org.md");
   writeFileSync(config, `${copyHeader("teamb", "org.md")}# teamb\n`);
   writeFileSync(join(root, "aidlc", "active-space"), "teamb\n");
   writeFileSync(join(intents, "active-intent"), `${created.dirName}\n`);

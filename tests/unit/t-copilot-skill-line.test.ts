@@ -60,7 +60,7 @@ function fresh(): string {
 const skillFile = (proj: string): string => join(proj, ".github", "skills", "aidlc", "SKILL.md");
 
 function record(proj: string): StoredMessage {
-  const dir = join(proj, "aidlc", ".aidlc-sessions", "messages");
+  const dir = join(proj, "aidlc", ".aidlc-engine", "sessions", "messages");
   expect(existsSync(dir), "no message record was written").toBe(true);
   const all = readdirSync(dir)
     .filter((name) => name.endsWith(".json"))

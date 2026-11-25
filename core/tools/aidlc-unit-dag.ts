@@ -48,6 +48,10 @@ export interface UnitDependencyEdge {
   depends_on: string[];
   // Optional per-unit kind (UNIT_KINDS). Absent = full design-artifact matrix.
   kind?: UnitKind;
+  // Optional likely repos, proposed at Units Generation as a guide: a repo name,
+  // or a folder inside one (`platform/services/billing`). Advisory: what a
+  // Unit changes is whatever its build writes.
+  repos?: string[];
 }
 
 // Discriminated result so the two consumers (the required-sections sensor's
@@ -170,6 +174,8 @@ function parseUnitsBlock(block: string): UnitDependencyEdge[] {
 
   const edges: UnitDependencyEdge[] = [];
   let current: UnitDependencyEdge | null = null;
+  // The list a bare `- item` line belongs to: depends_on, or repos after `repos:`.
+  let list: "depends_on" | "repos" = "depends_on";
   for (; i < lines.length; i++) {
     const line = lines[i];
     if (line.trim() === "") continue;
@@ -178,6 +184,7 @@ function parseUnitsBlock(block: string): UnitDependencyEdge[] {
     if (nameMatch) {
       if (current) edges.push(current);
       current = { name: unquoteScalar(nameMatch[1]), depends_on: [] };
+      list = "depends_on";
       continue;
     }
 
@@ -185,6 +192,15 @@ function parseUnitsBlock(block: string): UnitDependencyEdge[] {
     if (depMatch) {
       if (!current) throw new Error("depends_on: before any - name: entry");
       current.depends_on = parseInlineDepsList(depMatch[1]);
+      list = "depends_on";
+      continue;
+    }
+
+    const reposMatch = line.match(/^\s*repos\s*:\s*(.*)$/);
+    if (reposMatch) {
+      if (!current) throw new Error("repos: before any - name: entry");
+      current.repos = parseInlineDepsList(reposMatch[1]);
+      list = "repos";
       continue;
     }
 
@@ -207,10 +223,11 @@ function parseUnitsBlock(block: string): UnitDependencyEdge[] {
       continue;
     }
 
-    // Block-form dependency item (a bare `- dep` under `depends_on:`).
+    // Block-form list item (a bare `- dep` under `depends_on:`, `- repo` under `repos:`).
     const itemMatch = line.match(/^\s*-\s+(.+?)\s*$/);
     if (itemMatch && current) {
-      current.depends_on.push(unquoteScalar(itemMatch[1]));
+      if (list === "repos") current.repos?.push(unquoteScalar(itemMatch[1]));
+      else current.depends_on.push(unquoteScalar(itemMatch[1]));
       continue;
     }
 

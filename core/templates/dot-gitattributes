@@ -1,0 +1,2 @@
+# AI-DLC: marks its record of each piece of work as generated, which GitHub and GitLab fold in request diffs; a line of yours below this part wins
+aidlc/spaces/*/intents/** linguist-generated gitlab-generated

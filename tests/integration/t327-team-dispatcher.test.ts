@@ -279,11 +279,11 @@ function boardFixture(): { project: string; intentUuid: string } {
 function snapshotFiles(project: string): Record<string, string> {
   const roots = [
     seededStateFile(project),
-    join(project, "aidlc", ".aidlc-claim-registry.json"),
-    join(project, "aidlc", ".aidlc-claim-generations.json"),
-    join(project, "aidlc", ".aidlc-unit-scope.json"),
+    join(project, "aidlc", ".aidlc-engine", "units", "claim-registry.json"),
+    join(project, "aidlc", ".aidlc-engine", "units", "claim-generations.json"),
+    join(project, "aidlc", ".aidlc-engine", "units", "claimed.json"),
     seededAuditDir(project),
-    join(project, "aidlc", ".aidlc-unit-merges"),
+    join(project, "aidlc", ".aidlc-engine", "units", "merges"),
   ];
   const snapshot: Record<string, string> = {};
   const visit = (path: string): void => {
@@ -526,7 +526,7 @@ describe("t327 team construction dispatcher", () => {
     for (const view of [rendered, renderTeamConstructionBoard(board, "snapshot")]) {
       expect(view.replace(/`[^`]*`/g, "`x`")).not.toMatch(BOARD_TERMS);
     }
-    expect(rendered).toStartWith("# Team Construction Board\n_Last activity is what this checkout has seen, not when a team pushed._");
+    expect(rendered).toStartWith("# Team Construction Board\n_Last activity is what this checkout has seen, not when someone pushed._");
     expect(rendered).toContain("## Claims\n| unit | status | owner | attempt | last activity |");
     expect(rendered).toContain("| unit | step | commit | what is next |");
     expect(rendered).toContain("| unit | waits on |");
@@ -600,7 +600,7 @@ describe("t327 team construction dispatcher", () => {
         ),
     );
     writeFileSync(
-      join(participant.project, "aidlc", ".aidlc-unit-participant"),
+      join(participant.project, "aidlc", ".aidlc-engine", "units", "participant"),
       "participant\n",
     );
     const participantDirective = nextDirective(participant.project);
@@ -613,14 +613,14 @@ describe("t327 team construction dispatcher", () => {
     );
 
     const released = boardFixture();
-    rmSync(join(released.project, "aidlc", ".aidlc-unit-merges"), {
+    rmSync(join(released.project, "aidlc", ".aidlc-engine", "units", "merges"), {
       recursive: true,
       force: true,
     });
     const cachePath = join(
       released.project,
       "aidlc",
-      ".aidlc-claim-registry.json",
+      ".aidlc-engine", "units", "claim-registry.json",
     );
     const cache = JSON.parse(readFileSync(cachePath, "utf-8"));
     for (const claim of Object.values(cache.claims) as Array<
@@ -645,7 +645,7 @@ describe("t327 team construction dispatcher", () => {
     const raceCachePath = join(
       race.project,
       "aidlc",
-      ".aidlc-claim-registry.json",
+      ".aidlc-engine", "units", "claim-registry.json",
     );
     const raceCache = JSON.parse(readFileSync(raceCachePath, "utf-8"));
     raceCache.claims.awaiting.status = "released";
@@ -676,7 +676,7 @@ describe("t327 team construction dispatcher", () => {
 
   test("an unscoped checkout with every Unit claimed says nothing runs there and names each claim", () => {
     const fixture = boardFixture();
-    rmSync(join(fixture.project, "aidlc", ".aidlc-unit-merges"), {
+    rmSync(join(fixture.project, "aidlc", ".aidlc-engine", "units", "merges"), {
       recursive: true,
       force: true,
     });
@@ -688,7 +688,7 @@ describe("t327 team construction dispatcher", () => {
       ),
     );
     writeFileSync(
-      join(fixture.project, "aidlc", ".aidlc-unit-participant"),
+      join(fixture.project, "aidlc", ".aidlc-engine", "units", "participant"),
       "participant\n",
     );
     const statePath = seededStateFile(fixture.project);
@@ -980,7 +980,7 @@ describe("t327 team construction dispatcher", () => {
     const cachePath = join(
       stale.project,
       "aidlc",
-      ".aidlc-claim-registry.json",
+      ".aidlc-engine", "units", "claim-registry.json",
     );
     const cache = JSON.parse(readFileSync(cachePath, "utf-8"));
     cache.claims.awaiting.status = "released";
@@ -1030,7 +1030,7 @@ describe("t327 team construction dispatcher", () => {
     const cleanCachePath = join(
       clean.project,
       "aidlc",
-      ".aidlc-claim-registry.json",
+      ".aidlc-engine", "units", "claim-registry.json",
     );
     const cleanCache = JSON.parse(readFileSync(cleanCachePath, "utf-8"));
     cleanCache.claims.awaiting.observed_at = new Date().toISOString();
@@ -1045,7 +1045,7 @@ describe("t327 team construction dispatcher", () => {
     const upgradeCachePath = join(
       upgrade.project,
       "aidlc",
-      ".aidlc-claim-registry.json",
+      ".aidlc-engine", "units", "claim-registry.json",
     );
     const upgradeCache = JSON.parse(
       readFileSync(upgradeCachePath, "utf-8"),
@@ -1072,12 +1072,17 @@ describe("t327 team construction dispatcher", () => {
     );
     const unrelated = run(UTILITY, ["doctor", "--verbose"], clean.project);
     expect(unrelated.out).not.toContain("Orphan Unit claim refs");
+    // A team record of no work here, kept in AI-DLC's own ref rather than a branch, is one too.
+    const record = boardFixture();
+    git(record.project, ["update-ref", "refs/aidlc/claims/deadbeef/orphan", "HEAD"]);
+    const recordDoctor = run(UTILITY, ["doctor", "--verbose"], record.project);
+    expect(recordDoctor.out).toContain("Orphan Unit claim refs: 1 ref(s) match no local intent (refs/aidlc/claims/deadbeef/orphan)");
 
     const moved = boardFixture();
     const movedCachePath = join(
       moved.project,
       "aidlc",
-      ".aidlc-claim-registry.json",
+      ".aidlc-engine", "units", "claim-registry.json",
     );
     const movedCache = JSON.parse(readFileSync(movedCachePath, "utf-8"));
     movedCache.claims.awaiting.status = "released";

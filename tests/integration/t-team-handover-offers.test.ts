@@ -11,7 +11,7 @@
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readActiveDirectiveMarker, readUnitScopeStamp } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -59,7 +59,7 @@ function detailFor(directive: Record<string, unknown>, label: string): string | 
   return choicesOf(directive).find((choice) => choice.label === label)?.detail;
 }
 
-const PLAIN_PUSH = "main to origin as a plain push; it never overwrites what a team pushed.";
+const PLAIN_PUSH = "main to origin as a plain push; it never overwrites what anyone pushed.";
 
 function isHandover(directive: Record<string, unknown>, kind?: string): boolean {
   if (directive.kind !== "ask" || directive.ask_type !== "team-handover") return false;
@@ -109,7 +109,9 @@ function newFilesOutsideRecord(dir: string): number {
 // However many new files there are, the question names ten, the ones nearest
 // the project's top first and git's order within a depth, in git's own
 // spelling (`/` on Windows too), and says how many more, so the step stays a
-// few KB, far under any harness's limit for one step.
+// few KB, far under any harness's limit for one step. The commit message the
+// question shows, and the file its commands name, add the same few lines
+// whatever the count.
 function expectTenNamedAndTheCount(directive: Record<string, unknown>, dir: string): void {
   const question = String(directive.question);
   const words = question.match(/\(new: (.*), and (\d+) more; `git status` shows the rest\)/);
@@ -118,7 +120,7 @@ function expectTenNamedAndTheCount(directive: Record<string, unknown>, dir: stri
   expect((words as RegExpMatchArray)[1].split(", ")).toEqual(["z-deploy.env", "config/app.json", "src/x/y.ts", ...deepest]);
   expect(Number((words as RegExpMatchArray)[2])).toBe(newFilesOutsideRecord(dir) - 10);
   expect(question.length).toBeLessThan(1_500);
-  expect(Buffer.byteLength(JSON.stringify(directive), "utf-8")).toBeLessThan(4 * 1024);
+  expect(Buffer.byteLength(JSON.stringify(directive), "utf-8")).toBeLessThan(5 * 1024);
 }
 
 // Files of the person's already on main: one they later delete here, one
@@ -175,18 +177,22 @@ function expectResultNames(stdout: string, dir: string, words: string): void {
 }
 
 describe("step 1: the lead shares the plan with the teams", () => {
-  test("Several teams, claims open, a remote: the first Unit step is the share offer, once", () => {
+  test("Several teams or people, claims open, a remote: the first Unit step is the share offer, once", () => {
     const { seed: lead } = makeSeed();
     asLeadsOwnCheckout(lead);
     const offer = nextDirective(lead);
     expect(isHandover(offer, "share"), JSON.stringify(offer)).toBe(true);
     expect(String(offer.question)).toContain("Share them now?");
-    expect(String(offer.question)).toContain("push main to origin");
-    expect(labels(offer)).toEqual(["Share them with the teams", "Build them here for now"]);
-    expect(commandFor(offer, "Share them with the teams")).toMatch(/ unit share$/);
+    expect(String(offer.question)).toContain("push the plan on its own branch for a pull request");
+    expect(labels(offer)).toEqual(["Share by pull request (Recommended)", "Share by direct push", "Build them here for now"]);
+    // Each carries the file the share's commit message was drafted in.
+    expect(commandFor(offer, "Share by direct push")).toMatch(/ unit share --commit-message-file \S+\/unit-share-message-alpha\.txt$/);
+    expect(commandFor(offer, "Share by pull request (Recommended)")).toMatch(/ unit share --branch --commit-message-file \S+\/unit-share-message-alpha\.txt$/);
+    expect(String(offer.question)).toEndWith("with this commit message and push the plan on its own branch for a pull request, so anyone " +
+      "can take a Unit once it is in main, by opening their own clone and running /aidlc.\n\nShare the plan");
     expect(commandFor(offer, "Build them here for now")).toMatch(/ next$/);
-    expect(detailFor(offer, "Share them with the teams")).toBe(`Pushes ${PLAIN_PUSH}`);
-    expect(JSON.stringify(offer)).not.toContain("Team work needs this project at the top");
+    expect(detailFor(offer, "Share by direct push")).toBe(`Pushes ${PLAIN_PUSH}`);
+    expect(JSON.stringify(offer)).not.toContain("For its Units to be taken, this project needs to be at the top");
     // No self-loop: the reply that does not take it runs next, and the walk goes on.
     const walk = nextDirective(lead);
     expect(isHandover(walk), JSON.stringify(walk)).toBe(false);
@@ -257,7 +263,7 @@ describe("step 1: the lead shares the plan with the teams", () => {
     const offer = nextDirective(lead);
     expect(isHandover(offer, "share"), JSON.stringify(offer)).toBe(true);
     const question = String(offer.question);
-    const words = question.match(/I'd commit (the \d+ changed files here \(.*\)) and push main to origin, /)?.[1];
+    const words = question.match(/I'd commit (the \d+ changed files here \(.*\)) with this commit message and push the plan on its own branch for a pull request, /)?.[1];
     expect(words, question).toEndWith(` here ${OWN_EDITS_NAMED}`);
     const shared = runMergeTool(UNIT, ["share"], lead);
     expect(shared.status, shared.out).toBe(0);
@@ -319,7 +325,7 @@ describe("step 1: the lead shares the plan with the teams", () => {
     const offer = nextDirective(lead);
     expect(isHandover(offer, "share"), JSON.stringify(offer)).toBe(true);
     const question = String(offer.question);
-    const words = question.match(/I'd commit (the \d+ changed files here \(.*\)) and push main to origin, /)?.[1];
+    const words = question.match(/I'd commit (the \d+ changed files here \(.*\)) with this commit message and push the plan on its own branch for a pull request, /)?.[1];
     expect(words, question).toEndWith(" here (new: docs/new-name.md; deleted: docs/gone.md, docs/old-name.md)");
     const shared = runMergeTool(UNIT, ["share"], lead);
     expect(shared.status, shared.out).toBe(0);
@@ -370,7 +376,7 @@ describe("step 1: the lead shares the plan with the teams", () => {
     writeFileSync(join(outer, "other", "staged.md"), "staged outside the project\n");
     git(outer, ["add", "other/staged.md"]);
     writeFileSync(join(app, "z-deploy.env"), "API_KEY=not-for-the-team\n");
-    const line = "Team work needs this project at the top of its git repository; it sits in app of " +
+    const line = "For its Units to be taken, this project needs to be at the top of its git repository; it sits in app of " +
       `${git(outer, ["rev-parse", "--show-toplevel"])}.`;
     const chat = "01995000-7a11-7000-8000-000000003822";
     const step = nextInChat(app, chat);
@@ -408,7 +414,7 @@ describe("step 1: the lead shares the plan with the teams", () => {
     const offer = nextDirective(lead);
     expect(isHandover(offer, "share"), JSON.stringify(offer).slice(0, 2000)).toBe(true);
     const question = String(offer.question);
-    const words = question.match(/I'd commit (the \d+ changed files here \(.*\)) and push main to origin, /)?.[1];
+    const words = question.match(/I'd commit (the \d+ changed files here \(.*\)) with this commit message and push the plan on its own branch for a pull request, /)?.[1];
     expect(words, question).toEndWith(` here ${ten}; \`git status\` shows the rest)`);
     expect(question.length).toBeLessThan(1_500);
     expect(git(remote, ["rev-parse", "main"])).toBe(git(lead, ["rev-parse", "HEAD"]));
@@ -451,7 +457,9 @@ describe("step 1: the lead shares the plan with the teams", () => {
     const shared = runMergeTool(UNIT, ["share"], lead);
     expect(shared.status, shared.out).not.toBe(0);
     expect(shared.out).toContain("the team's pre-commit check said no");
-    expect(shared.out).toContain("Then share again.");
+    // A commit git or their hook turns away: the one way on, in place of "Then share again."
+    expect(shared.out).toContain("If it is the commit message, tell me the one to use, and I will commit with it and push again.");
+    expect(shared.out).not.toContain("Then share again.");
     expect(git(lead, ["rev-parse", "HEAD"])).toBe(before);
     expect(git(remote, ["rev-parse", "main"])).toBe(before);
     const again = nextDirective(lead);
@@ -476,7 +484,7 @@ describe("step 2: another clone takes a Unit", () => {
     const mate = clone(remote, "mate");
     const offer = nextDirective(mate);
     expect(isHandover(offer, "join"), JSON.stringify(offer)).toBe(true);
-    expect(String(offer.question)).toContain("Take one for your team?");
+    expect(String(offer.question)).toContain("Take one? I'd label your team");
     expect(labels(offer)).toEqual(["Take alpha", "Take beta", "Not now"]);
     expect(commandFor(offer, "Take alpha")).toMatch(/ next --claim alpha$/);
     expect(commandFor(offer, "Not now")).toMatch(/ next$/);
@@ -484,6 +492,19 @@ describe("step 2: another clone takes a Unit", () => {
     expect(isHandover(board)).toBe(false);
     expect(boardText(board)).toContain("# Team Construction Board");
     expect(boardText(nextDirective(mate))).toContain("# Team Construction Board");
+  });
+
+  // This flow seats a team in a worktree beside the lead's main checkout as
+  // well as in a clone: the plan made in the main checkout is not that seat's.
+  test("a plain worktree beside the lead's main checkout is offered the Units it can take, as a teammate's clone is", () => {
+    const { seed } = makeSeed(parallelDependencyBody());
+    const base = mkdtempSync(join(tmpdir(), "aidlc-team-seat-"));
+    tempDirs.push(base);
+    const seat = join(base, "seat");
+    git(seed, ["worktree", "add", "-q", "-b", "team-seat", seat, "main"]);
+    const offer = nextDirective(seat);
+    expect(isHandover(offer, "join"), JSON.stringify(offer)).toBe(true);
+    expect(labels(offer)).toEqual(["Take alpha", "Take beta", "Not now"]);
   });
 
   // The live run: a team built its first Unit in its own clone (that Unit's
@@ -795,10 +816,10 @@ describe("step 4: a published Unit is reviewed and merged", () => {
     expect(isHandover(offer, "review"), JSON.stringify(offer)).toBe(true);
     expect(isHandover(offer, "join")).toBe(true);
     expect(labels(offer)).toEqual(["Take beta", "Review and merge alpha", "Not now"]);
-    expect(String(offer.question)).toContain("Take one for your team, or review and merge?");
+    expect(String(offer.question)).toContain("Take one, or review and merge?");
     expect(String(offer.numbered_prose_question)).toContain("1. **Take beta**");
     expect(detailFor(offer, "Review and merge alpha"))
-      .toBe("Shows what the team built and its checks, then asks whether to merge it.");
+      .toBe("Shows what was built and its checks, then asks whether to merge it.");
     // No self-loop: Not now runs next, which never puts the same question again.
     expect(commandFor(offer, "Not now")).toMatch(/ next$/);
     expect(isHandover(nextDirective(fresh))).toBe(false);
@@ -817,7 +838,7 @@ describe("step 5: main is pushed after a land", () => {
     expect(String(land.next_step)).toMatch(/ next`/);
     const offer = nextDirective(lead);
     expect(isHandover(offer, "push"), JSON.stringify(offer)).toBe(true);
-    expect(String(offer.question)).toBe("Push main to origin now so the other teams see alpha landed?");
+    expect(String(offer.question)).toBe("Push main to origin now so everyone else sees alpha landed?");
     expect(labels(offer)).toEqual(["Push main", "Not now"]);
     expect(commandFor(offer, "Push main")).toMatch(/ unit share$/);
     expect(detailFor(offer, "Push main")).toBe(`Pushes ${PLAIN_PUSH}`);
@@ -828,7 +849,7 @@ describe("step 5: main is pushed after a land", () => {
     expect(JSON.parse(shared.stdout).committed_files).toBeUndefined();
     expect(git(remote, ["merge-base", "--is-ancestor", land.git_commit_oid, "main"])).toBe("");
     // What the push committed first, if anything, is named for the landing, never as the plan.
-    expect(git(lead, ["log", "-1", "--format=%s"])).not.toBe("Share the plan with the teams");
+    expect(git(lead, ["log", "-1", "--format=%s"])).not.toBe("Share the plan");
     expect(git(lead, ["status", "--porcelain"])).toBe("");
   });
 
@@ -845,8 +866,8 @@ describe("step 5: main is pushed after a land", () => {
     const offer = nextDirective(lead);
     expect(isHandover(offer, "push"), JSON.stringify(offer)).toBe(true);
     expect(String(offer.question)).toBe(
-      "Push main to origin now so the other teams see alpha landed? I'd commit the 3 changed files here " +
-        "(changed: src/shared.ts; new: z-deploy.env) first.",
+      "Push main to origin now so everyone else sees alpha landed? I'd commit the 3 changed files here " +
+        "(changed: src/shared.ts; new: z-deploy.env) first, with this commit message.\n\nRecord the alpha landing",
     );
     const shared = runMergeTool(UNIT, ["share"], lead);
     expect(shared.status, shared.out).toBe(0);
@@ -861,7 +882,7 @@ describe("step 5: main is pushed after a land", () => {
     addManyNewFiles(lead, 400);
     const offer = nextDirective(lead);
     expect(isHandover(offer, "push"), JSON.stringify(offer).slice(0, 2000)).toBe(true);
-    expect(String(offer.question)).toMatch(/shows the rest\) first\.$/);
+    expect(String(offer.question)).toMatch(/shows the rest\) first, with this commit message\.\n\nRecord the alpha landing$/);
     expectTenNamedAndTheCount(offer, lead);
   });
 
@@ -881,6 +902,118 @@ describe("step 5: main is pushed after a land", () => {
     const board = runMergeTool(ORCH, ["team-board", "--snapshot"], lead);
     expect(board.status, board.out).toBe(0);
     expect(board.stdout).toContain("the team's branch has alpha landed here and not on origin yet");
+  });
+
+  // A main that takes no direct push, as a host's ruleset refuses it: the share after a land keeps its commit on
+  // main, makes no branch, and says the landing's way on, which the board says too; the push question is not put
+  // again at that head.
+  const WAY_ON = "main has alpha landed here and not on origin yet: push it on a branch and get it merged your usual way.";
+  const refusedMarks = (dir: string): string[] =>
+    readdirSync(join(seededRecordDir(dir), ".aidlc-engine")).filter((name) => name.startsWith("team-handover-push-refused-"));
+  function landedAndRefused(): { lead: string; remote: string; hook: string } {
+    const { seed: lead, remote } = makeSeed();
+    prepareCandidate(remote, "alpha", "team-a");
+    approveMerge(lead, "alpha");
+    const landed = runMergeTool(UNIT, ["land", "alpha"], lead);
+    expect(landed.status, landed.out).toBe(0);
+    expect(isHandover(nextDirective(lead), "push")).toBe(true);
+    const hook = join(remote, "hooks", "pre-receive");
+    writeFileSync(hook, "#!/bin/sh\nwhile read old new ref; do\n  if [ \"$ref\" = refs/heads/main ]; then\n" +
+      "    echo 'error: GH013: Repository rule violations found for refs/heads/main.' >&2\n    exit 1\n  fi\ndone\nexit 0\n");
+    chmodSync(hook, 0o755);
+    return { lead, remote, hook };
+  }
+
+  test("the push after a land that a host's rule on main refuses says the landing's way on, keeps the commit on main, and is not asked again", () => {
+    const { lead } = landedAndRefused();
+    const head = git(lead, ["rev-parse", "HEAD"]);
+    expect(runMergeTool(ORCH, ["team-board", "--snapshot"], lead).stdout)
+      .toMatch(/- main has alpha landed here and not on origin yet: `[^`]* unit share`\./);
+    const shared = runMergeTool(UNIT, ["share"], lead);
+    expect(shared.status, shared.out).not.toBe(0);
+    expect(JSON.parse(shared.out.trim().split("\n").at(-1) ?? "{}").error).toBe(
+      "origin takes no direct push to main (error: GH013: Repository rule violations found for refs/heads/main. " +
+        `(pre-receive hook declined)). ${WAY_ON}`,
+    );
+    expect(git(lead, ["symbolic-ref", "HEAD"])).toBe("refs/heads/main");
+    expect(git(lead, ["merge-base", "--is-ancestor", head, "HEAD"])).toBe("");
+    expect(git(lead, ["for-each-ref", "refs/heads/aidlc-plan*"])).toBe("");
+    const look = nextDirective(lead);
+    expect(isHandover(look, "push"), JSON.stringify(look).slice(0, 400)).toBe(false);
+    const board = runMergeTool(ORCH, ["team-board", "--snapshot"], lead);
+    expect(board.stdout).toContain(`- ${WAY_ON}`);
+    expect(board.stdout).not.toContain("unit share");
+    expect(refusedMarks(lead)).toHaveLength(1);
+    // Another share that did not go through (here --branch, which takes the plan's own commits only) leaves it so.
+    expect(runMergeTool(UNIT, ["share", "--branch"], lead).status).not.toBe(0);
+    expect(isHandover(nextDirective(lead), "push")).toBe(false);
+    expect(runMergeTool(ORCH, ["team-board", "--snapshot"], lead).stdout).toContain(`- ${WAY_ON}`);
+    expect(refusedMarks(lead)).toHaveLength(1);
+  });
+
+  // Due again on a new head of main (the rule may be gone by then); once a push goes, nothing is due and the
+  // refusal's mark goes with it.
+  test("after that refusal, a new head of main puts the push question again, and a push that goes leaves nothing due", () => {
+    const { lead, hook } = landedAndRefused();
+    expect(runMergeTool(UNIT, ["share"], lead).status).not.toBe(0);
+    writeFileSync(join(lead, "notes.md"), "The lead's own note.\n");
+    git(lead, ["add", "notes.md"]);
+    git(lead, ["commit", "-m", "notes"]);
+    const again = nextDirective(lead);
+    expect(isHandover(again, "push"), JSON.stringify(again).slice(0, 400)).toBe(true);
+    // The refusal's mark stays until a push goes; a new head no longer reads it.
+    expect(refusedMarks(lead)).toHaveLength(1);
+    expect(String(again.question)).toBe("Push main to origin now so everyone else sees alpha landed?");
+    const board = runMergeTool(ORCH, ["team-board", "--snapshot"], lead);
+    expect(board.stdout).toContain("- main has alpha landed here and not on origin yet: `");
+    writeFileSync(hook, "#!/bin/sh\nexit 0\n");
+    const pushed = runMergeTool(UNIT, ["share"], lead);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(isHandover(nextDirective(lead), "push")).toBe(false);
+    expect(runMergeTool(ORCH, ["team-board", "--snapshot"], lead).stdout).not.toContain("landed here and not on origin yet");
+    expect(refusedMarks(lead)).toEqual([]);
+  });
+
+  // The host merges the lead's branch of the landing its own way, after a teammate's commit moved main: origin's
+  // main has the landing's changes under commits of its own, never the landing's. Read by content, it is in once
+  // this clone has fetched; until then nothing has told it.
+  function mergedByHost(how: "squash" | "rebase"): string {
+    const { seed: lead, remote } = makeSeed();
+    prepareCandidate(remote, "alpha", "team-a");
+    approveMerge(lead, "alpha");
+    expect(runMergeTool(UNIT, ["land", "alpha"], lead).status).toBe(0);
+    git(lead, ["push", "origin", "HEAD:refs/heads/land-alpha"]);
+    const host = clone(remote, `host-${how}`);
+    writeFileSync(join(host, "teammate.md"), "A teammate's change.\n");
+    git(host, ["add", "teammate.md"]);
+    git(host, ["commit", "-m", "teammate"]);
+    git(host, ["fetch", "origin", "land-alpha"]);
+    if (how === "squash") {
+      git(host, ["merge", "--squash", "FETCH_HEAD"]);
+      git(host, ["commit", "-m", "Land alpha (#12)"]);
+    } else {
+      // Each of the branch's commits again on top of main, as new commits, the way a host's rebase merge lands them.
+      let onto = git(host, ["rev-parse", "main"]);
+      for (const commit of git(host, ["rev-list", "--reverse", "--first-parent", "main..FETCH_HEAD"]).split("\n")) {
+        const tree = git(host, ["merge-tree", "--write-tree", "--merge-base", `${commit}^1`, onto, commit]).split("\n")[0];
+        onto = git(host, ["commit-tree", tree, "-p", onto, "-m", git(host, ["log", "-1", "--format=%s", commit])]);
+      }
+      git(host, ["reset", "-q", "--hard", onto]);
+    }
+    git(host, ["push", "origin", "main"]);
+    return lead;
+  }
+
+  test.each(["squash", "rebase"] as const)("a landing the host %s-merged into main from a branch: said until a fetch, quiet after it", (how) => {
+    const lead = mergedByHost(how);
+    const before = runMergeTool(ORCH, ["team-board", "--snapshot"], lead);
+    expect(before.stdout).toContain("- main has alpha landed here and not on origin yet: `");
+    git(lead, ["fetch", "origin"]);
+    const look = nextDirective(lead);
+    expect(isHandover(look, "push"), JSON.stringify(look).slice(0, 400)).toBe(false);
+    const board = runMergeTool(ORCH, ["team-board", "--snapshot"], lead);
+    expect(board.status, board.out).toBe(0);
+    expect(board.stdout).not.toContain("landed here and not on origin yet");
   });
 
   test("a land already on origin is not offered", () => {

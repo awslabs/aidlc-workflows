@@ -175,7 +175,7 @@ function handoff(proj: string): { code: number; stderr: string } {
 
 /** The status of each Plan Approval receipt this checkout holds. */
 function receipts(proj: string): string[] {
-  const dir = join(proj, "aidlc", ".aidlc-sessions", "plan-approval");
+  const dir = join(proj, "aidlc", ".aidlc-engine", "sessions", "plan-approval");
   if (!existsSync(dir)) return [];
   return readdirSync(dir).filter((name) => name.startsWith("receipt-"))
     .map((name) => (JSON.parse(readFileSync(join(dir, name), "utf-8")) as { status: string }).status);

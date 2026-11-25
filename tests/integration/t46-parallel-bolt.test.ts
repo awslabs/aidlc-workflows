@@ -127,7 +127,8 @@ async function raceFiveBolts(): Promise<RaceResult> {
   // clone-id and a first-run mint race could split the 5 writes across two shards
   // — non-deterministic. The lock contention this test asserts is unchanged.
   mkdirSync(join(proj, "aidlc"), { recursive: true });
-  writeFileSync(join(proj, "aidlc", ".aidlc-clone-id"), "cccccccccccc\n", "utf-8");
+  mkdirSync(join(proj, "aidlc", ".aidlc-engine"), { recursive: true });
+  writeFileSync(join(proj, "aidlc", ".aidlc-engine", "clone-id"), "cccccccccccc\n", "utf-8");
 
   const start = Date.now();
   // Record each change in the lock names so a stalled race shows whether its

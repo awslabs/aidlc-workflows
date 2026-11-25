@@ -635,7 +635,7 @@ describe("the setter when there is nothing to set", () => {
 // running the command again. Nowhere else does the tool behave differently.
 describe("the reply file and its pointer under Command Prompt", () => {
   const TOOL = join(REPO_ROOT, "core", "tools", "aidlc-utility.ts");
-  const POINTER = /^AI-DLC reply: (aidlc\/\.aidlc-sessions\/replies\/[a-z0-9-]+\.txt) \(Command Prompt shows a reply only when it is ready within a second; when this result ends here or its reply is cut off, go on from that file, which holds the whole reply once the command finishes; until it appears, the command is still running\)$/m;
+  const POINTER = /^AI-DLC reply: (aidlc\/\.aidlc-engine\/sessions\/replies\/[a-z0-9-]+\.txt) \(Command Prompt shows a reply only when it is ready within a second; when this result ends here or its reply is cut off, go on from that file, which holds the whole reply once the command finishes; until it appears, the command is still running\)$/m;
   function project(): string {
     const dir = temp("aidlc-t-kiro-terminal-tee-");
     mkdirSync(join(dir, "aidlc"), { recursive: true });
@@ -739,7 +739,7 @@ describe("the reply file and its pointer under Command Prompt", () => {
   test("a recorded Command Prompt without a settings file still tees, and the newest twenty replies are kept", () => {
     const m = machine();
     const dir = project();
-    const replies = join(dir, "aidlc", ".aidlc-sessions", "replies");
+    const replies = join(dir, "aidlc", ".aidlc-engine", "sessions", "replies");
     mkdirSync(replies, { recursive: true });
     for (let i = 10; i < 35; i++) writeFileSync(join(replies, `0000000${i}-1.txt`), "old\n");
     const r = run(["version"], dir, inTerminal(m, "cmd"));
@@ -826,7 +826,7 @@ describe("the quote pair Command Prompt left on the words", () => {
 // too, and doctor run in that terminal names what to check.
 describe("a PowerShell terminal whose shell integration did not run", () => {
   const TOOL = join(REPO_ROOT, "core", "tools", "aidlc-utility.ts");
-  const POINTER = /^AI-DLC reply: (aidlc\/\.aidlc-sessions\/replies\/[a-z0-9-]+\.txt) \(Kiro's terminal here runs without its shell integration, so it shows a reply only when it is ready within a second and every result ends with exit code -1; when this result ends here or its reply is cut off, go on from that file, which holds the whole reply once the command finishes; until it appears, the command is still running\)$/m;
+  const POINTER = /^AI-DLC reply: (aidlc\/\.aidlc-engine\/sessions\/replies\/[a-z0-9-]+\.txt) \(Kiro's terminal here runs without its shell integration, so it shows a reply only when it is ready within a second and every result ends with exit code -1; when this result ends here or its reply is cut off, go on from that file, which holds the whole reply once the command finishes; until it appears, the command is still running\)$/m;
   const BLOCKED = { VSCODE_NONCE: "05a79338-0192-4df2-9a5f-b69cc08579cd", VSCODE_INJECTION: "1", VSCODE_STABLE: "1", VSCODE_A11Y_MODE: "0" };
   const SETTING_OFF = { VSCODE_NONCE: "1ddc280d-fa22-4fd4-b0fd-b637a85c8660" };
   const LOADED = { VSCODE_INJECTION: "1" };

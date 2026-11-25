@@ -55,12 +55,12 @@ describe("a Windows path with an apostrophe reads alike in both shells an agent 
 
 describe("the undo for a file the build changed in a sibling repo names the repo whole", () => {
   test("a repo folder with a space is quoted", () => {
-    const line = broughtFilesLine([{ repo: "my app", path: "README.md", ref: "HEAD", deleted: false } as never]);
+    const line = broughtFilesLine([{ repo: "my app", gitDir: "my app", path: "README.md", ref: "HEAD", deleted: false } as never]);
     expect(line).toContain('`git -C "my app" checkout HEAD -- README.md`');
   });
 
   test("a repo folder no quoting passes in every shell gets no command, as a path like that gets none", () => {
-    const line = broughtFilesLine([{ repo: "a$b", path: "README.md", ref: "HEAD", deleted: false } as never]);
+    const line = broughtFilesLine([{ repo: "a$b", gitDir: "a$b", path: "README.md", ref: "HEAD", deleted: false } as never]);
     expect(line).not.toContain("git -C");
     expect(line).toContain("a$b/README.md");
   });
