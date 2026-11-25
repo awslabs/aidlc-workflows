@@ -1482,8 +1482,8 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
     }
   });
 
-  // P9: the adapter resolves an apply_patch Add/Update File path relative to the
-  // project dir (harness/codex/hooks/aidlc-codex-adapter.ts patchedFiles) and
+  // P9: the adapter resolves an apply_patch Add/Update File path from the payload's
+  // cwd, the project dir here (harness/codex/hooks/aidlc-codex-adapter.ts patchedFiles) and
   // forwards it to the core write-audit-log, which now logs a write ONLY when the
   // path is under the active intent's record root (docsRoot()). The captured
   // fixture is a verbatim pre-workspace run whose paths are `aidlc-docs/<rel>`;
