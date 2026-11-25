@@ -281,6 +281,10 @@ import {
   writeBaselineSourceSnapshot,
   writeUnitSourceSnapshot,
   writeWorkspaceSourceSnapshot,
+  readWorkspaceSourceSnapshot,
+  sourceKeysChangedOutsideAidlcSince,
+  aidlcOwnedSourceKey,
+  sourceListingChangedKeys,
   otherOpenWorkClaims,
   PLAN_APPROVAL_ASKED_BY_ENGINE,
   planApprovalAskIsOpen,
@@ -4838,10 +4842,10 @@ function handleReview(args: string[]): void {
           return;
         }
         // A pending request whose outputs or source changed before its verdict
-        // can never finish: a retry re-dispatches the old bytes, and a verdict
-        // cannot bind to them. A new request at the same pass replaces it (and a
-        // replacement interrupted in turn is replaced the same way), so an
-        // interrupted review never leaves the stage with no way to be reviewed.
+        // is not retried: a retry re-dispatches the old bytes. A new request at
+        // the same pass replaces it (and a replacement interrupted in turn is
+        // replaced the same way), so an interrupted review never leaves the
+        // stage with no way to be reviewed.
         const replaceIteration = pendingStatus?.replaceable ? pendingStatus.iteration : null;
         if (replaceIteration !== null) {
           if (iteration !== replaceIteration) {
@@ -5516,7 +5520,25 @@ function handleReview(args: string[]): void {
               "request with --retry-pending before recording the verdict.",
           );
         }
-        const sourceMoved = !sameWorkspaceSource(requestBinding.sourceFingerprint, sourceFingerprint);
+        let sourceMoved = !sameWorkspaceSource(requestBinding.sourceFingerprint, sourceFingerprint);
+        // Under strict, what moved is read against the listing the request kept,
+        // by the gate's own rule (sourceKeysChangedOutsideAidlcSince): a file Git
+        // ignores and HEAD does not track, such as a test run's output, is not a
+        // change to the reviewed source. AI-DLC's own files still count here, and
+        // a listing that cannot be read leaves the move counted.
+        let requestedListing: string | undefined;
+        if (sourceMoved && !changesAccepted && sourceState !== null) {
+          const requested = readWorkspaceSourceSnapshot(pd, flags.stage as string, requestBinding.sourceFingerprint as string);
+          try {
+            if (requested !== null) requestedListing = writeBaselineSourceSnapshot(pd, flags.stage as string, requested, intent, space);
+          } catch {
+            // Not kept: the move counts.
+          }
+          const counted = sourceKeysChangedOutsideAidlcSince(pd, flags.stage as string, requestedListing, sourceState, [], null);
+          const owned = aidlcOwnedSourceKey(pd);
+          sourceMoved = requested === null || counted === null || counted.size > 0 ||
+            [...sourceListingChangedKeys(requested, sourceState.listing)].some(owned);
+        }
         if (sourceMoved && !changesAccepted) {
           refuseReview(
             `Refusing REVIEW_COMPLETED for "${flags.stage}": workspace source changed after ` +
@@ -5530,13 +5552,14 @@ function handleReview(args: string[]): void {
         fields["Request Source Fingerprint"] = sourceFingerprint;
         fields["Source Fingerprint"] = sourceFingerprint;
         // The listing the reviewer saw, so the completion can tell an AI-DLC
-        // update after the review from a change to source. Only when the source
-        // did not move during the review: a move kept under relaxed or off is
-        // still said at the gate. Without it the completion compares
-        // fingerprints, so a failed write never fails the verdict.
+        // update after the review from a change to source; under strict, the
+        // request's when only files Git ignores moved. None when the source
+        // moved otherwise: a move kept under relaxed or off is still said at
+        // the gate. Without it the completion compares fingerprints, so a
+        // failed write never fails the verdict.
         if (sourceState !== null && !sourceMoved) {
           try {
-            fields["Source Listing"] = writeBaselineSourceSnapshot(pd, flags.stage as string, sourceState.listing, intent, space);
+            fields["Source Listing"] = requestedListing ?? writeBaselineSourceSnapshot(pd, flags.stage as string, sourceState.listing, intent, space);
           } catch {
             // Left out: fingerprints decide.
           }
