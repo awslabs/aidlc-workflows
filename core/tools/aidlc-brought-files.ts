@@ -169,7 +169,10 @@ export interface RemoteBranchCopy {
  * git's copy as the walk reads both), nobody's change in this work; otherwise
  * the build changed it on top of the team's copy. The workspace's repository, a
  * recorded repo and a recorded checkout are each read in their own folder, never
- * fetched, and nothing is written there. With no such branch, or when git cannot
+ * fetched, and nothing is written there. A path inside a submodule that branch
+ * records, checked out here at the commit the branch records for it, is read
+ * the same way in the submodule's own checkout, with that commit as its branch.
+ * With no such branch, or when git cannot
  * tell, a folder's files are not in the map and are named like any other
  * changed file. Never throws.
  */
@@ -193,18 +196,24 @@ export function remoteBranchCopies(
       const dir = checkout?.checkout.real ?? (parsed.repo === "" ? projectDir : repoDir(projectDir, parsed.repo));
       folders.set(dir, (folders.get(dir) ?? new Map<string, string>()).set(path, key));
     }
-    for (const [dir, paths] of folders) {
-      const branch = git(dir, ["rev-parse", "--symbolic-full-name", "@{upstream}"])?.toString("utf-8").trim();
-      const base = branch?.startsWith("refs/remotes/") ? git(dir, ["merge-base", "HEAD", branch])?.toString("utf-8").trim() : undefined;
+    // A submodule's folder is read after the folder above it, with `at`, the commit its entry on that branch records,
+    // and `gone`, its paths a commit on the branch above held as the work found them.
+    const reads: Array<{ dir: string; paths: Map<string, string>; at?: string; gone?: Set<string> }> =
+      [...folders].map(([dir, paths]) => ({ dir, paths }));
+    for (const { dir, paths, at, gone } of reads) {
+      const branch = at === undefined ? git(dir, ["rev-parse", "--symbolic-full-name", "@{upstream}"])?.toString("utf-8").trim() : undefined;
+      const base = at ?? (branch?.startsWith("refs/remotes/") ? git(dir, ["merge-base", "HEAD", branch])?.toString("utf-8").trim() : undefined);
       if (!base) continue;
       // The branch's entries in this folder, by path: mode and object. A read that fails leaves the folder out.
       const listing = git(dir, ["ls-tree", "-r", "-z", base]);
       if (listing === null) continue;
       const tree = new Map<string, { mode: string; object: string }>();
+      const submodules = new Map<string, string>();
       for (const line of listing.toString("utf-8").split("\0")) {
         const tab = line.indexOf("\t");
-        const entry = tab > 0 && paths.has(line.slice(tab + 1)) ? /^(\d{6}) \w+ ([0-9a-f]+)$/.exec(line.slice(0, tab)) : null;
-        if (entry !== null) tree.set(line.slice(tab + 1), { mode: entry[1], object: entry[2] });
+        const entry = tab > 0 ? /^(\d{6}) \w+ ([0-9a-f]+)$/.exec(line.slice(0, tab)) : null;
+        if (entry !== null && paths.has(line.slice(tab + 1))) tree.set(line.slice(tab + 1), { mode: entry[1], object: entry[2] });
+        if (entry?.[1] === "160000") submodules.set(line.slice(tab + 1), entry[2]);
       }
       const listed = [...paths.keys()].filter((path) => tree.has(path));
       const blobs = blobsAt(dir, listed.map((path) => tree.get(path)?.object ?? ""));
@@ -232,10 +241,28 @@ export function remoteBranchCopies(
         if (was === undefined) {
           if (tree.has(path)) added.push(path);
         } else if (!asTheBranch(path, was)) {
-          others.set(path, was.split(" ").at(-1) ?? "");
+          others.set(path, was);
         }
       }
       const earlier = heldOnHistory(dir, base, others);
+      // A path the submodule's commit lacks is gone on the branch when the folder above held it as the work found it.
+      for (const path of gone ?? []) if (!tree.has(path)) earlier.add(path);
+      // A path inside a submodule the branch records, checked out here at the commit recorded, is read in that
+      // checkout at that commit; any other is read here, as before.
+      for (const [submodule, recorded] of submodules) {
+        const within = [...paths].filter(([path]) => path.startsWith(`${submodule}/`));
+        const sub = join(dir, submodule);
+        if (within.length === 0 || !lstatSync(join(sub, ".git"), { throwIfNoEntry: false })) continue;
+        if (git(sub, ["rev-parse", "HEAD"])?.toString("utf-8").trim() !== recorded) continue;
+        const read = { dir: sub, at: recorded, paths: new Map<string, string>(), gone: new Set<string>() };
+        for (const [path, key] of within) {
+          read.paths.set(path.slice(submodule.length + 1), key);
+          if (earlier.has(path)) read.gone.add(path.slice(submodule.length + 1));
+          paths.delete(path);
+          others.delete(path);
+        }
+        reads.push(read);
+      }
       for (const path of [...added, ...[...others.keys()].filter((one) => earlier.has(one))]) {
         const key = paths.get(path) ?? "";
         const blob = theirs.get(path);
@@ -251,31 +278,37 @@ export function remoteBranchCopies(
   return copies;
 }
 
-// Of `found` (each path with the content the work found there), the ones a
-// commit on `rev`'s history held so: read at and before each of the newest
-// changes to the path there, from one path-limited `git log` and one read.
+// Of `found` (each path with its listing entry as the work found it), the ones
+// a commit on `rev`'s history held so: read at and before each of the newest
+// changes to the path there, from one path-limited `git log --raw`, which names
+// a submodule's commit with no object of it here, and one read of the files.
 function heldOnHistory(dir: string, rev: string, found: ReadonlyMap<string, string>): Set<string> {
   const held = new Set<string>();
   if (found.size === 0) return held;
-  const log = git(dir, ["log", "--stdin", "--no-show-signature", "--format=%x01%H", "--name-only", "--no-renames", "--relative", "-z"],
-    `${rev}\n--\n${[...found.keys()].map((path) => `./${path}\n`).join("")}`);
+  const log = git(dir, ["log", "--stdin", "--no-show-signature", "--format=%x01", "--raw", "--no-abbrev", "--no-renames",
+    "--ignore-submodules=none", "--relative", "-z"], `${rev}\n--\n${[...found.keys()].map((path) => `./${path}\n`).join("")}`);
   if (log === null) return held;
-  const changes = new Map<string, string[]>();
-  for (const entry of log.toString("utf-8").split("\x01").slice(1)) {
-    const [commit, ...paths] = entry.split("\0");
-    for (const path of paths.map((name) => name.replace(/^\n/, "")).filter(Boolean)) {
-      const seen = changes.get(path) ?? [];
-      if (seen.length < COMMITS_SEARCHED) changes.set(path, [...seen, commit]);
+  const changes = new Map<string, number>();
+  const asked: Array<{ path: string; object: string }> = [];
+  // Each change is `:<mode before> <mode after> <object before> <object after> <status>`, then its path.
+  const fields = log.toString("utf-8").split("\0");
+  for (let at = 0; at + 1 < fields.length; at++) {
+    const raw = /^\n?:(\d{6}) (\d{6}) ([0-9a-f]+) ([0-9a-f]+) /.exec(fields[at]);
+    if (raw === null) continue;
+    const path = fields[++at];
+    const was = found.get(path);
+    if (was === undefined || (changes.get(path) ?? 0) >= COMMITS_SEARCHED) continue;
+    changes.set(path, (changes.get(path) ?? 0) + 1);
+    for (const [mode, object] of [[raw[2], raw[4]], [raw[1], raw[3]]]) {
+      if (mode === "160000" && was === `${mode} ${object}`) held.add(path);
+      else if (mode !== "160000" && /[1-9a-f]/.test(object)) asked.push({ path, object });
     }
   }
-  const asked = [...changes].flatMap(([path, commits]) => commits.flatMap((commit) => [
-    { path, name: `${commit}:./${path}` }, { path, name: `${commit}^:./${path}` },
-  ]));
-  const blobs = blobsAt(dir, asked.map((one) => one.name));
+  const blobs = blobsAt(dir, asked.map((one) => one.object));
   if (blobs === null) return held;
   asked.forEach(({ path }, index) => {
     const blob = blobs[index];
-    if (blob !== null && holdsContent(blob, found.get(path) ?? "")) held.add(path);
+    if (blob !== null && holdsContent(blob, found.get(path)?.split(" ").at(-1) ?? "")) held.add(path);
   });
   return held;
 }

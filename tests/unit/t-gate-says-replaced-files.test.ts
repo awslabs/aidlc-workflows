@@ -13,7 +13,8 @@
 // no step. After a git pull, a teammate's files are not the build's change: a
 // file exactly as the branch the person's branch tracks holds it, as merged
 // here, is not named, and one the build changed on top of the teammate's copy
-// is put back as the teammate left it.
+// is put back as the teammate left it. A submodule a teammate moved, pulled and
+// updated, is read the same way, at the commit that branch records for it.
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
@@ -83,6 +84,8 @@ interface Setup {
   later?: Record<string, string>;
   // Brought files git stops tracking before the work starts, kept on disk as last committed.
   untracked?: string[];
+  // A submodule at web with these files, from its own team remote, there when the work starts.
+  web?: Record<string, string>;
 }
 
 // A poc project at Code Generation with plan approval off (t51's path), its
@@ -113,6 +116,19 @@ function atBuild(setup: Setup): string {
     if (setup.untracked) {
       git(proj, ["rm", "-q", "--cached", "--", ...setup.untracked]);
       git(proj, ["commit", "-qm", "stop tracking them"]);
+    }
+    if (setup.web) {
+      const web = `${proj}-web`;
+      created.push(web, `${web}.git`);
+      write(web, setup.web);
+      git(web, ["init", "-q"]);
+      git(web, ["add", "-A"]);
+      git(web, ["commit", "-qm", "the web page"]);
+      git(web, ["init", "-q", "--bare", `${web}.git`]);
+      git(web, ["remote", "add", "origin", `${web}.git`]);
+      git(web, ["push", "-q", "-u", "origin", "HEAD"]);
+      git(proj, ["-c", "protocol.file.allow=always", "submodule", "add", "-q", toPortablePath(`${web}.git`), "web"]);
+      git(proj, ["commit", "-qm", "the web page as a submodule"]);
     }
   }
   appendAuditEntry("WORKFLOW_STARTED", { Scope: "poc", ...sourceBaselineAuditFields(proj, workspaceBaselineStageSlugs()) }, proj);
@@ -905,4 +921,43 @@ describe("t-gate-says-replaced-files after a git pull", () => {
     const asked = askCheckpoint(p, "alpha");
     expect(asked.changed_files, JSON.stringify(asked)).toBeUndefined();
   });
+
+  for (const policy of ["off", "strict"] as const) {
+    test(`${policy}: a teammate's move of the web submodule, pulled and updated during the build, is not named`, () => {
+      const proj = atBuild({ type: "Brownfield", policy, git: true, brought: { "README.md": README }, web: WEB_PAGE });
+      teammateMovesWeb(tracked(proj), { "app.js": "render(wishlist);\n", "README.md": "# web\n\nA wishlist.\n" });
+      pullAndUpdate(proj);
+      expect(said(openGate(proj))).not.toContain("you had before this work started");
+    });
+  }
+
+  test("beside a teammate's move of the web submodule, the build's own change inside it is named", () => {
+    const proj = atBuild({ type: "Brownfield", git: true, brought: { "README.md": README }, web: WEB_PAGE });
+    teammateMovesWeb(tracked(proj), { "app.js": "render(wishlist);\n" });
+    pullAndUpdate(proj);
+    write(proj, { "web/README.md": "# web\n\nThe build's line.\n" });
+    expect(said(openGate(proj))).toContain(
+      "The build changed web/README.md, a file you had before this work started. There is no committed copy to put back.",
+    );
+  });
 });
+
+const WEB_PAGE = { "app.js": "render();\n", "index.html": "<html></html>\n", "README.md": "# web\n" };
+
+// A teammate's commit in the web submodule, pushed to web's own remote, and the shop's pointer moved to it and pushed.
+function teammateMovesWeb(mate: string, files: Record<string, string>): void {
+  git(mate, ["-c", "protocol.file.allow=always", "submodule", "update", "-q", "--init"]);
+  const web = join(mate, "web");
+  write(web, files);
+  git(web, ["commit", "-qam", "the wishlist"]);
+  const branch = git(web, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]).trim().replace(/^origin\//, "");
+  git(web, ["push", "-q", "origin", `HEAD:refs/heads/${branch}`]);
+  git(mate, ["add", "--", "web"]);
+  git(mate, ["commit", "-qm", "web moved on"]);
+  git(mate, ["push", "-q"]);
+}
+
+function pullAndUpdate(proj: string): void {
+  pull(proj);
+  git(proj, ["-c", "protocol.file.allow=always", "submodule", "update", "-q"]);
+}
