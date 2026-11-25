@@ -2719,8 +2719,10 @@ checkout has merged that branch, is nobody's change and is not named, and one
 the build changed on top of a teammate's copy is put back as that branch has it,
 or as the work found it when that branch has no such file (`remoteBranchCopies`,
 read in each repository's and recorded checkout's own
-folder, never fetched; the code plan question's already-changed line and the
-close's check of changes outside the Units leave the same files out). That
+folder, never fetched, and for a submodule in its own checkout, at the commit
+that branch records for it, when that is the commit checked out; the code plan
+question's already-changed line and the close's check of changes outside the
+Units leave the same files out). That
 includes a change the build made once it is pushed to that branch and merged
 here; a change only on this machine (uncommitted, or committed and not pushed)
 is named and counted as before. The listings are AI-DLC's ignored
