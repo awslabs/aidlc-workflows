@@ -406,6 +406,25 @@ describe("the stable page", () => {
     expect(page).toContain("## Highlights\n\n### Changes\n\n- A change.\n\n### Script compatibility\n\n- a flag is gone.\n\nPromoted from");
   });
 
+  // A second copy over an installed project replaces tools/data/harness.json,
+  // where its setup answers and plugin choices are kept.
+  test("the copy-channel line refreshes a copied project with its own setup command, never a second copy over it", () => {
+    const page = promotionNotes(shipped);
+    expect(page).toContain("`bun <harness folder>/tools/aidlc.ts config --from <that runtime folder> --harness <name>`");
+    expect(page).not.toContain("Copy it over the project");
+    expect(page).not.toContain("must copy the complete");
+    // An older project's own tool cannot do this refresh alone.
+    expect(page).toContain("so does a project copied before 2.11.0 or whose setup command never ran, and a project set up on 2.11.0 runs the command twice");
+  });
+
+  // The guide inside the release tag is the preview's, older than this page.
+  test("the copy-channel link opens the current guide on main, not the one inside the release tag", () => {
+    const page = promotionNotes(shipped);
+    expect(page).toContain("[copy-channel instructions](https://github.com/awslabs/aidlc-workflows/blob/main/docs/guide/18-install-and-lifecycle.md#copy-channel)");
+    expect(page).not.toContain("/blob/v2.11.1/docs/guide/18-install-and-lifecycle.md");
+    expect(readFileSync(join(REPO_ROOT, "docs/guide/18-install-and-lifecycle.md"), "utf8")).toMatch(/^## Copy Channel$/m);
+  });
+
   // prepare reserves the version before it prints the page, so a bullet whose
   // Script compatibility placement is wrong is refused first; any other line
   // off the shape renders where its author put it, for the page preview and
