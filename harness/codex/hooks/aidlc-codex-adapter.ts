@@ -6,7 +6,7 @@
 // subprocess-pipes into the named core hook, forwarding stdout/exit code.
 //
 // Codex payloads are near-isomorphic to Claude Code's (live corpus,
-// tmp/codex-dist/payload-corpus/ in the framework repo) with five
+// tmp/codex-dist/payload-corpus/ in the framework repo) with six
 // load-bearing differences:
 //   1. Edits arrive as tool_name "apply_patch" with the file paths INSIDE
 //      the patch envelope text (tool_input.command) — no file_path field.
@@ -37,6 +37,9 @@
 //      thread. record-human-turn never counts either as the person's turn
 //      (#1411), and the preamble maps either thread to this chat so an engine
 //      command run in it acts on this chat's work.
+//   6. On a shell call (Codex 0.166.0 and later) `cwd` is the call's own
+//      working folder, which can lie outside the project; Codex still starts
+//      the hook in the session's folder, and that is the project.
 //
 // Output contracts:
 //   - session-start: the core hook prints
@@ -83,7 +86,6 @@ import {
   stateFilePath,
   validSessionId,
 } from "../tools/aidlc-lib.ts";
-import { hookSessionProjectDir } from "../tools/aidlc-runtime-paths.ts";
 import { patchTargets } from "./review-freeze-command.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
@@ -287,23 +289,11 @@ if (!process.stdin.isTTY) {
   }
 }
 
-const projectDirRaw =
-  process.env.AIDLC_PROJECT_DIR ?? codex.cwd ?? process.cwd();
-const threadDir = isAbsolute(projectDirRaw)
+// The folder Codex starts the hook in, never the payload's cwd (difference 6).
+const projectDirRaw = process.env.AIDLC_PROJECT_DIR ?? process.cwd();
+const projectDir = isAbsolute(projectDirRaw)
   ? projectDirRaw
   : resolve(process.cwd(), projectDirRaw);
-// Codex runs these hooks from the project they are set up in, and the
-// payload's cwd is where the thread works: a helper working in a code repo
-// (beside the workspace, or one of its child folders) is the workspace's own,
-// so its records stay there, never in the person's repo. The project is the
-// host's, as for every hook (hookSessionProjectDir: a session in another git
-// worktree of it acts on that worktree); a host folder that is no AI-DLC
-// project leaves the thread's own folder, as before.
-const hostDir = process.cwd();
-const projectDir = process.env.AIDLC_PROJECT_DIR === undefined &&
-    existsSync(join(hostDir, ".codex")) && existsSync(join(hostDir, "aidlc"))
-  ? hookSessionProjectDir(hostDir, rawInput)
-  : threadDir;
 const payloadSessionId = validSessionId(codex.session_id);
 if (payloadSessionId) {
   process.env.AIDLC_SESSION_OVERRIDE = payloadSessionId;
@@ -659,10 +649,9 @@ function reconcilePriorSession(): void {
 
 // --- apply_patch envelope parsing --------------------------------------------
 
-// A patch names its files from the folder the thread works in (threadDir),
-// which a helper in a code repo beside the workspace keeps apart from the
-// project its records go to.
-const projectPath = (rel: string): string => isAbsolute(rel) ? rel : join(threadDir, rel);
+// A patch's relative file resolves from the payload's cwd, where Codex applies it.
+const patchDir = codex.cwd ? resolve(projectDir, codex.cwd) : projectDir;
+const projectPath = (rel: string): string => isAbsolute(rel) ? rel : join(patchDir, rel);
 
 function patchedFiles(command: string): Array<{ path: string; tool: "Write" | "Edit" }> {
   return patchTargets(command)
