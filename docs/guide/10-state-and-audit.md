@@ -383,6 +383,36 @@ If the state file is corrupted, you can reconstruct it from the audit trail by r
 
 ---
 
+## Existing repositories
+
+Adopting AI-DLC in a repository that already has history raises three questions: what to commit, what happens when branches run work in parallel, and how several repositories fit in one workspace.
+
+### What to commit
+
+Which files stay out of git, and why, is in [What's committed and what's not](03-spaces-and-intents.md#whats-committed-and-whats-not); the `.gitignore` block `aidlc config` adds already lists them, so run `git status` and commit what it shows. What differs by harness is the shell `aidlc config` installs. Commit these so the team shares one setup:
+
+| Harness | Installed shell paths |
+|---------|-----------------------|
+| Claude Code | `.claude/`, `.mcp.json` (`.claude/settings.local.json` is ignored) |
+| Codex CLI | `.codex/`, `.agents/skills/` |
+| Kiro CLI | `.kiro/`, including `settings/mcp.json` |
+| Kiro IDE | `.kiro/` (`.kiro/steering/aidlc-active-memory.md` and `.kiro/agents/aidlc-scoped-review-*.md` are ignored) |
+| Cursor | `.cursor/` |
+| GitHub Copilot | `.aidlc/`, `.github/skills/`, `.github/agents/aidlc-*-agent.md`, `.github/hooks/aidlc.json` |
+| opencode | `.aidlc/`, `.opencode/`, `opencode.json` |
+
+On every harness the shared `aidlc/` record, `aidlc.settings.json` and AI-DLC's marked part of `AGENTS.md` and `.gitignore` are committed too. Setup details are in the [harness guides](harnesses/README.md).
+
+### Parallel branches
+
+Each clone writes its own audit shard, so branches that run different intents merge without conflicts. If two clones advance the same intent, git can conflict in its `aidlc-state.md`; the next step handles it as described in [What's committed and what's not](03-spaces-and-intents.md#whats-committed-and-whats-not). The `STATE_FORKED`, `STATE_MERGED`, `AUDIT_FORKED` and `AUDIT_MERGED` events (see the [event taxonomy](#134-event-taxonomy)) are not about git branches: they record a Construction Bolt's worktree being given a copy of the intent's state and audit when it starts, and its state and audit entries being merged back when its gate is approved. Emitters and triggers are in [State Machine](../reference/12-state-machine.md).
+
+### Several repositories
+
+Put the code repos beside `aidlc/` in one workspace folder, each with its own `.git`, and run `aidlc config` in that folder, not inside a repo. The child folders with their own `.git` are the repos, and the record of the work lives once in `aidlc/`. The layout, the team setup and how an intent picks its repos are in [Several repos beside one `aidlc/`](03-spaces-and-intents.md#several-repos-beside-one-aidlc) and [Multiple repos in one intent](03-spaces-and-intents.md#multiple-repos-in-one-intent).
+
+---
+
 ## Next Steps
 
 - [Session Management](11-session-management.md) — How state is used for session resume
