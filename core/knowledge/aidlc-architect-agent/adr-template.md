@@ -60,7 +60,7 @@ Not: "It was decided that PostgreSQL might be a good option."
 - What trade-offs are we accepting?
 - What follow-up decisions will be needed?
 
-## Alternatives Considered
+## Alternatives Rejected
 
 ### Alternative 1: [Name]
 - Description: Brief explanation of this option
