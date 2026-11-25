@@ -356,6 +356,36 @@ function seedTwoUnitDag(proj: string): void {
   );
 }
 
+// A shop's test command: every run writes a new folder under .ci-runs/ and
+// rewrites .coverage/, the reviewer's own run of it included.
+const TEST_OUTPUT_IGNORE = ".ci-runs/\n.coverage/\n";
+function testCommandRun(root: string, run: number): void {
+  mkdirSync(join(root, ".ci-runs", `run-${run}`), { recursive: true });
+  writeFileSync(join(root, ".ci-runs", `run-${run}`, "result.xml"), `<testsuite run="${run}"/>\n`, "utf-8");
+  mkdirSync(join(root, ".coverage"), { recursive: true });
+  writeFileSync(join(root, ".coverage", "lcov.info"), `TN:run-${run}\n`, "utf-8");
+}
+
+// The verdict's own refusal, read from a recordReview that could not record.
+function verdictRefusal(record: () => void): string {
+  try {
+    record();
+  } catch (error) {
+    const out = (error as Error).message.replace(/^recordReview failed: /, "");
+    return (JSON.parse(out.split("\n")[0]) as { error: string }).error;
+  }
+  throw new Error("the verdict was recorded");
+}
+
+const SOURCE_MOVED_REFUSAL =
+  'Refusing REVIEW_COMPLETED for "code-generation": workspace source changed after REVIEW_REQUESTED iteration 1. ' +
+  `Request it again so the reviewer reviews what is there now: \`bun .claude/tools/aidlc-log.ts review --stage code-generation --reviewer ${REVIEWER}`;
+
+function reviewRows(proj: string, event: "REVIEW_REQUESTED" | "REVIEW_COMPLETED"): string[] {
+  return readAllAuditShards(proj).replace(/\r\n/g, "\n").split(/\n---\n/)
+    .filter((block) => block.includes(`**Event**: ${event}`));
+}
+
 // #2244: an in-tree tool cache the project does not ignore (Jest's
 // cacheDirectory inside the repo, say): untracked, rewritten by every test run,
 // no Unit's work and no Unit's to claim.
@@ -2029,6 +2059,148 @@ describe("t314 receipt stamping + completion guard (cli)", () => {
     expect(r.out).toContain(".worktrees/feature/app.ts");
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
+  // Under strict, the verdict leaves out the files the gate leaves out: what Git
+  // ignores and HEAD does not track. A test command the reviewer runs writes
+  // such files on every run, so counting them refused every review.
+  function ignoreTestOutput(): void {
+    writeFileSync(join(proj, ".gitignore"), TEST_OUTPUT_IGNORE, "utf-8");
+    git(proj, ["add", ".gitignore"]);
+    git(proj, ["commit", "-qm", "the shop ignores its test output"]);
+  }
+
+  test("under strict, files Git ignores that a test run writes while the reviewer works do not refuse the verdict", () => {
+    ignoreTestOutput();
+    recordReview(proj, "code-generation", REVIEWER, undefined, "READY", undefined, true, () => testCommandRun(proj, 1));
+    expect(reviewRows(proj, "REVIEW_COMPLETED")).toHaveLength(1);
+    testCommandRun(proj, 2);
+    const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(r.rc, r.out).toBe(0);
+    expect(r.out).not.toContain("changed after");
+    expect(r.out).not.toContain(".ci-runs");
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("under strict, that verdict keeps the source the request bound, and an edit after it still refuses, naming only that file", () => {
+    ignoreTestOutput();
+    recordReview(proj, "code-generation", REVIEWER, undefined, "READY", undefined, true, () => testCommandRun(proj, 1));
+    const requested = /\*\*Source Fingerprint\*\*: ([0-9a-f]{64})/.exec(reviewRows(proj, "REVIEW_REQUESTED")[0])?.[1];
+    expect(requested).toBeDefined();
+    const requestedListing = readWorkspaceSourceSnapshot(proj, "code-generation", requested as string);
+    expect(requestedListing).not.toBeNull();
+    expect([...(requestedListing as Map<string, string>).keys()].some((key) => key.includes(".ci-runs"))).toBe(false);
+    const completed = reviewRows(proj, "REVIEW_COMPLETED")[0];
+    expect(completed).toContain(`**Source Fingerprint**: ${requested}\n`);
+    expect(completed).toContain(
+      `**Source Listing**: ${writeBaselineSourceSnapshot(proj, "code-generation", requestedListing as Map<string, string>)}\n`,
+    );
+    testCommandRun(proj, 2);
+    writeFileSync(src, "export const answer = 1337; // edited after review\n", "utf-8");
+    const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(r.rc).not.toBe(0);
+    expect(r.out).toContain("What changed: app.ts;");
+    expect(r.out).not.toContain(".ci-runs");
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("under strict, a test run's output ignored only in .git/info/exclude does not refuse the verdict", () => {
+    writeFileSync(join(proj, ".git", "info", "exclude"), TEST_OUTPUT_IGNORE, "utf-8");
+    recordReview(proj, "code-generation", REVIEWER, undefined, "READY", undefined, false, () => testCommandRun(proj, 1));
+    expect(reviewRows(proj, "REVIEW_COMPLETED")).toHaveLength(1);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("under strict, an ignored run folder deleted while the reviewer works does not refuse the verdict", () => {
+    ignoreTestOutput();
+    testCommandRun(proj, 0);
+    recordReview(proj, "code-generation", REVIEWER, undefined, "READY", undefined, false, () =>
+      rmSync(join(proj, ".ci-runs", "run-0"), { recursive: true, force: true }));
+    expect(reviewRows(proj, "REVIEW_COMPLETED")).toHaveLength(1);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  // Anything else that moved while the reviewer worked still refuses, in the
+  // same words, beside the ignored output.
+  const stillRefused: Array<[string, () => void, () => void]> = [
+    ["a tracked file edited", ignoreTestOutput, () => writeFileSync(src, "export const answer = 7;\n", "utf-8")],
+    ["a test run's output Git does not ignore", () => {}, () => {}],
+    ["an ignored file HEAD tracks, rewritten", () => {
+      ignoreTestOutput();
+      mkdirSync(join(proj, ".coverage"), { recursive: true });
+      writeFileSync(join(proj, ".coverage", "baseline.info"), "TN:baseline\n", "utf-8");
+      git(proj, ["add", "-f", ".coverage/baseline.info"]);
+      git(proj, ["commit", "-qm", "a tracked coverage baseline"]);
+    }, () => writeFileSync(join(proj, ".coverage", "baseline.info"), "TN:rewritten\n", "utf-8")],
+    ["an ignored folder registered as source in .aidlc-source-paths.json", () => {
+      ignoreTestOutput();
+      sourceRegistry(proj, { paths: [".ci-runs"] });
+      git(proj, ["add", ".aidlc-source-paths.json"]);
+      git(proj, ["commit", "-qm", "the run folder is source"]);
+    }, () => {}],
+    ["ignore lines written into .gitignore", () => {}, () => writeFileSync(join(proj, ".gitignore"), TEST_OUTPUT_IGNORE, "utf-8")],
+    ["an AI-DLC file changed", () => {
+      ignoreTestOutput();
+      installedStageLevelBuild();
+    }, () => writeFileSync(join(proj, ".agents", "skills", "aidlc", "SKILL.md"), "AI-DLC 2\n", "utf-8")],
+    ["an edit in a worktree kept in a folder the project ignores", () => {
+      writeFileSync(join(proj, ".gitignore"), `${TEST_OUTPUT_IGNORE}.worktrees/\n`, "utf-8");
+      git(proj, ["add", ".gitignore"]);
+      git(proj, ["commit", "-qm", "the shop ignores its test output and worktrees"]);
+      git(proj, ["worktree", "add", "-q", "-b", "feature", join(proj, ".worktrees", "feature")]);
+    }, () => writeFileSync(join(proj, ".worktrees", "feature", "app.ts"), "export const answer = 7;\n", "utf-8")],
+  ];
+  for (const [what, setup, whileReviewing] of stillRefused) {
+    test(`under strict, ${what} while the reviewer works still refuses the verdict in the same words`, () => {
+      setup();
+      const refusal = verdictRefusal(() =>
+        recordReview(proj, "code-generation", REVIEWER, undefined, "READY", undefined, false, () => {
+          testCommandRun(proj, 1);
+          whileReviewing();
+        }));
+      expect(refusal).toStartWith(`${SOURCE_MOVED_REFUSAL} --iteration 1 --project-dir `);
+      expect(refusal).toEndWith("`.");
+      expect(reviewRows(proj, "REVIEW_COMPLETED")).toHaveLength(0);
+    }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+  }
+
+  test("under strict, ignored output with Git not on the path at the verdict still refuses in the same words", () => {
+    ignoreTestOutput();
+    const noGitPath = mkdtempSync(join(tmpdir(), "t314-verdict-no-git-"));
+    const priorPath = process.env.PATH;
+    try {
+      const refusal = verdictRefusal(() =>
+        recordReview(proj, "code-generation", REVIEWER, undefined, "READY", undefined, false, () => {
+          testCommandRun(proj, 1);
+          process.env.PATH = noGitPath;
+        }));
+      expect(refusal).toStartWith(`${SOURCE_MOVED_REFUSAL} --iteration 1 --project-dir `);
+    } finally {
+      process.env.PATH = priorPath;
+      rmSync(noGitPath, { recursive: true, force: true });
+    }
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("under strict, ignored output with the request's kept listing gone still refuses in the same words", () => {
+    ignoreTestOutput();
+    const refusal = verdictRefusal(() =>
+      recordReview(proj, "code-generation", REVIEWER, undefined, "READY", undefined, false, () => {
+        testCommandRun(proj, 1);
+        const requested = /\*\*Source Fingerprint\*\*: ([0-9a-f]{64})/.exec(reviewRows(proj, "REVIEW_REQUESTED")[0])?.[1] ?? "";
+        const kept = join(seededRecordDir(proj), ".aidlc-engine", "source-review", "code-generation", `workspace-${requested.slice(0, 12)}.tsv`);
+        expect(existsSync(kept)).toBe(true);
+        rmSync(kept);
+      }));
+    expect(refusal).toStartWith(`${SOURCE_MOVED_REFUSAL} --iteration 1 --project-dir `);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  for (const policy of ["relaxed", "off"]) {
+    test(`under ${policy}, ignored output written while the reviewer works records as before, with no listing kept`, () => {
+      setGuardPolicy(`${policy} (set by you)`);
+      ignoreTestOutput();
+      recordReview(proj, "code-generation", REVIEWER, undefined, "READY", undefined, false, () => testCommandRun(proj, 1));
+      const requested = /\*\*Source Fingerprint\*\*: ([0-9a-f]{64})/.exec(reviewRows(proj, "REVIEW_REQUESTED")[0])?.[1];
+      const completed = reviewRows(proj, "REVIEW_COMPLETED");
+      expect(completed).toHaveLength(1);
+      expect(completed[0]).toContain(`**Source Fingerprint**: ${requested}\n`);
+      expect(completed[0]).not.toContain("**Source Listing**");
+    }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+  }
+
   test("under relaxed, a post-review source edit is carried to the gate as the changed paths", () => {
     const statePath = seededStateFile(proj);
     writeFileSync(statePath, readFileSync(statePath, "utf-8").replace(
@@ -2972,6 +3144,40 @@ describe("t314 multi-unit source attribution", () => {
     const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
     expect(r.out).not.toContain("source-fingerprint mismatch");
     expect(r.rc).toBe(0);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("under strict, each Unit's review records over the files Git ignores that its test run writes, and the stage completes", () => {
+    writeFileSync(join(proj, ".gitignore"), TEST_OUTPUT_IGNORE, "utf-8");
+    git(proj, ["add", ".gitignore"]);
+    git(proj, ["commit", "-qm", "the shop ignores its test output"]);
+    restartBaseline(proj);
+    writeFileSync(join(proj, "alpha.ts"), "export const alpha = 1;\n", "utf-8");
+    recordReview(proj, "code-generation", REVIEWER, "alpha", "READY", [{ path: "alpha.ts" }], true, () => testCommandRun(proj, 1));
+    writeFileSync(join(proj, "beta.ts"), "export const beta = 2;\n", "utf-8");
+    recordReview(proj, "code-generation", REVIEWER, "beta", "READY", [{ path: "beta.ts" }], true, () => testCommandRun(proj, 2));
+    testCommandRun(proj, 3);
+    const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(r.rc, r.out).toBe(0);
+    expect(r.out).not.toContain(".ci-runs");
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("under strict, a Unit claiming the folder its ignored test output lands in is refused by its manifest, as before", () => {
+    writeFileSync(join(proj, ".gitignore"), TEST_OUTPUT_IGNORE, "utf-8");
+    git(proj, ["add", ".gitignore"]);
+    git(proj, ["commit", "-qm", "the shop ignores its test output"]);
+    restartBaseline(proj);
+    mkdirSync(join(proj, "web"), { recursive: true });
+    writeFileSync(join(proj, "web", "alpha.ts"), "export const alpha = 1;\n", "utf-8");
+    const refused = (() => {
+      try {
+        recordReview(proj, "code-generation", REVIEWER, "alpha", "READY", [{ path: "web/" }], false, () => testCommandRun(join(proj, "web"), 1));
+      } catch (error) {
+        return (error as Error).message;
+      }
+      return "recorded";
+    })();
+    expect(refused).toContain('contains ignored application source \\"web/.ci-runs/run-1/result.xml\\"');
+    expect(reviewRows(proj, "REVIEW_COMPLETED")).toHaveLength(0);
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   // The source changed after the last Unit's review: the one recovery review
@@ -6768,6 +6974,22 @@ describe("t314 a repo added during the work joins the stage-entry baseline", () 
     commitIn("app-a", "beta.ts", "export const beta = 2;\n");
     recordReview(proj, "code-generation", REVIEWER, "beta", "READY", [{ repo: "app-a", path: "beta.ts" }]);
   }
+
+  test("under strict, a repo's own ignored test output does not refuse a Unit's verdict, and a tracked edit there still does", () => {
+    commitIn("app-a", ".gitignore", TEST_OUTPUT_IGNORE);
+    restartBaseline(proj);
+    commitIn("app-a", "alpha.ts", "export const alpha = 1;\n");
+    recordReview(proj, "code-generation", REVIEWER, "alpha", "READY", [{ repo: "app-a", path: "alpha.ts" }], false, () =>
+      testCommandRun(join(proj, "app-a"), 1));
+    expect(reviewRows(proj, "REVIEW_COMPLETED")).toHaveLength(1);
+    commitIn("app-a", "beta.ts", "export const beta = 2;\n");
+    const refusal = verdictRefusal(() =>
+      recordReview(proj, "code-generation", REVIEWER, "beta", "READY", [{ repo: "app-a", path: "beta.ts" }], false, () => {
+        testCommandRun(join(proj, "app-a"), 2);
+        writeFileSync(join(proj, "app-a", "app.ts"), "export const a = 2;\n", "utf-8");
+      }));
+    expect(refusal).toStartWith(`${SOURCE_MOVED_REFUSAL} --unit beta --iteration 1 --project-dir `);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("the new repo's existing files are no Unit's change", () => {
     intent("add-repo", "payments");
