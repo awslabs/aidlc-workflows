@@ -440,9 +440,15 @@ methodology knowledge. A plugin may also ship house rules (Method/rules, below).
   the checked shape cannot drift. A team's own file at the same path always
   wins — kept, never overwritten, said once — and turning the plugin off
   removes exactly your files, byte-proven. `test-pro` ships one for its
-  `test-pro-integration-test-plan`. A template for a questions/timestamp
-  marker is never shape-checked, and one with no `##` headings requires
-  nothing; validate warns on both. See
+  `test-pro-integration-test-plan`. Name the template for the file the
+  artifact writes (`build-test-results` writes `test-results.md`, so its
+  template is `test-results.md`). A template for a core stage's own document
+  (for example `requirements.md`) is allowed and sets that document's whole
+  layout in every space, in place of the stage's own: keep every section the
+  stage needs in it; validate warns and sync says so once. A template for a
+  questions/timestamp marker is never shape-checked, and one with no `##`
+  headings requires nothing; validate warns on both. Files the OS or an
+  editor leaves in the folder (`.DS_Store`, `.gitkeep`) are skipped. See
   [The Plugin Mechanism](../reference/18-plugin-mechanism.md), section 7.
 - **Knowledge.** Ship per-agent **methodology** knowledge under
   `knowledge/<agent-slug>/`, projected into the framework-shipped

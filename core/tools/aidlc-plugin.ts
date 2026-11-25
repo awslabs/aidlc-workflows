@@ -15,7 +15,7 @@ import { homedir, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
-import { TEMPLATE_FILE_NAME } from "./aidlc-artifact-vocabulary.ts";
+import { artifactFilename, TEMPLATE_FILE_NAME } from "./aidlc-artifact-vocabulary.ts";
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { projectInvocationTokens } from "./aidlc-command.ts";
 import {
@@ -25,6 +25,7 @@ import {
   errorMessage,
   escapeRegex,
   isPlainObject,
+  loadStageGraphAll,
   parseArgs,
   parseStageFrontmatter,
   pausedBySelection,
@@ -1955,7 +1956,10 @@ function rulesBlockText(content: string, key: string, path: string): string | nu
 // and the sha256 of the section). One record per project, beside the rule files
 // every harness in it shares, so each harness and each clone keep the level the
 // person chose.
-export type RulesRecord = { schemaVersion: 1; level: RulesLevel; files: Record<string, string> };
+// `chosen`: the level was asked for (plugin select --rules-level), not the
+// engine's fallback for a plugin that placed no rules yet. A record whose files
+// hold placed sections keeps its level either way.
+export type RulesRecord = { schemaVersion: 1; level: RulesLevel; files: Record<string, string>; chosen?: true };
 
 const RULE_PHASES = PHASES.filter((phase) => phase !== "initialization");
 
@@ -1966,10 +1970,19 @@ function rulesRecordPath(projectDir: string, key: string): string {
 }
 
 // The plugins with a rules record in this project.
+// Every plugin with a memory record: its rules record, its templates record,
+// or both. A template-only plugin whose rules record an older engine dropped
+// still has its templates copied to a new space and checked by doctor.
 export function pluginRulesRecords(projectDir: string): string[] {
-  const dir = join(projectDir, ...RULES_RECORD_DIR);
-  if (!existsSync(dir)) return [];
-  return readdirSync(dir).filter((file) => /^[a-z][a-z0-9-]*\.json$/.test(file)).map((file) => file.slice(0, -5)).sort();
+  const keys = new Set<string>();
+  for (const parts of [RULES_RECORD_DIR, TEMPLATES_RECORD_DIR]) {
+    const dir = join(projectDir, ...parts);
+    if (!existsSync(dir)) continue;
+    for (const file of readdirSync(dir)) {
+      if (/^[a-z][a-z0-9-]*\.json$/.test(file)) keys.add(file.slice(0, -5));
+    }
+  }
+  return [...keys].sort();
 }
 
 export function readRulesRecord(projectDir: string, key: string): RulesRecord | null {
@@ -2008,9 +2021,15 @@ export function readTemplatesRecord(projectDir: string, key: string): Record<str
   if (!existsSync(path)) return null;
   try {
     const parsed = readJson(path);
+    // Every path the record names is joined to a space's memory folder and may
+    // be overwritten or removed, so a key that is not exactly
+    // templates/<artifact>.md (a `..` walk, a nested path, a rules file) makes
+    // the whole record one AI-DLC did not write: nothing it names is touched,
+    // and the next merge rebuilds it, treating what is on disk as the person's.
     if (
       isPlainObject(parsed) && isPlainObject(parsed.templates) &&
-      Object.values(parsed.templates).every((value) =>
+      Object.entries(parsed.templates).every(([rel, value]) =>
+        rel.startsWith("templates/") && TEMPLATE_FILE_NAME.test(rel.slice("templates/".length)) &&
         isPlainObject(value) && typeof value.sha256 === "string" &&
         Array.isArray(value.kept) && value.kept.every((space) => typeof space === "string")
       )
@@ -2125,11 +2144,37 @@ function placementLine(key: string, level: RulesLevel, files: string[]): string 
     `${entrySkillInvocation()} plugin select --rules-level ${key}=${others[0]}`;
 }
 
-// The templates line, said once per template when it first lands somewhere.
+// The documents core stages write, by file name, with the stage's name. A
+// plugin's template for one of them sets that document's whole shape, so its
+// placement line says so. Best-effort: with no graph to read, nothing is added.
+function coreDocumentStages(): Map<string, string> {
+  const out = new Map<string, string>();
+  try {
+    for (const node of loadStageGraphAll()) {
+      if (node.plugin !== undefined) continue;
+      for (const artifact of node.produces ?? []) {
+        const file = artifactFilename(artifact);
+        if (file.endsWith(".md") && !out.has(file)) out.set(file, node.name);
+      }
+    }
+  } catch {
+    // The placement line still names the templates.
+  }
+  return out;
+}
+
+// The templates line, said once per template when it first lands somewhere. A
+// template for a core stage's own document is named as setting its shape.
 function templatePlacementLine(key: string, rels: string[]): string {
-  const names = rels.map((rel) => rel.slice("templates/".length)).join(", ");
-  return `${key}'s templates are in each space's memory/templates: ${names}. ` +
-    "The required-sections sensor checks their ## headings at the gate; a file of your own at the same path is kept as yours.";
+  const files = rels.map((rel) => rel.slice("templates/".length));
+  const core = coreDocumentStages();
+  const shaped = files.filter((file) => core.has(file))
+    .map((file) => `${file} sets the whole layout of the ${core.get(file)} document`);
+  return `${key}'s templates are in each space's memory/templates: ${files.join(", ")}. ` +
+    "The required-sections sensor checks their ## headings at the gate; a file of your own at the same path is kept as yours." +
+    (shaped.length === 0
+      ? ""
+      : ` ${shaped.join("; ")}: the agent fills it in place of the stage's own layout.`);
 }
 
 // The kept line said once per space and file, when a team's own template wins.
@@ -2162,16 +2207,24 @@ function mergePluginTemplates(
         mkdirSync(dirname(path), { recursive: true });
         writeFileSync(path, content);
         landed = true;
+        // The person's own file that won here is gone, so the plugin's lands
+        // where its sections were not asked for before: said once.
+        if (keptBefore.has(basename(dirname(memoryDir)))) {
+          lines.push(`${relative(projectDir, path).split(sep).join("/")} was your own and is gone, so ${key}'s template is there now; the gate checks its sections.`);
+        }
         continue;
       }
       if (!lstatSync(path).isFile()) continue;
       const existing = templateLf(readFileSync(path, "utf-8"));
-      if (existing === content) {
+      // Identical bytes are the plugin's only once its record placed them: a
+      // file that was there before the plugin's first merge is the person's,
+      // even when it matches, so turning the plugin off never takes it.
+      if (existing === content && recorded !== undefined && !keptBefore.has(basename(dirname(memoryDir)))) {
         landed = true;
         continue;
       }
       const existingSha = sha256Text(existing);
-      if (recorded !== undefined && existingSha === recorded.sha256) {
+      if (recorded !== undefined && !keptBefore.has(basename(dirname(memoryDir))) && existingSha === recorded.sha256) {
         writeFileSync(path, content);
         landed = true;
         continue;
@@ -2196,6 +2249,7 @@ function mergePluginTemplates(
   for (const [rel, recorded] of Object.entries(prior ?? {})) {
     if (source.has(rel)) continue;
     for (const memoryDir of spaceMemoryDirs(projectDir)) {
+      if (recorded.kept.includes(basename(dirname(memoryDir)))) continue;
       const path = join(memoryDir, rel);
       if (!existsSync(path) || !lstatSync(path).isFile()) continue;
       if (sha256Text(templateLf(readFileSync(path, "utf-8"))) === recorded.sha256) rmSync(path, { force: true });
@@ -2225,7 +2279,12 @@ export function mergePluginRules(
     }
     return [];
   }
-  const level = requested ?? record?.level ?? source.level ?? "project";
+  // A record that placed no rules and was never asked a level holds only the
+  // engine's fallback, so a later version's declared level still applies.
+  const recordedLevel = record !== null && (record.chosen === true || Object.keys(record.files).length > 0)
+    ? record.level
+    : undefined;
+  const level = requested ?? recordedLevel ?? source.level ?? "project";
   const blocks = rulesBlocks(plugin.key, source, level);
   for (const memoryDir of spaceMemoryDirs(projectDir)) {
     for (const rel of ruleFilesIn(memoryDir)) {
@@ -2244,8 +2303,12 @@ export function mergePluginRules(
     schemaVersion: 1,
     level,
     files: Object.fromEntries([...blocks].map(([rel, block]) => [rel, sha256Text(block)])),
+    ...(requested !== undefined || record?.chosen === true ? { chosen: true as const } : {}),
   });
-  const said = source.files.has("rules.md") && (record === null || record.level !== level);
+  // Said when the rules first land (a plugin that shipped only templates
+  // before included) and when their level moves.
+  const said = source.files.has("rules.md") &&
+    (record === null || Object.keys(record.files).length === 0 || record.level !== level);
   return [...(said ? [placementLine(plugin.key, level, [...blocks.keys()])] : []), ...merged.lines];
 }
 
@@ -2281,7 +2344,6 @@ export function mergePluginRulesFromRoot(
   root: string,
   enabled?: (key: string) => boolean,
 ): string[] {
-  if (!existsSync(join(root, "memory"))) return [];
   let key: unknown;
   try {
     key = (readJson(join(root, ".aidlc-plugin", "plugin.json")) as { name?: unknown }).name;
@@ -2291,6 +2353,13 @@ export function mergePluginRulesFromRoot(
   if (typeof key !== "string" || !SAFE_PLUGIN_KEY.test(key)) return [];
   const selection = selectedPlugins(projectDir, harnessDir);
   if (enabled ? !enabled(key) : selection !== null && !selection.has(key)) return [];
+  // A version with no memory/ at all still has its earlier rules and templates
+  // taken out (mergePluginRules strips a record whose source is gone); with no
+  // record either, there is nothing to do.
+  if (
+    !existsSync(join(root, "memory")) &&
+    readRulesRecord(projectDir, key) === null && readTemplatesRecord(projectDir, key) === null
+  ) return [];
   return mergePluginRules(projectDir, { key, root });
 }
 
@@ -2299,7 +2368,13 @@ export function mergePluginRulesFromRoot(
 // stays. Turning the plugin off keeps its record as it is (the level it sat
 // at; its missing sections and templates compose again once it is on);
 // pruning it forgets it.
-export function stripPluginRules(projectDir: string, key: string, keepLevel: boolean): boolean {
+export function stripPluginRules(
+  projectDir: string,
+  key: string,
+  keepLevel: boolean,
+  // Filled with what was taken out, for the line that says it.
+  took?: { rules: boolean; templates: boolean },
+): boolean {
   const record = readRulesRecord(projectDir, key);
   const templates = readTemplatesRecord(projectDir, key);
   let stripped = false;
@@ -2311,14 +2386,18 @@ export function stripPluginRules(projectDir: string, key: string, keepLevel: boo
       if (after !== before) {
         writeFileSync(path, after);
         stripped = true;
+        if (took) took.rules = true;
       }
     }
     for (const [rel, prior] of Object.entries(templates ?? {})) {
+      // A space whose own file won is the person's file, whatever its bytes.
+      if (prior.kept.includes(basename(dirname(memoryDir)))) continue;
       const path = join(memoryDir, rel);
       if (!existsSync(path) || !lstatSync(path).isFile()) continue;
       if (sha256Text(templateLf(readFileSync(path, "utf-8"))) === prior.sha256) {
         rmSync(path, { force: true });
         stripped = true;
+        if (took) took.templates = true;
       }
     }
   }
@@ -2352,6 +2431,7 @@ export function pluginTemplateStripRemovals(projectDir: string, key: string): st
   const removals: string[] = [];
   for (const memoryDir of spaceMemoryDirs(projectDir)) {
     for (const [rel, prior] of Object.entries(templates ?? {})) {
+      if (prior.kept.includes(basename(dirname(memoryDir)))) continue;
       const path = join(memoryDir, rel);
       if (!existsSync(path) || !lstatSync(path).isFile()) continue;
       if (sha256Text(templateLf(readFileSync(path, "utf-8"))) === prior.sha256) {
@@ -2386,7 +2466,7 @@ export function movePluginRules(projectDir: string, harnessDir: string, key: str
       moved = true;
     }
   }
-  writeRulesRecord(projectDir, key, { schemaVersion: 1, level, files });
+  writeRulesRecord(projectDir, key, { schemaVersion: 1, level, files, chosen: true });
   return moved
     ? placementLine(key, level, Object.keys(files).sort())
     : `${key}'s rules will be in ${level}.md, in a section of their own at the end, ${
@@ -2434,10 +2514,9 @@ function rulesNeedMerge(projectDir: string, plugin: InstalledPlugin, requested?:
 // from the record alone (doctor reads no plugin source).
 export function rulesRecordGaps(projectDir: string, key: string): string[] {
   const record = readRulesRecord(projectDir, key);
-  if (record === null) return [];
   const gaps: string[] = [];
   for (const memoryDir of spaceMemoryDirs(projectDir)) {
-    for (const [rel, digest] of Object.entries(record.files).sort(([a], [b]) => a.localeCompare(b))) {
+    for (const [rel, digest] of Object.entries(record?.files ?? {}).sort(([a], [b]) => a.localeCompare(b))) {
       const path = join(memoryDir, rel);
       if (!existsSync(path)) continue;
       const shown = relative(projectDir, path).split(sep).join("/");
@@ -2471,8 +2550,7 @@ export function rulesRecordGaps(projectDir: string, key: string): string[] {
 export function copyPluginRulesToSpace(projectDir: string, fromMemoryDir: string, toMemoryDir: string): void {
   for (const key of pluginRulesRecords(projectDir)) {
     const record = readRulesRecord(projectDir, key);
-    if (record === null) continue;
-    for (const rel of Object.keys(record.files).sort()) {
+    for (const rel of Object.keys(record?.files ?? {}).sort()) {
       const from = join(fromMemoryDir, rel);
       const to = join(toMemoryDir, rel);
       if (!existsSync(from) || !existsSync(to)) continue;

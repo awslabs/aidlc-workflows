@@ -281,7 +281,7 @@ describe("t224 plugin selection - install chooses visible plugin surfaces", () =
     const disable = runUtility(proj, ["select-plugins", "aidlc"]);
     expect(disable.status).toBe(0);
     expect(disable.stdout).toContain(
-      "What test-pro added to other stages and agents, and its rules, is taken out; turn test-pro back on and they return at the next session start.",
+      "What test-pro added to other stages and agents, and its rules and templates, is taken out; turn test-pro back on and they return at the next session start.",
     );
     const stripped = readFileSync(stagePath, "utf-8");
     expect(stripped).not.toContain("test-pro-regression-suite");
@@ -366,7 +366,7 @@ describe("t224 plugin selection - install chooses visible plugin surfaces", () =
 
     const core = runUtility(proj, ["select-plugins", "aidlc"]);
     expect(core.status, core.stderr).toBe(0);
-    expect(core.stdout).toContain(`What ${PLUGIN} added to other stages and agents, and its rules, is taken out;`);
+    expect(core.stdout).toContain(`What ${PLUGIN} added to other stages and agents, and its rules and templates, is taken out;`);
     expect(buildSensors()).not.toContain("coverage-threshold");
     expect(buildSensors()).not.toContain("requirement-coverage");
   });

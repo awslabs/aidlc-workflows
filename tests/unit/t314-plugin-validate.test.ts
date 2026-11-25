@@ -347,6 +347,46 @@ describe("t314 standalone plugin validator", () => {
     ]);
   });
 
+  test("templates: OS and editor files are skipped, other non-Markdown files and misnamed or core-document templates are named", () => {
+    const root = fixture();
+    const manifestPath = join(root, ".aidlc-plugin", "plugin.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf-8")) as {
+      aidlc: { contributes: Record<string, string> };
+    };
+    manifest.aidlc.contributes.memory = "memory/";
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf-8");
+    const templateWarnings = () =>
+      validatePluginRoot(root).warnings.filter((finding) => finding.rule === "memory-template")
+        .map((finding) => finding.file).sort();
+    write(join(root, "memory", "templates", "integration-test-plan.md"), "# Plan\n\n## Scope\n");
+
+    // macOS Finder and an empty-folder keeper never block validate.
+    write(join(root, "memory", "templates", ".DS_Store"), "\u0000\u0000");
+    write(join(root, "memory", "templates", ".gitkeep"), "");
+    expect(validatePluginRoot(root).errors).toEqual([]);
+    expect(templateWarnings()).toEqual([]);
+
+    // Any other non-Markdown file is named once, since sync does not place it.
+    write(join(root, "memory", "templates", "notes.txt"), "x\n");
+    expect(validatePluginRoot(root).errors).toEqual([]);
+    expect(templateWarnings()).toEqual(["memory/templates/notes.txt"]);
+    rmSync(join(root, "memory", "templates", "notes.txt"));
+
+    // A template is found by the file its artifact writes.
+    write(join(root, "memory", "templates", "build-test-results.md"), "## Results\n");
+    expect(validatePluginRoot(root).warnings).toContainEqual(
+      expect.objectContaining({ rule: "memory-template", file: "memory/templates/build-test-results.md" }),
+    );
+    rmSync(join(root, "memory", "templates", "build-test-results.md"));
+
+    // A core stage's own document is allowed and named: it sets that
+    // document's whole shape in every space.
+    write(join(root, "memory", "templates", "requirements.md"), "## 개요\n\n## 기능 요구사항\n");
+    const core = validatePluginRoot(root).warnings.find((finding) => finding.file === "memory/templates/requirements.md");
+    expect(validatePluginRoot(root).errors).toEqual([]);
+    expect(core?.message).toContain("Requirements Analysis");
+  });
+
   test("dependencies name core and at most one base plugin, with a range npm can read", () => {
     const withDependencies = (dependencies: string[]): string[] => {
       const root = fixture();

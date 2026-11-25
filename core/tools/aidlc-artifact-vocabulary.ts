@@ -13,6 +13,17 @@ export function artifactFilename(name: string): string {
   return ARTIFACT_FILENAMES[name] ?? `${name}.md`;
 }
 
+/** The file an artifact writes when it is not `<name>.md` (a template is named for the file), else null. */
+export function differentArtifactFilename(name: string): string | null {
+  const file = ARTIFACT_FILENAMES[name];
+  return file !== undefined && file !== `${name}.md` ? file : null;
+}
+
+/** A questions or timestamp marker: never shape-checked, so no template applies to it. */
+export function isMarkerArtifact(name: string): boolean {
+  return name.endsWith("-questions") || name.endsWith("-timestamp");
+}
+
 /** Stages whose produced artifacts live in the space-level code knowledge base. */
 export const KNOWN_CODEKB_STAGES: ReadonlySet<string> = new Set([
   "reverse-engineering",

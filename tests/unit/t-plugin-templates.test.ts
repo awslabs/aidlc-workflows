@@ -1,15 +1,17 @@
-// covers: file:core/tools/aidlc-plugin.ts, function:mergePluginRules, function:stripPluginRules, function:copyPluginRulesToSpace, function:rulesRecordGaps, function:pluginTemplateStripRemovals, function:readRulesRecord
+// covers: file:core/tools/aidlc-plugin.ts, function:mergePluginRules, function:stripPluginRules, function:copyPluginRulesToSpace, function:rulesRecordGaps, function:pluginTemplateStripRemovals, function:readRulesRecord, function:readTemplatesRecord, function:mergePluginRulesFromRoot, function:pluginRulesRecords
 //
 // A plugin's memory/templates/<artifact>.md lands as a whole file in every
-// space's memory/templates/, hash-proven in the plugin's rules record (the
-// file itself carries no marker, so the skeleton the agent fills stays clean):
+// space's memory/templates/, hash-proven in a record of its own,
+// aidlc/plugin-templates/<plugin>.json (the file itself carries no marker, so
+// the skeleton the agent fills stays clean; a record whose keys are not
+// templates/<artifact>.md is not AI-DLC's and touches nothing):
 // placed everywhere and idempotent; a person's file at the same path always
 // wins, with the kept line said once; the plugin's own update replaces only
 // its own bytes; off strips exactly the plugin's files; a new space copies the
 // plugin's template and never the team's own; doctor's record gaps name a
 // missing file; a CRLF checkout still proves ownership.
 
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -17,6 +19,8 @@ import { join } from "node:path";
 import {
   copyPluginRulesToSpace,
   mergePluginRules,
+  mergePluginRulesFromRoot,
+  pluginRulesRecords,
   pluginTemplateStripRemovals,
   readRulesRecord,
   readTemplatesRecord,
@@ -30,8 +34,14 @@ const PLAN_V2 = "# Test plan\n\n## Scope\n\n## Branch Coverage\n\n## Risks\n";
 const OWN = "# Our own plan shape\n\n## What we check\n";
 const sha = (text: string) => createHash("sha256").update(text).digest("hex");
 
+const made: string[] = [];
+afterAll(() => {
+  for (const dir of made) rmSync(dir, { recursive: true, force: true });
+});
+
 function project(spaces: string[] = ["default", "alpha"]): string {
   const dir = mkdtempSync(join(tmpdir(), "aidlc-tpl-proj-"));
+  made.push(dir);
   for (const space of spaces) {
     const memory = join(dir, "aidlc", "spaces", space, "memory");
     mkdirSync(join(memory, "templates"), { recursive: true });
@@ -42,6 +52,7 @@ function project(spaces: string[] = ["default", "alpha"]): string {
 
 function plugin(files: Record<string, string>, key = "test-pro"): { key: string; root: string } {
   const root = mkdtempSync(join(tmpdir(), "aidlc-tpl-plug-"));
+  made.push(root);
   mkdirSync(join(root, ".aidlc-plugin"), { recursive: true });
   writeFileSync(
     join(root, ".aidlc-plugin", "plugin.json"),
@@ -97,6 +108,10 @@ describe("a plugin's templates in every space", () => {
     expect(mergePluginRules(proj, p)).toEqual([]);
     expect(readFileSync(planPath(proj, "alpha"), "utf-8")).toBe(OWN);
     rmSync(planPath(proj, "alpha"));
+    // Their file is gone, so the plugin's lands there now: said once.
+    expect(mergePluginRules(proj, p)).toEqual([
+      "aidlc/spaces/alpha/memory/templates/test-plan.md was your own and is gone, so test-pro's template is there now; the gate checks its sections.",
+    ]);
     expect(mergePluginRules(proj, p)).toEqual([]);
     expect(readFileSync(planPath(proj, "alpha"), "utf-8")).toBe(PLAN_V1);
     expect(readTemplatesRecord(proj, "test-pro")?.[PLAN].kept).toEqual([]);
@@ -232,5 +247,90 @@ describe("a plugin's templates in every space", () => {
     expect(readFileSync(planPath(proj, "default"), "utf-8")).toBe(crlf);
     expect(stripPluginRules(proj, "test-pro", true)).toBe(true);
     expect(existsSync(planPath(proj, "default"))).toBe(false);
+  });
+});
+
+describe("review fixes: what a templates record may name, and whose file is whose", () => {
+  test("a record key that walks out of memory/templates makes the record not AI-DLC's: off touches nothing", () => {
+    const proj = project(["default"]);
+    const p = plugin({ [PLAN]: PLAN_V1 });
+    mergePluginRules(proj, p);
+    const note = join(proj, "aidlc", "spaces", "default", "OUR-NOTES.md");
+    writeFileSync(note, PLAN_V1);
+    const recordPath = join(proj, "aidlc", "plugin-templates", "test-pro.json");
+    const record = JSON.parse(readFileSync(recordPath, "utf-8"));
+    record.templates["templates/../../OUR-NOTES.md"] = { sha256: sha(PLAN_V1), kept: [] };
+    writeFileSync(recordPath, JSON.stringify(record));
+    expect(readTemplatesRecord(proj, "test-pro")).toBeNull();
+    stripPluginRules(proj, "test-pro", true);
+    expect(existsSync(note)).toBe(true);
+    expect(pluginTemplateStripRemovals(proj, "test-pro")).toEqual([]);
+  });
+
+  test("a file the person placed before the plugin's first merge stays theirs, even with the plugin's bytes", () => {
+    const proj = project(["default"]);
+    writeFileSync(planPath(proj, "default"), PLAN_V1);
+    const p = plugin({ [PLAN]: PLAN_V1 });
+    const lines = mergePluginRules(proj, p);
+    expect(lines).toEqual(["Kept your own aidlc/spaces/default/memory/templates/test-plan.md; test-pro's template did not replace it."]);
+    expect(readTemplatesRecord(proj, "test-pro")?.[PLAN].kept).toEqual(["default"]);
+    expect(stripPluginRules(proj, "test-pro", true)).toBe(false);
+    expect(existsSync(planPath(proj, "default"))).toBe(true);
+    // The plugin's update never replaces it either.
+    mergePluginRules(proj, plugin({ [PLAN]: PLAN_V2 }));
+    expect(readFileSync(planPath(proj, "default"), "utf-8")).toBe(PLAN_V1);
+  });
+
+  test("a template-only first version leaves no level choice behind: a later version's declared level applies, and is said", () => {
+    const proj = project(["default"]);
+    const root = mkdtempSync(join(tmpdir(), "aidlc-tpl-plug-"));
+    made.push(root);
+    const manifest = join(root, ".aidlc-plugin", "plugin.json");
+    mkdirSync(join(root, ".aidlc-plugin"), { recursive: true });
+    mkdirSync(join(root, "memory", "templates"), { recursive: true });
+    writeFileSync(manifest, `${JSON.stringify({ name: "test-pro", version: "0.1.0" })}\n`);
+    writeFileSync(join(root, "memory", "templates", "test-plan.md"), PLAN_V1);
+    mergePluginRules(proj, { key: "test-pro", root });
+    expect(readRulesRecord(proj, "test-pro")?.chosen).toBeUndefined();
+    writeFileSync(manifest, `${JSON.stringify({ name: "test-pro", version: "0.2.0", aidlc: { rulesLevel: "team" } })}\n`);
+    writeFileSync(join(root, "memory", "rules.md"), "- Run the integration plan before merge.\n");
+    const lines = mergePluginRules(proj, { key: "test-pro", root });
+    const team = readFileSync(join(proj, "aidlc", "spaces", "default", "memory", "team.md"), "utf-8");
+    expect(team).toContain("Run the integration plan before merge.");
+    expect(readRulesRecord(proj, "test-pro")?.level).toBe("team");
+    expect(lines[0]).toStartWith("test-pro's rules are in team.md");
+  });
+
+  test("a level the person chose stays theirs when rules arrive later", () => {
+    const proj = project(["default"]);
+    const p = plugin({ [PLAN]: PLAN_V1 });
+    mergePluginRules(proj, p, "org");
+    expect(readRulesRecord(proj, "test-pro")).toMatchObject({ level: "org", chosen: true });
+    writeFileSync(join(p.root, "memory", "rules.md"), "- A rule.\n");
+    mergePluginRules(proj, p);
+    expect(readRulesRecord(proj, "test-pro")?.level).toBe("org");
+  });
+
+  test("a template-only plugin with no rules record still has its template copied to a new space and checked by doctor", () => {
+    const proj = project(["default"]);
+    mergePluginRules(proj, plugin({ [PLAN]: PLAN_V1 }));
+    rmSync(join(proj, "aidlc", "plugin-rules", "test-pro.json"), { force: true });
+    expect(pluginRulesRecords(proj)).toEqual(["test-pro"]);
+    const beta = join(proj, "aidlc", "spaces", "beta", "memory");
+    mkdirSync(join(beta, "templates"), { recursive: true });
+    copyPluginRulesToSpace(proj, join(proj, "aidlc", "spaces", "default", "memory"), beta);
+    expect(readFileSync(join(beta, "templates", "test-plan.md"), "utf-8")).toBe(PLAN_V1);
+    rmSync(planPath(proj, "default"));
+    expect(rulesRecordGaps(proj, "test-pro")).toEqual(["template missing from aidlc/spaces/default/memory/templates/test-plan.md"]);
+  });
+
+  test("a version that drops memory/ entirely takes its earlier templates out through the live root path", () => {
+    const proj = project(["default"]);
+    const p = plugin({ [PLAN]: PLAN_V1 });
+    mergePluginRules(proj, p);
+    rmSync(join(p.root, "memory"), { recursive: true, force: true });
+    mergePluginRulesFromRoot(proj, ".claude", p.root, () => true);
+    expect(existsSync(planPath(proj, "default"))).toBe(false);
+    expect(readTemplatesRecord(proj, "test-pro")).toBeNull();
   });
 });

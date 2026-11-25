@@ -35,7 +35,7 @@ import {
   type ValidationContext,
   validateStageFrontmatter,
 } from "./aidlc-stage-schema.ts";
-import { TEMPLATE_FILE_NAME } from "./aidlc-artifact-vocabulary.ts";
+import { differentArtifactFilename, isMarkerArtifact, TEMPLATE_FILE_NAME } from "./aidlc-artifact-vocabulary.ts";
 import { resolveHarnessPath } from "./aidlc-runtime-paths.ts";
 import { parseH2Headings } from "./aidlc-sensor-required-sections.ts";
 import { CORE_COMMAND_WORDS, PLUGIN_COMMAND_NAME_RE, PLUGIN_COMMAND_SCRIPT_RE } from "./aidlc-command.ts";
@@ -990,6 +990,30 @@ function validateManifest(
 // refused.
 const RULE_PHASE_FILES = ["ideation", "inception", "construction", "operation"].map((phase) => `phases/${phase}.md`);
 
+// The documents core stages write, by file name, with the stage's name, read
+// from the stage files beside this tool. Best-effort: a build with no stage
+// files beside it warns about none, and sync still says it where it lands.
+function coreDocumentStages(): Map<string, string> {
+  const out = new Map<string, string>();
+  const dir = join(import.meta.dir, "..", "aidlc-common", "stages");
+  if (!existsSync(dir)) return out;
+  for (const file of walkPluginFiles(dir).filter((path) => path.endsWith(".md")).sort()) {
+    try {
+      const text = readFileSync(file, "utf-8");
+      const fm = frontmatterBlock(text);
+      if (fm === null) continue;
+      const name = /^# (.+)$/m.exec(text)?.[1]?.trim() ?? basename(file, ".md");
+      for (const artifact of listField(fm, "produces")) {
+        const written = differentArtifactFilename(artifact) ?? `${artifact}.md`;
+        if (written.endsWith(".md") && !out.has(written)) out.set(written, name);
+      }
+    } catch {
+      // A stage file that does not read names no document.
+    }
+  }
+  return out;
+}
+
 // A template's `##` headings are the sections the required-sections sensor
 // requires of the artifact at the gate, and the skeleton the agent fills.
 function validateMemoryTemplate(memory: string, rel: string, display: string, findings: MutableFindings): void {
@@ -1000,12 +1024,12 @@ function validateMemoryTemplate(memory: string, rel: string, display: string, fi
       display,
       "memory-template",
       "a plugin's templates are memory/templates/<artifact>.md: one flat file per artifact, lowercase letters, digits and dashes",
-      "Name the file after the artifact whose shape it requires, directly under memory/templates/.",
+      "Name the file after the output file whose shape it requires (an artifact's <name>.md), directly under memory/templates/.",
     );
     return;
   }
   const stem = rel.slice("templates/".length, -".md".length);
-  if (stem.endsWith("-questions") || stem.endsWith("-timestamp")) {
+  if (isMarkerArtifact(stem)) {
     addWarning(
       findings,
       display,
@@ -1022,6 +1046,27 @@ function validateMemoryTemplate(memory: string, rel: string, display: string, fi
       "memory-template",
       "the template has no `##` headings, so it requires no section at the gate",
       "Add the `##` headings the artifact must carry; the required-sections sensor checks exactly those.",
+    );
+  }
+  const written = differentArtifactFilename(stem);
+  if (written !== null) {
+    addWarning(
+      findings,
+      display,
+      "memory-template",
+      `the ${stem} artifact is written to ${written}, and a template is found by the file it writes, so this one is never used`,
+      `Name it memory/templates/${written}.`,
+    );
+    return;
+  }
+  const coreStage = coreDocumentStages().get(`${stem}.md`);
+  if (coreStage !== undefined) {
+    addWarning(
+      findings,
+      display,
+      "memory-template",
+      `${stem}.md is the ${coreStage} stage's own document: this template sets its whole shape in every space (the agent fills it as the skeleton, in place of the stage's own layout)`,
+      "Keep every section that stage needs in the template, or ship templates only for documents your plugin's own stages produce.",
     );
   }
 }
@@ -1053,6 +1098,22 @@ function validateMemory(root: string, findings: MutableFindings): void {
   for (const rel of files) {
     const display = `memory/${rel}`;
     if (rel.startsWith("templates/")) {
+      // A file the OS or an editor leaves (.DS_Store, .gitkeep) is skipped as
+      // sync skips it; any other non-Markdown file is named, since sync does
+      // not place it.
+      const name = rel.slice(rel.lastIndexOf("/") + 1);
+      if (!name.endsWith(".md")) {
+        if (!name.startsWith(".")) {
+          addWarning(
+            findings,
+            display,
+            "memory-template",
+            "only memory/templates/<artifact>.md files are templates, so sync does not place this file",
+            "Remove it, or rename it to the .md file of the artifact whose shape it sets.",
+          );
+        }
+        continue;
+      }
       validateMemoryTemplate(memory, rel, display, findings);
       continue;
     }
