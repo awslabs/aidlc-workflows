@@ -9,11 +9,26 @@
 // launch of the running Bun under core/ and harness/ with the TypeScript
 // parser: each one whose next word is not a compiled route word carries
 // `...bunLaunchFlags()` right after the executable, or is named below with the
-// reason it starts no engine code from a copy tree.
+// reason it starts no engine code from a copy tree. And every reader of a
+// command (the Stop hook's reading of engine work, the stage graph rebuild,
+// the fold mode, the refresh that tells AI-DLC's hook entries and status line
+// from the person's) reads a copy launch the same with the two options as
+// without them, so a launch AI-DLC prints with them is still its own.
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import * as ts from "typescript";
+import { isLifecycleBoundaryCommand } from "../../dist/claude/.claude/hooks/aidlc-state-transition-guard.ts";
+import { aidlcHookTarget } from "../../dist/claude/.claude/tools/aidlc-distribution.ts";
+import {
+  classifyRuntimeCompileCommand,
+  isEngineEngagementSegment,
+  isEngineToolCall,
+  isStageWorkLogCall,
+  literalOrchestrateVerb,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { isAidlcClaudeStatusLine } from "../../dist/claude/.claude/tools/aidlc-statusline-choice.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 
 // file :: enclosing function :: the launch's next word, as written.
@@ -95,5 +110,46 @@ describe("t-copy-launch-project-config: every Bun child of engine code gets the 
   test("every launch named as not engine code is still there to name", () => {
     const keys = new Set(["core", "harness"].flatMap((root) => sources(join(REPO_ROOT, root))).flatMap(launches).map((launch) => launch.key));
     expect(Object.keys(NOT_ENGINE_FROM_A_COPY).filter((key) => !keys.has(key))).toEqual([]);
+  });
+});
+
+describe("t-copy-launch-project-config: a copy launch reads the same with its two Bun options", () => {
+  // Commands the engine prints or the agent runs, each in its copy spelling.
+  const commands = [
+    "bun .claude/tools/aidlc.ts engine orchestrate next",
+    "bun .claude/tools/aidlc.ts engine orchestrate report --stage code-generation --result approved --user-input Approve",
+    "bun .claude/tools/aidlc-orchestrate.ts next --status",
+    "bun .claude/tools/aidlc.ts engine log answer --stage requirements-analysis --questions-file q.md",
+    "bun .claude/tools/aidlc.ts engine state approve code-generation",
+    "bun .claude/tools/aidlc-state.ts approve code-generation",
+    "bun .claude/tools/aidlc.ts engine runtime compile",
+    "bun .claude/tools/aidlc-jump.ts execute --to requirements-analysis",
+  ];
+  const readers: ReadonlyArray<[string, (command: string) => unknown]> = [
+    ["isEngineToolCall", (command) => isEngineToolCall("Bash", { command })],
+    ["literalOrchestrateVerb", literalOrchestrateVerb],
+    ["classifyRuntimeCompileCommand", classifyRuntimeCompileCommand],
+    ["isStageWorkLogCall", (command) => isStageWorkLogCall("Bash", { command })],
+    ["isEngineEngagementSegment", (command) => isEngineEngagementSegment(command)],
+    ["isLifecycleBoundaryCommand", isLifecycleBoundaryCommand],
+  ];
+  for (const [name, read] of readers) {
+    test(`${name} reads each command alike`, () => {
+      const differs = commands.filter((command) => JSON.stringify(read(withCopyLaunchOptions(command))) !== JSON.stringify(read(command)));
+      expect(differs).toEqual([]);
+    });
+  }
+
+  const hooks = [
+    'bun "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts" engine hook guard-tool-call',
+    'bun "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts" engine hook record-human-turn',
+    'bun "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts" engine statusline',
+  ];
+  test("a hook or status line with the options is still AI-DLC's own entry", () => {
+    for (const command of hooks) {
+      expect(aidlcHookTarget(withCopyLaunchOptions(command)), command).toBe(aidlcHookTarget(command));
+    }
+    const statusLine = { type: "command", command: hooks[2] };
+    expect(isAidlcClaudeStatusLine({ ...statusLine, command: withCopyLaunchOptions(statusLine.command) })).toBe(true);
   });
 });

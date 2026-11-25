@@ -34,6 +34,7 @@ import {
 import { hostname, tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { renderGuardOperation } from "../../core/tools/aidlc-guard-operation.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import {
   evaluatePlanApprovalDispatch,
   blockReason,
@@ -1813,6 +1814,8 @@ describe("t265b hook lifecycle", () => {
         for (const spelled of [
           `aidlc engine ${route}`,
           `bun .claude/tools/aidlc-${noun}.ts ${rest.join(" ")}`,
+          // As a copy install prints it: with the two Bun options that keep the project's bunfig.toml and .env out.
+          withCopyLaunchOptions(`bun .claude/tools/aidlc-${noun}.ts ${rest.join(" ")}`),
         ]) {
           const result = runHook(proj, BASH(spelled));
           expect(result.code, `${spelled}\n${result.stderr}`).toBe(code);
@@ -1829,6 +1832,10 @@ describe("t265b hook lifecycle", () => {
         ["aidlc engine now", 0],
         ["bun .claude/tools/aidlc.ts engine now", 0],
         ["bun .claude/tools/aidlc-utility.ts now", 0],
+        [withCopyLaunchOptions("bun .claude/tools/aidlc.ts engine now"), 0],
+        [withCopyLaunchOptions("bun .claude/tools/aidlc.ts doctor"), 0],
+        // A config file of the command's own choosing can preload code: not the engine as installed.
+        ["bun --config=other.toml --no-env-file .claude/tools/aidlc-bolt.ts set-autonomy --mode gated", 2],
         // The doctor's export writes its report bundle inside the project, in a
         // folder no plan names: a stuck person can always send one.
         ["aidlc doctor --export --output out", 0],
