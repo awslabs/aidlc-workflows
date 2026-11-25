@@ -6358,6 +6358,7 @@ export async function collectDoctorReport(
   try {
     const proc = Bun.spawnSync({
       cmd: ["git", "-C", projectDir, "branch", "--list", "bolt-*"],
+      env: process.env,
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -7957,6 +7958,7 @@ function gitRmFlatTree(projectDir: string, flatTree: string): void {
     // Untrack (cached only — the data already moved). Ignore failure (non-git
     // project, or already untracked) — the rmSync below still tidies disk.
     Bun.spawnSync(["git", "-C", projectDir, "rm", "-r", "--cached", "--quiet", "--", flatTree], {
+      env: process.env,
       stdout: "ignore",
       stderr: "ignore",
     });

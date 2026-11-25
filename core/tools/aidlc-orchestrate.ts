@@ -5657,7 +5657,13 @@ function teamShareOffer(
 // at this HEAD. Null when not due.
 function teamPublishOffer(projectDir: string, unit: string): AskDirective | null {
   if (publishedAtHead(projectDir)) return null;
-  const head = Bun.spawnSync({ cmd: ["git", "rev-parse", "HEAD"], cwd: projectDir, stdout: "pipe", stderr: "ignore" });
+  const head = Bun.spawnSync({
+    cmd: ["git", "rev-parse", "HEAD"],
+    cwd: projectDir,
+    env: process.env,
+    stdout: "pipe",
+    stderr: "ignore",
+  });
   const key = `${unit}-${head.exitCode === 0 ? new TextDecoder().decode(head.stdout).trim().slice(0, 12) : "none"}`;
   const mark = teamHandoverMarkName("publish", key);
   if (handoverOffered(projectDir, mark)) return null;
@@ -6213,6 +6219,7 @@ function localClaimCheckouts(
   const listed = Bun.spawnSync({
     cmd: ["git", "worktree", "list", "--porcelain"],
     cwd: projectDir,
+    env: process.env,
     stdout: "pipe",
     stderr: "ignore",
   });
@@ -23918,12 +23925,14 @@ function handleTeamBoard(
     const top = Bun.spawnSync({
       cmd: ["git", "rev-parse", "--show-toplevel"],
       cwd: requestedProjectDir,
+      env: process.env,
       stdout: "pipe",
       stderr: "pipe",
     });
     const common = Bun.spawnSync({
       cmd: ["git", "rev-parse", "--git-common-dir"],
       cwd: requestedProjectDir,
+      env: process.env,
       stdout: "pipe",
       stderr: "pipe",
     });

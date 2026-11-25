@@ -30,10 +30,22 @@ import { fileURLToPath } from "node:url";
 // is removed again before any read; a child Bun process loads the files again
 // and runs this again on its first import.
 //
+// What is removed here reaches a child only through process.env.
+// node:child_process hands a child process.env as it is now; Bun's own spawn
+// (Bun.spawn, Bun.spawnSync) hands it the environment Bun started with, the
+// file's names included, whatever this process removed or set since. So every
+// Bun spawn in the engine names its `env` (process.env, or one built from it);
+// t-dotenv-guard fails on one that does not.
+//
 // Bun never overrides a name the shell already set, and once a file names a
 // variable there is no telling the two apart. So the drop is narrow: the
-// engine's own namespace and the host tools' names that steer where it reads,
-// writes or runs. The person's application names (an AWS profile, a database
+// engine's own namespace, the host tools' names that steer where it reads,
+// writes or runs, and the names through which a program the engine starts is
+// told to run another (git and the ssh it starts, a Bun or Node child, the
+// loader every child goes through, the editor git falls back to). The engine
+// starts those programs with its own environment, so a name left in would hand
+// a file of the repository's to git, to ssh or to a sensor's compiler. The
+// person's application names (an AWS profile, a database
 // URL, whatever their tests need) stay as the shell had them, so a command the
 // engine runs for them sees the same environment their terminal does. Two
 // declarations only a host makes are kept even when the file names them: the
@@ -56,8 +68,15 @@ export const BUN_DOTENV_FILES = [
 
 const DOTENV_ASSIGNMENT = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/gm;
 // Names the engine reads as its own, or that the host tools use to tell it
-// where the project, the person's settings, a plugin or a git configuration is.
-const DOTENV_GUARDED = /^(?:AIDLC_|AWS_AIDLC_|CLAUDE_|KIRO_|CODEX_|CURSOR_|COPILOT_|XDG_|GIT_CONFIG)/i;
+// where the project, the person's settings or a plugin is; then the names that
+// tell a program the engine starts what else to run: every `GIT_` name (its
+// configuration, its helpers' folder, its ssh, askpass, diff, editor and pager
+// programs, the repository it reads), ssh's askpass, Bun's and Node's own
+// options and module path, the package registry a `bunx` sensor installs
+// from, the loader's preload and library path, the file a bash script reads
+// before it runs, and the editor git falls back to.
+const DOTENV_GUARDED =
+  /^(?:AIDLC_|AWS_AIDLC_|CLAUDE_|KIRO_|CODEX_|CURSOR_|COPILOT_|XDG_|GIT_|SSH_ASKPASS|BUN_|NPM_CONFIG_|LD_|DYLD_|NODE_(?:OPTIONS|PATH)$|(?:BASH_ENV|EDITOR|VISUAL)$)/i;
 // Declarations only the host makes: kept even when a file names them.
 const DOTENV_HOST_ONLY = /^AIDLC_(?:UNATTENDED$|INTERNAL_)/i;
 
@@ -88,8 +107,9 @@ export function setByDotenvFile(name: string, dir = process.cwd()): boolean {
 }
 
 /**
- * Remove from `env` every AI-DLC or host-tool name the folder's dotenv files
- * assign, host-only declarations excepted; returns what was dropped. Nothing is
+ * Remove from `env` every AI-DLC, host-tool or program-starting name the
+ * folder's dotenv files assign (DOTENV_GUARDED), host-only declarations
+ * excepted; returns what was dropped. Nothing is
  * dropped when Bun loaded no file (`loaded` false): then everything present
  * came from the host.
  */
