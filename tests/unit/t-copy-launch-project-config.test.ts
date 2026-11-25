@@ -14,8 +14,9 @@
 // the fold mode, the refresh that tells AI-DLC's hook entries and status line
 // from the person's) reads a copy launch the same with the two options as
 // without them, so a launch AI-DLC prints with them is still its own.
-import { describe, expect, test } from "bun:test";
-import { readdirSync, readFileSync } from "node:fs";
+import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
+import { spawnSync } from "node:child_process";
+import { cpSync, existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import * as ts from "typescript";
 import { isLifecycleBoundaryCommand } from "../../dist/claude/.claude/hooks/aidlc-state-transition-guard.ts";
@@ -28,8 +29,12 @@ import {
   literalOrchestrateVerb,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { isAidlcClaudeStatusLine } from "../../dist/claude/.claude/tools/aidlc-statusline-choice.ts";
-import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
-import { REPO_ROOT } from "../harness/fixtures.ts";
+import { aidlcInvocation } from "../../dist/claude/.claude/tools/aidlc-runtime-paths.ts";
+import { COPY_LAUNCH_CONFIG, withCopyLaunchOptions } from "../harness/copy-launch.ts";
+import { cleanupTestProject, createTestProject, REPO_ROOT } from "../harness/fixtures.ts";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 // file :: enclosing function :: the launch's next word, as written.
 const NOT_ENGINE_FROM_A_COPY: Readonly<Record<string, string>> = {
@@ -151,5 +156,130 @@ describe("t-copy-launch-project-config: a copy launch reads the same with its tw
     }
     const statusLine = { type: "command", command: hooks[2] };
     expect(isAidlcClaudeStatusLine({ ...statusLine, command: withCopyLaunchOptions(statusLine.command) })).toBe(true);
+  });
+});
+
+// The copy trees the packager builds, by harness folder.
+const COPY_TREES: ReadonlyArray<[string, string]> = [
+  ["claude", ".claude"], ["codex", ".codex"], ["cursor", ".cursor"], ["kiro", ".kiro"],
+  ["kiro-ide", ".kiro"], ["opencode", ".aidlc"], ["copilot", ".aidlc"],
+];
+const CONFIG_LINE = "# AI-DLC starts its own Bun with this file in place of your project's bunfig.toml. It holds no settings on purpose.\n";
+
+const projects: string[] = [];
+afterAll(() => {
+  for (const project of projects) cleanupTestProject(project);
+});
+
+// A Claude Code copy project whose bunfig.toml preloads a file that appends a
+// line to a marker file each time Bun loads it.
+function copyProject(bunfig = 'preload = ["./setup.ts"]\n'): { project: string; preloadRuns: () => number } {
+  const project = createTestProject();
+  projects.push(project);
+  cpSync(join(REPO_ROOT, "dist", "claude", ".claude"), join(project, ".claude"), { recursive: true });
+  const marker = join(project, "setup-ran.txt");
+  writeFileSync(join(project, "setup.ts"), `require("fs").appendFileSync(${JSON.stringify(marker)}, "ran\\n");\n`);
+  writeFileSync(join(project, "bunfig.toml"), bunfig);
+  return { project, preloadRuns: () => existsSync(marker) ? readFileSync(marker, "utf-8").split("\n").length - 1 : 0 };
+}
+
+function run(project: string, command: string): { status: number | null; stdout: string; stderr: string } {
+  const env: NodeJS.ProcessEnv = { ...process.env, CLAUDE_PROJECT_DIR: project };
+  const res = spawnSync("sh", ["-c", command], {
+    cwd: project,
+    encoding: "utf-8",
+    env,
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+  });
+  return { status: res.status, stdout: res.stdout ?? "", stderr: res.stderr ?? "" };
+}
+
+type DoctorCheck = { pass: boolean; label: string; fix?: string; severity?: string };
+function doctorChecks(project: string, command: string): DoctorCheck[] {
+  const res = run(project, `${command} --json`);
+  return (JSON.parse(res.stdout) as { data: { checks: DoctorCheck[] } }).data.checks;
+}
+const preloadRows = (checks: DoctorCheck[]) => checks.filter((check) => check.label.startsWith("Your project's bunfig.toml preloads"));
+
+// Every command string a hook registration file holds (`command`, and Copilot's `bash` and `powershell`).
+function registeredCommands(value: unknown): string[] {
+  if (Array.isArray(value)) return value.flatMap(registeredCommands);
+  if (!value || typeof value !== "object") return [];
+  return Object.entries(value as Record<string, unknown>).flatMap(([key, item]) =>
+    typeof item === "string" && ["command", "bash", "powershell"].includes(key) ? [item] : registeredCommands(item));
+}
+
+describe("t-copy-launch-project-config: a copy install's own launches keep the project's bunfig.toml and .env out", () => {
+  test("every copy tree holds the empty config file, and no native tree does", () => {
+    for (const [harness, dir] of COPY_TREES) {
+      const file = join(REPO_ROOT, "dist", harness, dir, "tools", COPY_LAUNCH_CONFIG);
+      expect(existsSync(file) ? readFileSync(file, "utf-8") : null, harness).toBe(CONFIG_LINE);
+      expect(existsSync(join(REPO_ROOT, "dist-release", harness, dir, "tools", COPY_LAUNCH_CONFIG)), harness).toBe(false);
+    }
+  });
+
+  test("every hook and status line a copy tree registers starts Bun with the two options", () => {
+    const files: ReadonlyArray<[string, string]> = [
+      ["claude", ".claude/settings.json"], ["claude", ".claude/tools/data/harness.json"], ["codex", ".codex/hooks.json"],
+      ["cursor", ".cursor/hooks.json"], ["copilot", ".github/hooks/aidlc.json"], ["kiro", ".kiro/agents/aidlc.json"],
+      ["kiro-ide", ".kiro/hooks/aidlc-guard-tool-call.json"],
+    ];
+    const plain: string[] = [];
+    for (const [harness, file] of files) {
+      const commands = registeredCommands(JSON.parse(readFileSync(join(REPO_ROOT, "dist", harness, file), "utf-8")));
+      expect(commands.length, `${harness} ${file}`).toBeGreaterThan(0);
+      for (const command of commands) {
+        if (/^bun /.test(command) && !/^bun "?--config=\S*\/tools\/aidlc-bunfig\.toml"? --no-env-file /.test(command)) plain.push(`${harness} ${file}: ${command}`);
+      }
+    }
+    expect(plain).toEqual([]);
+  });
+
+  test("doctor, run as a copy install prints it, runs no preload of the project's", () => {
+    const { project, preloadRuns } = copyProject();
+    run(project, `${aidlcInvocation()} doctor`);
+    expect(aidlcInvocation()).toStartWith(`bun --config=.claude/tools/${COPY_LAUNCH_CONFIG} --no-env-file `);
+    expect(preloadRuns()).toBe(0);
+  });
+
+  test("doctor says once when AI-DLC's hooks here start Bun without the options, with the setup line that fixes it", () => {
+    const { project } = copyProject();
+    const settingsPath = join(project, ".claude", "settings.json");
+    const flagged = `bun "--config=$CLAUDE_PROJECT_DIR/.claude/tools/${COPY_LAUNCH_CONFIG}" --no-env-file `;
+    writeFileSync(settingsPath, readFileSync(settingsPath, "utf-8").replaceAll(JSON.stringify(flagged).slice(1, -1), "bun "));
+    const rows = preloadRows(doctorChecks(project, `${aidlcInvocation()} doctor`));
+    expect(rows.map((row) => row.label)).toEqual([
+      "Your project's bunfig.toml preloads ./setup.ts, and AI-DLC's hooks here were set up before AI-DLC kept that file out of its own runs, so the preload still runs inside each hook",
+    ]);
+    expect(rows[0].fix).toBe(
+      `run \`${aidlcInvocation()} config --harness claude --from <the runtime/claude root you copied from>\` to put back AI-DLC's hooks (your own hooks are kept)`,
+    );
+  });
+
+  test("doctor says once when it was itself started without the options, with the command that runs it the same way", () => {
+    const { project } = copyProject();
+    const rows = preloadRows(doctorChecks(project, "bun .claude/tools/aidlc.ts doctor"));
+    expect(rows.map((row) => row.label)).toEqual([
+      "Your project's bunfig.toml preloads ./setup.ts, and this command was typed without AI-DLC's two Bun options, so the preload ran inside this doctor run",
+    ]);
+    expect(rows[0].fix).toBe(
+      `AI-DLC's own hooks and commands pass them; to run doctor the same way: \`bun --config=.claude/tools/${COPY_LAUNCH_CONFIG} --no-env-file .claude/tools/aidlc.ts doctor\``,
+    );
+  });
+
+  test("doctor names at most three preloads, then how many more", () => {
+    const { project } = copyProject('preload = ["./setup.ts", "./b.ts", "./c.ts", "./d.ts"]\n');
+    for (const name of ["b.ts", "c.ts", "d.ts"]) writeFileSync(join(project, name), "");
+    const [row] = preloadRows(doctorChecks(project, "bun .claude/tools/aidlc.ts doctor"));
+    expect(row?.label).toStartWith("Your project's bunfig.toml preloads ./setup.ts, ./b.ts, ./c.ts and 1 more, ");
+  });
+
+  test("doctor says nothing of it when every launch has the options, or nothing is preloaded for a script", () => {
+    for (const bunfig of ['preload = ["./setup.ts"]\n', '[test]\npreload = ["./setup.ts"]\n', ""]) {
+      const { project } = copyProject(bunfig);
+      expect(preloadRows(doctorChecks(project, `${aidlcInvocation()} doctor`)), bunfig).toEqual([]);
+    }
+    const { project } = copyProject('[test]\npreload = ["./setup.ts"]\n');
+    expect(preloadRows(doctorChecks(project, "bun .claude/tools/aidlc.ts doctor"))).toEqual([]);
   });
 });
