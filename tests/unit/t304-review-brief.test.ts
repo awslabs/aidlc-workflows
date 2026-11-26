@@ -856,6 +856,15 @@ describe("t304 executable review brief scenarios", () => {
     ).toThrow("row has 7 cells, header declares 6: 1 unexpected extra cell(s)");
   });
 
+  test("a legacy finding row with a different prefix reports the accepted ID format", () => {
+    const review = reviewMarkdown("NOT-READY", [
+      "| F-01 | Minor | aidlc/requirements.md > FR-1 | Deadline is missing | Fix it | New |",
+    ]);
+    expect(() => parseReviewArtifact(review, "aidlc/requirements.md")).toThrow(
+      'invalid finding ID "F-01". Use R- followed by digits, for example R-01.',
+    );
+  });
+
   test("valid findings preserve escaped pipes and explicit empty cells", () => {
     expect(
       parseReviewArtifact(
