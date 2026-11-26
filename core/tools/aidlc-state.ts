@@ -6196,7 +6196,7 @@ function reviewerPreconditionError(
       receipts,
     });
   }
-  // A request that can never finish is requested again at its own pass.
+  // A request whose outputs or source changed is requested again at its own pass.
   const ordinal = pending?.state === "outstanding" ? String(pending.iteration) : "<next ordinal>";
   if (action === "present-approval-gate") {
     const message =

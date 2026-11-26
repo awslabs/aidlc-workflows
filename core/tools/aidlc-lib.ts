@@ -19644,7 +19644,7 @@ export interface PendingReviewRequestStatus {
   retryable: boolean;
   verdictRecordable: boolean;
   // Its outputs or source changed since the request (every output and any unit
-  // source manifest still reads), so it can never finish and a new request may
+  // source manifest still reads), so it is not retried and a new request may
   // replace it. A missing output is not this: restoring it can make the request
   // current again.
   replaceable: boolean;
@@ -20378,8 +20378,8 @@ export function freshReviewReceipts(
   >();
   let stageVerdict: ReviewVerdict | null = null;
   let newestSourceFingerprint: string | null = null;
-  // The listing that receipt kept (`Source Listing`), absent on receipts an
-  // earlier release wrote and when the source moved during the review.
+  // The listing that receipt kept (`Source Listing`), absent on receipts an earlier
+  // release wrote and when the source moved in the review (strict: past ignored files).
   let newestSourceListing: string | undefined;
   let newestSourceRow: AuditShardEvent | null = null;
   let newestSourceUnit: string | null = null;
@@ -20842,8 +20842,8 @@ export function freshReviewReceipts(
   const awaitingVerdict = new Set<string>();
   for (const request of pendingRequests.values()) {
     awaitingVerdict.add(request.unit ?? "");
-    // A pending request whose outputs or source changed before its verdict can
-    // never finish (a retry re-dispatches the old bytes); the next move is a new
+    // A pending request whose outputs or source changed before its verdict is
+    // not retried (a retry re-dispatches the old bytes); the next move is a new
     // request at the same pass, which is what `outstanding` names to every
     // reader (wave entries, gates, recovery).
     const currency =
@@ -27322,8 +27322,8 @@ function baselineSourceSnapshotMissing(
 // Source]` tag, then the receipt's certified source). The fingerprint alone can
 // say that source moved, never which files. These snapshots keep the per-path
 // listing that produced a fingerprint so a later drift can be told to the human
-// as paths, under either Change Control value. They are advisory to the human
-// line only: the decision compares fingerprints, never these bytes.
+// as paths, under either Change Control value. Plan Approval decides by
+// fingerprints, never these bytes; a review verdict reads the request's one.
 
 const WORKSPACE_SNAPSHOT_HEADER = "workspace";
 
@@ -32958,8 +32958,8 @@ export function guardAttemptState(
     iteration,
   });
   const nextReviewAt = (iteration: number) => ({ nextReview: { iteration, request: requestAt(iteration) } });
-  // A pending request that can never finish (its outputs or source changed
-  // before a verdict) is requested again at the same pass, once per attempt.
+  // A pending request whose outputs or source changed before a verdict is
+  // requested again at the same pass, once per attempt.
   const pendingReviewFor = (iteration: number) =>
     pendingStatus?.iteration === iteration && pendingStatus.replaceable
       ? nextReviewAt(iteration)
