@@ -61,7 +61,7 @@ diagnostic and lifecycle routes.
 | `/aidlc --stage <slug\|#>` | Jump to a specific stage |
 | `/aidlc --stage <slug> --single` | Run one stage in isolation, without advancing your workflow |
 | `/aidlc --phase <name\|#>` | Jump to the start of a phase |
-| `/aidlc --scope <name>` | Change the active scope |
+| `/aidlc --scope <name>` | Change the active scope; to generate a start command with a scope, settings and stage changes, use the [Interactive Composer](05-1-interactive-composer.md) |
 | `/aidlc --depth <level>` | Override depth level (minimal, standard, comprehensive) |
 | `/aidlc --test-strategy <level>` | Override test strategy (minimal, standard, comprehensive) |
 | `/aidlc --project-type <type>` | Say whether this work is a new project or existing code (greenfield, brownfield); mid-workflow it scans again and runs Reverse Engineering for existing code |
