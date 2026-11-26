@@ -18547,8 +18547,7 @@ function finishedUnitNotRedoneHere(
 // Unit's stages itself (claimedCheckoutReopens): back to one the Unit has
 // reached, for that Unit only, with the steps after it, as a solo walk reopens
 // one Unit's step (unitMajorReopen), so the redone work is the person's to
-// approve again. "route" when the walk is on that stage and the Unit has done
-// nothing there yet. Any other move waits until the Unit has landed.
+// approve again. Any other move waits until the Unit has landed.
 function claimedCheckoutMove(
   projectDir: string,
   stateContent: string,
@@ -18624,6 +18623,36 @@ function claimedCheckoutMove(
     const redo = picked ? unitMajorRedo(projectDir, scope, stateContent, cursorSlug, { unit: claimedUnit, stage: target }) : null;
     if (redo?.jump) return jumpStepPrint(redo.message, redo.jump);
     const at = unitStages.indexOf(target);
+    if (flags.change === true) {
+      const beat = teamUnitMajorWalkBeat(projectDir, scope, stateContent, target);
+      const matched = beat === null ? null : unitStepWorkOrPause(projectDir, scope, stateContent, beat, target, claimedUnit);
+      if (matched !== null && !(beat?.step.kind === "work" && beat.step.ledger.receipts.has(claimedUnit))) {
+        if (existsSync(unitParkedPath(projectDir))) return "route";
+        if (matched.owed !== null) {
+          const jump = [
+            "reopen", "--target", target, "--stages", unitStages.slice(at).join(","), "--units", claimedUnit,
+            "--scope", scope, "--via", "change",
+          ];
+          return jumpStepPrint(
+            `Run \`${jumpCommandText(jump)}\` to reopen "${target}" and the steps after it for unit "${claimedUnit}" only, ` +
+              `as the person's change, then tell the person in one line: "Making your change in ${name} for unit ${claimedUnit}." ` +
+              `and re-run \`next\` to continue. When "${target}" comes back for unit "${claimedUnit}", ` +
+              "make the change from their own words; they already said what to change, so do not ask whether to keep, " +
+              "change or redo its files.",
+            jump,
+          );
+        }
+        if (matched.step.kind === "paused") {
+          const resume = `${aidlcToolInvocation("state")} unit resume --stage ${shellArg(target)} --unit ${shellArg(claimedUnit)}`;
+          return {
+            kind: "print",
+            message: `Run \`${resume}\` to pick unit "${claimedUnit}" up where it stopped, ` +
+              `then tell the person in one line: "Picked unit ${claimedUnit} up at ${name}." and re-run \`next\` to continue.`,
+          };
+        }
+        return "route";
+      }
+    }
     // The walk keeps Current Stage on the step it routes the Unit to, until
     // every Unit's row is done and the record moves on past the Unit's stages
     // (to Build and Test, the work's stage). There the Unit's own walk says
@@ -18686,21 +18715,34 @@ function unitStepOwesOnlyRecords(
   stageSlug: string,
   unit: string,
 ): boolean {
-  const step = walk.step;
-  const paused = unitPausedOnStep(step, stageSlug, unit);
-  if (!paused && (step.kind !== "work" || step.stage.slug !== stageSlug || step.unit !== unit)) return false;
-  const target = walk.block.find((stage) => stage.slug === stageSlug);
-  if (target === undefined) return false;
-  const owed = unitReceiptOnlyStep(
-    projectDir, target, unit, walk.context.recordPrefix, walk.context.codekbCtx,
-    walk.context.kinds?.get(unit) ?? null, unitLedgerFor(projectDir, stageSlug), stateContent, scope, paused,
-  );
-  return owed !== null;
+  const matched = unitStepWorkOrPause(projectDir, scope, stateContent, walk, stageSlug, unit);
+  return matched !== null && matched.owed !== null;
 }
 
 // The walk's step is that Unit's own pause on that stage.
 function unitPausedOnStep(step: UnitJumpStep, stageSlug: string, unit: string): boolean {
   return step.kind === "paused" && step.stage === stageSlug && step.checkpoint.unit === unit;
+}
+
+function unitStepWorkOrPause(
+  projectDir: string,
+  scope: string,
+  stateContent: string,
+  walk: { step: UnitJumpStep; block: GraphStage[]; context: UnitWorkContext },
+  stageSlug: string,
+  unit: string,
+): { step: Extract<UnitJumpStep, { kind: "work" | "paused" }>; owed: UnitRecordStep | null } | null {
+  const step = walk.step;
+  const paused = unitPausedOnStep(step, stageSlug, unit);
+  if (step.kind !== "paused" && step.kind !== "work") return null;
+  if (!paused && (step.kind !== "work" || step.stage.slug !== stageSlug || step.unit !== unit)) return null;
+  const target = walk.block.find((stage) => stage.slug === stageSlug);
+  if (target === undefined) return null;
+  const owed = unitReceiptOnlyStep(
+    projectDir, target, unit, walk.context.recordPrefix, walk.context.codekbCtx,
+    walk.context.kinds?.get(unit) ?? null, unitLedgerFor(projectDir, stageSlug), stateContent, scope, paused,
+  );
+  return { step, owed };
 }
 
 function unitStepChangeReopen(
