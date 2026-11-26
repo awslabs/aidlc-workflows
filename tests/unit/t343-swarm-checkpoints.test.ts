@@ -77,6 +77,7 @@ import {
   NATIVE_STARTUP_TIMEOUT_MS,
   remainingOperationTimeoutMs,
 } from "../harness/test-budget.ts";
+import * as native from "../harness/swarm-checkpoint.ts";
 
 // The stage's checks run once before its review or gate, and again at the gate
 // (completionChecksStep, t-checks-before-review); this file's fixture documents
@@ -92,6 +93,7 @@ const CHECK = "git diff --check";
 afterEach(() => {
   while (projects.length) cleanupTestProject(projects.pop());
 });
+afterEach(native.cleanupCheckpointFixtures, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 function git(pd: string, args: string[]): string {
   const result = Bun.spawnSync(["git", ...args], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: pd, stdout: "pipe", stderr: "pipe" });
@@ -463,8 +465,11 @@ describe("t343 completed swarm batch checkpoints", () => {
   // approved, but the person can still send it back, so it is checked again
   // with the current command (#4097).
   test("a landed batch checked with an earlier command, not yet approved, can be sent back", () => {
-    const pd = fixture();
-    converge(pd);
+    const pd = native.fixture(BATCH);
+    const prepared = native.prepare(pd, BATCH);
+    expect(prepared.code, `${prepared.out}\n${prepared.err}`).toBe(0);
+    for (const unit of BATCH) native.writeUnitSource(pd, unit, 2);
+    native.checkReviewFinalizeAndLand(pd, { alpha: 2, beta: 2 });
     recordCommand(pd, "git diff --exit-code -- src");
     const status = resolveSwarmCheckpoint(pd, 1, BATCH);
     expect(status).toMatchObject({
@@ -480,6 +485,23 @@ describe("t343 completed swarm batch checkpoints", () => {
     choice(pd, "t343-checkpoint", "Request Changes");
     rejectSwarmCheckpoint(pd, 1, BATCH, "Request Changes", "Check it again with the current command", "t343-checkpoint");
     expect(gates(pd, "GATE_REJECTED")).toHaveLength(BATCH.length);
+    // The person gets out: the batch comes back, is rebuilt from its landed
+    // source, and is checked with the current command.
+    expect(native.nextDirective(pd)).toMatchObject({ kind: "invoke-swarm", units: BATCH, resume_existing: true });
+    for (const unit of BATCH) native.approvePlan(pd, unit, "current-command-revision");
+    const rebuilt = native.prepare(pd, BATCH, true);
+    expect(rebuilt.code, `${rebuilt.out}\n${rebuilt.err}`).toBe(0);
+    for (const unit of BATCH) {
+      expect(readFileSync(join(native.wt(pd, unit), "src", `${unit}.ts`), "utf-8")).toBe(`export const ${unit} = 2;\n`);
+    }
+    native.checkReviewFinalizeAndLand(pd, { alpha: 2, beta: 2 });
+    const current = authorizedVerificationCommand(pd, readFileSync(seededStateFile(pd), "utf-8"))!.sha256;
+    const checked = BATCH.map((unit) => auditBlockField(readAuditShardEvents(pd).filter((row) =>
+      row.event === "SWARM_UNIT_CONVERGED" && auditBlockField(row.block, "Unit name") === unit).at(-1)!.block, "Command SHA-256"));
+    expect(checked).toEqual(BATCH.map(() => current));
+    expect(resolveSwarmCheckpoint(pd, 1, BATCH)).toMatchObject({
+      ready: true, checked_with_earlier_command: false, send_back_only: false,
+    });
   });
 
   test("a batch never checked with any approved command still cannot be asked", () => {

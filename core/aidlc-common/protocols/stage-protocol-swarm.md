@@ -198,7 +198,9 @@ question-and-answer flow below; `ask` refuses an unready batch, with one
 exception: when `changed_after_check` is true (under a strict Guard Policy, the
 batch's files or outputs changed after it was checked) or
 `checked_with_earlier_command` is true, and those are its only errors
-(`send_back_only: true`), `ask` offers the person Request Changes only, so they can always send the batch back. Under a relaxed or
+(`send_back_only: true`), `ask` offers the person Request Changes only, so they can always send the batch back;
+under automatic completion (`human_required: false`) too, issue `ask` for such a batch and wait for the person,
+since `approve` refuses it. Under a relaxed or
 off Guard Policy such a change is kept instead: the batch stays ready, and `ask`
 and `approve` return the one line to tell the person in `notices`. Automatic
 completion uses the recorded autonomous policy, needs no `ask`, and omits `--user-input`.

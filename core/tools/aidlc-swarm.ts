@@ -3412,7 +3412,7 @@ function handleFinalize(rest: string[]): void {
       fail(
         `finalize: ${landed.join(", ")} already landed in batch ${batch} with worktrees removed, ` +
         "so there is nothing to re-verify and nothing was recorded. Use the batch checkpoint instead: " +
-        `aidlc engine bolt swarm-checkpoint --action status --batch ${batch} --units "<batch units>".`,
+        `${aidlcDispatcherInvocation("bolt swarm-checkpoint")} --action status --batch ${batch} --units "<batch units>".`,
       );
     }
   }
