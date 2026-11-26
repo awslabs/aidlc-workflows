@@ -820,7 +820,7 @@ function onTree(host: ScopeHost, command: string): string {
 }
 
 function engineLine(host: ScopeHost, ...args: string[]): string {
-  const head = host.launcher === null ? ["bun", `${host.dir}/tools/aidlc.ts`] : ["aidlc"];
+  const head = host.launcher === null ? [...host.bunWords(), `${host.dir}/tools/aidlc.ts`] : ["aidlc"];
   return [...head, "engine", ...args].map(shellQuote).join(" ");
 }
 const bashOp = (line: string): Op => ({ kind: "bash", line });
