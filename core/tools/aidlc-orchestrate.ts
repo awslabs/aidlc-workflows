@@ -21534,6 +21534,27 @@ function practicesDraftPostureProblem(pd: string): string | null {
   return promotableTestingPosture(extractMarkdownSection(content, "## Testing Posture")).problem;
 }
 
+function practicesDraftRuleFormProblem(pd: string): string | null {
+  const prefix = engineRelativeRecordDir(pd);
+  if (prefix === null) return null;
+  let draft: string;
+  try {
+    draft = readFileSync(join(pd, prefix, "inception", "practices-discovery", "discovered-rules.md"), "utf-8");
+  } catch {
+    return null;
+  }
+  const { mandated, forbidden } = practicesRulesToAdd(draft, "");
+  const stray = [
+    ...mandated.filter((rule) => !/^ALWAYS\s+\S/.test(rule)).map((rule) => `"${rule}" under ## Mandated`),
+    ...forbidden.filter((rule) => !/^NEVER\s+\S/.test(rule)).map((rule) => `"${rule}" under ## Forbidden`),
+  ];
+  if (stray.length === 0) return null;
+  return (
+    `these list items are not rules: ${stray.join("; ")}. Each list item under ## Mandated is one rule starting ALWAYS, ` +
+    "each under ## Forbidden one starting NEVER, and a heading with no new rule holds only a plain None. line with no list marker."
+  );
+}
+
 // The rules Approve at Practices Discovery adds to the project's rules, said
 // with the gate from the reading practices-promote writes them from; said too
 // when it adds none, so a summary that counts rules the draft does not hold as
@@ -21598,6 +21619,7 @@ function checkStageCompletionEvidence(
   const pipelineEvidence = checkPipelineLinkEvidence(node, slug, pd, approval && retry ? { approval: retry } : {});
   if (!pipelineEvidence.ok) return pipelineEvidence;
 
+  const reportAgain = retry ?? `\`${gateReportCommand(slug, "awaiting-approval")}\` again`;
   if (slug === "practices-discovery") {
     const problem = practicesDraftPostureProblem(pd);
     if (problem !== null) {
@@ -21608,12 +21630,23 @@ function checkStageCompletionEvidence(
           "Once that line is fixed, Practices Discovery comes back for approval.",
       };
     }
+    // At the approved report the person has already answered the gate:
+    // refusing then would lose their Approve.
+    const ruleProblem = approval ? null : practicesDraftRuleFormProblem(pd);
+    if (ruleProblem !== null) {
+      return {
+        ok: false,
+        step: true,
+        message:
+          `Practices Discovery is not ready for approval yet. In discovered-rules.md: ${ruleProblem} ` +
+          `Fix those items, then run ${reportAgain}.`,
+      };
+    }
   }
 
   // Construction walks its Units from Units Generation's units block, so the
   // stage's gate never opens over a block the engine cannot read: the agent
   // writes it, then runs the same report again.
-  const reportAgain = retry ?? `\`${gateReportCommand(slug, "awaiting-approval")}\` again`;
   if (slug === "units-generation") {
     const dag = resolveBoltDag(pd);
     if (dag.state === "malformed") {
