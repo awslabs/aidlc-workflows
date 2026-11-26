@@ -228,10 +228,12 @@ No exceptions were discussed.
 - None new beyond \`project.md\`. The existing NEVER rules stay in force.
 `);
     const gate = openGate(proj);
-    expect(gate.kind).not.toBe("print");
+    expect(gate.kind, gate.message).toBe("print");
     expect(gate.message).toContain("In discovered-rules.md");
     expect(gate.message).toContain('"Flag, not a new rule: the cache layer conflicts with this work." under ## Mandated');
     expect(gate.message).toContain('"None new beyond `project.md`. The existing NEVER rules stay in force." under ## Forbidden');
+    expect(gate.message).toContain("report --stage practices-discovery --result awaiting-approval` again.");
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toContain(`- [-] practices-discovery ${STAGE_SEP} EXECUTE`);
   });
 
   test.each([
@@ -242,8 +244,10 @@ No exceptions were discussed.
   ])("a Mandated item %p is no rule and keeps the gate shut", (item, named) => {
     const { proj } = project(`# Discovered Rules\n\n## Mandated\n\n${item}\n\n## Forbidden\n\nNone.\n`);
     const gate = openGate(proj);
-    expect(gate.kind).not.toBe("print");
+    expect(gate.kind, gate.message).toBe("print");
     expect(gate.message).toContain(`"${named}" under ## Mandated`);
+    expect(gate.message).toContain("report --stage practices-discovery --result awaiting-approval` again.");
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toContain(`- [-] practices-discovery ${STAGE_SEP} EXECUTE`);
   });
 
   test("indented rule items and an empty heading open the gate with those rules", () => {
@@ -257,6 +261,24 @@ No exceptions were discussed.
       "Mandated: ALWAYS   review every change",
     ]);
     expect(promote(proj, draftDir)).toMatchObject({ mandated_appended: 2, forbidden_appended: 0 });
+  });
+
+  // The person has answered the gate, so a note item the draft gains after it
+  // opened never refuses their Approve.
+  test("an Approve at an open gate is recorded after the draft gains a note item", () => {
+    const rules = "# Discovered Rules\n\n## Mandated\n\n- ALWAYS run the test suite in CI\n\n## Forbidden\n\nNone.\n";
+    const { proj, draftDir } = project(rules);
+    const gate = openGate(proj);
+    expect(gate.kind, gate.message).toBe("print");
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toContain(`- [?] practices-discovery ${STAGE_SEP} EXECUTE`);
+    writeFileSync(join(draftDir, "discovered-rules.md"), rules.replace("CI\n", "CI\n- None new beyond `project.md`.\n"));
+    promote(proj, draftDir);
+    const r = spawnSync(BUN, [
+      ORCH, "report", "--stage", "practices-discovery", "--result", "approved", "--user-input", "Approve", "--project-dir", proj,
+    ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", cwd: proj });
+    const approved = JSON.parse(r.stdout.trim().split("\n").pop() ?? "{}");
+    expect(approved.kind, `${r.stdout}${r.stderr}`).toBe("done");
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toContain(`- [x] practices-discovery ${STAGE_SEP} EXECUTE`);
   });
 
   test("a rule already in the project's rules is neither shown nor written again", () => {

@@ -21286,6 +21286,7 @@ function checkStageCompletionEvidence(
   const pipelineEvidence = checkPipelineLinkEvidence(node, slug, pd, approval && retry ? { approval: retry } : {});
   if (!pipelineEvidence.ok) return pipelineEvidence;
 
+  const reportAgain = retry ?? `\`${gateReportCommand(slug, "awaiting-approval")}\` again`;
   if (slug === "practices-discovery") {
     const problem = practicesDraftPostureProblem(pd);
     if (problem !== null) {
@@ -21296,13 +21297,16 @@ function checkStageCompletionEvidence(
           "Once that line is fixed, Practices Discovery comes back for approval.",
       };
     }
-    const ruleProblem = practicesDraftRuleFormProblem(pd);
+    // At the approved report the person has already answered the gate:
+    // refusing then would lose their Approve.
+    const ruleProblem = approval ? null : practicesDraftRuleFormProblem(pd);
     if (ruleProblem !== null) {
       return {
         ok: false,
+        step: true,
         message:
           `Practices Discovery is not ready for approval yet. In discovered-rules.md: ${ruleProblem} ` +
-          "Once those items are fixed, Practices Discovery comes back for approval.",
+          `Fix those items, then run ${reportAgain}.`,
       };
     }
   }
@@ -21310,7 +21314,6 @@ function checkStageCompletionEvidence(
   // Construction walks its Units from Units Generation's units block, so the
   // stage's gate never opens over a block the engine cannot read: the agent
   // writes it, then runs the same report again.
-  const reportAgain = retry ?? `\`${gateReportCommand(slug, "awaiting-approval")}\` again`;
   if (slug === "units-generation") {
     const dag = resolveBoltDag(pd);
     if (dag.state === "malformed") {

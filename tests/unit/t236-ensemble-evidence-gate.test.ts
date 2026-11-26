@@ -1066,7 +1066,7 @@ describe("t236 ensemble evidence gate — mob approval requires contribution fil
     );
     writeFileSync(
       join(draftDir, "discovered-rules.md"),
-      "# Discovered Rules\n\n## Mandated\n\n- Keep the greeter's output on one line\n\n## Forbidden\n\n- No new dependencies\n",
+      "# Discovered Rules\n\n## Mandated\n\n- ALWAYS keep the greeter's output on one line\n\n## Forbidden\n\n- NEVER add new dependencies\n",
       "utf-8",
     );
     const opened = runReport(proj, ["--stage", "practices-discovery", "--result", "awaiting-approval"]);
@@ -1309,7 +1309,7 @@ describe("t236 an approval given with the collaborators switch stands", () => {
     );
     writeFileSync(
       discoveredRules,
-      "# Discovered Rules\n\n## Mandated\n\n- Keep the greeter's output on one line\n\n## Forbidden\n\n- No new dependencies\n",
+      "# Discovered Rules\n\n## Mandated\n\n- ALWAYS keep the greeter's output on one line\n\n## Forbidden\n\n- NEVER add new dependencies\n",
       "utf-8",
     );
 
