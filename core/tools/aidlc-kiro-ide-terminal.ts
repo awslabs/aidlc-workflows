@@ -389,7 +389,7 @@ export function commandPromptChildCommand(
   execPath: string = process.execPath,
   compiled: boolean = isCompiledExecutable(),
 ): string[] {
-  return [execPath, ...bunLaunchFlags(), ...argv.slice(compiled ? 2 : 1)];
+  return compiled ? [execPath, ...argv.slice(2)] : [execPath, ...bunLaunchFlags(), ...argv.slice(1)];
 }
 
 // Kiro reads the terminal one second after sending the command. The child's

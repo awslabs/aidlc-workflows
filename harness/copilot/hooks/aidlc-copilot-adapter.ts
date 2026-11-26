@@ -1065,7 +1065,10 @@ export async function run(
   function toLauncher(command: string): string | null {
     if (command.startsWith(`${ENGINE_PREFIX} `)) return `${LAUNCHER_PATH} ${command.slice(ENGINE_PREFIX.length + 1)}`;
     if (!ENGINE_PREFIX.startsWith("bun ")) return null;
+    // Either spelling of a copy launch, with its two Bun options or without (an older copy's).
     const plain = withoutBunLaunchOptions(command);
+    const plainEngine = withoutBunLaunchOptions(`${ENGINE_PREFIX} `);
+    if (plain.startsWith(plainEngine)) return `${LAUNCHER_PATH} ${plain.slice(plainEngine.length)}`;
     const m = /^bun \.aidlc\/tools\/(aidlc-[a-z0-9-]+\.ts) /.exec(plain);
     if (!m) return null;
     const rest = plain.slice(m[0].length);

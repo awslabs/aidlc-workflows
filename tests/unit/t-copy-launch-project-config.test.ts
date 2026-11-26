@@ -42,6 +42,7 @@ const NOT_ENGINE_FROM_A_COPY: Readonly<Record<string, string>> = {
   "core/tools/aidlc-install-paths.ts :: activeVersion :: commandPath()": "a list of paths to resolve, not a launch",
   "core/tools/aidlc-lib.ts :: settingsBesideDecision :: ...args": "the compiled branch: the executable is the installed engine",
   "core/tools/aidlc-orchestrate.ts :: toolCommand :: ...args": "the compiled branch: the executable is the installed engine",
+  "core/tools/aidlc-kiro-ide-terminal.ts :: commandPromptChildCommand :: ...argv.slice(2)": "the compiled branch: the executable is the installed engine",
   "core/skills/aidlc-issue-report/scripts/collect.ts :: aidlcCommand :: join(t.dir, \"tools\", \"aidlc.ts\")":
     "the issue-report skill's scripts import no engine module and run with a plain bun from any folder, as the skill says",
 };

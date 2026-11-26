@@ -1163,9 +1163,14 @@ function rewriteCopyLaunches(outRoot: string, m: HarnessManifest): void {
 
 // The finished copy tree, every file but the TypeScript ones, whatever wrote it
 // (the rewrite above, an emit, a generated table): no launch of an AI-DLC script
-// under any harness folder, `bun run` included, without the copy options.
+// in the tree's own harness folder, `bun run` included, without the copy
+// options. A folder of another name is not this tree's (a port that renames
+// the folder keeps text naming the one it was ported from).
 function checkCopyLaunches(outRoot: string, m: HarnessManifest): void {
-  const plain = /\bbun[ \t]+(?:run[ \t]+)?(?:\\?["'])?(?:\$\{?CLAUDE_PROJECT_DIR\}?\/)?\.[A-Za-z0-9_-]+\/(?:tools|hooks)\/aidlc|Shell\(bun:\.[A-Za-z0-9_-]+\//;
+  const dir = escapeRegExp(m.harnessDir);
+  const plain = new RegExp(
+    String.raw`\bbun[ \t]+(?:run[ \t]+)?(?:\\?["'])?(?:\$\{?CLAUDE_PROJECT_DIR\}?/)?${dir}/(?:tools|hooks)/aidlc|Shell\(bun:${dir}/`,
+  );
   for (const file of walk(outRoot)) {
     if (file.endsWith(".ts")) continue;
     const value = readFileSync(file, "utf-8");

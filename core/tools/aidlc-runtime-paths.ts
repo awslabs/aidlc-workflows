@@ -184,7 +184,7 @@ export function bunLaunchAt(toolsDir: string): string {
 // command's words once the shell's quotes are read) its folder may hold any
 // character, a space or an apostrophe included; in text an unquoted path ends
 // at the first space or shell character.
-const LAUNCH_CONFIG = String.raw`\.[A-Za-z0-9_-]+[\\/]tools[\\/]aidlc-bunfig\.toml`;
+const LAUNCH_CONFIG = String.raw`\.[A-Za-z0-9_.-]+[\\/]tools[\\/]aidlc-bunfig\.toml`;
 const LAUNCH_CONFIG_WORD = new RegExp(String.raw`^--config=(?:[^\r\n]*[\\/])?` + LAUNCH_CONFIG + "$");
 const LAUNCH_OPTIONS_TEXT = new RegExp(
   String.raw`(\bbun(?:\.exe)?[ \t]+)(?:"--config=(?:[^"\r\n]*[\\/])?` + LAUNCH_CONFIG + String.raw`"|'--config=(?:[^'\r\n]*[\\/])?` +
