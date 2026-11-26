@@ -1080,6 +1080,59 @@ function expandWord(word: string, values: Map<string, Array<string | null>>): Ar
   });
 }
 
+// A word the shell leaves undecided only because of a wildcard (`*`, `?`) is
+// still decidable here: no variable, backquote or substitution remains, so the
+// folders it can reach are fixed by its spelling. It can reach the audit trail
+// only if a wildcard segment could itself be `audit` (`au*`, `*`, `**`), or a
+// wildcard stands before a literal `audit` segment (`aidlc/sp*/.../audit/x`),
+// or its literal folders already are the trail (`<record>/audit/*.md`). Any
+// other wildcard word (`<stage>/*.bak`) is a stage folder's own housekeeping.
+// A bracket class, a computed directory change, or quoting the shell would not
+// join leaves the word undecided, and the caller keeps failing closed.
+const GLOB_ONLY_UNRESOLVED = /[$`]|__substitution__/;
+const GLOB_CHARACTER = /[*?]/;
+
+function wildcardSegmentCouldBe(segment: string, name: string): boolean {
+  const pattern = segment
+    .split("")
+    .map((character) => character === "*" ? ".*" : character === "?" ? "." : character.replace(/[.+^${}()|[\]\\]/g, "\\$&"))
+    .join("");
+  return new RegExp(`^${pattern}$`, "i").test(name);
+}
+
+function wildcardWordVerdict(
+  word: string,
+  values: Map<string, Array<string | null>>,
+  roots: string[],
+  computedRoot: boolean,
+  cwd: string,
+): "safe" | "audit" | "undecided" {
+  if (computedRoot || !GLOB_CHARACTER.test(word)) return "undecided";
+  const expansions = expandWord(word.replace(/[*?]/g, (glob) => glob === "*" ? "\u0001" : "\u0002"), values);
+  let verdict: "safe" | "audit" = "safe";
+  for (const expansion of expansions) {
+    if (expansion === null) return "undecided";
+    const restored = expansion.replace(/\u0001/g, "*").replace(/\u0002/g, "?");
+    if (GLOB_ONLY_UNRESOLVED.test(restored) || restored.includes("[")) return "undecided";
+    const spelled = dequoteShellWord(restored);
+    if (spelled === null) return "undecided";
+    for (const root of roots) {
+      const absolute = resolve(root, spelled);
+      if (protectedAuditTrailPath(absolute, cwd)) { verdict = "audit"; continue; }
+      const segments = absolute.split(/[\\/]+/);
+      const firstWildcard = segments.findIndex((segment) => GLOB_CHARACTER.test(segment));
+      if (firstWildcard === -1) continue;
+      const reachesAudit = segments.some((segment, index) => index >= firstWildcard && (
+        GLOB_CHARACTER.test(segment)
+          ? wildcardSegmentCouldBe(segment, "audit") || wildcardSegmentCouldBe(segment, ".aidlc-engine")
+          : segment.toLowerCase() === "audit"
+      ));
+      if (reachesAudit) verdict = "audit";
+    }
+  }
+  return verdict;
+}
+
 function unresolvedAuditTrailWrite(visible: string, command: string, cwd: string): boolean {
   // The walk's `visible` text has rewritten what it evaluated (a substitution
   // as its literal output or a placeholder, a heredoc as its header, unquoted
@@ -1126,6 +1179,9 @@ function unresolvedAuditTrailWrite(visible: string, command: string, cwd: string
         integrityTargetMatched ??= spelled;
         return true;
       }
+      // A wildcard word that cannot reach the trail passes; any other verdict
+      // keeps the fail-closed rule below, so this only ever narrows a refusal.
+      if (wildcardWordVerdict(word, values, roots, computedRoot, cwd) === "safe") return false;
       if (!AUDIT_SEGMENT.test(withoutOwnFolders(word, cwd)) && !namesAudit) return false;
       integrityTargetMatched ??= word;
       return true;

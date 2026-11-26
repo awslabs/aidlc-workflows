@@ -353,6 +353,47 @@ describe("t349 audit trail guard: shell commands", () => {
     }
   });
 
+  test("a wildcard word is decided by the folders it can reach: stage housekeeping passes, the trail stays guarded", () => {
+    // A wildcard leaves the shell word undecided, but with no variable,
+    // backquote or substitution left its reachable folders are fixed. Cleaning a
+    // reviewer's .bak files out of a stage folder never touches the trail.
+    const STAGE = `${RECORD}/inception/user-stories`;
+    for (const [command, cwd] of [
+      [`rm ${STAGE}/*.bak`, CWD],
+      [`rm -f ${STAGE}/stories.md.bak ${STAGE}/*.md.bak`, CWD],
+      [`mv ${STAGE}/*.bak /tmp/`, CWD],
+      [`rm ./*.bak`, `${CWD}/${STAGE}`],
+      [`rm *.bak`, `${CWD}/${STAGE}`],
+      [`rm ${RECORD}/construction/u1/review-?.md.bak`, CWD],
+      [`S=${STAGE}; rm "$S"/*.bak`, CWD],
+      // Outside the AIDLC workspace a wildcard was never refused, and the
+      // wildcard reading only ever narrows a refusal, never adds one.
+      [`rm /tmp/scratch/*`, CWD],
+      [`rm build/*`, CWD],
+      [`cp out/* /tmp/`, CWD],
+    ] as const) {
+      expect(bash(command, cwd), command).toBeNull();
+    }
+    // A wildcard that could be the audit folder, stand before it, or sit
+    // inside it is refused, as is any wildcard word the parser cannot fix.
+    for (const [command, cwd] of [
+      [`rm ${AUDIT}/*`, CWD],
+      [`rm ${AUDIT}/*.md`, CWD],
+      [`rm ${RECORD}/au*/host.md`, CWD],
+      [`rm ${RECORD}/*/host-fixturecloneid01.md`, CWD],
+      [`rm ${RECORD}/**/host-fixturecloneid01.md`, CWD],
+      [`rm aidlc/spaces/*/intents/*/audit/host.md`, CWD],
+      [`rm ${RECORD}/.aidlc-engine/*/host.md`, CWD],
+      [`rm ${RECORD}/.aidlc-*/audit/host.md`, CWD],
+      [`rm *`, `${CWD}/${RECORD}`],
+      [`rm ../../audit/*.md`, `${CWD}/${STAGE}`],
+      [`rm ${STAGE}/[ab]*.bak $X/*.bak`, CWD],
+      [`rm "$(ls -d ${STAGE})"/*.bak`, CWD],
+    ] as const) {
+      expect(bash(command, cwd), command).toBe("audit");
+    }
+  });
+
   test("the project's own folders and an audit command are not the audit trail", () => {
     // A project under a folder named audit, a project named for audits, and a
     // dependency audit, each with a write the parser cannot place.
