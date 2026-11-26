@@ -4972,12 +4972,16 @@ export function uuidv7(): string {
   return `${body.slice(0, 8)}-${body.slice(8, 12)}-${body.slice(12, 16)}-${body.slice(16, 20)}-${body.slice(20, 32)}`;
 }
 
-// Deterministic free-text → SLUG_RE-valid kebab: lowercase; non-alphanumerics →
-// hyphens; collapse + trim hyphens; cap length; ensure a leading letter. Pure +
-// idempotent (slugify(slugify(x)) === slugify(x)). Falls back to "intent" when
-// the input reduces to empty.
+// Deterministic free-text → SLUG_RE-valid kebab: accents dropped (as
+// folderRepoName drops them, so "Cálculo" is calculo and not c-lculo, and a
+// macOS (NFD) and a Windows or Linux (NFC) spelling of one name agree);
+// lowercase; non-alphanumerics → hyphens; collapse + trim hyphens; cap length;
+// ensure a leading letter. Pure + idempotent (slugify(slugify(x)) ===
+// slugify(x)). Falls back to "intent" when the input reduces to empty.
 export function slugify(text: string, maxLength = 48): string {
   let s = text
+    .normalize("NFKD")
+    .replace(/\p{M}+/gu, "")
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
