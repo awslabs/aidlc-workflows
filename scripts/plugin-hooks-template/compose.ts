@@ -143,6 +143,16 @@ const projectPluginTokens: ProjectTokens = await import(join(HARNESS_DIR, "tools
 const quoteArgument: (value: string) => string = await import(join(HARNESS_DIR, "tools", "aidlc-runtime-paths.ts"))
   .then((m) => typeof m.quoteCommandArgument === "function" ? (value: string) => m.quoteCommandArgument(value) as string : (value: string) => value)
   .catch(() => (value: string) => value);
+// The installed tree's launch up to a tool's path, for a command compose names
+// for the agent: with a copy launch's two Bun options when the tree holds their
+// config file (copyLaunchPrefix), the spelling its allowlists pre-approve;
+// plain bun in a tree from before that file.
+const toolLaunch: string = await import(join(HARNESS_DIR, "tools", "aidlc-runtime-paths.ts"))
+  .then((m) => typeof m.copyLaunchPrefix === "function" && typeof m.BUN_LAUNCH_CONFIG === "string" &&
+      existsSync(join(HARNESS_DIR, "tools", m.BUN_LAUNCH_CONFIG))
+    ? m.copyLaunchPrefix(HARNESS_LEAF) as string
+    : "bun")
+  .catch(() => "bun");
 // The person runs AI-DLC as `aidlc`: the installed tree was set up for it
 // (`aidlc plugin test` runs compose as Bun, in a copy of a native project). A
 // tree from before projectInvocationTokens has only the compiled engine's word.
@@ -416,21 +426,21 @@ function pluginEnabledBySelection(): boolean {
   return selected === null || selected.has(PLUGIN_NAME);
 }
 
-function selectCommandForPlugin(): string {
+export function selectCommandForPlugin(): string {
   const selected = selectedPlugins();
   const names = new Set<string>(selected ?? ["aidlc"]);
   names.add(PLUGIN_NAME);
   const selection = [...names].sort().join(",");
   return NATIVE_CHANNEL
     ? `aidlc engine plugin select ${selection}`
-    : `bun ${HARNESS_LEAF}/tools/aidlc-utility.ts select-plugins ${selection}`;
+    : `${toolLaunch} ${HARNESS_LEAF}/tools/aidlc-utility.ts select-plugins ${selection}`;
 }
 
 // The engine command that adds this plugin's rules to the rule files.
 // The engine's syncCommand rule (hostListsPlugins): only Claude Code and Codex
 // list their plugins, so every other host's sync names the plugin's folder.
 export function syncCommandForPlugin(): string {
-  const sync = NATIVE_CHANNEL ? "aidlc engine plugin sync" : `bun ${HARNESS_LEAF}/tools/aidlc-plugin.ts sync`;
+  const sync = NATIVE_CHANNEL ? "aidlc engine plugin sync" : `${toolLaunch} ${HARNESS_LEAF}/tools/aidlc-plugin.ts sync`;
   return HARNESS_NAME === "claude" || HARNESS_NAME === "codex" ? sync : `${sync} --plugin-root ${quoteArgument(PLUGIN_ROOT)}`;
 }
 

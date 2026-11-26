@@ -433,6 +433,48 @@ describe("t-copy-launch-project-config: every copy allowlist pre-approves the ne
     expect(bash["bun .aidlc/tools/*"]).toBeUndefined();
   });
 
+  // A plugin's compose script names the select and sync commands for the agent to run, built in the tree it
+  // composes into: the launch the tree's allowlists pre-approve, or plain bun in a tree without the config file.
+  const COMPOSE = join(REPO_ROOT, "scripts", "plugin-hooks-template", "compose.ts");
+  const composeLines = (tree: string, leaf: string, harness: string): { select: string; sync: string } => {
+    const res = spawnSync(process.execPath, ["-e",
+      `const m = await import(${JSON.stringify(COMPOSE)}); console.log(JSON.stringify({ select: m.selectCommandForPlugin(), sync: m.syncCommandForPlugin() }));`], {
+      encoding: "utf-8",
+      cwd: tree,
+      env: {
+        ...process.env, AIDLC_PROJECT_DIR: tree, AIDLC_HARNESS_DIR: leaf, AIDLC_HARNESS_NAME: harness,
+        AIDLC_PLUGIN_ROOT: join(REPO_ROOT, "plugins", "test-pro"), AIDLC_COMPILED_EXECUTABLE: "", CLAUDE_PLUGIN_ROOT: "", PLUGIN_ROOT: "",
+      },
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(res.status, res.stderr).toBe(0);
+    return JSON.parse(res.stdout.trim());
+  };
+
+  test("a plugin's select and sync lines are the launch the allowlists pre-approve, and plain bun in an older tree", () => {
+    for (const [harness, leaf] of COPY_TREES) {
+      const { select, sync } = composeLines(join(REPO_ROOT, "dist", harness), leaf, harness);
+      expect(select, harness).toStartWith(`${prefix(leaf)}${leaf}/tools/aidlc-utility.ts select-plugins `);
+      expect(sync, harness).toStartWith(`${prefix(leaf)}${leaf}/tools/aidlc-plugin.ts sync`);
+    }
+    const claudeAllow = json("claude", ".claude/settings.json").permissions.allow as string[];
+    const allowed = (command: string) => claudeAllow.some((rule) => {
+      const body = /^Bash\((.*)\)$/.exec(rule)?.[1] ?? "";
+      return body.endsWith(" *") ? command.startsWith(body.slice(0, -1)) : command === body;
+    });
+    const claude = composeLines(join(REPO_ROOT, "dist", "claude"), ".claude", "claude");
+    expect(allowed(claude.select), claude.select).toBe(true);
+    expect(allowed(claude.sync), claude.sync).toBe(true);
+    // A tree from before the config file: the line it can run.
+    const older = createTestProject();
+    projects.push(older);
+    cpSync(join(REPO_ROOT, "dist", "claude", ".claude"), join(older, ".claude"), { recursive: true });
+    rmSync(join(older, ".claude", "tools", COPY_LAUNCH_CONFIG));
+    const plain = composeLines(older, ".claude", "claude");
+    expect(plain.select).toStartWith("bun .claude/tools/aidlc-utility.ts select-plugins ");
+    expect(plain.sync).toBe("bun .claude/tools/aidlc-plugin.ts sync");
+  });
+
   const codexOnPath = spawnSync("codex", ["--version"], { encoding: "utf-8" }).status === 0;
   test.skipIf(!codexOnPath)("Codex's own evaluator allows the new spelling and not today's", () => {
     const rules = join(REPO_ROOT, "dist", "codex", ".codex", "rules", "default.rules");
