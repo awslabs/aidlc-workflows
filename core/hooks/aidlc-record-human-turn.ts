@@ -117,7 +117,7 @@ import { gateNoticeBoxShown, notePlanApprovalAskReply, openEngineQuestion, planQ
 import { claudeTurnKey, noteClaudeTurnPending } from "../tools/aidlc-claude-turn-origin.ts";
 import { settleClaudeTurnsFirst } from "../tools/aidlc-claude-turn-pending.ts";
 import { openPlanQuestion } from "../tools/aidlc-question-store.ts";
-import { boxQuestionId, QUESTION_ID_FIELD, turnQuestionFields } from "../tools/aidlc-questions.ts";
+import { boxQuestionId, boxQuestionRecommendations, QUESTION_ID_FIELD, turnQuestionFields } from "../tools/aidlc-questions.ts";
 import { aidlcEntryWords, isAidlcCommandPrompt, recommendedChoices } from "../tools/aidlc-reply-reader.ts";
 import { MESSAGE_PICKER_MAX_CHARS, MESSAGE_TEXT_MAX_CHARS, type NewMessage, saveMessage } from "../tools/aidlc-message-store.ts";
 
@@ -1113,7 +1113,8 @@ try {
               // open here in the question's own words.
               const id = boxQuestionId(projectDir, sessionId, question);
               if (id !== null) boxLogged = true;
-              const recommended = options === undefined ? [] : recommendedChoices(options);
+              const logged = id !== null && options !== undefined ? boxQuestionRecommendations(projectDir, id, options) : [];
+              const recommended = logged.length > 0 ? logged : recommendedChoices(options ?? []);
               appendAuditEntryUnlocked("QUESTION_REPLIED", {
                 ...(sessionId ? { Session: sessionId } : {}),
                 Question: question,

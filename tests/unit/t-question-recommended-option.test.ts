@@ -152,6 +152,25 @@ describe("t-question-recommended-option: log decision keeps the choice the agent
 });
 
 describe("t-question-recommended-option: a question box keeps the choice it showed as recommended", () => {
+  test("a localized Claude picker records the recommendation from its logged option position", async () => {
+    const proj = requirements();
+    const labels = ["Standard", "Standard avec mémoire", "Minimal"];
+    await decision(proj, [
+      ...labels.flatMap((label) => ["--option", label]), "--recommended-options", "1",
+    ]);
+    await claudeBox(proj, labels, labels[0]);
+    expect(field(proj, "DECISION_RECORDED", "Recommended")).toBe("Standard");
+    expect(field(proj, "QUESTION_REPLIED", "Recommended")).toBe(JSON.stringify(["Standard"]));
+    expect(field(proj, "QUESTION_REPLIED", "Reply")).toBe("Standard");
+  });
+
+  test("a picker with different choices does not inherit a logged recommendation", async () => {
+    const proj = requirements();
+    await decision(proj, ["--options", "Standard,Minimal", "--recommended-options", "1"]);
+    await claudeBox(proj, ["Minimal", "Custom"], "Minimal");
+    expect(field(proj, "QUESTION_REPLIED", "Recommended")).toBeNull();
+  });
+
   test("Claude Code: the reply row names the marked choice beside the box's choices and the pick", async () => {
     const proj = requirements();
     await claudeBox(proj, LABELS, LABELS[1]);

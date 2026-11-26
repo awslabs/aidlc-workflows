@@ -13,6 +13,7 @@ import { dirname, join, relative } from "node:path";
 import {
   auditBlockField,
   auditFilePath,
+  optionsList,
   ownShardRows,
   planApprovalRuntimeFile,
   readActiveDirectiveMarker,
@@ -598,5 +599,20 @@ export function boxQuestionId(projectDir: string, chat: string, question: string
     return openIn(projectDir, chat).findLast((entry) => entry.text === sha)?.id ?? null;
   } catch {
     return null;
+  }
+}
+
+/** Recommendations on the same logged question, when the picker offered the same choices. */
+export function boxQuestionRecommendations(projectDir: string, id: string, labels: readonly string[]): string[] {
+  try {
+    const decision = readAuditShardEvents(projectDir).findLast((row) =>
+      row.event === "DECISION_RECORDED" && auditBlockField(row.block, QUESTION_ID_FIELD) === id
+    );
+    if (!decision) return [];
+    const options = optionsList(auditBlockField(decision.block, "Options"));
+    if (options.length !== labels.length || !options.every((option, index) => option === labels[index])) return [];
+    return optionsList(auditBlockField(decision.block, "Recommended")).filter(Boolean);
+  } catch {
+    return [];
   }
 }
