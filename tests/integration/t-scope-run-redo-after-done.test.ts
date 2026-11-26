@@ -57,7 +57,7 @@ describe("a redo of Code Generation after a bugfix finished there", () => {
     const redoFrom = auditEvents(proj).length;
     person.say("Can you redo Code Generation? I'd like the code built again.");
     const print = agent.next("--stage", "code-generation");
-    const jump = /`(bun \.claude\/tools\/aidlc-jump\.ts execute [^`]+)`/.exec(String(print.message ?? ""))?.[1];
+    const jump = /`(bun (?:--config=\S+ --no-env-file )?\.claude\/tools\/aidlc-jump\.ts execute [^`]+)`/.exec(String(print.message ?? ""))?.[1];
     expect(jump, JSON.stringify(print)).toContain("--direction redo");
     expect(listed(proj)).toBe("complete");
     const ran = host.bash(jump as string);
@@ -81,7 +81,7 @@ describe("a redo of Code Generation after a bugfix finished there", () => {
     const finishedRows = auditEvents(proj).filter((row) => row.event === "WORKFLOW_COMPLETED").length;
     host.fullHost = true;
     const print = agent.next("--stage", "code-generation", "--unit", "core");
-    const reopen = /`(bun \.claude\/tools\/aidlc-jump\.ts reopen [^`]+)`/.exec(String(print.message ?? ""))?.[1];
+    const reopen = /`(bun (?:--config=\S+ --no-env-file )?\.claude\/tools\/aidlc-jump\.ts reopen [^`]+)`/.exec(String(print.message ?? ""))?.[1];
     expect(reopen, JSON.stringify(print)).toBeDefined();
     // The agent's own reopen waits for the person, and says so.
     let refused = "";
@@ -100,7 +100,7 @@ describe("a redo of Code Generation after a bugfix finished there", () => {
     // doctor reads a reopened run, not a lost state write whose fix would end
     // the redo.
     expect(listed(proj), "the redo runs, but the work list says the work is complete").toBe("in-flight");
-    const doctor = host.bash("bun .claude/tools/aidlc-utility.ts doctor");
+    const doctor = host.bash(`${host.bunWords().join(" ")} .claude/tools/aidlc-utility.ts doctor`);
     expect(doctor.stdout, "doctor read the reopen as drift").not.toContain("State/audit drift");
     expect(doctor.stdout).not.toContain("set Status=Completed");
     const final = agent.drive(agent.next());
@@ -127,7 +127,7 @@ describe("a redo of Code Generation after a bugfix finished there", () => {
     Bun.sleepSync(1100);
     person.say("core");
     const print = agent.next("--stage", "code-generation", "--unit", "core", "--change");
-    const reopen = /`(bun \.claude\/tools\/aidlc-jump\.ts reopen [^`]+--via change[^`]*)`/.exec(String(print.message ?? ""))?.[1];
+    const reopen = /`(bun (?:--config=\S+ --no-env-file )?\.claude\/tools\/aidlc-jump\.ts reopen [^`]+--via change[^`]*)`/.exec(String(print.message ?? ""))?.[1];
     expect(reopen, JSON.stringify(print)).toBeDefined();
     const ran = host.bash(reopen as string);
     expect(ran.status, ran.stdout + ran.stderr).toBe(0);
@@ -147,7 +147,7 @@ describe("a redo of Code Generation after a bugfix finished there", () => {
     const asked = agent.asked.length;
     person.say("Redo code generation for every unit.");
     const print = agent.next("--stage", "code-generation", "--every-unit");
-    const jump = /`(bun \.claude\/tools\/aidlc-jump\.ts (?:reopen|execute) [^`]+)`/.exec(String(print.message ?? ""))?.[1];
+    const jump = /`(bun (?:--config=\S+ --no-env-file )?\.claude\/tools\/aidlc-jump\.ts (?:reopen|execute) [^`]+)`/.exec(String(print.message ?? ""))?.[1];
     expect(jump, JSON.stringify(print)).toBeDefined();
     const ran = host.bash(jump as string);
     expect(ran.status, ran.stdout + ran.stderr).toBe(0);
