@@ -568,9 +568,17 @@ function mergeLeafValues(
 ): void {
   for (const [key, value] of Object.entries(source)) {
     if (key === "$schema" || (key === "schemaVersion" && prefix === "")) continue;
+    // A parsed file can hold a key named __proto__ (JSON.parse makes it an
+    // ordinary key), and the one free-form object a file may carry, the status
+    // line it replaced, is not checked key by key. Read or assigned by that
+    // name, the merged object answers with its prototype, the one every object
+    // shares. So that key is never merged, and only a key the merged object
+    // holds itself is merged into.
+    if (key === "__proto__") continue;
     const path = prefix ? `${prefix}.${key}` : key;
     if (isRecord(value)) {
-      const nested = isRecord(target[key]) ? target[key] as Record<string, unknown> : {};
+      const held = Object.hasOwn(target, key) ? target[key] : undefined;
+      const nested = isRecord(held) ? held : {};
       target[key] = nested;
       mergeLeafValues(nested, value, origin, origins, path);
     } else {
