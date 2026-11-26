@@ -35,11 +35,12 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { copyChannelDispatcherCommands, copyChannelToolScripts } from "../../core/tools/aidlc.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import { AIDLC_SRC } from "../harness/fixtures.ts";
 
 const SETTINGS = join(AIDLC_SRC, "settings.json");
 const SETTINGS_LOCAL_EXAMPLE = join(AIDLC_SRC, "settings.local.json.example");
-const SOURCE_INVOKE = 'bun "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts"';
+const SOURCE_INVOKE = withCopyLaunchOptions('bun "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts"');
 
 interface HookEntry {
   type?: string;
@@ -95,8 +96,9 @@ describe("t40 settings.json hook/statusline/permissions config (migrated from t4
     const allow = readSettings().permissions?.allow ?? [];
     expect(allow.length).toBe(4 + copyChannelDispatcherCommands().length + 2 * copyChannelToolScripts().length);
     expect(allow).toContain("Edit(/**)");
-    expect(allow).toContain("Bash(bun .claude/tools/aidlc.ts engine *)");
-    expect(allow).toContain("Bash(bun .claude/tools/aidlc-log.ts *)");
+    expect(allow).toContain(`Bash(${withCopyLaunchOptions("bun .claude/tools/aidlc.ts engine *")})`);
+    expect(allow).toContain(`Bash(${withCopyLaunchOptions("bun .claude/tools/aidlc-log.ts *")})`);
+    expect(allow).not.toContain(`Bash(${withCopyLaunchOptions("bun .claude/tools/aidlc-*")})`);
     expect(allow).not.toContain("Bash(bun .claude/tools/aidlc-*)");
     expect(allow).not.toContain("Bash(date -u *)");
     expect(allow).not.toContain("Bash");

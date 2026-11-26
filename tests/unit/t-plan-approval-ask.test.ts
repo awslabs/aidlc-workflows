@@ -71,6 +71,7 @@
 //     after a submodule update, nor a submodule's files as the commit that branch
 //     records for it holds them, while the build's own change inside it still is.
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash, createHmac } from "node:crypto";
@@ -137,6 +138,10 @@ import { listMessages, saveMessage } from "../../dist/claude/.claude/tools/aidlc
 import { FILE_TOOLS_RULE } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 
 setDefaultTimeout(120_000);
+
+// The words a command the installed copy tree names starts with, ahead of its tool's file name.
+const COPY_TOOLS = withCopyLaunchOptions("bun .claude/tools/");
+const COPY_TOOLS_PATTERN = COPY_TOOLS.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
 
 const BUN = process.execPath;
 const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
@@ -328,7 +333,7 @@ function guardBash(proj: string, command: string): { code: number; stderr: strin
 // Runs an engine command the way the conductor would, after the guard let it
 // through: the installed tools in the project, as the engine spelled them.
 function runInstalled(proj: string, command: string): string {
-  expect(command).toMatch(/^bun \.claude\/tools\/[\w.-]+\.ts( [\w-]+)+( --reason '[^']*')?$/);
+  expect(command).toMatch(new RegExp(`^${COPY_TOOLS_PATTERN}[\\w.-]+\\.ts( [\\w-]+)+( --reason '[^']*')?$`));
   // The engine's own reason for the person's skip is one quoted argument.
   const reason = /--reason '([^']*)'$/.exec(command)?.[1];
   const [, ...args] = command.replace(/ --reason '[^']*'$/, "").split(" ");
@@ -616,7 +621,7 @@ describe("the engine asks for Plan Approval", () => {
     const switched = next(proj, ["--statusline", "off"]);
     expect(switched.kind, JSON.stringify(switched)).toBe("print");
     const command = /^Run `([^`]+)`, print its output verbatim, then stop\./.exec(switched.message ?? "")?.[1];
-    expect(command, switched.message).toBe("bun .claude/tools/aidlc.ts config --statusline off --harness claude");
+    expect(command, switched.message).toBe(withCopyLaunchOptions("bun .claude/tools/aidlc.ts config --statusline off --harness claude"));
     expect(switched.message).toContain("do NOT run `next`");
     const guarded = guardBash(proj, command as string);
     expect(guarded.code, guarded.stderr).toBe(0);
@@ -638,8 +643,8 @@ describe("the engine asks for Plan Approval", () => {
     expect(configure.kind, JSON.stringify(configure)).toBe("print");
     expect(configure.message).toContain("do NOT run `next`");
     const show = /Read current state first with `([^`]+)`/.exec(configure.message ?? "")?.[1];
-    expect(show, configure.message).toBe("bun .claude/tools/aidlc.ts config models --show --json");
-    const land = "bun .claude/tools/aidlc.ts config models --preset thorough --local --yes";
+    expect(show, configure.message).toBe(withCopyLaunchOptions("bun .claude/tools/aidlc.ts config models --show --json"));
+    const land = withCopyLaunchOptions("bun .claude/tools/aidlc.ts config models --preset thorough --local --yes");
     for (const command of [show as string, land]) {
       const guarded = guardBash(proj, command);
       expect(guarded.code, `${command}\n${guarded.stderr}`).toBe(0);
@@ -2984,7 +2989,7 @@ describe("'review the plan' next to other questions and for groups", () => {
 // that followed the plan step was handed Requirements Analysis).
 describe("an isolated Code Generation run's plan steps name that run's own next", () => {
   const SINGLE = ["--stage", "code-generation", "--single"];
-  const WORKFLOW_NEXT = "bun .claude/tools/aidlc-orchestrate.ts next";
+  const WORKFLOW_NEXT = withCopyLaunchOptions("bun .claude/tools/aidlc-orchestrate.ts next");
   const OWN = `${WORKFLOW_NEXT} --stage code-generation --single --scope poc`;
   const planStep = (command: string) =>
     `Write this plan and its test instructions (Code Generation Steps 1 and 2), then run \`${command}\`: ` +
@@ -3000,7 +3005,7 @@ describe("an isolated Code Generation run's plan steps name that run's own next"
     return proj;
   }
   // The command the step names, run as printed.
-  const own = (proj: string): Emitted => next(proj, OWN.split(" ").slice(3));
+  const own = (proj: string): Emitted => next(proj, OWN.split(" ").slice(WORKFLOW_NEXT.split(" ").length));
 
   test("the plan step, the question and the build: each names it, and it brings back that run's step", () => {
     const proj = isolated();
@@ -3071,7 +3076,7 @@ describe("an isolated Code Generation run's plan steps name that run's own next"
 // it does inside work.
 describe("an isolated Code Generation run in a project with no work", () => {
   const SINGLE = ["--stage", "code-generation", "--single", "--scope", "enterprise"];
-  const OWN_NEXT = "bun .claude/tools/aidlc-orchestrate.ts next";
+  const OWN_NEXT = withCopyLaunchOptions("bun .claude/tools/aidlc-orchestrate.ts next");
   const SPACE_RECORD = ["aidlc", "spaces", "default", "intents"];
   const planDir = (proj: string) => join(proj, ...SPACE_RECORD, "construction", "code-generation");
   // A project with code and no work, the harness installed, and the run started.
@@ -3587,14 +3592,15 @@ describe("plan approval turned on after a plan was built without asking", () => 
   });
 
   test("an isolated Code Generation run: its own next asks, and names itself", () => {
-    const OWN = "bun .claude/tools/aidlc-orchestrate.ts next --stage code-generation --single --scope poc";
+    const NEXT = withCopyLaunchOptions("bun .claude/tools/aidlc-orchestrate.ts next");
+    const OWN = `${NEXT} --stage code-generation --single --scope poc`;
     const proj = project("relaxed", "off");
     cpSync(AIDLC_SRC, join(proj, ".claude"), { recursive: true });
     setLines(proj, (state) => state.replace(/^- \*\*Current Stage\*\*:.*$/m, "- **Current Stage**: requirements-analysis"));
     reply(proj, "/aidlc --stage code-generation --single");
     next(proj, ["--stage", "code-generation", "--single"]);
     writePlan(proj);
-    const own = (): Emitted => next(proj, OWN.split(" ").slice(3));
+    const own = (): Emitted => next(proj, OWN.split(" ").slice(NEXT.split(" ").length));
     const build = own();
     expect(build.plan_approval.skipped, JSON.stringify(build)).toBe(true);
     turnOn(proj);
@@ -3775,7 +3781,8 @@ describe("what the engine names while a plan waits", () => {
     const text = ["stage-protocol.md", "stage-protocol-reviewer.md"]
       .map((name) => readFileSync(join(dir, name), "utf-8")).join("\n");
     // A checkpoint row keeps its own rule, so only the plain question rows.
-    const commands = [...text.matchAll(/`(bun \.claude\/tools\/[^`\n]*(?:aidlc-review-brief\.ts|engine log (?:decision|answer) --stage <slug>)[^`\n]*)`/g)]
+    const named = new RegExp(`\`(${COPY_TOOLS_PATTERN}[^\`\\n]*(?:aidlc-review-brief\\.ts|engine log (?:decision|answer) --stage <slug>)[^\`\\n]*)\``, "g");
+    const commands = [...text.matchAll(named)]
       .map((m) => filled(m[1]))
       .filter((command) => !command.includes("--checkpoint"));
     expect(commands.length, "the protocol names no review brief or log row").toBeGreaterThan(3);
@@ -3836,7 +3843,7 @@ describe("what the engine names while a plan waits", () => {
 
   test("a review the person asks for runs while the plan waits: its request is the engine's command, its files are records, the code waits", () => {
     const proj = waitingPlan();
-    const request = "bun .claude/tools/aidlc.ts engine log review --stage code-generation --reviewer aidlc-architecture-reviewer-agent --iteration 2";
+    const request = withCopyLaunchOptions("bun .claude/tools/aidlc.ts engine log review --stage code-generation --reviewer aidlc-architecture-reviewer-agent --iteration 2");
     // AI-DLC's own command: the log tool judges it, this guard does not.
     expect(guardBash(proj, request).code).toBe(0);
     reply(proj, "before I approve the plan, have the reviewer look at it again");
@@ -3882,14 +3889,14 @@ describe("what the engine names while a plan waits", () => {
 
   test("a jump waits for the person to ask (the jump tool checks no one); a skip is the engine's own command; the code waits", () => {
     const proj = waitingPlan();
-    const jump = "bun .claude/tools/aidlc-jump.ts execute --target nfr-requirements --direction backward --scope poc";
+    const jump = withCopyLaunchOptions("bun .claude/tools/aidlc-jump.ts execute --target nfr-requirements --direction backward --scope poc");
     expect(guardBash(proj, jump).code).toBe(2);
-    expect(guardBash(proj, "bun .claude/tools/aidlc.ts engine recompose --skip build-and-test").code).toBe(0);
+    expect(guardBash(proj, withCopyLaunchOptions("bun .claude/tools/aidlc.ts engine recompose --skip build-and-test")).code).toBe(0);
     reply(proj, "/aidlc --stage nfr-requirements");
     expect(namedCommands(next(proj, ["--stage", "nfr-requirements"]))).toContain(jump);
     const verdict = guardBash(proj, jump);
     expect(verdict.code, verdict.stderr).toBe(0);
-    expect(guardBash(proj, "bun .claude/tools/aidlc.ts engine recompose --skip build-and-test --scope feature").code).toBe(0);
+    expect(guardBash(proj, withCopyLaunchOptions("bun .claude/tools/aidlc.ts engine recompose --skip build-and-test --scope feature")).code).toBe(0);
     expect(guardWrite(proj, join(proj, "src", "slugify.ts")).code).toBe(2);
   });
 
@@ -4033,7 +4040,7 @@ describe("what the engine names while a plan waits", () => {
     const proj = waitingPlan();
     reply(proj, typed);
     for (const setter of setters) {
-      const command = `bun .claude/tools/aidlc.ts engine state ${setter}`;
+      const command = withCopyLaunchOptions(`bun .claude/tools/aidlc.ts engine state ${setter}`);
       const verdict = guardBash(proj, command);
       expect(verdict.code, `${command}\n${verdict.stderr}`).toBe(0);
       runInstalled(proj, command);
@@ -4111,7 +4118,7 @@ describe("what the engine names while a plan waits", () => {
     expect(run.stage).toBe("reverse-engineering");
     const record = guardWrite(proj, join(seededRecordDir(proj), "inception", "reverse-engineering", "notes.md"));
     expect(record.code, record.stderr).toBe(0);
-    const scan = guardBash(proj, "bun .claude/tools/aidlc.ts engine workspace codekb-scope-diff");
+    const scan = guardBash(proj, withCopyLaunchOptions("bun .claude/tools/aidlc.ts engine workspace codekb-scope-diff"));
     expect(scan.code, scan.stderr).toBe(0);
     // The workspace source still waits for the approved plan, and so do the
     // work's state and a record hard-linked to source.
@@ -4409,7 +4416,7 @@ describe("stopping for now at Code Generation", () => {
     cpSync(join(AIDLC_SRC, "tools"), join(proj, ".claude", "tools"), { recursive: true });
     askFor(proj);
     const source = workspaceSourceFingerprint(proj);
-    let park = "bun .claude/tools/aidlc.ts engine orchestrate park --person-asked";
+    let park = withCopyLaunchOptions("bun .claude/tools/aidlc.ts engine orchestrate park --person-asked");
     if (how === "typed") {
       const named = next(proj, ["park"]);
       expect(named.kind, JSON.stringify(named)).toBe("print");
@@ -4449,7 +4456,7 @@ describe("stopping for now at Code Generation", () => {
       expect(answer(proj, "Approve Plan", ["--park"]).message).toContain("parked");
     } else {
       reply(proj, "let's stop here for today");
-      const park = "bun .claude/tools/aidlc.ts engine orchestrate park --person-asked";
+      const park = withCopyLaunchOptions("bun .claude/tools/aidlc.ts engine orchestrate park --person-asked");
       expect(JSON.parse(runInstalled(proj, park)).kind).toBe("parked");
     }
     const otherWorkGoesOn = (point: string): void => {
@@ -4491,7 +4498,7 @@ describe("stopping for now at Code Generation", () => {
       expect(next(proj)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
       replyAndRecord(proj, "1", "Approve Plan");
       expect(next(proj)).toMatchObject({ kind: "run-stage", plan_approval: { status: "approved" } });
-      runInstalled(proj, "bun .claude/tools/aidlc-state.ts unit start --stage code-generation --unit unit-a");
+      runInstalled(proj, withCopyLaunchOptions("bun .claude/tools/aidlc-state.ts unit start --stage code-generation --unit unit-a"));
       expect(next(proj)).toMatchObject({ kind: "run-stage", unit: "unit-a" });
       writeFileSync(join(proj, "src", "a.ts"), "export const a = 1;\n");
       for (const name of ["code-summary", "traceability"]) {
@@ -4505,7 +4512,7 @@ describe("stopping for now at Code Generation", () => {
       appendAuditEntry("REVIEW_REQUESTED", fields, proj);
       appendAuditEntry("REVIEW_COMPLETED", { ...fields, Verdict: "READY" }, proj);
       next(proj);
-      runInstalled(proj, "bun .claude/tools/aidlc-state.ts unit complete --stage code-generation --unit unit-a");
+      runInstalled(proj, withCopyLaunchOptions("bun .claude/tools/aidlc-state.ts unit complete --stage code-generation --unit unit-a"));
       expect(unitCompletedReceipts(proj, "code-generation").has("unit-a")).toBe(true);
       expect(next(proj)).toMatchObject({ kind: "run-stage", unit: "unit-b", plan_approval: { status: "plan" } });
       writePlan(proj, "", "unit-b", "src/b.ts");
@@ -4515,7 +4522,7 @@ describe("stopping for now at Code Generation", () => {
         expect(answer(proj, "Approve Plan", ["--park"]).message).toContain("parked");
       } else {
         reply(proj, "let's stop here for today");
-        expect(JSON.parse(runInstalled(proj, "bun .claude/tools/aidlc.ts engine orchestrate park --person-asked")).kind)
+        expect(JSON.parse(runInstalled(proj, withCopyLaunchOptions("bun .claude/tools/aidlc.ts engine orchestrate park --person-asked"))).kind)
           .toBe("parked");
       }
       const builtUnitsFilesGoOn = (point: string): void => {
@@ -4776,7 +4783,7 @@ describe("the zero-Unit Code Generation lockout reported in #1172", () => {
         replyAndRecord(proj, "1", "Approve Plan");
         expect(engineCall(proj, ["next"])).toMatchObject({ kind: "load-steering", part: 1 });
       }
-      const park = "bun .claude/tools/aidlc.ts engine orchestrate park";
+      const park = withCopyLaunchOptions("bun .claude/tools/aidlc.ts engine orchestrate park");
       const parkAdmitted = guardBash(proj, park);
       expect(parkAdmitted.code, parkAdmitted.stderr).toBe(0);
       expect(JSON.parse(runInstalled(proj, park)).kind).toBe("parked");
@@ -5046,7 +5053,7 @@ describe("Code Generation receipt recovery through the Plan Approval hook", () =
     expect(next(proj)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
     replyAndRecord(proj, "1", "Approve Plan");
     expect(next(proj)).toMatchObject({ kind: "run-stage", plan_approval: { status: "approved" } });
-    const start = `bun .claude/tools/aidlc-state.ts unit start --stage code-generation --unit unit-a`;
+    const start = withCopyLaunchOptions(`bun .claude/tools/aidlc-state.ts unit start --stage code-generation --unit unit-a`);
     expect(guardBash(proj, start).code).toBe(0);
     runInstalled(proj, start);
     expect(next(proj)).toMatchObject({ kind: "run-stage", plan_approval: { status: "approved" } });
@@ -5081,9 +5088,9 @@ describe("Code Generation receipt recovery through the Plan Approval hook", () =
     test(`${unitMajor ? "unit-major" : "stage-major"}: next refreshes retired authority before its exact receipt command is guarded`, () => {
       const proj = readyUnit(unitMajor);
       reply(proj, "Use scope-dependent skeleton stance");
-      runInstalled(proj, "bun .claude/tools/aidlc-state.ts set-skeleton-stance scope-dependent");
+      runInstalled(proj, withCopyLaunchOptions("bun .claude/tools/aidlc-state.ts set-skeleton-stance scope-dependent"));
       expect(readActiveDirectiveMarker(proj, readFileSync(seededStateFile(proj), "utf-8"))).toBeNull();
-      const complete = "bun .claude/tools/aidlc-state.ts unit complete --stage code-generation --unit unit-a";
+      const complete = withCopyLaunchOptions("bun .claude/tools/aidlc-state.ts unit complete --stage code-generation --unit unit-a");
       // A Unit's completion is the engine's own command, before `next` as
       // after: `unit complete` judges the Unit's approved plan itself.
       const early = guardBash(proj, complete);
@@ -5160,7 +5167,7 @@ describe("Code Generation receipt recovery through the Plan Approval hook", () =
     expect(JSON.stringify(recovered)).not.toContain("unit_record_step");
     // The guard admits the Unit's completion; `unit complete` holds it itself
     // while the changed plan waits for the person.
-    const complete = "bun .claude/tools/aidlc-state.ts unit complete --stage code-generation --unit unit-a";
+    const complete = withCopyLaunchOptions("bun .claude/tools/aidlc-state.ts unit complete --stage code-generation --unit unit-a");
     const admitted = guardBash(proj, complete);
     expect(admitted.code, admitted.stderr).toBe(0);
     expect(admitted.stderr).toBe("");

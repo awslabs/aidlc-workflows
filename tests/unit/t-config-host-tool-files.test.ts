@@ -28,6 +28,7 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { hostToolPath, sha256File } from "../../core/tools/aidlc-distribution.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 
 const BUN = process.execPath;
 const DIST = join(REPO_ROOT, "dist");
@@ -149,7 +150,7 @@ describe("config leaves what a host tool installed for itself alone", () => {
     expect(result.output).toContain("error: aidlc/spaces/default/memory/team.md is a link");
     expect(result.output).toContain(
       "fix: put the file itself at aidlc/spaces/default/memory/team.md, then run " +
-        "`bun .aidlc/tools/aidlc.ts config models --agent developer --effort high --project --yes` again",
+        `\`${withCopyLaunchOptions("bun .aidlc/tools/aidlc.ts config models --agent developer --effort high --project --yes")}\` again`,
     );
     expect(result.output).not.toContain(scratch);
     expect(readdirSync(scratch).filter((name) => name.startsWith("aidlc-config-copy-source-"))).toEqual([]);

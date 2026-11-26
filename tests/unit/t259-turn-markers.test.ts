@@ -486,8 +486,8 @@ describe("t259 the engine's last word ended the turn", () => {
         tempDirs.push(proj);
         const env: Record<string, string | undefined> = { ...process.env, CLAUDE_PROJECT_DIR: proj };
         delete env[STOP_HOOK_PROBE_ENV];
-        const run = (args: string[]) =>
-          spawnSync(process.execPath, [".claude/tools/aidlc.ts", ...args], { cwd: proj, encoding: "utf-8", env });
+        const run = (args: string[], options: string[] = []) =>
+          spawnSync(process.execPath, [...options, ".claude/tools/aidlc.ts", ...args], { cwd: proj, encoding: "utf-8", env });
         const dir = stageDir(proj, "ideation", "feasibility");
         mkdirSync(dir, { recursive: true });
         const file = join(dir, "feasibility-questions.md");
@@ -506,7 +506,10 @@ describe("t259 the engine's last word ended the turn", () => {
         }
         const printed = JSON.parse(run(["engine", "orchestrate", "next", ...typed]).stdout);
         expect(printed.kind, label).toBe("print");
-        const command = /`bun \.claude\/tools\/aidlc\.ts (engine [^`]*)`/.exec(printed.message)?.[1];
+        // The command as printed, the copy tree's two Bun options included.
+        const named = /`bun ((?:--config=\S+ --no-env-file )?)\.claude\/tools\/aidlc\.ts (engine [^`]*)`/.exec(printed.message);
+        const command = named?.[2];
+        const options = named?.[1].split(" ").filter(Boolean) ?? [];
         expect(command, `${label}: ${printed.message}`).toBeDefined();
         if (written === "after their turn") {
           expect(printed.message, label).toContain("print its output verbatim and re-run next to carry on with the work.");
@@ -514,7 +517,7 @@ describe("t259 the engine's last word ended the turn", () => {
           expect(existsSync(turnEndMarkerPath(proj)), label).toBe(false);
           // The same turn goes on to the stage, whose questions the agent asks
           // (past the stage's rules, when they come ahead of it).
-          expect(run(command!.split(" ")).status, label).toBe(0);
+          expect(run(command!.split(" "), options).status, label).toBe(0);
           const after = runOrchestrateNext(join(proj, ".claude", "tools", "aidlc-orchestrate.ts"), proj, [], { cwd: proj, env }).directive;
           expect([after?.kind, after?.stage], label).toEqual(["run-stage", "feasibility"]);
         } else {

@@ -15,6 +15,7 @@ import { platform, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { copyChannelOmits, projectionFiles, walkFiles } from "../../core/tools/aidlc-distribution.ts";
 import { AIDLC_VERSION } from "../../core/tools/aidlc-version.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
@@ -155,7 +156,7 @@ describe("a copied project's own config with a native aidlc on the machine", () 
       const refresh = run(project, "claude", ["--force"], env);
       expect(refresh.status, refresh.out).toBe(4);
       expect(refresh.out).toContain(`refreshing .claude needs the ${AIDLC_VERSION} release files`);
-      expect(refresh.out).toContain("bun .claude/tools/aidlc.ts config --force --download");
+      expect(refresh.out).toContain(withCopyLaunchOptions("bun .claude/tools/aidlc.ts config --force --download"));
       expect(refresh.out).not.toContain(nativeVersion === AIDLC_VERSION ? "configured" : nativeVersion);
       expect(stampOf(project, "claude")).toBe(AIDLC_VERSION);
       expect(treeFiles(project)).toEqual(files);
@@ -184,7 +185,8 @@ describe("a copied project's own config with a native aidlc on the machine", () 
     const refreshed = run(project, "claude", ["--harness", "claude", "--from", copyRuntime("claude"), "--yes"], env);
     expect(refreshed.status, refreshed.out).toBe(0);
     expect(refreshed.out).toContain(`Kiro CLI (.kiro) is still on 2.9.0. To bring it to ${AIDLC_VERSION}: get `);
-    expect(refreshed.out).toContain("then run `bun .claude/tools/aidlc.ts config --harness kiro-v2 --from <that file>`.");
-    expect(refreshed.out).not.toContain("`bun .claude/tools/aidlc.ts config --harness kiro-v2`.");
+    const config = withCopyLaunchOptions("bun .claude/tools/aidlc.ts config --harness kiro-v2");
+    expect(refreshed.out).toContain(`then run \`${config} --from <that file>\`.`);
+    expect(refreshed.out).not.toContain(`\`${config}\`.`);
   });
 });

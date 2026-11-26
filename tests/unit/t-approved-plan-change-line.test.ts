@@ -508,9 +508,10 @@ describe("their words in a new chat are read for the way back to the approved pl
   }
 
   // The restore the print names, through the plan-approval guard, then run as
-  // given in the project's own installed tools.
+  // given in the project's own installed tools, the copy tree's two Bun
+  // options included.
   function runNamedRestore(proj: string, message: string | undefined): string {
-    const command = /`(bun \.claude\/tools\/[^`]* restore (?:--unit [^`]+|--stage-level))`/.exec(message ?? "")?.[1];
+    const command = /`(bun (?:--config=\S+ --no-env-file )?\.claude\/tools\/[^`]* restore (?:--unit [^`]+|--stage-level))`/.exec(message ?? "")?.[1];
     expect(command, message).toBeDefined();
     if (!command) return "";
     cpSync(AIDLC_SRC, join(proj, ".claude"), { recursive: true });

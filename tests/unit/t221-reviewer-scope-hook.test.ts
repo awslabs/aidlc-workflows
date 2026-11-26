@@ -19,6 +19,7 @@
 //       cannot silently drop the enforcement while the hook file survives.
 
 import { readConductorSurface } from "../harness/conductor-skill.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import {
   NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
   NATIVE_STARTUP_TIMEOUT_MS,
@@ -1353,7 +1354,7 @@ describe("t221 (c) harness registration and protocol prose", () => {
       const group = groups.find((g) =>
         (g.hooks ?? []).some(
           (h) => h.command ===
-            `bun "$CLAUDE_PROJECT_DIR/${harness.manifest.harnessDir}/tools/aidlc.ts" engine hook guard-tool-call`,
+            withCopyLaunchOptions(`bun "$CLAUDE_PROJECT_DIR/${harness.manifest.harnessDir}/tools/aidlc.ts" engine hook guard-tool-call`),
         ),
       );
       expect(group, harness.name).toBeDefined();
@@ -1391,9 +1392,9 @@ describe("t221 (c) harness registration and protocol prose", () => {
         for (const e of reviewerEntries) {
           // The registration passes its own agent name so the adapter forwards
           // a real identity instead of a bare scoped_registration.
-          expect(e.command).toBe(
+          expect(e.command).toBe(withCopyLaunchOptions(
             `bun ${harness.manifest.harnessDir}/tools/aidlc.ts engine adapter kiro reviewer-scope ${agent}${kiroManifest.hookCommandSuffix}`,
-          );
+          ));
         }
         expect(
           entries.some((entry) =>
@@ -1468,7 +1469,7 @@ describe("t221 (c) harness registration and protocol prose", () => {
       const group = pre.filter((g) =>
         g.hooks.some(
           (h) => h.command ===
-            `bun ${harness.manifest.harnessDir}/tools/aidlc.ts engine adapter codex guard-tool-call`,
+            withCopyLaunchOptions(`bun ${harness.manifest.harnessDir}/tools/aidlc.ts engine adapter codex guard-tool-call`),
         ),
       );
       expect(group, harness.name).toHaveLength(1);
@@ -1497,7 +1498,7 @@ describe("t221 (c) harness registration and protocol prose", () => {
         pre.some(
           (h) =>
             h.command ===
-            `bun ${harness.manifest.harnessDir}/hooks/aidlc-cursor-adapter.ts guards`,
+            withCopyLaunchOptions(`bun ${harness.manifest.harnessDir}/hooks/aidlc-cursor-adapter.ts guards`),
         ),
       ).toBe(true);
       const adapter = readFileSync(

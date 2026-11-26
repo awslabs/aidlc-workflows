@@ -175,10 +175,11 @@ function redo(proj: string, words: string, named: string[]): string {
   return String(step.message);
 }
 
-// The engine commands a print names for the agent to run, in order. The park
-// it names is only for a person who also asked to stop there.
+// The engine commands a print names for the agent to run, in order, with or
+// without the copy launch's two Bun options. The park it names is only for a
+// person who also asked to stop there.
 function commands(message: string): string[] {
-  return [...message.matchAll(/`bun \.claude\/tools\/(aidlc[a-z-]*\.ts) ([^`]*)`/g)]
+  return [...message.matchAll(/`bun (?:--config=\S+ --no-env-file )?\.claude\/tools\/(aidlc[a-z-]*\.ts) ([^`]*)`/g)]
     .map((match) => `${match[1]} ${match[2]}`)
     .filter((command) => command !== "aidlc-orchestrate.ts park --person-asked");
 }

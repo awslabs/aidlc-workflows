@@ -14,6 +14,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import { AIDLC_SRC, cleanupTestProject, createTestProject, REPO_ROOT } from "../harness/fixtures.ts";
 
 const projects: string[] = [];
@@ -83,7 +84,7 @@ describe("no shipped file asks for or pre-approves date -u", () => {
       "aidlc-common/protocols/stage-protocol-learnings.md",
       "aidlc-common/stages/initialization/state-init.md",
     ]) {
-      expect(readFileSync(join(AIDLC_SRC, rel), "utf-8"), rel).toContain("bun .claude/tools/aidlc.ts engine now");
+      expect(readFileSync(join(AIDLC_SRC, rel), "utf-8"), rel).toContain(withCopyLaunchOptions("bun .claude/tools/aidlc.ts engine now"));
     }
   });
 
@@ -113,7 +114,7 @@ describe("no shipped file asks for or pre-approves date -u", () => {
   test("a Kiro IDE reviewer may run it on both channels", () => {
     for (const agent of ["aidlc-product-lead-agent", "aidlc-architecture-reviewer-agent"]) {
       const copy = readFileSync(join(REPO_ROOT, "dist", "kiro-ide", ".kiro", "agents", `${agent}.md`), "utf-8");
-      expect(copy, agent).toContain('        - "bun .kiro/tools/aidlc.ts engine now"');
+      expect(copy, agent).toContain(`        - "${withCopyLaunchOptions("bun .kiro/tools/aidlc.ts engine now")}"`);
       const native = readFileSync(join(REPO_ROOT, "dist-release", "kiro-ide", ".kiro", "agents", `${agent}.md`), "utf-8");
       expect(native, agent).toContain('        - "aidlc engine now"');
     }

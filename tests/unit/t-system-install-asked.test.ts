@@ -388,7 +388,7 @@ describe.each(["strict", "relaxed", "off", "locked"] as const)("Guard Policy %s,
     joinChat(redone, LATER);
     expect(reply(redone, "Can you redo Code Generation? I'd like the code built again.", LATER).status).toBe(0);
     const step = String(next(redone, ["--stage", "code-generation"]).message ?? "");
-    const jump = /`(bun \.claude\/tools\/aidlc-jump\.ts execute [^`]+)`/.exec(step)?.[1];
+    const jump = /`(bun --config=\.claude\/tools\/aidlc-bunfig\.toml --no-env-file \.claude\/tools\/aidlc-jump\.ts execute [^`]+)`/.exec(step)?.[1];
     expect(jump, step).toBeDefined();
     const ran = runNamed(redone, jump as string, { AIDLC_SESSION_OVERRIDE: LATER });
     expect(ran.status, ran.stdout + ran.stderr).toBe(0);

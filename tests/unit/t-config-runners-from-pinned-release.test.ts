@@ -124,7 +124,13 @@ describe("config writes the runner skills with the release its files come from",
     const { root, harness } = staged(PINNED);
     process.env.T_RUNNER_EXIT = "3";
     const generator = runnerGenerator(harness, true);
-    expect(generator).toEqual({ release: PINNED, commands: [[process.execPath, join(harness, "tools", "aidlc-runner-gen.ts"), "write"], [process.execPath, join(harness, "tools", "aidlc-runner-gen.ts"), "scopes"]] });
+    // Run from source, whose tools folder holds no launch config, the child
+    // Bun gets `--no-env-file` alone.
+    const tool = join(harness, "tools", "aidlc-runner-gen.ts");
+    expect(generator).toEqual({
+      release: PINNED,
+      commands: [[process.execPath, "--no-env-file", tool, "write"], [process.execPath, "--no-env-file", tool, "scopes"]],
+    });
     const failure = pinnedRunnersFailure(root, (generator as { commands: string[][] }).commands);
     expect(failure).toBe("exit 3");
     expect(runnersFallbackLine(PINNED, failure)).toBe(

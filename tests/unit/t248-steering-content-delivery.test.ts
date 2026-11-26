@@ -10,6 +10,7 @@
 // Optional persona/knowledge remains path-loaded with actionable warnings.
 
 import { readConductorSurface } from "../harness/conductor-skill.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import {
   NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
   NATIVE_STARTUP_TIMEOUT_MS,
@@ -68,7 +69,7 @@ const BUN = process.execPath;
 const MAX_DIRECTIVE_BYTES = 28 * 1024;
 const RECEIPT_PATTERN = /^[A-Za-z0-9_-]{8}$/;
 const CONTINUE_COMMAND_PREFIX =
-  "bun .claude/tools/aidlc-orchestrate.ts continue ";
+  withCopyLaunchOptions("bun .claude/tools/aidlc-orchestrate.ts continue ");
 // The steering payload stored on a marker. `n` (next_stage) and `q` (unit_gate)
 // are dropped by JSON when undefined, so only the rest are always present.
 // `o` carries the open-gate re-entry flag (gate_only) as a boolean, and `t`

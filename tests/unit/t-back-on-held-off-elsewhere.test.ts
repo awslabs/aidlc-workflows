@@ -89,9 +89,10 @@ function workspace(): {
     typed: (line) => {
       const step = runOrchestrateNext(join(proj, ".claude", "tools", "aidlc-orchestrate.ts"), proj,
         line.replace(/^\/aidlc\s+/, "").split(" "), { cwd: proj, env });
-      const named = /Run `bun \.claude\/tools\/(aidlc[a-z-]*\.ts) ([^`]+)`/.exec(String(step.directive?.message));
+      const named = /Run `bun (--config=\.claude\/tools\/aidlc-bunfig\.toml) (--no-env-file) \.claude\/tools\/(aidlc[a-z-]*\.ts) ([^`]+)`/
+        .exec(String(step.directive?.message));
       expect(named, step.out.slice(0, 400)).not.toBeNull();
-      const r = Bun.spawnSync([process.execPath, join(proj, ".claude", "tools", named![1]), ...named![2].split(" ")], {
+      const r = Bun.spawnSync([process.execPath, named![1], named![2], join(proj, ".claude", "tools", named![3]), ...named![4].split(" ")], {
         cwd: proj, env, timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       });
       expect(r.exitCode, `${r.stdout}${r.stderr}`).toBe(0);

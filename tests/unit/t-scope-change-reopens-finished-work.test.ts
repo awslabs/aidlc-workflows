@@ -155,7 +155,7 @@ function finishedBugfix(): string {
 /** Run the scope change a print names, as the agent would: the dispatcher line, through the dist tool. */
 function actOnScopeChangePrint(proj: string, directive: Directive): string {
   expect(directive.kind, JSON.stringify(directive)).toBe("print");
-  const m = /`bun \.claude\/tools\/aidlc\.ts engine scope change --scope ([a-z-]+)`/.exec(directive.message ?? "");
+  const m = /`bun --config=\.claude\/tools\/aidlc-bunfig\.toml --no-env-file \.claude\/tools\/aidlc\.ts engine scope change --scope ([a-z-]+)`/.exec(directive.message ?? "");
   expect(m, directive.message).not.toBeNull();
   const res = run(UTILITY, proj, ["scope-change", "--scope", m![1]]);
   expect(res.rc, res.out).toBe(0);
@@ -496,7 +496,7 @@ describe("t-scope-change-reopens-finished-work: a scope switch over running work
         calls++;
         while (step.kind === "print" && calls < 4) {
           prints.push(step.message ?? "");
-          const named = /`bun \.claude\/tools\/aidlc-orchestrate\.ts report --stage ([a-z0-9-]+) --result skipped --reason '([^']*)'`/
+          const named = /`bun --config=\.claude\/tools\/aidlc-bunfig\.toml --no-env-file \.claude\/tools\/aidlc-orchestrate\.ts report --stage ([a-z0-9-]+) --result skipped --reason '([^']*)'`/
             .exec(step.message ?? "");
           expect(named, step.message).not.toBeNull();
           const skipped = report(proj, named![1], ["--result", "skipped", "--reason", named![2]]);

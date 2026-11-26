@@ -231,9 +231,10 @@ describe("structured guard recovery operations", () => {
       else process.env.AIDLC_COMPILED_EXECUTABLE = previous;
     }
     // Source mode names Bun by absolute path, so the child resolves even when
-    // Bun's install directory is absent from the hook's PATH.
+    // Bun's install directory is absent from the hook's PATH. The source tools
+    // folder holds no launch config, so the child gets `--no-env-file` alone.
     expect(aidlcEngineCommand("runtime", ["compile"], "/source/aidlc-runtime.ts", null))
-      .toEqual([process.execPath, "/source/aidlc-runtime.ts", "compile"]);
+      .toEqual([process.execPath, "--no-env-file", "/source/aidlc-runtime.ts", "compile"]);
   });
 
   test("explicit source and native children ignore the compiled executable environment override", () => {
@@ -242,7 +243,7 @@ describe("structured guard recovery operations", () => {
     try {
       const args = ["approve", "code-generation", "--project-dir", "/workspace with spaces"];
       expect(aidlcEngineCommand("state", args, "/source/aidlc-state.ts", null))
-        .toEqual([process.execPath, "/source/aidlc-state.ts", ...args]);
+        .toEqual([process.execPath, "--no-env-file", "/source/aidlc-state.ts", ...args]);
       expect(aidlcEngineCommand("state", args, "/source/aidlc-state.ts", "/native install/aidlc"))
         .toEqual(["/native install/aidlc", "engine", "state", ...args]);
     } finally {

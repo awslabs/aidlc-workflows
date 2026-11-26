@@ -16,6 +16,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { AIDLC_VERSION } from "../../core/tools/aidlc-version.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import { type ReleaseServerFault, serveReleaseFixture, writeReleaseFixture } from "../harness/release-fixture.ts";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 
@@ -278,7 +279,7 @@ describe("a copied project's refresh from a newer release runs that release's ow
     expect(result.out).toContain("to take the shipped version over it, run it again with --force.");
     expect(result.out).not.toContain(basename(dirname(runtime)));
     for (const line of result.out.split(/\r?\n/).filter((item) => item.includes("aidlc.ts"))) {
-      expect(line).toContain("bun .codex/tools/aidlc.ts");
+      expect(line).toContain(withCopyLaunchOptions("bun .codex/tools/aidlc.ts"));
     }
   });
 
@@ -289,7 +290,7 @@ describe("a copied project's refresh from a newer release runs that release's ow
     const result = own(project, ["config", "--from", runtime, "--harness", "claude"], { AIDLC_TEST_CONFIG_TTY: "1" });
     expect(result.out).toContain(ranLine(NEWER));
     expect(existsSync(join(project, ".claude")), result.out).toBe(false);
-    expect(result.out).toContain("Run bun .codex/tools/aidlc.ts config --from");
+    expect(result.out).toContain(`Run ${withCopyLaunchOptions("bun .codex/tools/aidlc.ts config --from")}`);
     expect(result.out).not.toContain(".claude/tools/aidlc.ts");
   });
 
@@ -353,7 +354,7 @@ describe("a copied project's refresh from a newer release runs that release's ow
       expect(out).toContain(ranLine(NEWER));
       expect(JSON.parse(readFileSync(join(project, ".codex", "tools", "data", "aidlc-stamp.json"), "utf-8")).frameworkVersion)
         .toBe(NEWER);
-      expect(out).toContain("Run bun .codex/tools/aidlc.ts config again where you can answer.");
+      expect(out).toContain(`Run ${withCopyLaunchOptions("bun .codex/tools/aidlc.ts config")} again where you can answer.`);
       expect(status, out).toBe(2);
     } finally {
       release.stop();

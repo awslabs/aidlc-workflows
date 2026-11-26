@@ -8,6 +8,7 @@
 // answer. Driven end to end over the real hook, the real engine and the real
 // setter, with the session the chat runs under.
 import { readConductorSurface } from "../harness/conductor-skill.ts";
+import { COPY_LAUNCH_CONFIG } from "../harness/copy-launch.ts";
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -474,13 +475,16 @@ describe("the chain the agent follows ends, within three steps, and applies a se
    * The agent runs the command a step names and prints its output as it came.
    * The command names the install's own tool path (`.claude/tools/...`), which
    * a person's project has and a fixture does not: run the same tool out of the
-   * build under test, with the same arguments.
+   * build under test, with the same arguments, and the same for the Bun config
+   * a copy launch names.
    */
   function runAsTheAgent(proj: string, command: string): { status: number; out: string } {
     const argv = command.split(/\s+/).map((token) =>
       /^\.[\\/]?[a-z-]*[\\/]tools[\\/]aidlc[a-z-]*\.ts$/.test(token)
         ? join(AIDLC_SRC, "tools", token.split(/[\\/]/).pop() as string)
-        : token);
+        : /^--config=\.[\\/]?[a-z-]*[\\/]tools[\\/]aidlc-bunfig\.toml$/.test(token)
+          ? `--config=${join(AIDLC_SRC, "tools", COPY_LAUNCH_CONFIG)}`
+          : token);
     const result = spawnSync(argv[0] === "bun" ? BUN : argv[0], argv.slice(1), {
       cwd: proj,
       env: { ...process.env, ...CLEAR, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj },

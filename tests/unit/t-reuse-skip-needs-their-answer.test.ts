@@ -16,6 +16,7 @@ import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { cpSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { auditBlockField, parseCheckboxes, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
@@ -152,7 +153,7 @@ for (const tree of TREES) {
       expect(message).toContain(`Show it to them, word for word as it was asked, with its choices, and end your turn: ${JSON.stringify(QUESTION)}`);
       expect(message).toContain('"Reuse existing knowledge base", "Full rescan", "Focused scan"');
       // The skip is the way on only after a keep; a scan answer carries on with the scan.
-      expect(message).toContain(`if they chose to keep the existing knowledge base, run the same skip report again: \`bun ${tree.tools}/tools/aidlc-orchestrate.ts report --stage ${STAGE} --result skipped`);
+      expect(message).toContain(`if they chose to keep the existing knowledge base, run the same skip report again: \`${withCopyLaunchOptions(`bun ${tree.tools}/tools/aidlc-orchestrate.ts report --stage ${STAGE} --result skipped`)}`);
       expect(message).toContain(`if they chose a scan, carry on with "${STAGE}"'s scan from where you asked.`);
       expect(message).not.toContain("again, word for word");
       nothingSkipped(proj);
@@ -172,8 +173,8 @@ for (const tree of TREES) {
       const refused = skip(tree, proj);
       const step = lastJson(refused.stdout);
       expect(step.kind).toBe("error");
-      expect(String(step.message)).toContain(`\`bun ${tree.tools}/tools/aidlc-log.ts decision\``);
-      expect(String(step.message)).toContain(`\`bun ${tree.tools}/tools/aidlc-log.ts answer\``);
+      expect(String(step.message)).toContain(`\`${withCopyLaunchOptions(`bun ${tree.tools}/tools/aidlc-log.ts decision`)}\``);
+      expect(String(step.message)).toContain(`\`${withCopyLaunchOptions(`bun ${tree.tools}/tools/aidlc-log.ts answer`)}\``);
       expect(String(step.message)).toContain(`if they chose a scan, carry on with "${STAGE}"'s scan from where you asked.`);
       nothingSkipped(proj);
     });

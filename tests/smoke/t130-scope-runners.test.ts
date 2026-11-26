@@ -64,6 +64,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import { AIDLC_SRC, REPO_ROOT } from "../harness/fixtures.ts";
 import {
   defaultScopeBatch,
@@ -151,12 +152,15 @@ describe("t130 scope-runners — structural conformance of the shipped first-bat
   // On Claude Code the first command carries none of the person's words; every other tree's still forwards them.
   test("aidlc-bugfix: shell drives the engine with --scope bugfix [.sh test f]", () => {
     const body = readFileSync(runnerPath("bugfix"), "utf-8");
-    expect(body).toContain("`directive = bun .claude/tools/aidlc-orchestrate.ts next --entry --scope bugfix`, whatever they typed");
+    const entry = withCopyLaunchOptions("bun .claude/tools/aidlc-orchestrate.ts next --entry --scope bugfix");
+    expect(body).toContain(`\`directive = ${entry}\`, whatever they typed`);
     expect(body).not.toContain("$ARGUMENTS");
     const rendered = renderRunner("bugfix", DISCOVERED.bugfix?.description ?? "");
-    expect(rendered).toContain("`directive = bun .claude/tools/aidlc-orchestrate.ts next --entry --scope bugfix`, whatever they typed");
+    expect(rendered).toContain(`\`directive = ${entry}\`, whatever they typed`);
     const codex = readFileSync(join(REPO_ROOT, "dist", "codex", ".agents", "skills", "aidlc-bugfix", "SKILL.md"), "utf-8");
-    expect(codex).toContain("`directive = bun .codex/tools/aidlc-orchestrate.ts next --scope bugfix $ARGUMENTS`");
+    expect(codex).toContain(
+      `\`directive = ${withCopyLaunchOptions("bun .codex/tools/aidlc-orchestrate.ts next --scope bugfix $ARGUMENTS")}\``,
+    );
   });
 
   // ===========================================================================
@@ -211,18 +215,18 @@ describe("t130 scope-runners — structural conformance of the shipped first-bat
       for (const body of [readFileSync(runnerPath(scope), "utf-8"), rendered]) {
         const collapsed = body.replace(/\s+/g, " ");
         expect(collapsed).toContain(
-          "Every pass after step 1 runs bare `bun .claude/tools/aidlc-orchestrate.ts next`, with no `--scope` and nothing else after it.",
+          `Every pass after step 1 runs bare \`${withCopyLaunchOptions("bun .claude/tools/aidlc-orchestrate.ts next")}\`, with no \`--scope\` and nothing else after it.`,
         );
         expect(collapsed).not.toContain("Repeat from step 1");
         expect(collapsed).toContain("A `done` that carries it only recorded a step: run that bare `next` at once");
         expect(collapsed).toContain(
-          "also asked to stop the workflow there for now (not to pause on one decision inside the work), run `bun .claude/tools/aidlc-orchestrate.ts park --person-asked` instead",
+          `also asked to stop the workflow there for now (not to pause on one decision inside the work), run \`${withCopyLaunchOptions("bun .claude/tools/aidlc-orchestrate.ts park --person-asked")}\` instead`,
         );
       }
       // $ARGUMENTS reach only the first next on a tree that forwards them; every later pass is bare.
       const codex = readFileSync(join(REPO_ROOT, "dist", "codex", ".agents", "skills", `aidlc-${scope}`, "SKILL.md"), "utf-8");
       expect(codex.replace(/\s+/g, " ")).toContain(
-        "Pass `$ARGUMENTS` only to the first `next` in step 1: every later pass runs bare `bun .codex/tools/aidlc-orchestrate.ts next`, with no `--scope` and no `$ARGUMENTS`",
+        `Pass \`$ARGUMENTS\` only to the first \`next\` in step 1: every later pass runs bare \`${withCopyLaunchOptions("bun .codex/tools/aidlc-orchestrate.ts next")}\`, with no \`--scope\` and no \`$ARGUMENTS\``,
       );
     });
   }

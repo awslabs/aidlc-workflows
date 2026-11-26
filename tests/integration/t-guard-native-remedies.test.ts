@@ -14,6 +14,7 @@ import {
   remainingOperationTimeoutMs,
   NATIVE_COMPILE_TIMEOUT_MS,
 } from "../harness/test-budget.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import { setDefaultTimeout, afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -533,7 +534,7 @@ describe("source and native guard remedies execute their owning operations", () 
 
       const requested = completeReview(p, target);
       const command = String(requested.recordVerdict);
-      expect(command.startsWith("bun .claude/tools/aidlc-log.ts review "))
+      expect(command.startsWith(withCopyLaunchOptions("bun .claude/tools/aidlc-log.ts review ")))
         .toBe(projection === "source");
       expect(command.startsWith("aidlc engine log review "))
         .toBe(projection === "native");
@@ -735,7 +736,7 @@ describe("source and native guard remedies execute their owning operations", () 
     });
     const output = succeeded(p.exact(command!));
     const jump = returnedJump(json(output));
-    expect(jump).toStartWith("bun .aidlc/tools/aidlc-jump.ts execute ");
+    expect(jump).toStartWith(withCopyLaunchOptions("bun .aidlc/tools/aidlc-jump.ts execute "));
     succeeded(p.copilotAdapter("post-tool", {
       ...input, hook_event_name: "PostToolUse", tool_input: { command },
       tool_result: { result_type: "success", text_result_for_llm: output.stdout.trim() },
