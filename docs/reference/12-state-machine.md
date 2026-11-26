@@ -701,7 +701,10 @@ compares it, or when no listing is on record to tell (a rejection an earlier
 release wrote).
 
 Swarm footprint verification and immutable Source Commit creation apply the
-same boundary. Clean-filter raw-byte replacement is restricted to exact
+same boundary. A file Git ignores that neither the Unit's HEAD nor the commit it
+started from tracks, unless registered in `.aidlc-source-paths.json`, rides no
+Source Commit and is no write the Unit has to claim. Clean-filter raw-byte
+replacement is restricted to exact
 filesystem-included regular paths, so excluded generated or framework files
 cannot re-enter after shaping. In a Bolt worktree the Source Commit keeps the
 base commit's `aidlc.settings.json` and `aidlc.settings.local.json`, so a

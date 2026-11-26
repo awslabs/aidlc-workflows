@@ -172,6 +172,7 @@ import {
   type SourceClaimModel,
   toPosix,
   UNBINDABLE_FINGERPRINT,
+  unclaimableIgnoredSourceKeys,
   validateUnitName,
   verificationCommandDetails,
   verificationCommandRecovery,
@@ -874,8 +875,13 @@ function reviewerReceiptError(
       for (const path of currentListing.keys()) {
         if (!verifiedBaseListing.has(path)) outside.add(path.slice(path.indexOf("\0") + 1));
       }
+      // A file Git ignores, HEAD does not track and no registry names (a test
+      // run's output) rides no Source Commit and is no write a Unit could claim;
+      // whatever the Source Commit does change against the base is still named.
+      const committed = new Set(diff.stdout.split("\0").filter((token, index) => index % 2 === 1 && token.length > 0));
+      const ignored = unclaimableIgnoredSourceKeys(wt, [...outside].filter((path) => !committed.has(path)).map((path) => `\0${path}`), false);
       const outsideClaims = [...outside]
-        .filter((path) => !sourceClaimCovers(`\0${path}`, reviewedClaims));
+        .filter((path) => !ignored.has(`\0${path}`) && !sourceClaimCovers(`\0${path}`, reviewedClaims));
       if (outsideClaims.length > 0 && acceptsChanges) {
         // Under relaxed or off the files stay and merge; they are named once.
         accepted.push({
