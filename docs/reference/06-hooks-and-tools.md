@@ -553,7 +553,9 @@ Either way the hook's environment is the host tool's, never the project's `.env`
 compiled engine is built with Bun's dotenv and bunfig autoload off, and a Bun-run tree
 evaluates `aidlc-runtime-paths.ts` first (every entry imports it before its own body) to drop the AI-DLC and host-tool names those files
 assigned (`AIDLC_*`, `AWS_AIDLC_*`, the `CLAUDE_*`, `KIRO_*`, `CODEX_*`, `CURSOR_*`,
-`COPILOT_*` and `XDG_*` names), in the dispatcher and in each tool it spawns. It drops the same way
+`COPILOT_*` and `XDG_*` names, and `PLUGIN_ROOT`, the name a host gives a hook for its plugin's
+folder, so a project cannot name itself as a plugin for `plugin sync` to compose), in the
+dispatcher and in each tool it spawns. It drops the same way
 the names that tell a program the engine starts what else to run, so a file of the repository's is
 never handed to git, to ssh or to a sensor's compiler: every `GIT_*` name, `SSH_ASKPASS*`, `BUN_*`,
 `NODE_OPTIONS`, `NODE_PATH`, `NPM_CONFIG_*`, `LD_*`, `DYLD_*`, `BASH_ENV`, `EDITOR` and `VISUAL`.

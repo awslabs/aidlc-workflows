@@ -68,15 +68,17 @@ export const BUN_DOTENV_FILES = [
 
 const DOTENV_ASSIGNMENT = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/gm;
 // Names the engine reads as its own, or that the host tools use to tell it
-// where the project, the person's settings or a plugin is; then the names that
-// tell a program the engine starts what else to run: every `GIT_` name (its
+// where the project, the person's settings or a plugin is (a host hands a hook
+// its plugin's folder as CLAUDE_PLUGIN_ROOT or as PLUGIN_ROOT with no prefix,
+// and plugin sync runs the compose script of every folder so named); then the
+// names that tell a program the engine starts what else to run: every `GIT_` name (its
 // configuration, its helpers' folder, its ssh, askpass, diff, editor and pager
 // programs, the repository it reads), ssh's askpass, Bun's and Node's own
 // options and module path, the package registry a `bunx` sensor installs
 // from, the loader's preload and library path, the file a bash script reads
 // before it runs, and the editor git falls back to.
 const DOTENV_GUARDED =
-  /^(?:AIDLC_|AWS_AIDLC_|CLAUDE_|KIRO_|CODEX_|CURSOR_|COPILOT_|XDG_|GIT_|SSH_ASKPASS|BUN_|NPM_CONFIG_|LD_|DYLD_|NODE_(?:OPTIONS|PATH)$|(?:BASH_ENV|EDITOR|VISUAL)$)/i;
+  /^(?:AIDLC_|AWS_AIDLC_|CLAUDE_|KIRO_|CODEX_|CURSOR_|COPILOT_|PLUGIN_ROOT$|XDG_|GIT_|SSH_ASKPASS|BUN_|NPM_CONFIG_|LD_|DYLD_|NODE_(?:OPTIONS|PATH)$|(?:BASH_ENV|EDITOR|VISUAL)$)/i;
 // Declarations only the host makes: kept even when a file names them.
 const DOTENV_HOST_ONLY = /^AIDLC_(?:UNATTENDED$|INTERNAL_)/i;
 
