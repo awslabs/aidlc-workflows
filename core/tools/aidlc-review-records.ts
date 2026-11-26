@@ -458,7 +458,7 @@ export function parseReviewSection(
       cells[index.get(name) ?? -1]?.trim() ?? "";
     const id = value("ID");
     if (!/^R-[0-9]+$/.test(id)) {
-      throw new Error(`${artifact}: invalid finding ID ${JSON.stringify(id)}`);
+      throw new Error(`${artifact}: invalid finding ID ${JSON.stringify(id)}. Use R- followed by digits, for example R-01.`);
     }
     const status = value("Status");
     if (!validReviewFindingStatus(status)) {
