@@ -343,6 +343,44 @@ describe("t203 nested-project detection (bounded recursive fallback)", () => {
     put(terragrunt, ["live", "prod", "terragrunt.hcl"], "include \"root\" {}\n");
     expect(detectWorkspace(terragrunt).projectType).toBe("Brownfield");
   });
+
+  // A project whose code is scripts (an installer, ops tooling, an admin
+  // module) is existing code, named by its language.
+  test("scripts are code: shell and PowerShell -> Brownfield, language named", () => {
+    const sh = tmp();
+    put(sh, ["f2c.sh"], '#!/bin/sh\necho "scale=2; ($1-32)*5/9" | bc\n');
+    put(sh, ["test.sh"], '#!/bin/sh\n[ "$(sh f2c.sh 212)" = "100.00" ]\n');
+    const shScan = detectWorkspace(sh);
+    expect(shScan.projectType).toBe("Brownfield");
+    expect(shScan.languages).toBe("Shell");
+
+    const bashAndZsh = tmp();
+    put(bashAndZsh, ["install.bash"], "#!/usr/bin/env bash\n");
+    put(bashAndZsh, ["prompt.zsh"], "autoload -U colors\n");
+    expect(detectWorkspace(bashAndZsh).languages).toBe("Shell");
+
+    const ps = tmp();
+    put(ps, ["Admin.ps1"], "Write-Host hi\n");
+    put(ps, ["Helpers.psm1"], "function Get-X {}\n");
+    const psScan = detectWorkspace(ps);
+    expect(psScan.projectType).toBe("Brownfield");
+    expect(psScan.languages).toBe("PowerShell");
+
+    const nested = tmp();
+    put(nested, ["ops", "deploy", "deploy.sh"], "#!/bin/sh\n");
+    const nestedScan = detectWorkspace(nested);
+    expect(nestedScan.projectType).toBe("Brownfield");
+    expect(nestedScan.nestedRoot).toBe("ops/deploy");
+  });
+
+  // Hooks in tool folders are setup for the tools, not the project's code.
+  test("a shell hook in a dot-folder alone is not code", () => {
+    const d = tmp();
+    put(d, [".devcontainer", "post-create.sh"], "#!/bin/sh\nnpm i\n");
+    put(d, [".husky", "pre-commit.sh"], "#!/bin/sh\nnpm test\n");
+    put(d, ["README.md"], "# new\n");
+    expect(detectWorkspace(d).projectType).toBe("Greenfield");
+  });
 });
 
 // intent-create writes state into the created intent's per-intent record dir.
