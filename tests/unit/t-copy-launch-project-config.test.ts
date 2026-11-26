@@ -57,7 +57,7 @@ function sources(dir: string): string[] {
 
 // A name a launch uses for a value, read as the value its function (or file)
 // declares for it: `const command = executable ?? process.execPath`.
-function valueOf(node: ts.Expression): ts.Expression {
+function declaredValue(node: ts.Expression): ts.Expression {
   if (!ts.isIdentifier(node)) return node;
   let scope: ts.Node | undefined = node.parent;
   while (scope && !ts.isFunctionLike(scope) && !ts.isSourceFile(scope)) scope = scope.parent;
@@ -77,7 +77,7 @@ function valueOf(node: ts.Expression): ts.Expression {
 function isRunningBun(node: ts.Node): boolean {
   if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken) return isRunningBun(node.right);
   if (ts.isIdentifier(node) && node.text !== "execPath") {
-    const value = valueOf(node);
+    const value = declaredValue(node);
     return value !== node && isRunningBun(value);
   }
   if (ts.isPropertyAccessExpression(node)) {
@@ -117,7 +117,7 @@ function launches(file: string): Launch[] {
     found.push({ key: `${where} :: ${enclosingName(at)} :: ${next.getText().replace(/\s+/g, " ")}`, flagged });
   };
   const recordList = (at: ts.Node, list: ts.Expression | undefined) => {
-    const value = list === undefined ? undefined : valueOf(list);
+    const value = list === undefined ? undefined : declaredValue(list);
     if (value !== undefined && ts.isConditionalExpression(value)) {
       for (const branch of [value.whenTrue, value.whenFalse]) recordList(at, branch);
     } else {

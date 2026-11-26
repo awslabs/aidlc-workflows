@@ -766,10 +766,10 @@ export class AgentStandIn {
    * project up.
    */
   private named(dev: string, installed = dev): RegExp {
-    const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
+    const literal = (text: string) => text.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
     const prefix = this.host.launcher === null
-      ? `bun (?:--config=\\S+ --no-env-file )?${escape(`${this.host.dir}/tools/`)}${dev}`
-      : `${escape("aidlc ")}${installed}`;
+      ? `bun (?:--config=\\S+ --no-env-file )?${literal(`${this.host.dir}/tools/`)}${dev}`
+      : `${literal("aidlc ")}${installed}`;
     return new RegExp(`\`(${prefix})\``);
   }
 
