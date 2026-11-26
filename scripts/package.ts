@@ -1123,6 +1123,7 @@ function buildTree(
   refreshGeneratedSkillRegions(outRoot, treeRoot, harnessDir, m);
   // 7. The place an earlier release's refresh writes the tables into the skill.
   keepEarlierReleaseRegions(outRoot, m);
+  if (invoke !== "aidlc") checkCopyLaunches(outRoot, m);
   return [...walk(outRoot)];
 }
 
@@ -1157,15 +1158,20 @@ function rewriteCopyLaunches(outRoot: string, m: HarnessManifest): void {
       .replaceAll(cursorShell, `Shell(bun:${options} ${m.harnessDir}/`);
     if (rewritten !== value) writeFileSync(file, rewritten);
   }
-  for (const file of walk(outRoot)) {
-    if (!/\.(?:md|mdc|json|toml|hook)$/.test(file)) continue;
-    const value = readFileSync(file, "utf-8");
-    launch.lastIndex = 0;
-    if (launch.test(value) || value.includes(cursorShell)) {
-      throw new Error(`[${m.name}] a launch without the copy options survived in ${relative(outRoot, file)}`);
-    }
-  }
   writeFileSync(join(outRoot, m.harnessDir, "tools", BUN_LAUNCH_CONFIG), COPY_LAUNCH_CONFIG_TEXT);
+}
+
+// The finished copy tree, every file but the TypeScript ones, whatever wrote it
+// (the rewrite above, an emit, a generated table): no launch of an AI-DLC script
+// under any harness folder, `bun run` included, without the copy options.
+function checkCopyLaunches(outRoot: string, m: HarnessManifest): void {
+  const plain = /\bbun[ \t]+(?:run[ \t]+)?(?:\\?["'])?(?:\$\{?CLAUDE_PROJECT_DIR\}?\/)?\.[A-Za-z0-9_-]+\/(?:tools|hooks)\/aidlc|Shell\(bun:\.[A-Za-z0-9_-]+\//;
+  for (const file of walk(outRoot)) {
+    if (file.endsWith(".ts")) continue;
+    const value = readFileSync(file, "utf-8");
+    if (value.includes("\0")) continue;
+    if (plain.test(value)) throw new Error(`[${m.name}] a launch without the copy options survived in ${relative(outRoot, file)}`);
+  }
 }
 
 function escapeRegExp(value: string): string {
@@ -1327,7 +1333,7 @@ function expandKiroToolAllows(treeRoot: string, m: HarnessManifest, copy: boolea
   const agentsDir = join(treeRoot, "agents");
   // A copy tree's commands carry its launch options after `bun` (copyLaunchPrefix).
   const options = copy ? `${escapeRegExp(copyLaunchPrefix(m.harnessDir).slice("bun ".length))} ` : "";
-  const bun = (path: string) => `bun (run )?${options}(${path}|"${path}"|'${path}')`;
+  const bun = (path: string) => `bun ${options}(run )?(${path}|"${path}"|'${path}')`;
   let expanded = 0;
   for (const file of walk(agentsDir).filter((path) => path.endsWith(".json"))) {
     const value = JSON.parse(readFileSync(file, "utf-8")) as {

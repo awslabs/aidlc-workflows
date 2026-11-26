@@ -160,11 +160,12 @@ export function copyLaunchPrefix(harnessDir: string): string {
 
 /**
  * `bun` as a command this tree prints launches a copied tool from the project
- * folder: with the two options in a copy tree; plain in the source tree, which
- * has no config file to name.
+ * folder: with the two options in a copy tree (whose launch the packager wrote
+ * into PROJECTED_INVOKE); plain in the source tree, which has no config file to
+ * name, and in the native tree, whose own launch is `aidlc`.
  */
 export function bunLaunchFor(harnessDir: string): string {
-  return PROJECTED_INVOKE.startsWith("{{") ? "bun" : copyLaunchPrefix(harnessDir);
+  return PROJECTED_INVOKE.startsWith("bun ") ? copyLaunchPrefix(harnessDir) : "bun";
 }
 
 /**
@@ -179,10 +180,12 @@ export function bunLaunchAt(toolsDir: string): string {
 }
 
 // The config file a copy launch names: `<a harness folder>/tools/aidlc-bunfig.toml`,
-// relative or under any folder. As one word its folder may hold a space; in
-// text an unquoted path ends at the first space or shell character.
+// relative or under any folder. As one word (a process's own arguments, or a
+// command's words once the shell's quotes are read) its folder may hold any
+// character, a space or an apostrophe included; in text an unquoted path ends
+// at the first space or shell character.
 const LAUNCH_CONFIG = String.raw`\.[A-Za-z0-9_-]+[\\/]tools[\\/]aidlc-bunfig\.toml`;
-const LAUNCH_CONFIG_WORD = new RegExp(String.raw`^--config=(?:[^"';&|]*[\\/])?` + LAUNCH_CONFIG + "$");
+const LAUNCH_CONFIG_WORD = new RegExp(String.raw`^--config=(?:[^\r\n]*[\\/])?` + LAUNCH_CONFIG + "$");
 const LAUNCH_OPTIONS_TEXT = new RegExp(
   String.raw`(\bbun(?:\.exe)?[ \t]+)(?:"--config=(?:[^"\r\n]*[\\/])?` + LAUNCH_CONFIG + String.raw`"|'--config=(?:[^'\r\n]*[\\/])?` +
     LAUNCH_CONFIG + String.raw`'|--config=(?:[^\s"';&|]*[\\/])?` + LAUNCH_CONFIG + String.raw`)[ \t]+--no-env-file[ \t]+`,

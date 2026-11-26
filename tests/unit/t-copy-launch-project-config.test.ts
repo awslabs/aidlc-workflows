@@ -54,9 +54,31 @@ function sources(dir: string): string[] {
   });
 }
 
+// A name a launch uses for a value, read as the value its function (or file)
+// declares for it: `const command = executable ?? process.execPath`.
+function valueOf(node: ts.Expression): ts.Expression {
+  if (!ts.isIdentifier(node)) return node;
+  let scope: ts.Node | undefined = node.parent;
+  while (scope && !ts.isFunctionLike(scope) && !ts.isSourceFile(scope)) scope = scope.parent;
+  let found: ts.Expression | undefined;
+  const look = (at: ts.Node) => {
+    if (found) return;
+    if (ts.isVariableDeclaration(at) && ts.isIdentifier(at.name) && at.name.text === node.text && at.initializer) found = at.initializer;
+    else ts.forEachChild(at, look);
+  };
+  if (scope) look(scope);
+  return found ?? node;
+}
+
 // The running Bun as a launch's program: `process.execPath`, `bunExecutable()`,
-// or an `execPath` parameter that defaults to it.
+// an `execPath` parameter that defaults to it, the Bun after `??` when the
+// compiled engine comes first, or a name holding one of them.
 function isRunningBun(node: ts.Node): boolean {
+  if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken) return isRunningBun(node.right);
+  if (ts.isIdentifier(node) && node.text !== "execPath") {
+    const value = valueOf(node);
+    return value !== node && isRunningBun(value);
+  }
   if (ts.isPropertyAccessExpression(node)) {
     return ts.isIdentifier(node.expression) && node.expression.text === "process" && node.name.text === "execPath";
   }
@@ -76,8 +98,11 @@ function enclosingName(node: ts.Node): string {
 
 type Launch = { key: string; flagged: boolean };
 
-// Each launch and its next word: the second element of `[bun, ...]`, or the
-// first of the argument list in `spawnSync(bun, [...])`.
+// Each launch and its next word: the second element of `[bun, ...]`, the
+// first of the argument list in `spawnSync(bun, [...])` (the list a name holds
+// read as its value, and each branch of `compiled ? [...] : [...]` but the
+// compiled engine's own route), or the first of `args` beside `command: bun`
+// in an object a launch is built from.
 function launches(file: string): Launch[] {
   const text = readFileSync(file, "utf-8");
   const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
@@ -90,6 +115,14 @@ function launches(file: string): Launch[] {
     const where = relative(REPO_ROOT, file).replaceAll("\\", "/");
     found.push({ key: `${where} :: ${enclosingName(at)} :: ${next.getText().replace(/\s+/g, " ")}`, flagged });
   };
+  const recordList = (at: ts.Node, list: ts.Expression | undefined) => {
+    const value = list === undefined ? undefined : valueOf(list);
+    if (value !== undefined && ts.isConditionalExpression(value)) {
+      for (const branch of [value.whenTrue, value.whenFalse]) recordList(at, branch);
+    } else {
+      record(at, value !== undefined && ts.isArrayLiteralExpression(value) ? value.elements[0] : value);
+    }
+  };
   const visit = (node: ts.Node) => {
     if (ts.isArrayLiteralExpression(node) && node.elements.length > 0 && isRunningBun(node.elements[0])) {
       record(node, node.elements[1]);
@@ -97,8 +130,12 @@ function launches(file: string): Launch[] {
       ts.isCallExpression(node) && node.arguments.length > 0 && isRunningBun(node.arguments[0]) &&
       /^(?:spawnSync|spawn|execFileSync|execFile)$/.test(node.expression.getText().split(".").pop() ?? "")
     ) {
-      const args = node.arguments[1];
-      record(node, args && ts.isArrayLiteralExpression(args) ? args.elements[0] : args);
+      recordList(node, node.arguments[1]);
+    } else if (ts.isObjectLiteralExpression(node)) {
+      const field = (name: string) => node.properties.find((property): property is ts.PropertyAssignment =>
+        ts.isPropertyAssignment(property) && property.name.getText() === name)?.initializer;
+      const command = field("command");
+      if (command !== undefined && isRunningBun(command)) recordList(node, field("args"));
     }
     ts.forEachChild(node, visit);
   };
@@ -132,6 +169,9 @@ describe("t-copy-launch-project-config: a copy launch reads the same with its tw
     "bun .claude/tools/aidlc-state.ts approve code-generation",
     "bun .claude/tools/aidlc.ts engine runtime compile",
     "bun .claude/tools/aidlc-jump.ts execute --to requirements-analysis",
+    // An agent that adds `run`, which Kiro CLI's allow entry takes after the two options.
+    "bun run .claude/tools/aidlc.ts engine orchestrate next",
+    "bun run .claude/tools/aidlc-state.ts approve code-generation",
   ];
   const readers: ReadonlyArray<[string, (command: string) => unknown]> = [
     ["isEngineToolCall", (command) => isEngineToolCall("Bash", { command })],
@@ -334,6 +374,18 @@ describe("t-copy-launch-project-config: a copy install's own launches keep the p
     for (const name of ["b.ts", "c.ts", "d.ts"]) writeFileSync(join(project, name), "");
     const [row] = preloadRows(doctorChecks(project, "bun .claude/tools/aidlc.ts doctor"));
     expect(row?.label).toStartWith("Your project's bunfig.toml preloads ./setup.ts, ./b.ts, ./c.ts and 1 more, ");
+  });
+
+  test("doctor, run as printed from a project folder whose name holds an apostrophe or an ampersand, says nothing of it", () => {
+    const { project } = copyProject(undefined, "Kate's R&D; shop");
+    expect(preloadRows(doctorChecks(project, `${aidlcInvocation()} doctor`))).toEqual([]);
+  });
+
+  test("the native tree prints plain bun where a copy tree prints the two options", async () => {
+    const copy = await import(join(REPO_ROOT, "dist", "copilot", ".aidlc", "tools", "aidlc-runtime-paths.ts"));
+    const native = await import(join(REPO_ROOT, "dist-release", "copilot", ".aidlc", "tools", "aidlc-runtime-paths.ts"));
+    expect(copy.bunLaunchFor(".aidlc")).toBe(`bun --config=.aidlc/tools/${COPY_LAUNCH_CONFIG} --no-env-file`);
+    expect(native.bunLaunchFor(".aidlc")).toBe("bun");
   });
 
   test("doctor says nothing of it when every launch has the options, or nothing is preloaded for a script", () => {

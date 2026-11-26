@@ -55,10 +55,10 @@ const HARNESSES = ["kiro"] as const;
 // entries hold that spelling only.
 const COPY_OPTIONS = `--config=.kiro/tools/${COPY_LAUNCH_CONFIG} --no-env-file`;
 
-/** A command in the copy install's spelling: the two options after each `bun`
- *  (or `bun run`) that starts a segment. */
+/** A command in the copy install's spelling: the two options right after each
+ *  `bun` that starts a segment, before a `run` the agent added. */
 function copySpelling(command: string): string {
-  return command.replace(/(^|[;&|\n]\s*)bun (run )?/g, (_m, lead: string, run = "") => `${lead}bun ${run}${COPY_OPTIONS} `);
+  return command.replace(/(^|[;&|\n]\s*)bun /g, (_m, lead: string) => `${lead}bun ${COPY_OPTIONS} `);
 }
 
 // Every read form agents were seen running for "show my settings", "what

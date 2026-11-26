@@ -2405,7 +2405,7 @@ function runStagedTool(
       : args[0] === "scopes"
       ? ["engine", "gen", "runner-scopes", ...args.slice(1)]
       : ["engine", "gen", ...args]
-    : [join(stagedProject, harnessDir, "tools", `aidlc-${tool}.ts`), ...args];
+    : [...bunLaunchFlags(), join(stagedProject, harnessDir, "tools", `aidlc-${tool}.ts`), ...args];
   const result = spawnSync(command, commandArgs, {
     cwd: stagedProject,
     encoding: "utf-8",
@@ -2443,7 +2443,7 @@ function refreshGeneratedTable(
   const command = executable ?? process.execPath;
   const args = executable
     ? ["engine", "gen", verb]
-    : [join(stagedProject, harnessDir, "tools", "aidlc-utility.ts"), verb];
+    : [...bunLaunchFlags(), join(stagedProject, harnessDir, "tools", "aidlc-utility.ts"), verb];
   const result = spawnSync(command, args, {
     cwd: stagedProject,
     encoding: "utf-8",
