@@ -1530,15 +1530,6 @@ export function templateEligibleArtifacts(produces: string[]): string[] {
   );
 }
 
-export function stageDeliverablePaths(paths: readonly string[]): string[] {
-  return paths.filter((path) => {
-    const name = basename(path);
-    return name !== "memory.md" &&
-      !name.endsWith("-questions.md") &&
-      !name.endsWith("-timestamp.md");
-  });
-}
-
 /** Topological sort of the given subset using Kahn's algorithm with
  *  numeric-order tiebreak. Operates on arbitrary subsets: full graph,
  *  scope sub-DAG, or synthetic test fixtures. Edges to nodes outside

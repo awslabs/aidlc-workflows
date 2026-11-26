@@ -77,8 +77,7 @@ const BUN = process.execPath;
 const SENSOR = join(AIDLC_SRC, "tools", "aidlc-sensor-upstream-coverage.ts");
 
 const UNREFERENCED_HINT =
-	"Name each one in a deliverable — its slug as a standalone word, a [[wikilink]] or a backticked filename — " +
-	"or mark its consumes: entry required: false when it did not inform the output.";
+	"Name each one in a deliverable: its slug as a standalone word, a [[wikilink]] or a backticked filename.";
 
 const tempDirs: string[] = [];
 afterAll(() => {
@@ -92,6 +91,7 @@ interface SensorResult {
 	scanned_files: string[];
 	reason?: string;
 	findings_count: number;
+	message?: string;
 }
 
 function makeStageDir(files: Record<string, string>): string {
@@ -578,5 +578,15 @@ describe("t233 one fire over every repository's folder", () => {
 				message: UNREFERENCED_HINT,
 			})}\n`,
 		);
+	});
+});
+
+describe("t233 a failing check says how to cover what it names", () => {
+	test("unreferenced upstream artifacts keep their slugs and gain the way to cover them", () => {
+		const dir = makeStageDir({ "intent-statement.md": "# Intent Statement\n\nProse only.\n" });
+		const result = run(dir, "intent-statement.md", "team-practices:practices-discovery", "intent-statement");
+		expect(result.pass).toBe(false);
+		expect(result.unreferenced).toEqual(["team-practices"]);
+		expect(result.message).toBe(UNREFERENCED_HINT);
 	});
 });

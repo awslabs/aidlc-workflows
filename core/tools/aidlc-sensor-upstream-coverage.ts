@@ -14,8 +14,7 @@ interface Result {
 }
 
 const UNREFERENCED_HINT =
-	"Name each one in a deliverable — its slug as a standalone word, a [[wikilink]] or a backticked filename — " +
-	"or mark its consumes: entry required: false when it did not inform the output.";
+	"Name each one in a deliverable: its slug as a standalone word, a [[wikilink]] or a backticked filename.";
 
 interface Consume {
 	slug: string;

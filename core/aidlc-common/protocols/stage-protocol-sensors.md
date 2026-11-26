@@ -26,12 +26,6 @@ opens the gate when no review took them first, comes back as a `print` that
 names what a check found and the same command. That step is yours: fix what
 is yours in those documents, then run the command again. It goes on without
 checking again; the gate checks again and says what is left.
-
-The stage's questions file (`*-questions.md`), its `*-timestamp.md` run record
-and `memory.md` are scaffolding, not deliverables: no `fire_on: gate` check
-fires on them, so a stage that has written only its questions file gets no
-verdict about outputs it has not written yet.
-
 Advisory outcomes emit their audit rows but do not stop the
 gate; a gate the engine approves itself under Construction autonomy runs only
 its blocking sensors, since advisory evidence has no reader there. A blocking gate sensor requires a verified pass: findings, unavailable

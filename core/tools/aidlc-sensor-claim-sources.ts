@@ -37,15 +37,10 @@ interface Result {
 	message?: string;
 }
 
-const SOURCE_TAG_CHOICES = "[desc], [Q<n>], [scope], [memory:<id>] or [assumption]";
-
 function fixHints(findings: readonly string[]): string | undefined {
 	const hints: string[] = [];
 	if (findings.some((finding) => finding.includes("assumption/open question lacks [assumption]"))) {
 		hints.push("Prefix each assumption or open question with [assumption].");
-	}
-	if (findings.some((finding) => finding.includes("claim block has no source tag"))) {
-		hints.push(`Add ${SOURCE_TAG_CHOICES} to each untagged claim block.`);
 	}
 	return hints.length === 0 ? undefined : hints.join(" ");
 }
