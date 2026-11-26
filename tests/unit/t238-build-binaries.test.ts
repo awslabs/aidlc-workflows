@@ -381,6 +381,8 @@ describe("t238 build-binaries release builder", () => {
       const registry = join(pluginFixture, "installed_plugins.json");
       const settings = join(pluginFixture, "settings.json");
       writeFileSync(join(pluginFixture, "package.json"), "{}\n");
+      // Plugin sync runs only in an AI-DLC project; a spaces folder is the least that makes one.
+      mkdirSync(join(pluginFixture, "aidlc", "spaces"), { recursive: true });
       writeFileSync(registry, '{"version":2,"plugins":{}}\n');
       writeFileSync(settings, '{"enabledPlugins":{}}\n');
       const pluginSync = spawnSync(native.artifact, ["engine", "plugin", "sync"], {
