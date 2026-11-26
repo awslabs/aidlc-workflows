@@ -173,7 +173,10 @@ A file in `documents/` that is not in the knowledge base yet, or is in it with
 no text it can read (a type it has no reader for, such as an old `.xls` or a slide
 deck, or a scanned page), is named by AI-DLC in one line when work starts
 or goes on, with what to do for each kind: add it with `sync`, or save a text
-copy (`.md`, `.txt` or `.csv`) beside it with the same name, then `sync`. Each
+copy (`.md`, `.txt` or `.csv`) beside it with the same name, then `sync`. Text
+is read as UTF-8 only: a `.txt` or `.csv` in another encoding (Excel's plain
+"CSV", an "ANSI" or "Unicode" Notepad file) is named as not UTF-8, and is read
+once you save it again as UTF-8 (from Excel, "CSV UTF-8") and `sync`. Each
 file is named once in a piece of work, and the work goes on: carrying on
 without it is your call. `aidlc doctor` lists the same files each time you run
 it, as a warning.
