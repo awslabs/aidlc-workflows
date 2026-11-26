@@ -91,6 +91,7 @@ import {
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { guardPreflight } from "../../dist/claude/.claude/tools/aidlc-state.ts";
 import { broughtFilesChanged } from "../../dist/claude/.claude/tools/aidlc-brought-files.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import {
   fixtureIntentId8,
   AIDLC_SRC,
@@ -379,7 +380,7 @@ function verdictRefusal(record: () => void): string {
 
 const SOURCE_MOVED_REFUSAL =
   'Refusing REVIEW_COMPLETED for "code-generation": workspace source changed after REVIEW_REQUESTED iteration 1. ' +
-  `Request it again so the reviewer reviews what is there now: \`bun .claude/tools/aidlc-log.ts review --stage code-generation --reviewer ${REVIEWER}`;
+  `Request it again so the reviewer reviews what is there now: \`${withCopyLaunchOptions("bun .claude/tools/aidlc-log.ts")} review --stage code-generation --reviewer ${REVIEWER}`;
 
 function reviewRows(proj: string, event: "REVIEW_REQUESTED" | "REVIEW_COMPLETED"): string[] {
   return readAllAuditShards(proj).replace(/\r\n/g, "\n").split(/\n---\n/)
