@@ -1192,15 +1192,16 @@ Refresh preserves:
   time it starts on its 3.0 engine. When the release changes what such a file
   allows (it drops an allow entry or adds a deny entry the file Kiro upgraded
   from had), the refresh puts the release's version back by itself, provided
-  Kiro upgrades it again by itself at its next 3.0 start (its auto-upgrade is
-  on: `chat.enableAutoAgentUpgrade` is true in your own Kiro settings, as
-  **Enable auto-upgrade** at Kiro's first 3.0 start saves it), that file is
-  the one AI-DLC wrote there, and nobody changed Kiro's copy since Kiro wrote it
-  (the `kiroUpgrade` stamp Kiro writes into the file still matches it; for a
-  copy Kiro did not stamp, every field but `tools`, `hooks` and `permissions`
-  is still the file's own); otherwise it keeps Kiro's copy and says, in one line,
-  that the file still allows what an older release allowed and that `--force`
-  takes the release's version. When the release no longer ships such a file,
+  `chat.enableAutoAgentUpgrade` is not `false` in your own Kiro settings (from
+  Kiro CLI 2.37 Kiro then upgrades it again by itself at its next 3.0 start; an
+  older Kiro CLI asks first), that file is the one AI-DLC wrote there, and
+  nobody changed Kiro's copy since Kiro wrote it (the `kiroUpgrade` stamp Kiro
+  writes into the file still matches it; a copy Kiro did not stamp goes back
+  only when the setting is `true` and every field but `tools`, `hooks` and
+  `permissions` is still the file's own); otherwise it keeps Kiro's copy and
+  says, in one line, that the file still allows what an older release allowed
+  and that `--force` takes the release's version. When the release no longer
+  ships such a file,
   the file Kiro upgraded from is the one AI-DLC wrote there and its stamp still
   matches, the refresh removes it like any file the release no longer ships,
   keeps Kiro's backups of it, and says so in one line

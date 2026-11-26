@@ -19,7 +19,10 @@
 // upgrade of the file AI-DLC wrote there. Measured on Kiro CLI 2.29.0: with
 // `chat.enableAutoAgentUpgrade` true Kiro upgrades it again at its next 3.0
 // start without a question (the new backup kept as `.json.bak.1`); unset, Kiro
-// asks first; false, Kiro runs its default agent in its place.
+// asks first; false, Kiro runs its default agent in its place. From Kiro CLI
+// 2.37 a setting that is not set is on (Kiro's changelog); Kiro CLI 3.6.1, with
+// it not set, upgraded the files at its start and upgraded a file put back
+// again, and stamps revision 3 with the same two hashes as revision 2.
 // An upgrade Kiro did not stamp (Kiro CLI 2.27.1) is read by its kept fields.
 // Switching such a project to the Kiro row (`--harness kiro`), which ships
 // no agent JSON, removes each stamped, untouched upgrade with the rest of the
@@ -80,24 +83,25 @@ function configured(): string {
 const agentJsons = (project: string): string[] =>
   readdirSync(join(project, AGENTS)).filter((name) => name.endsWith(".json")).sort().map((name) => `${AGENTS}/${name}`);
 
-// Kiro's `kiroUpgrade` stamp on an upgraded agent (the captured pairs check
-// kiroUpgradeStamp against Kiro's own output).
-function stamped(agent: Record<string, unknown>): Record<string, unknown> {
+// Kiro's `kiroUpgrade` stamp on an upgraded agent, at the revision Kiro wrote
+// (the captured pairs check kiroUpgradeStamp against Kiro's own output).
+function stamped(agent: Record<string, unknown>, revision = 2): Record<string, unknown> {
   const { kiroUpgrade: _, ...fields } = agent;
-  return { ...fields, kiroUpgrade: kiroUpgradeStamp(fields) };
+  return { ...fields, kiroUpgrade: { ...kiroUpgradeStamp(fields), revision } };
 }
 const writeAgent = (file: string, agent: unknown): void => writeFileSync(file, `${JSON.stringify(agent, null, 2)}\n`);
 
 // What Kiro's upgrade leaves, in the measured shape: the file AI-DLC wrote as
 // .bak, the agent rewritten with Kiro's tool names, a permissions block and,
-// from Kiro CLI 2.34.2 on, Kiro's stamp.
-function kiroUpgrade(project: string, rel: string, stamp = true): void {
+// from Kiro CLI 2.34.2 on, Kiro's stamp (revision 3 on Kiro CLI 3.6.1; null
+// for none).
+function kiroUpgrade(project: string, rel: string, revision: number | null = 2): void {
   const file = join(project, rel);
   copyFileSync(file, `${file}.bak`);
   const agent = JSON.parse(readFileSync(file, "utf-8"));
   agent.tools = ["read", "shell", "write"];
   agent.permissions = { rules: [{ capability: "shell", effect: "allow", match: ["bun *.kiro/tools/aidlc.ts* engine *"] }] };
-  writeAgent(file, stamp ? stamped(agent) : agent);
+  writeAgent(file, revision === null ? agent : stamped(agent, revision));
 }
 
 // A persona an earlier release shipped, recorded as AI-DLC's: a refresh
@@ -218,25 +222,35 @@ describe("a refresh keeps the agent files Kiro upgraded for its 3.0 engine", () 
 
 describe("a refresh replaces an agent file Kiro upgraded when this release changes what it allows", () => {
   test("the narrowed file gets this release's version like any updated file, and the record follows it", () => {
-    narrowedRefresh(true);
+    for (const revision of [2, 3]) narrowedRefresh(revision, true);
   });
 
   test("a narrowed file Kiro upgraded without its stamp gets this release's version when its kept fields are unchanged", () => {
-    narrowedRefresh(false);
+    narrowedRefresh(null, true);
   });
 
-  function narrowedRefresh(stamp: boolean): void {
+  test("with Kiro's auto-upgrade setting not set, which Kiro CLI 2.37 and later read as on, the narrowed file gets this release's version", () => {
+    for (const revision of [3, 2]) narrowedRefresh(revision, undefined);
+    // Kiro's own settings file without the key.
+    narrowedRefresh(3, "other settings");
+  });
+
+  function narrowedRefresh(revision: number | null, setting: boolean | undefined | "other settings"): void {
     const project = configured();
     const shipped = olderAgent(project, DEVELOPER, allowedMore);
     const jsons = agentJsons(project);
-    for (const rel of jsons) kiroUpgrade(project, rel, stamp);
-    autoUpgrade(project, true);
+    for (const rel of jsons) kiroUpgrade(project, rel, revision);
+    if (typeof setting === "boolean") autoUpgrade(project, setting);
+    if (setting === "other settings") {
+      mkdirSync(join(kiroHome(project), "settings"), { recursive: true });
+      writeFileSync(join(kiroHome(project), "settings", "cli.json"), `${JSON.stringify({ "chat.defaultAgent": "aidlc" }, null, 2)}\n`);
+    }
     const others = jsons.filter((rel) => rel !== DEVELOPER);
     const upgraded = snapshot(project, others);
 
     const refresh = config(project, ["--yes"]);
     expect(refresh.status, refresh.out).toBe(0);
-    expect(readFileSync(join(project, DEVELOPER), "utf-8"), `stamp ${stamp}`).toBe(shipped);
+    expect(readFileSync(join(project, DEVELOPER), "utf-8"), `revision ${revision}, setting ${setting}`).toBe(shipped);
     expect(recorded(project, DEVELOPER)).toBe(sha256Bytes(shipped));
     expect(snapshot(project, others)).toEqual(upgraded);
     expect(refresh.out).not.toContain("still allow");
@@ -272,11 +286,12 @@ describe("a refresh replaces an agent file Kiro upgraded when this release chang
   });
 
   test("a narrowed file the person changed, or one AI-DLC cannot prove it wrote, is kept and one line says what that leaves", () => {
-    for (const how of ["changed", "changed what Kiro wrote", "unproved"]) {
+    const cases = [[2, true], [3, true], [3, undefined]] as const;
+    for (const [revision, setting] of cases) for (const how of ["changed", "changed what Kiro wrote", "unproved"]) {
       const project = configured();
       olderAgent(project, DEVELOPER, allowedMore);
-      kiroUpgrade(project, DEVELOPER);
-      autoUpgrade(project, true);
+      kiroUpgrade(project, DEVELOPER, revision);
+      if (setting !== undefined) autoUpgrade(project, setting);
       const file = join(project, DEVELOPER);
       if (how === "changed") {
         const agent = JSON.parse(readFileSync(file, "utf-8"));
@@ -294,24 +309,33 @@ describe("a refresh replaces an agent file Kiro upgraded when this release chang
       const before = readFileSync(file, "utf-8");
 
       const refresh = config(project, ["--yes"]);
-      expect(refresh.status, `${how}: ${refresh.out}`).toBe(0);
-      expect(readFileSync(file, "utf-8"), how).toBe(before);
-      expect(refresh.out, how).toMatch(KEPT_CHANGED);
+      const label = `${how}, revision ${revision}, setting ${setting}`;
+      expect(refresh.status, `${label}: ${refresh.out}`).toBe(0);
+      expect(readFileSync(file, "utf-8"), label).toBe(before);
+      expect(refresh.out, label).toMatch(KEPT_CHANGED);
     }
   });
 
-  test("a narrowed file Kiro would not upgrade again by itself is kept, and one line says what that leaves", () => {
-    for (const setting of [undefined, false]) {
+  // Off, or a settings file that does not parse; and a copy Kiro did not stamp, whose
+  // fields Kiro wrote nothing proves unchanged, unless the setting is true.
+  test("a narrowed file Kiro would not upgrade again by itself, or one Kiro did not stamp with the setting not set, is kept, and one line says what that leaves", () => {
+    const cases = [[2, false], [3, false], [3, "unreadable"], [null, undefined]] as const;
+    for (const [revision, setting] of cases) {
       const project = configured();
       olderAgent(project, DEVELOPER, allowedMore);
-      kiroUpgrade(project, DEVELOPER);
-      if (setting !== undefined) autoUpgrade(project, setting);
+      kiroUpgrade(project, DEVELOPER, revision);
+      if (typeof setting === "boolean") autoUpgrade(project, setting);
+      if (setting === "unreadable") {
+        mkdirSync(join(kiroHome(project), "settings"), { recursive: true });
+        writeFileSync(join(kiroHome(project), "settings", "cli.json"), "{\n");
+      }
       const before = readFileSync(join(project, DEVELOPER), "utf-8");
 
       const refresh = config(project, ["--yes"]);
-      expect(refresh.status, `${setting}: ${refresh.out}`).toBe(0);
-      expect(readFileSync(join(project, DEVELOPER), "utf-8"), `${setting}`).toBe(before);
-      expect(refresh.out, `${setting}`).toMatch(KEPT_CHANGED);
+      const label = `revision ${revision}, setting ${setting}`;
+      expect(refresh.status, `${label}: ${refresh.out}`).toBe(0);
+      expect(readFileSync(join(project, DEVELOPER), "utf-8"), label).toBe(before);
+      expect(refresh.out, label).toMatch(KEPT_CHANGED);
     }
   });
 });
@@ -322,13 +346,15 @@ describe("Kiro's stamp tells its untouched upgrade from a file changed since", (
   const CAPTURED = join(REPO_ROOT, "tests", "fixtures", "kiro-agent-upgrade-2.34.2");
   const read = (name: string) => JSON.parse(readFileSync(join(CAPTURED, name), "utf-8"));
 
-  test("Kiro's own upgrade holds in any key order; a change to a field Kiro wrote or kept, or another backup, does not", () => {
+  test("Kiro's own upgrade holds in any key order and at the revision Kiro CLI 3.6.1 writes; a change to a field Kiro wrote or kept, another revision, or another backup, does not", () => {
     for (const agent of ["aidlc-sample-agent", "aidlc-numeric-agent"]) {
       const upgraded = read(`${agent}.json`);
       const backup = read(`${agent}.json.bak`);
       const { kiroUpgrade, ...fields } = upgraded;
       expect(kiroUpgradeStamp(fields), agent).toEqual(kiroUpgrade);
       expect(kiroUpgradeUntouched(upgraded, backup), agent).toBe(true);
+      const revision = (value: unknown) => ({ ...upgraded, kiroUpgrade: { ...upgraded.kiroUpgrade, revision: value } });
+      expect(kiroUpgradeUntouched(revision(3), backup), `${agent} revision 3`).toBe(true);
       const reordered = (value: unknown): unknown =>
         Array.isArray(value)
           ? value.map(reordered)
@@ -341,8 +367,8 @@ describe("Kiro's stamp tells its untouched upgrade from a file changed since", (
       permissions.permissions.rules[0].match.push("npm test");
       const prompt = { ...upgraded, prompt: `${upgraded.prompt} My own line.` };
       const added = { ...upgraded, welcomeMessage: "Hi." };
-      const revision = { ...upgraded, kiroUpgrade: { ...upgraded.kiroUpgrade, revision: 3 } };
-      for (const [how, changed] of Object.entries({ permissions, prompt, added, revision })) {
+      const revisions = { revision1: revision(1), revision4: revision(4), revisionText: revision("3"), noRevision: revision(undefined) };
+      for (const [how, changed] of Object.entries({ permissions, prompt, added, ...revisions })) {
         expect(kiroUpgradeUntouched(changed, backup), `${agent} ${how}`).toBe(false);
       }
       expect(kiroUpgradeUntouched(upgraded, { ...backup, description: "another file" }), `${agent} backup`).toBe(false);
@@ -360,9 +386,13 @@ describe("switching to the Kiro row removes the agent files Kiro upgraded from A
     );
 
   test("an untouched upgrade goes with the rest of the old row's files, and its backups stay", () => {
+    for (const revision of [2, 3]) untouchedSwitch(revision);
+  });
+
+  function untouchedSwitch(revision: number): void {
     const project = configured();
     const jsons = agentJsons(project);
-    for (const rel of jsons) kiroUpgrade(project, rel);
+    for (const rel of jsons) kiroUpgrade(project, rel, revision);
     const backups = snapshot(project, jsons.map((rel) => `${rel}.bak`));
     // An agent file the person made there is theirs, and stays.
     const ownAgent = `${AGENTS}/my-agent.json`;
@@ -370,7 +400,7 @@ describe("switching to the Kiro row removes the agent files Kiro upgraded from A
     backups.set(ownAgent, readFileSync(join(project, ownAgent), "utf-8"));
 
     const preview = config(project, ["--yes", "--dry-run"], "kiro-ide");
-    expect(preview.status, preview.out).toBe(0);
+    expect(preview.status, `revision ${revision}: ${preview.out}`).toBe(0);
     expect(preview.out).toMatch(backupsKept(15, "would remove"));
     expect(manifest(project).distribution).toBe("kiro");
 
@@ -382,13 +412,14 @@ describe("switching to the Kiro row removes the agent files Kiro upgraded from A
     expect(jsons.filter((rel) => existsSync(join(project, rel)))).toEqual([]);
     expect(snapshot(project, [...backups.keys()])).toEqual(backups);
     expect(manifest(project).distribution).toBe("kiro-ide");
-  });
+  }
 
   test("an upgraded file changed since Kiro wrote it, one Kiro did not stamp, or one AI-DLC did not write, still stops the switch", () => {
-    for (const field of ["permissions", "prompt", "no stamp", "another backup"] as const) {
+    const cases = [2, 3].flatMap((revision) => (["permissions", "prompt", "no stamp", "another backup"] as const).map((field) => ({ revision, field })));
+    for (const { revision, field } of cases) {
       const project = configured();
       const jsons = agentJsons(project);
-      for (const rel of jsons) kiroUpgrade(project, rel, rel !== DEVELOPER || field !== "no stamp");
+      for (const rel of jsons) kiroUpgrade(project, rel, rel === DEVELOPER && field === "no stamp" ? null : revision);
       const file = join(project, DEVELOPER);
       const agent = JSON.parse(readFileSync(file, "utf-8"));
       if (field === "permissions") agent.permissions.rules[0].match.push("npm test");
@@ -399,12 +430,12 @@ describe("switching to the Kiro row removes the agent files Kiro upgraded from A
         const own = JSON.parse(readFileSync(`${file}.bak`, "utf-8"));
         own.description = "My own developer agent.";
         writeAgent(`${file}.bak`, own);
-        writeAgent(file, stamped({ ...agent, description: own.description }));
+        writeAgent(file, stamped({ ...agent, description: own.description }, revision));
       }
       const before = snapshot(project, jsons);
 
       const switched = config(project, ["--yes"], "kiro-ide");
-      expect(switched.status, `${field}: ${switched.out}`).toBe(4);
+      expect(switched.status, `${field}, revision ${revision}: ${switched.out}`).toBe(4);
       expect(switched.out).toContain("1 config conflict(s): .kiro/agents/aidlc-developer-agent.json (removed upstream but locally modified)");
       expect(snapshot(project, jsons), field).toEqual(before);
       expect(manifest(project).distribution).toBe("kiro");
@@ -412,6 +443,10 @@ describe("switching to the Kiro row removes the agent files Kiro upgraded from A
   });
 
   test("a refresh that retires one upgraded agent file removes it, keeps the others, and counts only its backups", () => {
+    for (const revision of [2, 3]) retiredRefresh(revision);
+  });
+
+  function retiredRefresh(revision: number): void {
     const project = configured();
     const retired = `${AGENTS}/aidlc-retired-agent.json`;
     const file = join(project, retired);
@@ -420,16 +455,16 @@ describe("switching to the Kiro row removes the agent files Kiro upgraded from A
     baseline.files[retired] = sha256Bytes(readFileSync(file));
     writeFileSync(record(project), `${JSON.stringify(baseline, null, 2)}\n`);
     const jsons = agentJsons(project);
-    for (const rel of jsons) kiroUpgrade(project, rel);
+    for (const rel of jsons) kiroUpgrade(project, rel, revision);
     const kept = jsons.filter((rel) => rel !== retired);
     const before = snapshot(project, kept);
 
     const refresh = config(project, ["--yes"]);
-    expect(refresh.status, refresh.out).toBe(0);
+    expect(refresh.status, `revision ${revision}: ${refresh.out}`).toBe(0);
     expect(existsSync(file)).toBe(false);
     expect(existsSync(`${file}.bak`)).toBe(true);
     expect(snapshot(project, kept)).toEqual(before);
     expect(refresh.out).toMatch(backupsKept(1));
     expect(refresh.out.match(/Kiro's backups of the/g)?.length).toBe(1);
-  });
+  }
 });

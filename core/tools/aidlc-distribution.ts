@@ -1059,7 +1059,8 @@ const kiroFieldsHash = (agent: Record<string, unknown>, keep: (key: string) => b
 
 // Kiro CLI 2.34.2 also stamps its upgrade with `kiroUpgrade`: hashes of
 // `canonical` JSON over the fields it wrote (`fingerprint`) and over the ones
-// it kept (`source`), revision 2. The stamp Kiro writes on `agent`.
+// it kept (`source`), revision 2; Kiro CLI 3.6.1 stamps revision 3 with the
+// same two hashes. The stamp Kiro writes on `agent`, at revision 2.
 export function kiroUpgradeStamp(agent: Record<string, unknown>): { revision: 2; fingerprint: string; source: string } {
   return {
     revision: 2,
@@ -1070,12 +1071,12 @@ export function kiroUpgradeStamp(agent: Record<string, unknown>): { revision: 2;
 
 // Kiro reads a fingerprint that no longer matches as the person's edit and
 // leaves that file alone; this reads either hash the same way. Whether
-// `upgraded` carries Kiro's stamp and is Kiro's upgrade of `backup` with
-// nothing changed since.
+// `upgraded` carries Kiro's stamp, at a revision whose hashes are these, and
+// is Kiro's upgrade of `backup` with nothing changed since.
 export function kiroUpgradeUntouched(upgraded: unknown, backup: unknown): boolean {
   if (!plainObject(upgraded) || !plainObject(backup)) return false;
   const stamp = upgraded.kiroUpgrade;
-  if (!plainObject(stamp) || stamp.revision !== 2) return false;
+  if (!plainObject(stamp) || (stamp.revision !== 2 && stamp.revision !== 3)) return false;
   const own = kiroUpgradeStamp(upgraded);
   return stamp.fingerprint === own.fingerprint && stamp.source === own.source &&
     stamp.source === kiroFieldsHash(backup, (key) => !KIRO_WROTE.has(key));
