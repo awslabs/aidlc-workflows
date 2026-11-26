@@ -2119,9 +2119,10 @@ export function mergePluginRules(
 }
 
 // A sync a host hook runs (a session start) prints to the agent, not the
-// person, so the line waits for the next step the agent speaks from in that
-// chat. At a terminal the person reads it as it prints.
-export function sayRulesPlacement(projectDir: string, lines: readonly string[]): void {
+// person, so its lines (a plugin held, where its rules went) wait for the next
+// step the agent speaks from in that chat. At a terminal the person reads them
+// as they print.
+export function sayAtNextStep(projectDir: string, lines: readonly string[]): void {
   if (lines.length === 0 || process.stdout.isTTY || process.env.AIDLC_PERSON_AT_TERMINAL === "1") return;
   try {
     const session = resolveInvokingSessionId(projectDir);
@@ -3333,7 +3334,7 @@ export async function main(argv: string[]): Promise<void> {
       // A plugin hook names its harness too.
       if (flags["harness-dir"]) pinNamedHarness(projectDir, flags["harness-dir"]);
       const result = await syncPlugins(projectDir, argv);
-      sayRulesPlacement(projectDir, result.rules);
+      sayAtNextStep(projectDir, [...result.newlyHeld.map((record) => record.reason), ...result.rules]);
       const message = result.nothingToSync ? "no installed plugins; nothing to sync" : `plugin sync complete: ${result.synced.length} plugin(s)` +
         (result.pruned.length > 0 ? `; pruned ${result.pruned.length} missing plugin(s)` : "") +
         result.newlyHeld.map((record) => `\n${record.reason}`).join("") +
@@ -3351,7 +3352,7 @@ export async function main(argv: string[]): Promise<void> {
       const line = mergePluginRulesFromRoot(projectDir, runtimeHarnessDir(projectDir), resolve(flags["plugin-root"]));
       if (line !== null) {
         process.stdout.write(`${line}\n`);
-        sayRulesPlacement(projectDir, [line]);
+        sayAtNextStep(projectDir, [line]);
       }
       refreshRulesCopy(projectDir);
       return;

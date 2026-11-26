@@ -765,7 +765,8 @@ Independent authors who never coordinate are kept safe by:
   outside the range, builds on another plugin or lacks a stage the plugin's
   scopes include (`include_stages`, section 7), or whose manifest names two bases or
   cannot be read, is held and never resolved: sync says one line
-  once, writes `tools/data/plugin-held-<key>.json`, composes every other
+  once (from a session start, that line waits for the next step the agent
+  speaks from in that chat, so the person hears it), writes `tools/data/plugin-held-<key>.json`, composes every other
   plugin and exits 0 (`--json` lists `data.held`); `plugin list` and doctor
   show the line until a sync composes the plugin and removes the record. A
   held plugin composed before stays as it was, because plain sync never

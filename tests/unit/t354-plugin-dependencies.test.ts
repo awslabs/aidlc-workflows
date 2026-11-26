@@ -188,7 +188,7 @@ type Ran = { status: number | null; stdout: string; stderr: string };
 function pluginTool(
   target: Project,
   args: string[],
-  options: { hookRoot?: string; hostList?: boolean } = {},
+  options: { hookRoot?: string; hostList?: boolean; env?: Record<string, string> } = {},
 ): Ran {
   const result = spawnSync(process.execPath, [join(target.dir, ".claude", "tools", "aidlc-plugin.ts"), ...args], {
     cwd: target.dir,
@@ -201,6 +201,7 @@ function pluginTool(
       AIDLC_HARNESS_DIR: ".claude",
       AIDLC_HARNESS_NAME: "claude",
       ...(options.hookRoot ? { CLAUDE_PLUGIN_ROOT: options.hookRoot } : {}),
+      ...options.env,
     }),
   });
   return { status: result.status, stdout: String(result.stdout ?? ""), stderr: String(result.stderr ?? "") };
@@ -462,6 +463,28 @@ function doctorChecks(target: Project): Array<{ label: string; fix?: string; pas
     .data.checks;
 }
 
+// What the next step the agent speaks from tells the person, in one chat.
+function personNotices(target: Project, chat: Record<string, string>): string[] {
+  const run = (args: string[]): { kind: string; receipt?: string; change_notices?: string[] } => {
+    const result = spawnSync(
+      process.execPath,
+      [join(target.dir, ".claude", "tools", "aidlc-orchestrate.ts"), ...args, "--project-dir", target.dir],
+      {
+        cwd: target.dir,
+        encoding: "utf-8",
+        timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS),
+        // Unattended: no host runs the hooks here to prove they are on.
+        env: cleanEnv({ CLAUDE_PROJECT_DIR: target.dir, AIDLC_HARNESS_DIR: ".claude", AIDLC_HARNESS_NAME: "claude", AIDLC_UNATTENDED: "1", ...chat }),
+      },
+    );
+    expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+    return JSON.parse(String(result.stdout).trim());
+  };
+  let directive = run(["next", "--scope", "mvp", "--stage", "requirements-analysis"]);
+  for (let hops = 0; directive.kind === "load-steering" && hops < 50; hops++) directive = run(["continue", directive.receipt ?? ""]);
+  return directive.change_notices ?? [];
+}
+
 const heldRecord = (target: Project, key: string): string =>
   join(target.dir, ".claude", "tools", "data", `plugin-held-${key}.json`);
 
@@ -511,6 +534,23 @@ describe("t354 a core range is an engine requirement", () => {
     expect(held.stdout).toContain(
       "alpha is not composed: it needs AI-DLC >=2.0.0 <2.5.0, and this project runs AI-DLC 2.5.0.",
     );
+  });
+
+  test("a hold a session start's sync finds is said to the person at the next step in that chat, once", () => {
+    const target = project({
+      alpha: { root: plugin({ name: "alpha", dependencies: ["core@>=2.6.0"] }) },
+    });
+    setEngineVersion(target, "2.5.0");
+    const chat = { AIDLC_SESSION_OVERRIDE: "4f0c2a8e-1111-4222-8333-944455556666", AIDLC_SESSION_OVERRIDE_SOURCE: "payload" };
+    const ran = pluginTool(target, ["sync"], { env: chat });
+    const line = "alpha is not composed: it needs AI-DLC >=2.6.0, and this project runs AI-DLC 2.5.0. Move the project to an AI-DLC release in that range, or install a version of alpha made for AI-DLC 2.5.0; then alpha composes at the next session start.";
+    expect(ran.status, ran.stdout + ran.stderr).toBe(0);
+    expect(ran.stdout).toContain(line);
+    expect(personNotices(target, chat)).toContain(line);
+    expect(personNotices(target, chat)).not.toContain(line);
+    // A second sync with nothing changed says nothing, so nothing waits.
+    expect(pluginTool(target, ["sync"], { env: chat }).stdout).not.toContain(line);
+    expect(personNotices(target, chat)).not.toContain(line);
   });
 
   test("a re-sync composes the plugin once the engine satisfies the range, and removes the record", () => {

@@ -3226,7 +3226,8 @@ on another plugin, or two bases named), or that needs AI-DLC in a version
 range this project is outside (a `core@<range>` dependency, such as
 `core@>=2.11.4`, checked against the AI-DLC version the project runs), is
 held: sync says why once, in one line
-after the complete line, composes every other plugin and exits 0, and `--json`
+after the complete line (a sync a session start runs keeps that line for the
+next step the agent speaks from in that chat), composes every other plugin and exits 0, and `--json`
 lists it in `data.held`. `aidlc engine plugin list` and doctor keep the line
 until a sync composes it; a held plugin composed before stays as it was. A plugin installed twice (its old `aidlc-<name>` copy beside the rebuilt one) composes from the rebuilt one, and sync prints one line naming the old copy's remove command each time it runs, listed in `--json` as `data.superseded`. On a
 host whose session-start hook names only its own plugin, the hook composes that

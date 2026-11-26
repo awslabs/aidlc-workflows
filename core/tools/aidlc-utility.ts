@@ -547,7 +547,7 @@ import {
   parseRulesLevels,
   pluginRulesRecords,
   refreshRulesCopy,
-  sayRulesPlacement,
+  sayAtNextStep,
   noPluginListLine,
   personaTwinRels,
   projectDiffPlan,
@@ -1840,7 +1840,7 @@ async function handlePluginSync(projectDir: string, pluginRoot: string | undefin
     rulesLines.push(...pluginSyncRules(projectDir, item.root));
   }
   refreshRulesCopy(projectDir);
-  sayRulesPlacement(projectDir, rulesLines);
+  sayAtNextStep(projectDir, rulesLines);
 
   process.stdout.write(`plugin sync complete: ${composePaths.length} plugin(s)\n${rulesLines.map((line) => `${line}\n`).join("")}`);
 }
