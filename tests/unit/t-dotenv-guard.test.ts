@@ -6,7 +6,7 @@
 // reaches a read, in the dispatcher or in the tools it spawns.
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { cpSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -66,6 +66,30 @@ describe("t-dotenv-guard: a project .env never reaches the engine", () => {
     const doc = JSON.parse(shown.stdout ?? "") as { data: { sources: Record<string, string> } };
     expect(doc.data.sources.AWS_AIDLC_DEFAULT_SCOPE, captured).toBe("env");
   });
+
+  // git writes a trace file when GIT_TRACE names one, so the file says whether
+  // a git the engine started was handed the name. `doctor` starts git from the
+  // dispatcher's own tool process, through both node's spawn and Bun's.
+  test("a git the engine starts is never handed a name a project .env assigns", () => {
+    const project = projectWithClaudeTree();
+    const trace = join(project, "git-trace.log");
+    const doctor = (env: NodeJS.ProcessEnv) =>
+      spawnSync(BUN, [dispatcherIn(project), "doctor"], { cwd: project, encoding: "utf-8", env, timeout: 120_000 });
+    const env: NodeJS.ProcessEnv = { ...process.env };
+    for (const name of ["GIT_TRACE", "GIT_EXEC_PATH", "GIT_SSH_COMMAND"]) delete env[name];
+
+    writeFileSync(
+      join(project, ".env"),
+      `GIT_TRACE='${trace}'\nGIT_EXEC_PATH='${join(project, "helpers")}'\nGIT_SSH_COMMAND='${join(project, "ssh.sh")}'\n`,
+    );
+    doctor(env);
+    expect(existsSync(trace)).toBe(false);
+
+    // The same name in the real environment is the person's, and git gets it.
+    writeFileSync(join(project, ".env"), "");
+    doctor({ ...env, GIT_TRACE: trace });
+    expect(existsSync(trace)).toBe(true);
+  });
 });
 
 describe("t-dotenv-guard: the module", () => {
@@ -110,6 +134,25 @@ describe("t-dotenv-guard: the module", () => {
     expect(dropDotenvNames(env, dir)).toEqual([]);
   });
 
+  test("drops the names that tell a program the engine starts what else to run, keeps the names beside them", () => {
+    const dropped = [
+      "GIT_EXEC_PATH", "GIT_SSH_COMMAND", "GIT_SSH", "GIT_ASKPASS", "GIT_EXTERNAL_DIFF", "GIT_EDITOR", "GIT_PAGER",
+      "GIT_PROXY_COMMAND", "GIT_TEMPLATE_DIR", "GIT_DIR", "GIT_TRACE", "GIT_CONFIG_GLOBAL",
+      "SSH_ASKPASS", "SSH_ASKPASS_REQUIRE",
+      "BUN_OPTIONS", "BUN_INSTALL", "NODE_OPTIONS", "NODE_PATH", "npm_config_registry", "NPM_CONFIG_REGISTRY",
+      "LD_PRELOAD", "LD_LIBRARY_PATH", "DYLD_INSERT_LIBRARIES", "BASH_ENV", "EDITOR", "VISUAL",
+    ];
+    // The person's own: a token, an agent socket, build flags, a bundler's path, an app's own settings.
+    const kept = [
+      "GITHUB_TOKEN", "SSH_AUTH_SOCK", "LDFLAGS", "BUNDLE_PATH", "NODE_ENV", "NODE_OPTIONS_FILE", "NPM_TOKEN",
+      "EDITORCONFIG", "VISUAL_TESTS", "DATABASE_URL",
+    ];
+    const dir = folder({ ".env": [...dropped, ...kept].map((name) => `${name}=repo\n`).join("") });
+    const env: NodeJS.ProcessEnv = Object.fromEntries([...dropped, ...kept].map((name) => [name, "repo"]));
+    expect(dropDotenvNames(env, dir)).toEqual(dropped);
+    expect(Object.keys(env)).toEqual(kept);
+  });
+
   test("keeps the declarations only the host makes, even when the file names them", () => {
     const dir = folder({ ".env": "AIDLC_UNATTENDED=1\nAIDLC_INTERNAL_HUMAN_TURN_TOKEN=x\nAIDLC_HOOK_DEBUG=1\n" });
     const env: NodeJS.ProcessEnv = { AIDLC_UNATTENDED: "1", AIDLC_INTERNAL_HUMAN_TURN_TOKEN: "host-token", AIDLC_HOOK_DEBUG: "1" };
@@ -122,6 +165,51 @@ describe("t-dotenv-guard: the module", () => {
     const env: NodeJS.ProcessEnv = { AIDLC_A: "from-the-host" };
     expect(dropDotenvNames(env, dir, false)).toEqual([]);
     expect(env).toEqual({ AIDLC_A: "from-the-host" });
+  });
+});
+
+// Bun's own spawn hands a child the environment Bun started with, the project
+// .env's names included, whatever the engine removed since. A call that names
+// its `env` hands the child the settled one.
+describe("t-dotenv-guard: every Bun spawn in the engine names its environment", () => {
+  function sources(dir: string): string[] {
+    return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) return entry.name === "node_modules" ? [] : sources(path);
+      return entry.name.endsWith(".ts") && !entry.name.endsWith(".test.ts") ? [path] : [];
+    });
+  }
+
+  // The text of each call, from `Bun.spawn(` to its closing parenthesis.
+  function spawnCalls(text: string): string[] {
+    const calls: string[] = [];
+    for (const match of text.matchAll(/Bun\.spawn(?:Sync)?\(/g)) {
+      let depth = 0;
+      let end = match.index + match[0].length - 1;
+      for (; end < text.length; end++) {
+        if (text[end] === "(") depth++;
+        else if (text[end] === ")" && --depth === 0) break;
+      }
+      calls.push(text.slice(match.index, end + 1));
+    }
+    return calls;
+  }
+
+  test("no call leaves the child's environment to Bun's default", () => {
+    const unnamed: string[] = [];
+    let seen = 0;
+    for (const root of ["core", "harness", "plugins"]) {
+      for (const file of sources(join(REPO_ROOT, root))) {
+        for (const call of spawnCalls(readFileSync(file, "utf-8"))) {
+          // A mention with no arguments is prose, not a call.
+          if (/^Bun\.spawn(?:Sync)?\(\s*\)$/.test(call)) continue;
+          seen++;
+          if (!/\benv\s*[:,}]/.test(call)) unnamed.push(`${file.slice(REPO_ROOT.length + 1)}: ${call.replace(/\s+/g, " ").slice(0, 100)}`);
+        }
+      }
+    }
+    expect(seen).toBeGreaterThan(20);
+    expect(unnamed).toEqual([]);
   });
 });
 

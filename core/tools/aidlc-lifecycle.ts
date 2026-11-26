@@ -1404,6 +1404,7 @@ function activateReserved(version: string, options: { failAfter?: number } = {})
         }
         for (const command of activationProbeCommands(commandPath(), exeInPlace ? exe : null)) {
           const probe = Bun.spawnSync([command, "version"], {
+            env: process.env,
             stdin: "ignore",
             stdout: "pipe",
             stderr: "pipe",

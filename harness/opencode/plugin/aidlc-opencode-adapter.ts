@@ -883,7 +883,8 @@ async function createV1Adapter({
               };
             };
             if (parsed.hookSpecificOutput?.updatedInput) {
-              output.args = parsed.hookSpecificOutput.updatedInput;
+              // opencode runs the tool with the object it handed over, not a new one put in output.args.
+              Object.assign(args, parsed.hookSpecificOutput.updatedInput);
             }
           } catch {
             throw new Error(

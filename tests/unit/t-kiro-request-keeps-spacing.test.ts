@@ -92,12 +92,6 @@ function kiroSays(proj: string, prompt: string): void {
     { hook_event_name: "userPromptSubmit", prompt }, { CLAUDE_PROJECT_DIR: undefined });
 }
 
-// The call the hook told the agent to run, as the shell hands it to the engine.
-function latchedArgs(proj: string): string[] {
-  const latch = JSON.parse(readFileSync(join(proj, "aidlc", ".aidlc-sessions", ".kiro-cli-forwarding-latch.json"), "utf-8")) as { args: string[] };
-  return latch.args;
-}
-
 function next(proj: string, args: string[]): { d: Record<string, unknown>; out: string } {
   const options = { env: env(proj) };
   const result = followProposal(runOrchestrateNext(ORCHESTRATE, proj, args, options), ORCHESTRATE, proj, options);
@@ -124,7 +118,8 @@ describe("Kiro CLI: a request is recorded with the person's spacing as typed", (
     expect(records.length, JSON.stringify(records)).toBe(1);
     expect(personsWordsText(records[0].text)).toBe(`/aidlc ${request}`);
     expect(records[0].words && personsWordsText(records[0].words)).toBe(request);
-    const { d, out } = next(proj, latchedArgs(proj));
+    // The skill's first command, which the hook names and which reads the recorded line.
+    const { d, out } = next(proj, ["--entry"]);
     expect(d.kind, out).toBe("ask");
     expect(String(d.question), out).toContain(request);
     const copies = questionCopies(proj);
@@ -152,11 +147,10 @@ describe("Kiro CLI: a request is recorded with the person's spacing as typed", (
     kiroSays(proj, `/aidlc ${request}`);
     const words = listMessages(proj)[0].words;
     expect(words && personsWordsText(words)).toBe(request);
-    const args = latchedArgs(proj);
-    const first = runOrchestrateNext(ORCHESTRATE, proj, args, { env: env(proj) });
+    const first = runOrchestrateNext(ORCHESTRATE, proj, ["--entry"], { env: env(proj) });
     expect(first.directive?.kind, first.out).toBe("print");
     expect(String((first.directive as { message?: unknown }).message)).toContain("--max-length");
-    const { d, out } = next(proj, ["--", ...args]);
+    const { d, out } = next(proj, ["--", ...splitKiroCommandArgs(request)]);
     expect(d.kind, out).toBe("ask");
     const copies = questionCopies(proj);
     expect(copies.length, out).toBeGreaterThan(0);

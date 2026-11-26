@@ -345,7 +345,9 @@ describe("t-journey-workspace (live SDK multi-repo·intent·space journey)", () 
           /(?:aidlc-orchestrate\.ts["']?|engine orchestrate)\s+next\b/.test(command)
         );
         expect(r2Next.length).toBeGreaterThan(0);
-        for (const command of r2Next) {
+        // AI-DLC's first command (`next --entry`) carries none of the person's words: the engine reads their typed
+        // line from its own record, and the record checks below show what it ran.
+        for (const command of r2Next.filter((next) => !/\snext --entry$/.test(next))) {
           expect(command).toMatch(/--single\b/);
           expect(command).toMatch(/--stage(?:=|\s+)(?:["'])?reverse-engineering\b/);
         }

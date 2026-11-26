@@ -107,7 +107,7 @@ export function currentWindowsElevationType(): number {
         "powershell.exe", "-NoProfile", "-NonInteractive", "-EncodedCommand",
         Buffer.from(TOKEN_ELEVATION_PROBE, "utf16le").toString("base64"),
       ],
-      { stdin: "ignore", stdout: "pipe", stderr: "pipe", windowsHide: true, timeout: 30_000 },
+      { env: process.env, stdin: "ignore", stdout: "pipe", stderr: "pipe", windowsHide: true, timeout: 30_000 },
     );
     const value = Number(Buffer.from(probe.stdout).toString("utf-8").trim());
     if (probe.exitCode === 0 && [1, 2, 3].includes(value)) return value;
@@ -1082,6 +1082,7 @@ function launch(path: string, journal: WindowsUninstallJournal): void {
       ],
       {
         cwd: workingDirectory,
+        env: process.env,
         stdin: "ignore",
         stdout: "pipe",
         stderr: "pipe",

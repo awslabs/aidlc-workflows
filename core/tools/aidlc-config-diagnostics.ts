@@ -85,6 +85,7 @@ import { cmdScriptLaunch, isCmdScript, pathEntries, resolveExecutableOnPath } fr
 import { personaTwinRels } from "./aidlc-plugin.ts";
 import { readBoundedRegularFile } from "./aidlc-inline-context.ts";
 import { KIRO_IDE_STEERING } from "./aidlc-includes.ts";
+import { sameDirectory } from "./aidlc-lib.ts";
 import {
   HARNESS_PRODUCT_NAMES,
   isModelHarness,
@@ -222,6 +223,16 @@ function invocationForHarness(harnessDir: string): string {
   return aidlcInvocation() === "aidlc"
     ? "aidlc"
     : `bun ${harnessDir}/tools/aidlc.ts`;
+}
+
+// The fixes doctor and config print are written for the project folder ("run
+// `aidlc config`", "move the file", git commands), so a run from another folder
+// names that folder once, above them. It states the fact only: a fix's own
+// words say where it runs (one runs git outside the project).
+export function otherFolderLine(projectDir: string, command: "doctor" | "config"): string | null {
+  if (sameDirectory(projectDir, process.cwd())) return null;
+  const folder = resolve(projectDir).replace(/\p{Cc}/gu, "?");
+  return `Project folder for this report: ${folder} (not the folder you ran ${command} from).`;
 }
 
 // The one command that rebuilds a missing workspace shell: an explicit

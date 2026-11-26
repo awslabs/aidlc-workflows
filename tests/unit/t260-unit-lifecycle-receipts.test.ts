@@ -504,7 +504,8 @@ describe("t260 single active unit", () => {
     expect(unitVerb(proj, "start", "unit-a").rc).toBe(0);
     expect(unitVerb(proj, "pause", "unit-b", ["--reason", "r", "--next-action", "n"]).rc).not.toBe(0);
     expect(unitVerb(proj, "complete", "unit-b").rc).not.toBe(0);
-    expect(unitVerb(proj, "resume", "unit-a").rc).not.toBe(0);
+    expect(unitVerb(proj, "resume", "unit-b").rc).not.toBe(0);
+    expect(unitVerb(proj, "resume", "unit-a").rc).toBe(0);
   });
 
   // A refusal names the step that is true for the unit: a unit that is
@@ -732,6 +733,51 @@ describe("t260 pause carries the checkpoint and hard-stops the engine", () => {
     const state = readFileSync(seededStateFile(proj), "utf-8");
     expect(state).not.toContain("- **Active Unit**:");
     expect(state).not.toContain("- **Unit Pause Reason**:");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a repeated resume acknowledges the unit already in progress (#4067)", () => {
+    constructionProject();
+    pauseUnitA();
+
+    expect(unitVerb(proj, "resume", "unit-a").rc).toBe(0);
+    const again = unitVerb(proj, "resume", "unit-a");
+    expect(again.rc, again.out).toBe(0);
+    const ack = JSON.parse(again.out) as {
+      already_active?: boolean;
+      state?: string;
+      warning?: string;
+    };
+    expect(ack.already_active).toBe(true);
+    expect(ack.state).toBe("in-progress");
+    expect(ack.warning).toContain("already in progress");
+    expect(readAuditShardEvents(proj).filter((row) => row.event === "UNIT_RESUMED")).toHaveLength(1);
+
+    const statePath = seededStateFile(proj);
+    writeFileSync(
+      statePath,
+      readFileSync(statePath, "utf-8")
+        .replace("- **Unit State**: in-progress", "- **Unit State**: paused")
+        .replace("- **Last Updated**:", "- **Unit Pause Reason**: stale\n- **Last Updated**:"),
+      "utf-8",
+    );
+    expect(unitVerb(proj, "resume", "unit-a").rc).toBe(0);
+    const repaired = readFileSync(statePath, "utf-8");
+    expect(repaired).toContain("- **Unit State**: in-progress");
+    expect(repaired).not.toContain("- **Unit Pause Reason**: stale");
+
+    const other = unitVerb(proj, "resume", "unit-b");
+    expect(other.rc).not.toBe(0);
+    expect(JSON.parse(other.out).error).toContain(
+      'Refusing to resume unit "unit-b" for "functional-design": it is not the paused unit (active: "unit-a", in-progress)',
+    );
+
+    writeUnitArtifacts(proj, "unit-a");
+    expect(unitVerb(proj, "complete", "unit-a").rc).toBe(0);
+    const notActive = unitVerb(proj, "complete", "unit-b");
+    expect(notActive.rc).not.toBe(0);
+    expect(JSON.parse(notActive.out).error).toContain(
+      'Refusing to complete unit "unit-b" for "functional-design": it is not the active unit',
+    );
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("`next` emits a paused-unit ask in plain words and names the checkpoint", () => {

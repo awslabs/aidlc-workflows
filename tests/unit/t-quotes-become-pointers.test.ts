@@ -125,16 +125,17 @@ describe.each(POLICIES)("Guard Policy %s: a choice left to the agent names the m
   });
 
   // `--on-instruction` last on the line, with nothing after it to take as a value.
-  test("with no message named, the answer is the agent's own: no claim, no message, no refusal", () => {
+  test("with no message named, their reply since the question is the one the row names", () => {
     const proj = project();
-    said(proj, "up to you, choose the recommended answers");
     ask(proj);
+    const words = "up to you, choose the recommended answers";
+    const id = said(proj, words);
     const r = log(proj, ["answer", "--stage", STAGE, "--details", "Q5: A; Q6: A; Q7: A", "--on-instruction"]);
     expect(r.status, r.out).toBe(0);
     const row = answers(proj).at(-1);
-    expect(field(row, "Answer Source")).toBeNull();
-    expect(field(row, "Message Id")).toBeNull();
-    expect(field(row, "Person Reply")).toBeNull();
+    expect(field(row, "Answer Source")).toBe("chosen by the agent, reading their message");
+    expect(field(row, "Message Id")).toBe(id);
+    expect(field(row, "Person Reply")).toBe(words);
   });
 
   test("a question logged naming their message: that message is the pointer", () => {
@@ -224,14 +225,14 @@ describe.each(POLICIES)("Guard Policy %s: a choice left to the agent names the m
     expect(learningsRuns()).toBe(false);
   });
 
-  test("the old value form is the agent's own text: recorded, no claim, no refusal", () => {
+  test("the old value form is the agent's own text: kept beside the reply it stands on", () => {
     const proj = project();
-    said(proj, "Scale it up to your expected load, and let me look at it first.");
     ask(proj);
+    const id = said(proj, "Scale it up to your expected load, and let me look at it first.");
     const r = log(proj, ["answer", "--stage", STAGE, "--details", "Q5: A", "--on-instruction", "up to you"]);
     expect(r.status, r.out).toBe(0);
     const row = answers(proj).at(-1);
-    expect(field(row, "Answer Source")).toBeNull();
+    expect(field(row, "Message Id")).toBe(id);
     expect(field(row, "Instruction")).toBeNull();
     expect(field(row, "Conductor Summary")).toBe("up to you");
   });
@@ -241,7 +242,7 @@ describe.each(POLICIES)("Guard Policy %s: a choice left to the agent names the m
     ask(proj);
     const nothing = log(proj, ["answer", "--stage", STAGE, "--details", "Q5: A", "--on-instruction"]);
     expect(nothing.status).not.toBe(0);
-    expect(nothing.out).toContain("Nothing the person said in this piece of work is on record");
+    expect(nothing.out).toContain("no reply of the person's is on record since this question was asked. Ask them");
     said(proj, "you choose");
     const checkpoint = log(proj, [
       "answer", "--stage", STAGE, "--details", "Looks correct", "--checkpoint", "summary-confirmation", "--on-instruction",

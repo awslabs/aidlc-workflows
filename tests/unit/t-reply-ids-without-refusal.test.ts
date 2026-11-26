@@ -1,5 +1,5 @@
 // covers: hook:aidlc-record-human-turn, subcommand:aidlc-orchestrate:next
-// covers: function:openQuestionReplyDirective, function:openPlanQuestionReplyDirective
+// covers: function:openQuestionReplyDirective, function:openPlanQuestionReplyDirective, function:namedMessageWords
 //
 // The agent learns the id of the person's message without meeting a refusal
 // first, and never from their words. On the work, the human-turn hook's line
@@ -18,6 +18,10 @@
 // agent sent the words on as new work and asked "What should I do?", and
 // nothing was recorded (nightly 2026-10-22). Now the agent records the answer,
 // nothing is routed, and the next step moves on.
+// The id handed to `next` where a request's id goes is read as that message's
+// words handed on, the reading `/aidlc <words>` gets, so a reply at a stop goes
+// on without "That question is no longer available" and their typing it again
+// with /aidlc in front.
 //
 // Mechanism: function - the shipped hook through each host's adapter, `next`,
 // and `log answer` on the answers corpus fixtures; no agent runs.
@@ -25,8 +29,10 @@ import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { auditBlockField, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { listMessages } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
+import { readQuestion } from "../../dist/claude/.claude/tools/aidlc-question-store.ts";
 import {
-  type AnswersItem, SESSION, STAGE, buildQuestion, env, exec, next, recordByAgent, say,
+  type AnswersItem, SESSION, STAGE, buildQuestion, env, exec, next, pick, recordByAgent, say,
 } from "../harness/aidlc-answers-corpus.ts";
 import { DISPATCHER, buildState } from "../harness/aidlc-input-corpus.ts";
 import { cleanupTestProject, seededStateFile, setupIntegrationProject } from "../harness/fixtures.ts";
@@ -263,5 +269,144 @@ describe("t-reply-ids-without-refusal: a checkpoint's row and a routing row name
     expect(routed).toHaveLength(1);
     expect(auditBlockField(routed[0].block, "Message Id")).toBe(reply);
     expect(reply).not.toBe(request);
+  });
+});
+
+// The agent hands the id the hook's line gave it to `next` where a request's
+// id goes. The id names their message, so `next` reads its words as the agent
+// handing them on, the reading `/aidlc <words>` gets, never a flag of their
+// line: a jump or a setting typed with it ran once, by the line's own command.
+describe("t-reply-ids-without-refusal: the line's id handed to next as a request's reads the message's words", () => {
+  const WORDS = "looks good, but call the export button Download";
+  const GONE = "That question is no longer available; please describe the work again.";
+  const DECISIONS = ["GATE_APPROVED", "GATE_REJECTED", "QUESTION_ANSWERED", "DECISION_RECORDED"];
+  // What two runs of one step differ by: the ids minted, the project folder, the times kept.
+  const shape = (proj: string, out: { directive: Record<string, unknown> | null }): string =>
+    JSON.stringify(out.directive)
+      .split(proj).join("<proj>")
+      .replace(/\b[0-9a-f]{8}\b/g, "<id>")
+      .replace(/\d{4}-\d\d-\d\dT[\d:.]+Z/g, "<at>");
+  const at = async (state: string): Promise<string> => {
+    const proj = project();
+    if (state === "stage-question" || state === "stage-gate") await buildQuestion(proj, state);
+    else await buildState(proj, state as Parameters<typeof buildState>[1]);
+    // The person replies after what the state kept, as in any chat: the store keeps whole seconds, and two
+    // messages of one second sort by their random ids, so a reply in the same second can read as the older line.
+    await Bun.sleep(1001 - (Date.now() % 1000));
+    return proj;
+  };
+  // The id of the message one turn kept.
+  const kept = async (proj: string, send: () => Promise<unknown>): Promise<string> => {
+    const before = new Set(listMessages(proj).map((message) => message.id));
+    await send();
+    const ids = listMessages(proj).map((message) => message.id).filter((id) => !before.has(id));
+    expect(ids).toHaveLength(1);
+    return ids[0];
+  };
+  // `/aidlc <words>` as the person types it, then the skill's first command.
+  const typed = async (state: string, line: string): Promise<string> => {
+    const proj = await at(state);
+    await say(proj, line, "claude");
+    return shape(proj, await next(proj, ["--entry"]));
+  };
+  const handed = async (state: string, prompt: string, beside: string[] = []) => {
+    const proj = await at(state);
+    const id = await kept(proj, () => say(proj, prompt, "claude"));
+    return { proj, id, step: await next(proj, [...beside, "--request", id]) };
+  };
+
+  for (const state of ["fresh", "routing-question-open", "plan-offer-open", "work-open", "stage-question", "stage-gate"]) {
+    test(`${state}: the reply's id prints the step /aidlc with its words prints`, async () => {
+      const proj = await at(state);
+      const id = await kept(proj, () => say(proj, WORDS, "claude"));
+      const gate = state === "stage-gate" ? readFileSync(seededStateFile(proj), "utf-8") : null;
+      const decided = DECISIONS.map((event) => rows(proj, event).length);
+      const step = await next(proj, ["--request", id]);
+      expect(step.out).not.toContain(GONE);
+      expect(step.directive, step.out).not.toBeNull();
+      expect(shape(proj, step)).toBe(await typed(state, `/aidlc ${WORDS}`));
+      if (gate !== null) {
+        // Read, never decided: the gate still waits and nothing is recorded as their answer.
+        expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(gate);
+        expect(DECISIONS.map((event) => rows(proj, event).length)).toEqual(decided);
+      }
+    });
+  }
+
+  test("their words go on as they typed them, quote marks and spacing kept", async () => {
+    const words = 'rename the export button to "Download"  and keep the icon';
+    const { proj, step } = await handed("fresh", words);
+    const id = /--request ([0-9a-f]{8})/.exec(String(step.directive?.message ?? ""))?.[1];
+    expect(id, step.out).toBeDefined();
+    expect(readQuestion(proj, id as string)?.text).toBe(words);
+  });
+
+  test("a jump typed with the words ran once, by its own line: the id hands on the words and the work stays put", async () => {
+    const proj = await at("work-open");
+    const id = await kept(proj, () => say(proj, `/aidlc --stage ${STAGE} ${WORDS}`, "claude"));
+    await next(proj, ["--entry"]);
+    const after = readFileSync(seededStateFile(proj), "utf-8");
+    const jumps = rows(proj, "STAGE_JUMPED").length;
+    const step = await next(proj, ["--request", id]);
+    expect(step.out).not.toContain(GONE);
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(after);
+    expect(rows(proj, "STAGE_JUMPED")).toHaveLength(jumps);
+  });
+
+  test("a reply the record kept cut goes on whole from its copy, and with no copy kept says the question is gone", async () => {
+    // Past the record's cut a typed prompt is kept whole beside it, up to the request cap; past the cap only its
+    // first part is kept, and a part never goes on as their words.
+    const long = `${"keep every column of the export, ".repeat(300)}and call the button Download`;
+    const { proj, step } = await handed("fresh", long);
+    const id = /--request ([0-9a-f]{8})/.exec(String(step.directive?.message ?? ""))?.[1];
+    expect(id, step.out.slice(0, 400)).toBeDefined();
+    expect(readQuestion(proj, id as string)?.text).toBe(long);
+    const over = await handed("fresh", "keep every column. ".repeat(8000));
+    expect(over.step.directive).toMatchObject({ kind: "error", message: GONE });
+  });
+
+  // A box whose question runs past what the record keeps of it is marked cut too; its answer is still whole.
+  for (const question of [QUESTION, `${QUESTION} ${"Some context about the choice. ".repeat(80)}`]) {
+    test(`a question-box answer's id hands on the words it carried (a ${question.length}-character question)`, async () => {
+      const item = {
+        question: "stage-question", input: "PostgreSQL",
+        picker: { question, options: ["PostgreSQL", "SQLite", "Other"], answer: "PostgreSQL" },
+      } as unknown as AnswersItem;
+      const proj = await at("stage-question");
+      const id = await kept(proj, () => pick(proj, item, "claude"));
+      const step = await next(proj, ["--request", id]);
+      expect(step.out).not.toContain(GONE);
+      const twin = await at("stage-question");
+      await pick(twin, item, "claude");
+      expect(shape(proj, step)).toBe(shape(twin, await next(twin, ["PostgreSQL"])));
+    });
+  }
+
+  test("a question-box answer cut past what the record keeps of it says the question is gone", async () => {
+    const answer = "PostgreSQL, because ".repeat(450);
+    const item = {
+      question: "stage-question", input: answer,
+      picker: { question: QUESTION, options: ["PostgreSQL", "SQLite", "Other"], answer },
+    } as unknown as AnswersItem;
+    const proj = await at("stage-question");
+    const id = await kept(proj, () => pick(proj, item, "claude"));
+    expect((await next(proj, ["--request", id])).directive).toMatchObject({ kind: "error", message: GONE });
+  });
+
+  test("the agent's own flags beside the id give way to the message's words", async () => {
+    const { proj, step } = await handed("work-open", WORDS, ["--scope", "bugfix"]);
+    expect(step.out).not.toContain(GONE);
+    const alone = await handed("work-open", WORDS);
+    expect(shape(proj, step)).toBe(shape(alone.proj, alone.step));
+  });
+
+  test("an id that names no request and no words of theirs still says the question is gone", async () => {
+    const lines = [WORDS, "/aidlc --depth minimal", "/aidlc --request deadbeef looks good"];
+    for (const [index, line] of lines.entries()) {
+      const { proj, id } = await handed("work-open", line);
+      const named = index === 0 ? "deadbeef" : id;
+      const step = await next(proj, ["--request", named]);
+      expect(step.directive, `${line}: ${step.out}`).toMatchObject({ kind: "error", message: GONE });
+    }
   });
 });
