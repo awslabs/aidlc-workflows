@@ -7,8 +7,8 @@
 // does `next` hand the agent a step, is that step's own work admitted by the
 // guard, does every refusal name a way past the guard admits, and are the
 // developer dispatch and a source write refused before the approval and
-// admitted after it. The helpers here are the plan-approval ask test's
-// (tests/unit/t-plan-approval-ask.test.ts).
+// admitted after it. The helpers here are the plan-approval ask tests'
+// (tests/harness/plan-approval-ask.ts).
 import { expect } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
