@@ -1425,8 +1425,6 @@ export function inertPath(path: string): string {
 export const SYNC_UPLOAD_FOLDERS: ReadonlyMap<string, string> = new Map([
   [".tmp.driveupload", "Google Drive Folder backup"],
 ]);
-export const SYNC_UPLOAD_STEP =
-  "exclude this folder from Google Drive's Folder backup, or move the project out of it";
 // Drive's layout inside the folder is not documented, so the search is
 // recursive; the cap keeps a huge upload folder from stalling every read.
 const SYNC_UPLOAD_MAX_ENTRIES = 10_000;
@@ -1454,7 +1452,6 @@ export interface SyncUploadOptions {
 
 let syncUploadWalks = 0;
 const syncUploadDecisions = new Map<string, { accepted: boolean; result: SyncUploadLinks }>();
-const syncUploadWarned = new Set<string>();
 
 /** How many upload-folder searches this process has run (tests spy on it). */
 export function syncUploadWalkCount(): number {
@@ -1464,7 +1461,6 @@ export function syncUploadWalkCount(): number {
 export function resetSyncUploadCacheForTests(): void {
   syncUploadWalks = 0;
   syncUploadDecisions.clear();
-  syncUploadWarned.clear();
 }
 
 // A folder someone else could have made, or a link to one, could hold any
@@ -1521,6 +1517,10 @@ export function syncUploadLinks(path: string, stat: LinkStat, options: SyncUploa
   const self = join(start, basename(path));
   const stop = home !== null && pathWithin(home, start) ? home : null;
   const result: SyncUploadLinks = { service: null, paths: [], complete: true };
+  // An upload folder inside another is searched from both, so one link can be
+  // found twice; the accept compares the count of distinct paths (as spelled on
+  // disk) with the file's link count.
+  const links = new Set<string>();
   for (let dir = start; ; dir = dirname(dir)) {
     for (const [name, service] of SYNC_UPLOAD_FOLDERS) {
       const folder = join(dir, name);
@@ -1528,9 +1528,9 @@ export function syncUploadLinks(path: string, stat: LinkStat, options: SyncUploa
       const found = linksInFolder(folder, stat, self, maxEntries);
       if (!found.complete) result.complete = false;
       if (found.paths.length > 0) result.service ??= service;
-      result.paths.push(...found.paths);
+      for (const link of found.paths) links.add(link);
     }
-    if (dir === stop || dirname(dir) === dir) return result;
+    if (dir === stop || dirname(dir) === dir) return { ...result, paths: [...links] };
   }
 }
 
@@ -1560,6 +1560,20 @@ export function singleOrSyncUploadLinked(path: string, stat: LinkStat): boolean 
   return stat.nlink > 1 && acceptsSyncUploadLinks(path, stat).accepted;
 }
 
+// Number() matches the precision of the number-valued lstat the upload-folder
+// search compares against, so the same inode compares equal on both sides.
+export function singleOrSyncUploadLinkedArtifact(
+  path: string,
+  st: { dev: bigint; ino: bigint; nlink: bigint; ctimeNs: bigint },
+): boolean {
+  return singleOrSyncUploadLinked(path, {
+    dev: Number(st.dev),
+    ino: Number(st.ino),
+    nlink: Number(st.nlink),
+    ctimeMs: Number(st.ctimeNs) / 1e6,
+  });
+}
+
 /**
  * Whether a file's links held still while it was read. The count may not rise,
  * and ctime may change only when the open was accepted as a sync upload link
@@ -1575,37 +1589,29 @@ export function linksSteadyWhileReading(
   return syncUploadAccepted && after.nlink < opened.nlink;
 }
 
-export function syncUploadWarning(file: string, result: SyncUploadLinks): string {
-  return `AI-DLC read ${inertPath(file)}, which ${result.service ?? "a sync service"} also links while it ` +
-    `uploads (${result.paths.map(inertPath).join(", ")}). To stop this warning, ${SYNC_UPLOAD_STEP}.`;
-}
-
 /** The way past a hardlink refusal. Said in words: a chained shell command does
  *  not parse in Windows PowerShell 5.1, and cmd has no cp or mv. */
 export const HARDLINK_REMEDY = "Copy the file, delete the original, give the copy the original's name, then re-run.";
 
-/** The refusal of a multiply linked file, naming what AI-DLC found of its other links. */
-export function hardLinkRefusal(what: string, path: string, nlink: number, result: SyncUploadLinks): string {
+/**
+ * The refusal of a multiply linked file, naming what AI-DLC found of its other
+ * links. `subject` leads the line ("record file", or the knowledge tool's file
+ * name or "it"); `path`, when given, follows it.
+ */
+export function hardLinkRefusal(subject: string, path: string | null, nlink: number, result: SyncUploadLinks): string {
   const others = nlink - 1;
   const found = result.paths.length;
   const missing = Math.max(0, others - found);
   const where = found === 0
-    ? `${others === 1 ? "Another link exists" : `${others} other links exist`} outside the folders AI-DLC ` +
-      "checks, and AI-DLC cannot see where. "
-    : `${found === 1 ? "One other link is" : `${found} other links are`} in ${result.service}'s upload folder ` +
-      `(${result.paths.map(inertPath).join(", ")}); ${missing} ${missing === 1 ? "link" : "links"} unaccounted for. `;
+    ? `It has ${nlink} links, and AI-DLC cannot see where ` +
+      `${others === 1 ? "the other one is" : `the other ${others} are`}. `
+    : `It has ${nlink} links. ${found === 1 ? "One other link is" : `${found} other links are`} in ` +
+      `${result.service}'s upload folder (${result.paths.map(inertPath).join(", ")}); ` +
+      `${missing} ${missing === 1 ? "link" : "links"} unaccounted for. `;
   const cut = result.complete ? "" : "AI-DLC could not search an upload folder to the end. ";
   // The leading words are the refusal callers and scripts already match on.
-  return `${what} is multiply linked (a hardlink) and is not trusted: ${inertPath(path)}. ` +
-    `It has ${nlink} links. ${where}${cut}` +
+  return `${inertPath(subject)} is multiply linked (a hardlink) and is not trusted${path === null ? "" : `: ${inertPath(path)}`}. ` +
+    `${where}${cut}` +
     "A hardlink can alias content from elsewhere on the filesystem into this directory; backup and sync " +
     `clients commonly make them. ${HARDLINK_REMEDY}`;
-}
-
-/** Prints the accepted-link warning at most once per file per process. */
-export function warnSyncUploadOnce(file: string, stat: LinkStat, result: SyncUploadLinks): void {
-  const key = `${stat.dev}:${stat.ino}`;
-  if (syncUploadWarned.has(key)) return;
-  syncUploadWarned.add(key);
-  process.stderr.write(`${syncUploadWarning(file, result)}\n`);
 }

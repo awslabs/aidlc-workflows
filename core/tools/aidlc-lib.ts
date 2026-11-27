@@ -58,6 +58,7 @@ import {
   repoNameRefusal,
   inertPath,
   singleOrSyncUploadLinked,
+  singleOrSyncUploadLinkedArtifact,
   typedHarnessName,
   withoutBunLaunchOptions,
 } from "./aidlc-runtime-paths.ts";
@@ -16518,17 +16519,6 @@ type ReviewArtifactContent =
 
 function artifactFdStat(fd: number): StableArtifactStat {
   return fstatSync(fd, { bigint: true }) as unknown as StableArtifactStat;
-}
-
-// Number() matches the precision of the number-valued lstat the upload-folder
-// search compares against, so the same inode compares equal on both sides.
-function singleOrSyncUploadLinkedArtifact(path: string, st: StableArtifactStat): boolean {
-  return singleOrSyncUploadLinked(path, {
-    dev: Number(st.dev),
-    ino: Number(st.ino),
-    nlink: Number(st.nlink),
-    ctimeMs: Number(st.ctimeNs) / 1e6,
-  });
 }
 
 function sameArtifactIdentity(

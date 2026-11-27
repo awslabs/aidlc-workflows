@@ -19,8 +19,6 @@ import {
   hardLinkRefusal,
   knownActiveSpace,
   linksSteadyWhileReading,
-  type SyncUploadLinks,
-  warnSyncUploadOnce,
 } from "./aidlc-runtime-paths.ts";
 
 export const ENGINE_DIR = ".aidlc-engine";
@@ -2183,11 +2181,11 @@ export function readRegularFileNoFollowOrThrow(
     }
     // A second link is refused unless every other link is a sync client's
     // upload link (Google Drive Folder backup holds one while it uploads).
-    let syncUpload: SyncUploadLinks | null = null;
+    let syncUploadAccepted = false;
     if (st.nlink !== 1) {
       const { accepted, result } = acceptsSyncUploadLinks(path, st);
       if (!accepted) throw new Error(hardLinkRefusal(what, path, st.nlink, result));
-      syncUpload = result;
+      syncUploadAccepted = true;
     }
     if (maxBytes !== undefined && st.size > maxBytes) {
       throw new Error(
@@ -2254,12 +2252,11 @@ export function readRegularFileNoFollowOrThrow(
     }
     const afterFd = fstatSync(fd);
     if (!sameFileIdentity(fileIdentity(afterRealPath), identity) ||
-        !linksSteadyWhileReading(st, afterFd, syncUpload !== null) ||
+        !linksSteadyWhileReading(st, afterFd, syncUploadAccepted) ||
         afterFd.size !== st.size || afterFd.mtimeMs !== st.mtimeMs ||
         bytes.length !== st.size) {
       throw changedDuringReadError(`${what} changed while reading: ${path}`);
     }
-    if (syncUpload !== null) warnSyncUploadOnce(path, st, syncUpload);
     return withSnapshot ? { bytes, mtimeMs: st.mtimeMs } : bytes;
   } finally {
     closeSync(fd);

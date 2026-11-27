@@ -2059,7 +2059,9 @@ own outputs, another stage's, the phase-boundary verification report under
 parallel batch. Not the engine's own files there, which only the engine writes
 (`aidlc-state.md`, `intents.json`, `.aidlc-engine/`, `audit/`, and a delegated
 worktree's `.aidlc-plan-approval/`), nor a path reached through a symlink or
-hard-linked to another file. Nothing in a record stands in for the person's
+hard-linked to another file (a link Google Drive Folder backup holds in its
+`.tmp.driveupload` folder while it uploads the file does not count). Nothing in
+a record stands in for the person's
 answer: the approval is the engine's receipt, minted from the person's own
 recorded turn and kept outside `aidlc/spaces`. Three files outside that folder pass
 too, exactly: the composer's grid proposal

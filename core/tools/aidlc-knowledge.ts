@@ -1696,7 +1696,7 @@ function statOnlyRefusal(real: string, rel: string): string | null {
   // present_but_refused state exists to prevent.
   if (st.nlink !== 1) {
     const { accepted, result } = acceptsSyncUploadLinks(real, st);
-    if (!accepted) return hardLinkRefusal("document", rel, st.nlink, result);
+    if (!accepted) return hardLinkRefusal(rel, null, st.nlink, result);
   }
   try {
     // fs.constants.R_OK, as a literal: this file's restricted fs allowlist

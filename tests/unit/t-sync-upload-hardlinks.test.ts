@@ -1,16 +1,16 @@
-// covers: function:syncUploadLinks, function:acceptsSyncUploadLinks, function:singleOrSyncUploadLinked, function:linksSteadyWhileReading, function:hardLinkRefusal, function:syncUploadWarning, function:warnSyncUploadOnce, function:readRegularFileNoFollowOrThrow
+// covers: function:syncUploadLinks, function:acceptsSyncUploadLinks, function:singleOrSyncUploadLinked, function:linksSteadyWhileReading, function:hardLinkRefusal, function:readRegularFileNoFollowOrThrow
 //
 // Google Drive's Folder backup hard-links a file it is uploading into a hidden
 // `.tmp.driveupload` folder. A record file whose every other link is there is
-// read with one warning; any other second link is still refused, and the
+// read, with nothing printed; any other second link is still refused, and the
 // refusal says what AI-DLC found. The reader, the plan-approval guard's
 // predicate and the knowledge list-time check agree.
 
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { linkSync, mkdirSync, statSync, symlinkSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { linkSync, mkdirSync, realpathSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import {
   acceptsSyncUploadLinks,
   HARDLINK_REMEDY,
@@ -47,6 +47,11 @@ function linked(file: string, link: string): string {
   return link;
 }
 
+// The search returns a link as its real folder plus its name; a temp folder
+// can be spelled otherwise (an 8.3 short name on GitHub's Windows runners). The
+// folder is resolved, not the link: a file's realpath can name another link.
+const realPath = (path: string): string => join(realpathSync.native(dirname(path)), basename(path));
+
 /** A home holding a backed-up Documents folder with a project in it, as Drive lays it out. */
 function driveLayout(): { home: string; uploads: string; file: string } {
   const home = createTestProject();
@@ -63,7 +68,7 @@ type Op = { read: string } | { link: [string, string] };
 type Outcome = { ok?: string; error?: string };
 
 // A child process: Bun reads the home folder once, at start.
-function readInChild(home: string, ops: Op[]): { results: Outcome[]; warnings: string[] } {
+function readInChild(home: string, ops: Op[]): { results: Outcome[]; stderr: string } {
   const script = `const { readRegularFileNoFollowOrThrow } = await import(${JSON.stringify(LOCKS)});
 const { linkSync } = await import("node:fs");
 const out = [];
@@ -81,36 +86,33 @@ console.log(JSON.stringify(out));`;
   expect(child.status, child.stderr).toBe(0);
   return {
     results: JSON.parse(child.stdout.trim().split("\n").pop() ?? "[]"),
-    warnings: child.stderr.split("\n").filter((line) => line.startsWith("AI-DLC read ")),
+    stderr: child.stderr,
   };
 }
 
 describe("t-sync-upload-hardlinks a record file linked only by Drive's upload folder", () => {
-  test("1. is read, with one warning naming the file, the upload link and the service", () => {
-    const { home, uploads, file } = driveLayout();
-    const upload = linked(file, join(uploads, "record.md"));
-    const { results, warnings } = readInChild(home, [{ read: file }]);
-    expect(results).toEqual([{ ok: "record\n" }]);
-    expect(warnings).toHaveLength(1);
-    expect(warnings[0]).toContain(file);
-    expect(warnings[0]).toContain(upload);
-    expect(warnings[0]).toContain(SERVICE);
-    expect(warnings[0]).toContain("exclude this folder from Google Drive's Folder backup, or move the project out of it");
-  });
-
-  test("2. warns once however often the file is read", () => {
+  // A read that worked leaves the person nothing to do, so it prints nothing.
+  test("1. is read, and nothing is printed", () => {
     const { home, uploads, file } = driveLayout();
     linked(file, join(uploads, "record.md"));
-    const { results, warnings } = readInChild(home, [{ read: file }, { read: file }]);
+    const { results, stderr } = readInChild(home, [{ read: file }]);
+    expect(results).toEqual([{ ok: "record\n" }]);
+    expect(stderr).toBe("");
+  });
+
+  test("2. is read every time, and nothing is printed", () => {
+    const { home, uploads, file } = driveLayout();
+    linked(file, join(uploads, "record.md"));
+    const { results, stderr } = readInChild(home, [{ read: file }, { read: file }]);
     expect(results).toEqual([{ ok: "record\n" }, { ok: "record\n" }]);
-    expect(warnings).toHaveLength(1);
+    expect(stderr).toBe("");
   });
 
   test("3. finds a link folders deep inside the upload folder", () => {
     const { home, uploads, file } = driveLayout();
     const nested = linked(file, join(uploads, "a1", "b2", "record.md"));
     const stat = statSync(file);
-    expect(syncUploadLinks(file, stat, { home })).toEqual({ service: SERVICE, paths: [nested], complete: true });
+    expect(syncUploadLinks(file, stat, { home })).toEqual({ service: SERVICE, paths: [realPath(nested)], complete: true });
     expect(acceptsSyncUploadLinks(file, stat, { home }).accepted).toBe(true);
   });
 
@@ -118,14 +120,13 @@ describe("t-sync-upload-hardlinks a record file linked only by Drive's upload fo
     const { home, uploads, file } = driveLayout();
     const upload = linked(file, join(uploads, "record.md"));
     linked(file, join(home, "elsewhere.md"));
-    const { results, warnings } = readInChild(home, [{ read: file }]);
+    const { results } = readInChild(home, [{ read: file }]);
     expect(results).toHaveLength(1);
     const error = results[0]!.error ?? "";
     expect(error).toContain(`record file is multiply linked (a hardlink) and is not trusted: ${file}`);
     expect(error).toContain("It has 3 links.");
-    expect(error).toContain(upload);
+    expect(error).toContain(realPath(upload));
     expect(error).toContain("1 link unaccounted for");
-    expect(warnings).toEqual([]);
   });
 
   test("5. refuses a second link when no upload folder holds it, and says AI-DLC cannot see where", () => {
@@ -136,12 +137,14 @@ describe("t-sync-upload-hardlinks a record file linked only by Drive's upload fo
     expect(accepted).toBe(false);
     expect(result).toEqual({ service: null, paths: [], complete: true });
     const refusal = hardLinkRefusal("record file", file, stat.nlink, result);
-    expect(refusal).toContain("Another link exists outside the folders AI-DLC checks, and AI-DLC cannot see where.");
+    expect(refusal).toContain("It has 2 links, and AI-DLC cannot see where the other one is.");
     expect(refusal).toContain("backup and sync clients commonly make them");
     expect(refusal).toContain(HARDLINK_REMEDY);
     expect(refusal).not.toMatch(/&&|\bcp |\bmv /);
     // Several links: counted, in the plural.
-    expect(hardLinkRefusal("record file", file, 3, result)).toContain("2 other links exist outside");
+    expect(hardLinkRefusal("record file", file, 3, result)).toContain(
+      "It has 3 links, and AI-DLC cannot see where the other 2 are.",
+    );
     const two = { service: SERVICE, paths: ["/u/a", "/u/b"], complete: true };
     expect(hardLinkRefusal("record file", file, 5, two)).toContain(`2 other links are in ${SERVICE}'s upload folder`);
     expect(hardLinkRefusal("record file", file, 5, two)).toContain("2 links unaccounted for");
@@ -163,8 +166,8 @@ describe("t-sync-upload-hardlinks a record file linked only by Drive's upload fo
     const stat = statSync(file);
     const owner = statSync(uploads).uid;
     expect(syncUploadLinks(file, stat, { home, platform: "linux", uid: owner + 1 }).paths).toEqual([]);
-    expect(syncUploadLinks(file, stat, { home, platform: "linux", uid: owner }).paths).toEqual([upload]);
-    expect(syncUploadLinks(file, stat, { home, platform: "win32", uid: owner + 1 }).paths).toEqual([upload]);
+    expect(syncUploadLinks(file, stat, { home, platform: "linux", uid: owner }).paths).toEqual([realPath(upload)]);
+    expect(syncUploadLinks(file, stat, { home, platform: "win32", uid: owner + 1 }).paths).toEqual([realPath(upload)]);
     expect(acceptsSyncUploadLinks(file, stat, { home, platform: "linux", uid: owner + 1 }).accepted).toBe(false);
   });
 
@@ -225,5 +228,19 @@ describe("t-sync-upload-hardlinks a record file linked only by Drive's upload fo
     linked(doc, join(home, "elsewhere.md"));
     expect(singleOrSyncUploadLinked(doc, statSync(doc))).toBe(false);
     expect(listDocuments(project, SPACE).map((row) => row.status)).toEqual(["present_but_refused"]);
+  });
+
+  test("13. counts a link once when one upload folder sits inside another", () => {
+    const home = createTestProject();
+    roots.push(home);
+    const project = join(home, "Documents", ".tmp.driveupload", "project");
+    const file = written(join(project, "aidlc", "record.md"));
+    const inner = linked(file, join(project, ".tmp.driveupload", "record.md"));
+    linked(file, join(home, "elsewhere.md"));
+    const stat = statSync(file);
+    expect(syncUploadLinks(file, stat, { home }).paths).toEqual([realPath(inner)]);
+    expect(acceptsSyncUploadLinks(file, stat, { home }).accepted).toBe(false);
+    const { results } = readInChild(home, [{ read: file }]);
+    expect(results[0]!.error).toContain("1 link unaccounted for");
   });
 });
