@@ -8,7 +8,9 @@
 // could not be taken, carries on under relaxed or off, and under strict stops
 // naming the two steps that work there. It is never said as a change of the
 // person's, the next Unit's landing, the batch checkpoint and the stage's
-// completion do not say it again, and the stage completes.
+// completion do not say it again, and the stage completes. A first Unit that
+// landed where the record was read stands where its copy is lost: the next Unit
+// lands and the stage completes there, with nothing said.
 
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { chmodSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -108,9 +110,13 @@ function checkpoint(pd: string, action: string, extra: string[] = []): Run {
 }
 
 // Both Units land, then the person approves the batch and Code Generation;
-// every step's output, for the count.
-function landsAndCompletes(pd: string): Run[] {
-  const runs = UNITS.map((unit) => ok(land(pd, unit)));
+// every step's output, for the count. `between` runs after the first landing.
+function landsAndCompletes(pd: string, between?: () => void): Run[] {
+  const runs = UNITS.map((unit, index) => {
+    const run = ok(land(pd, unit));
+    if (index === 0) between?.();
+    return run;
+  });
   for (const run of runs) expect(run.err).not.toContain("during the build");
   expect(nextDirective(pd)).toMatchObject({
     kind: "run-stage", swarm_checkpoint: { batch: 1, units: UNITS, ready: true, approved: false },
@@ -159,6 +165,17 @@ describe("the record of what the stage started from is not on this machine", () 
     expect(said([refused, ...runs])).toBe(1);
     expect(unchecked(pd)).toHaveLength(1);
   });
+
+  // A teammate pulls work whose first Unit landed where the record was read,
+  // and carries on on a machine with no copy of it.
+  for (const policy of ["strict", "off"]) {
+    test(`${policy}: after a first landing where the record was read, the next Unit lands where it is lost and the stage completes`, () => {
+      const pd = converged(policy);
+      const runs = landsAndCompletes(pd, () => lose(pd));
+      expect(said(runs)).toBe(0);
+      expect(unchecked(pd)).toHaveLength(0);
+    });
+  }
 
   // A teammate's machine that has the record reads the same chain.
   test("the landed chain stands on a machine that reads the record, or another where it changed", () => {
