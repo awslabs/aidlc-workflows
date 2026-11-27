@@ -56,10 +56,13 @@ import {
   SPACE_NAME_REGEX,
   repoNameProblem,
   repoNameRefusal,
+  inertPath,
+  singleOrSyncUploadLinked,
+  singleOrSyncUploadLinkedArtifact,
   typedHarnessName,
   withoutBunLaunchOptions,
 } from "./aidlc-runtime-paths.ts";
-export { entrySkillInvocation, repoNameProblem, repoNameRefusal, SPACE_NAME_REGEX } from "./aidlc-runtime-paths.ts";
+export { entrySkillInvocation, inertPath, repoNameProblem, repoNameRefusal, SPACE_NAME_REGEX } from "./aidlc-runtime-paths.ts";
 import { humanTurnMintAllowed, personGitNameField } from "./aidlc-git-name.ts";
 export { humanTurnMintAllowed } from "./aidlc-git-name.ts";
 import { gitCommonDirOf, hasRealGitEntry, submoduleLeavesProjectRepo } from "./aidlc-git.ts";
@@ -16605,7 +16608,7 @@ function readStableReviewArtifacts(
         contents.push({ ...entry, state: "not-file", identity: before });
         continue;
       }
-      if (before.nlink !== 1n) return null;
+      if (!singleOrSyncUploadLinkedArtifact(entry.path, before)) return null;
 
       const noFollow =
         typeof fsConstants.O_NOFOLLOW === "number"
@@ -16623,7 +16626,7 @@ function readStableReviewArtifacts(
       const openedIdentity = artifactFdStat(fd);
       if (
         !openedIdentity.isFile() ||
-        openedIdentity.nlink !== 1n ||
+        !singleOrSyncUploadLinkedArtifact(entry.path, openedIdentity) ||
         !sameArtifactIdentity(before, openedIdentity)
       ) return null;
       const openedReal = realpathSync(entry.path);
@@ -28439,7 +28442,7 @@ function plainProjectFile(projectDir: string, rel: string): boolean {
   try {
     const path = assertNoSymlinkInChainOrThrow(realpathSync(projectDir), rel);
     const stat = lstatSync(path, { throwIfNoEntry: false });
-    return stat === undefined || (stat.isFile() && stat.nlink === 1);
+    return stat === undefined || (stat.isFile() && singleOrSyncUploadLinked(path, stat));
   } catch {
     return false;
   }
@@ -41658,16 +41661,6 @@ function appendGuardPolicySetRow(
 }
 
 /** A bounded, human-readable list of changed paths. */
-// A path anyone can name may carry a line break or a control character. In a
-// line the person or the conductor reads it stays one inert line.
-export function inertPath(path: string): string {
-  return path.replace(
-    // biome-ignore lint/suspicious/noControlCharactersInRegex: escaping them is the point
-    /[\u0000-\u001f\u007f-\u009f\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g,
-    (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`,
-  );
-}
-
 export function renderChangedPaths(paths: readonly string[]): string {
   const shown = paths.slice(0, CHANGE_CONTROL_MAX_LISTED_PATHS).map(inertPath);
   const more = paths.length - shown.length;

@@ -167,7 +167,7 @@ import {
 } from "../tools/aidlc-lock-line.ts";
 import { mainCheckoutChangeStep, personTurnStands } from "../tools/aidlc-message-store.ts";
 import type { planApprovalAskState } from "../tools/aidlc-plan-approval-ask.ts";
-import { aidlcToolInvocation, bunLaunchOptionWords, quoteCommandArgument, runtimeHarnessName } from "../tools/aidlc-runtime-paths.ts";
+import { aidlcToolInvocation, bunLaunchOptionWords, quoteCommandArgument, runtimeHarnessName, singleOrSyncUploadLinked } from "../tools/aidlc-runtime-paths.ts";
 import { claimedCheckoutReopens } from "../tools/aidlc-unit-landing.ts";
 import { RECORDABLE_PROJECT_BYPASSES } from "../tools/aidlc-settings.ts";
 import {
@@ -1130,7 +1130,7 @@ function isRepliedPlanFileTarget(projectDir: string, target: string, editable: s
     if (!editable.some((file) => normalizeDriveLetter(resolve(file)) === normalizeDriveLetter(targetAbs))) return false;
     assertNoSymlinkInChainOrThrow(realpathSync(projectLexical), relative(projectLexical, targetAbs));
     const existing = lstatSync(targetAbs, { throwIfNoEntry: false });
-    return existing === undefined || (existing.isFile() && existing.nlink === 1);
+    return existing === undefined || (existing.isFile() && singleOrSyncUploadLinked(targetAbs, existing));
   } catch {
     return false;
   }
@@ -1202,7 +1202,7 @@ async function landingClashFilesOnly(projectDir: string, targets: string[], unit
       if (!files.has(inside.split(sep).join("/"))) return false;
       assertNoSymlinkInChainOrThrow(projectReal, inside);
       const existing = lstatSync(targetAbs, { throwIfNoEntry: false });
-      return existing === undefined || (existing.isFile() && existing.nlink === 1);
+      return existing === undefined || (existing.isFile() && singleOrSyncUploadLinked(targetAbs, existing));
     });
   } catch {
     return false;
@@ -1239,7 +1239,7 @@ function isStageRecordOutput(projectDir: string, target: string): boolean {
     }
     assertNoSymlinkInChainOrThrow(realpathSync(projectLexical), relative(projectLexical, targetAbs));
     const existing = lstatSync(targetAbs, { throwIfNoEntry: false });
-    return existing === undefined || (existing.isFile() && existing.nlink === 1);
+    return existing === undefined || (existing.isFile() && singleOrSyncUploadLinked(targetAbs, existing));
   } catch {
     return false;
   }
@@ -1258,7 +1258,7 @@ function isEngineTextTarget(projectDir: string, target: string): boolean {
       return false;
     }
     const existing = lstatSync(resolve(target), { throwIfNoEntry: false });
-    return existing === undefined || (existing.isFile() && existing.nlink === 1);
+    return existing === undefined || (existing.isFile() && singleOrSyncUploadLinked(resolve(target), existing));
   } catch {
     return false;
   }
@@ -1274,7 +1274,7 @@ function isRequestTextTarget(projectDir: string, target: string): boolean {
     if (normalizeDriveLetter(dirname(resolve(target))) !== normalizeDriveLetter(resolve(folder))) return false;
     if (!isTrustedRecordTarget(projectDir, target, folder)) return false;
     const existing = lstatSync(resolve(target), { throwIfNoEntry: false });
-    return existing === undefined || (existing.isFile() && existing.nlink === 1);
+    return existing === undefined || (existing.isFile() && singleOrSyncUploadLinked(resolve(target), existing));
   } catch {
     return false;
   }
@@ -1289,7 +1289,7 @@ function isComposerProposalTarget(projectDir: string, target: string): boolean {
     }
     assertNoSymlinkInChainOrThrow(realpathSync(projectLexical), relative(projectLexical, targetAbs));
     const existing = lstatSync(targetAbs, { throwIfNoEntry: false });
-    return existing === undefined || (existing.isFile() && existing.nlink === 1);
+    return existing === undefined || (existing.isFile() && singleOrSyncUploadLinked(targetAbs, existing));
   } catch {
     return false;
   }

@@ -962,7 +962,6 @@ humanTurnState
 identityScopedUnitPath
 ignoredPathClaimable
 ignoredSourceClaimReason
-inertPath
 inspectArtifactPath
 inspectContinuationCursor
 installPlanApprovalLegacyOffer
