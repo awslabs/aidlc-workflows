@@ -43,7 +43,7 @@
 // the run's record shows when the bound bit; audit failures never change the
 // decision.
 
-import { existsSync, statSync, unlinkSync } from "node:fs";
+import { existsSync, readdirSync, statSync, unlinkSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import {
   hookOutsideGate,
@@ -115,6 +115,10 @@ export interface ScopeVerdict {
    *  command with no path operand falls back to, not a token the caller typed.
    *  Lets the refusal message say the offending path was implied, not written. */
   defaulted?: boolean;
+  /** True when `target` is not in another unit's folder: it is a folder that
+   *  holds the units' folders, refused as the start of a search or a listing.
+   *  The refusal says that, and where to start instead. */
+  above?: boolean;
 }
 
 /** Optional path context for the pure matcher. The live hook supplies both:
@@ -354,7 +358,8 @@ function judgeLexicalPath(text: string, scope: PreparedScope): ScopeVerdict | nu
   for (let i = 0; i < comps.length; i++) {
     if (constructionIndex([comps[i]], true) !== 0) continue;
     if (judgeOccurrence(comps.slice(i), scope.unitFolded, scope.exemptSuffixes)) {
-      return verdict(text);
+      // A folder named construction itself, with no unit named after it.
+      return i === comps.length - 1 && constructionIndex([comps[i]]) === 0 ? { ...verdict(text), above: true } : verdict(text);
     }
   }
   return null;
@@ -411,7 +416,7 @@ function judgeResolvedPath(
     // Recursive/search roots above construction/ sweep every sibling unit even
     // when the command never spells `construction` (for example `rg X .`).
     if (mode === "search-root" && containsPath(path, scope.constructionRoot)) {
-      return verdict(text);
+      return { ...verdict(text), above: true };
     }
   }
   return null;
@@ -842,31 +847,99 @@ export function blockReason(
   target: string,
   dispatch: ReviewerDispatch,
   defaulted = false,
-  context?: ScopeContext,
+  starts?: StartsBelow,
 ): string {
+  if (starts) {
+    const implied = defaulted ? " (the folder this call starts in when it names none)" : "";
+    const why = starts.alsoMeans === undefined
+      ? "a search or a listing that starts there runs through every unit's folder"
+      : `this check also takes "${target}" to mean ${starts.alsoMeans}, and a search or a listing that ` +
+        `starts there runs through every unit's folder`;
+    const below = starts.onlyUnit
+      ? ""
+      : starts.folders.length === 0
+        ? `, or in the folder below "${target}" that holds the code you mean`
+        : `, or in one of these: ${starts.folders.join(", ")}${starts.more > 0 ? ` (and ${starts.more} more)` : ""}`;
+    return (
+      `This review cannot open "${target}"${implied} because ${why}; the current review covers ` +
+      `${dispatch.unit}. Start it lower instead: in ${starts.unitFolder} for this unit's documents${below}.`
+    );
+  }
   const defaultNote = defaulted
     ? ` (this command names no path, so "${target}" is the implicit recursive search ` +
       `root it falls back to - not a path you typed; give it an explicit in-scope path)`
     : "";
-  const artifactsRoot = context?.recordRoot
-    ? `${toPosix(resolve(context.recordRoot))}/construction/${dispatch.unit}`
-    : `construction/${dispatch.unit}`;
-  const sourceRoot = context?.cwd
-    ? `${toPosix(resolve(context.cwd))} (the checkout this review runs in)`
-    : `the checkout this review runs in`;
   return (
     `This review cannot open "${target}"${defaultNote} because it belongs to another unit; the current ` +
     `review covers ${dispatch.unit}. Use the files supplied with the review and the files ` +
-    `under this unit's construction path. Search only two roots, and name the root in every call: ` +
-    `${artifactsRoot} (this unit's artifacts) and ${sourceRoot}, whose claimed source paths are the ` +
-    `ones ${dispatch.unit}'s source-manifest.json names. For example ` +
-    `Glob {pattern: "**/*.md", path: "${artifactsRoot}"} or ` +
-    `Grep {pattern: "TODO", path: "${artifactsRoot}"}. A Glob or Grep with no path searches from the ` +
-    `session folder through every unit, so it is refused. If the design depends on another unit, note ` +
-    `that integration point in the findings instead of opening its files. Write ${dispatch.unit} ` +
+    `under this unit's construction path. If the design depends on another unit, note that ` +
+    `integration point in the findings instead of opening its files. Write ${dispatch.unit} ` +
     `literally in shell paths because variables cannot be checked, and keep searches inside ` +
     `the current unit.`
   );
+}
+
+const FOLDERS_NAMED = 12;
+
+/** Where a search or a listing refused for starting above the units' folders can start instead. */
+export interface StartsBelow {
+  /** This unit's folder. */
+  unitFolder: string;
+  /** Up to FOLDERS_NAMED more folders a search may start in, written as the call wrote its folder. */
+  folders: string[];
+  /** How many more such folders there are. */
+  more: number;
+  /** No folder but this unit's is named: the refused one is named construction, or is this unit's own. */
+  onlyUnit: boolean;
+  /** Set when the refused folder, written in full from the tool's own folder, is open: what the check also took it to mean. */
+  alsoMeans?: string;
+}
+
+/**
+ * Where a search or a listing refused at `target` can start instead, or nothing
+ * when this unit's own folder is refused too. Every folder it names is first
+ * asked of evaluateReviewerScope as a listing, so a call that starts in that
+ * folder is not refused for it. Folder names are read only inside the project
+ * folder.
+ */
+export function startsBelow(
+  target: string,
+  dispatch: Pick<ReviewerDispatch, "unit" | "exempt">,
+  context: ScopeContext,
+  projectDir: string,
+): StartsBelow | undefined {
+  const unitFolder = toPosix(resolve(context.recordRoot ?? "", "construction", dispatch.unit));
+  const open = (path: string) => !evaluateReviewerScope("LS", { path }, dispatch, context).block;
+  if (!open(unitFolder)) return undefined;
+  const refused = resolve(context.cwd ?? "", target);
+  if (open(toPosix(refused))) {
+    // Refused where the matcher also read the path from the record or this unit's folder.
+    const scope = prepareScope(dispatch, context);
+    const alsoMeans = scope.bases.slice(scope.toolDirFirst ? 1 : 0)
+      .map((base) => toPosix(resolve(base, target)))
+      .find((path) => !open(path));
+    // Not refused from any base this context knows (a cd earlier in the line moved it): this unit's folder only.
+    if (alsoMeans === undefined) return { unitFolder, folders: [], more: 0, onlyUnit: true };
+    const own = normalizeForCompare(refused) === normalizeForCompare(unitFolder);
+    return { unitFolder, folders: own ? [] : [toPosix(refused)], more: 0, onlyUnit: own, alsoMeans };
+  }
+  if (constructionIndex(normalizedComps(target).slice(-1)) === 0) {
+    return { unitFolder, folders: [], more: 0, onlyUnit: true };
+  }
+  let names: string[] = [];
+  if (containsPath(normalizeForCompare(resolve(projectDir)), normalizeForCompare(refused))) {
+    try {
+      names = readdirSync(refused, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
+        .map((entry) => entry.name)
+        .sort();
+    } catch {
+      // Not a folder that can be listed: the unit's folder is still named.
+    }
+  }
+  const root = toPosix(target).replace(/\/+$/, "");
+  const folders = names.map((name) => (root === "." ? name : `${root}/${name}`)).filter(open);
+  return { unitFolder, folders: folders.slice(0, FOLDERS_NAMED), more: Math.max(0, folders.length - FOLDERS_NAMED), onlyUnit: false };
 }
 
 /**
@@ -1202,8 +1275,16 @@ async function checkScope(input: string, projectDir: string, outside: boolean, b
   if (reviewerScopeStandsAside(projectDir, parsed, toolName, dispatch.unit, verdict.target ?? "", dispatch.stage)) {
     return 0;
   }
+  let starts: StartsBelow | undefined;
+  if (verdict.above) {
+    try {
+      starts = startsBelow(verdict.target ?? ".", dispatch, scopeContext, projectDir);
+    } catch {
+      // The refusal stands, in the other wording.
+    }
+  }
   process.stderr.write(
-    `${blockReason(verdict.target ?? "", dispatch, verdict.defaulted, scopeContext)}\n`,
+    `${blockReason(verdict.target ?? "", dispatch, verdict.defaulted, starts)}\n`,
   );
   emitReviewerScopeBlocked(
     projectDir,

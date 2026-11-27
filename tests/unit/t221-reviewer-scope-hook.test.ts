@@ -35,6 +35,7 @@ import {
   blockReason,
   evaluateReviewerScope,
   parseDispatchRecord,
+  startsBelow,
   type ScopeContext,
   type ReviewerDispatch,
 } from "../../dist/claude/.claude/hooks/aidlc-reviewer-scope.ts";
@@ -43,6 +44,7 @@ import {
   readAuditShardEvents,
   reviewerDispatchPath,
   stateDigest,
+  toPosix,
   writeActiveDirectiveMarker,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { hookGroupMembers } from "../../core/tools/aidlc-command.ts";
@@ -441,24 +443,6 @@ describe("t221 (a) evaluateReviewerScope decision table", () => {
     expect(defaulted).toContain("implicit recursive search");
   });
 
-  test("blockReason names the roots a refused search may use, and they pass the matcher", () => {
-    const full: ReviewerDispatch = { reviewer: "aidlc-architecture-reviewer-agent", stage: "s", ...DISPATCH };
-    const artifactsRoot = join(RECORD_ROOT, "construction", "U03-scoring");
-    const reason = blockReason(".", full, true, SCOPE_CONTEXT);
-
-    expect(reason).toContain(artifactsRoot);
-    expect(reason).toContain("this unit's artifacts");
-    expect(reason).toContain(REPO_ROOT);
-    expect(reason).toContain("source-manifest.json");
-    expect(reason).toContain(`Glob {pattern: "**/*.md", path: "${artifactsRoot}"}`);
-    expect(reason).toContain("no path searches from the session folder through every unit, so it is refused");
-
-    expect(
-      evaluateReviewerScope("Glob", { pattern: "**/*.md", path: artifactsRoot }, DISPATCH, SCOPE_CONTEXT).block,
-    ).toBe(false);
-    expect(evaluateReviewerScope("Glob", { pattern: "**/*.md" }, DISPATCH, SCOPE_CONTEXT).block).toBe(true);
-  });
-
   test("parseDispatchRecord accepts the documented shape and rejects malformed records", () => {
     const good = parseDispatchRecord(
       '{"reviewer":"aidlc-architecture-reviewer-agent","stage":"nfr-requirements","unit":"U03","exempt":["a.md"]}',
@@ -469,6 +453,148 @@ describe("t221 (a) evaluateReviewerScope decision table", () => {
     expect(parseDispatchRecord('{"reviewer":"r","stage":"s","unit":"","exempt":[]}')).toBeNull();
     expect(parseDispatchRecord('{"reviewer":"r","stage":"s","unit":"U03","exempt":[1]}')).toBeNull();
     expect(parseDispatchRecord('{"reviewer":"r","stage":"s","unit":"U03"}')).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A search or a listing refused for where it starts: a folder that holds every
+// unit's folder, such as the project folder. The refusal says that, and every
+// start it names is one the same matcher lets through.
+// ---------------------------------------------------------------------------
+
+describe("t221 (a) a search or a listing refused for starting above the units' folders", () => {
+  // Two folders below the temporary one, so the folder two above the project is
+  // still one that holds it, wherever the temporary folder is.
+  const PROJ = join(mkdtempSync(join(tmpdir(), "t221-above-")), "work", "notify-hub");
+  const RECORD = join(PROJ, "aidlc", "spaces", "default", "intents", "x");
+  for (const dir of ["server", "src", "test", ".claude", "aidlc/spaces/default/intents/x/inception"]) {
+    mkdirSync(join(PROJ, dir), { recursive: true });
+  }
+  for (const unit of ["U01-infra", "U03-scoring/functional-design", "U03-scoring/nfr-requirements"]) {
+    mkdirSync(join(RECORD, "construction", unit), { recursive: true });
+  }
+  const FULL: ReviewerDispatch = { reviewer: "aidlc-architecture-reviewer-agent", stage: "nfr-design", unit: "U03-scoring", exempt: [] };
+  const AT_PROJECT: ScopeContext = { recordRoot: RECORD, cwd: PROJ };
+  const UNIT_FOLDER = toPosix(join(RECORD, "construction", "U03-scoring"));
+
+  // What the hook does on a refusal: the verdict, then the words.
+  function refusal(tool: string, input: Record<string, unknown>, context = AT_PROJECT) {
+    const verdict = evaluateReviewerScope(tool, input, FULL, context);
+    const starts = verdict.above ? startsBelow(verdict.target ?? ".", FULL, context, PROJ) : undefined;
+    return { verdict, text: blockReason(verdict.target ?? "", FULL, verdict.defaulted, starts) };
+  }
+
+  // Every way a reviewer would start again from a folder the refusal names.
+  function expectOpen(start: string, context: ScopeContext): void {
+    for (const [tool, input] of [
+      ["Bash", { command: `find ${start} -iname "*zulip*"` }],
+      ["Bash", { command: `grep -rn zulip ${start}` }],
+      ["Bash", { command: `ls ${start}` }],
+      ["Grep", { pattern: "zulip", path: start }],
+      ["Glob", { pattern: "**/*.ts", path: start }],
+      ["LS", { path: start }],
+    ] as Array<[string, Record<string, unknown>]>) {
+      expect(evaluateReviewerScope(tool, input, FULL, context), `${tool} ${JSON.stringify(input)}`).toEqual({ block: false });
+    }
+  }
+
+  const project = toPosix(PROJ);
+  const record = toPosix(RECORD);
+  const FROM_ABOVE: Array<[string, string, Record<string, unknown>, string[]]> = [
+    ["a search a reviewer ran from the project folder", "Bash", { command: 'find . -iname "*zulip*" -not -path "*/aidlc/*" -not -path "*/.claude/*"' }, ["server", "src", "test"]],
+    ["a listing of the project folder", "Bash", { command: "ls" }, ["server", "src", "test"]],
+    ["a Grep with no folder", "Grep", { pattern: "zulip" }, ["server", "src", "test"]],
+    ["a Glob in the project folder", "Glob", { pattern: "**/*.ts", path: project }, [`${project}/server`, `${project}/src`, `${project}/test`]],
+    ["a search of the record folder", "Bash", { command: `grep -rn timeout ${record}` }, [`${record}/inception`]],
+    ["a search of the space folder", "Bash", { command: "grep -rn timeout aidlc/spaces/default" }, []],
+  ];
+  for (const [name, tool, input, folders] of FROM_ABOVE) {
+    test(`${name}: refused for where it starts, and every start its refusal names is open`, () => {
+      const { verdict, text } = refusal(tool, input);
+      expect(verdict.block).toBe(true);
+      expect(verdict.above).toBe(true);
+      expect(text).toStartWith(`This review cannot open "${verdict.target}"`);
+      expect(text).toContain("because a search or a listing that starts there runs through every unit's folder;");
+      expect(text).not.toContain("belongs to another unit");
+      expect(text).toContain(`Start it lower instead: in ${UNIT_FOLDER} for this unit's documents, `);
+      expect(text).toEndWith(
+        folders.length > 0
+          ? `in one of these: ${folders.join(", ")}.`
+          : `or in the folder below "${verdict.target}" that holds the code you mean.`,
+      );
+      for (const start of [UNIT_FOLDER, ...folders]) expectOpen(start, AT_PROJECT);
+    });
+  }
+
+  test("past 12 open folders the refusal names the first 12 and how many more", () => {
+    const wide = join(mkdtempSync(join(tmpdir(), "t221-above-")), "wide");
+    const wideRecord = join(wide, "aidlc", "spaces", "default", "intents", "x");
+    mkdirSync(join(wideRecord, "construction", "U03-scoring"), { recursive: true });
+    const names = Array.from({ length: 15 }, (_, i) => `pkg${String(i + 1).padStart(2, "0")}`);
+    for (const name of names) mkdirSync(join(wide, name));
+    const context: ScopeContext = { recordRoot: wideRecord, cwd: wide };
+    const verdict = evaluateReviewerScope("Bash", { command: "ls" }, FULL, context);
+    const starts = startsBelow(verdict.target ?? ".", FULL, context, wide);
+    expect(starts?.folders).toEqual(names.slice(0, 12));
+    expect(starts?.more).toBe(3);
+    expect(blockReason(verdict.target ?? "", FULL, verdict.defaulted, starts)).toEndWith(
+      `in one of these: ${names.slice(0, 12).join(", ")} (and 3 more).`,
+    );
+  });
+
+  test("a call that names no folder says it started in the tool's folder", () => {
+    expect(refusal("Grep", { pattern: "zulip" }).text).toContain('cannot open "." (the folder this call starts in when it names none) because');
+    expect(refusal("Bash", { command: "grep -rn zulip ." }).text).toContain('cannot open "." because');
+  });
+
+  test("a listing of a folder named construction names this unit's folder once, and only it", () => {
+    for (const command of [`ls ${record}/construction`, "ls construction"]) {
+      const { verdict, text } = refusal("Bash", { command });
+      expect(verdict.above).toBe(true);
+      expect(text).toEndWith(`Start it lower instead: in ${UNIT_FOLDER} for this unit's documents.`);
+      expect(text.split(UNIT_FOLDER)).toHaveLength(2);
+    }
+  });
+
+  test("a folder above the project is not listed: no folder outside the project is named", () => {
+    const { verdict, text } = refusal("Bash", { command: "find ../.. -name x" });
+    expect(verdict.above).toBe(true);
+    expect(text).toEndWith(`for this unit's documents, or in the folder below "../.." that holds the code you mean.`);
+  });
+
+  test("from a folder the call could start in, a call that names no folder says where else the check read it", () => {
+    const why = `because this check also takes "." to mean ${record}, and a search or a listing that starts there runs through every unit's folder;`;
+    const fromUnit: ScopeContext = { recordRoot: RECORD, cwd: join(RECORD, "construction", "U03-scoring") };
+    const own = refusal("Grep", { pattern: "zulip" }, fromUnit);
+    expect(own.verdict.above).toBe(true);
+    expect(own.text).toContain(why);
+    expect(own.text).toEndWith(`Start it lower instead: in ${UNIT_FOLDER} for this unit's documents.`);
+    expectOpen(UNIT_FOLDER, fromUnit);
+    const fromServer: ScopeContext = { recordRoot: RECORD, cwd: join(PROJ, "server") };
+    const source = refusal("Grep", { pattern: "zulip" }, fromServer);
+    expect(source.text).toContain(why);
+    expect(source.text).toEndWith(`in one of these: ${project}/server.`);
+    for (const start of [UNIT_FOLDER, `${project}/server`]) expectOpen(start, fromServer);
+  });
+
+  test("when this unit's own folder is refused too, the refusal names no start", () => {
+    // A project inside a folder named construction: the guide's switch is the way on there.
+    const inside = join(mkdtempSync(join(tmpdir(), "t221-above-")), "construction", "shop");
+    const insideRecord = join(inside, "aidlc", "spaces", "default", "intents", "x");
+    mkdirSync(join(insideRecord, "construction", "U03-scoring"), { recursive: true });
+    const context: ScopeContext = { recordRoot: insideRecord, cwd: inside };
+    const verdict = evaluateReviewerScope("Grep", { pattern: "zulip" }, FULL, context);
+    expect(verdict.block).toBe(true);
+    expect(startsBelow(verdict.target ?? ".", FULL, context, inside)).toBeUndefined();
+  });
+
+  test("another unit's file, and a search from another unit's folder, keep their own words", () => {
+    const sibling = refusal("Read", { file_path: join(RECORD, "construction", "U01-infra", "design.md") });
+    expect(sibling.verdict.above).toBeUndefined();
+    expect(sibling.text).toContain("because it belongs to another unit");
+    const fromSibling = refusal("Grep", { pattern: "zulip" }, { recordRoot: RECORD, cwd: join(RECORD, "construction", "U01-infra") });
+    expect(fromSibling.verdict.above).toBeUndefined();
+    expect(fromSibling.text).toContain("implicit recursive search");
   });
 });
 
@@ -809,7 +935,7 @@ describe("t221 (b) dispatch-record lifecycle (shipped hook, subprocess)", () => 
       tool_input: { command: "grep -rn TODO | cat" },
     });
     expect(firstSeg.code).toBe(2);
-    expect(firstSeg.stderr).toContain("names no path");
+    expect(firstSeg.stderr).toContain("(the folder this call starts in when it names none)");
   });
 
   test("piped filesystem modes and option-supplied sibling operands -> exit 2", () => {
@@ -1188,7 +1314,7 @@ describe("t221 (a) a checkout recorded for the work", () => {
     ["rg with only a glob", "Bash", { command: "rg -g '../shop-web/**' x" }],
   ] as Array<[string, string, Record<string, unknown>]>) {
     test(`a pathless search names its default root: ${name}`, () => {
-      expect(judge(tool, input, BESIDE)).toEqual({ block: true, target: ".", defaulted: true });
+      expect(judge(tool, input, BESIDE)).toEqual({ block: true, target: ".", defaulted: true, above: true });
     });
   }
 
@@ -1300,6 +1426,21 @@ describe("t221 (b) a checkout recorded for the work (shipped hook, subprocess)",
     const closed = reviewer(proj, "Read", { file_path: "../shop-web/app.js" });
     expect(closed.code).toBe(2);
     expect(closed.stderr).toContain('This review cannot open "../shop-web/app.js" because it belongs to another unit');
+  });
+
+  test("a search refused for starting at the project folder names the folders to start in, and the named start passes", () => {
+    const { proj } = shopWithWeb();
+    mkdirSync(join(proj, "src"));
+    const refused = reviewer(proj, "Bash", { command: 'find . -iname "*app*" -not -path "*/aidlc/*"' });
+    expect(refused.code).toBe(2);
+    expect(refused.stderr).toContain('This review cannot open "." because a search or a listing that starts there runs through every unit\'s folder;');
+    const unitFolder = toPosix(join(seededRecordDir(proj), "construction", UNIT));
+    expect(refused.stderr).toContain(`Start it lower instead: in ${unitFolder} for this unit's documents, or in one of these: src.\n`);
+    expect(rows(proj, "REVIEWER_SCOPE_BLOCKED")).toHaveLength(1);
+    // The named steps work.
+    expect(reviewer(proj, "Bash", { command: 'find src -iname "*app*"' }).code).toBe(0);
+    expect(reviewer(proj, "Bash", { command: `find ${unitFolder} -name "*.md"` }).code).toBe(0);
+    expect(rows(proj, "REVIEWER_SCOPE_BLOCKED")).toHaveLength(1);
   });
 
   test("two recorded checkouts are both open", () => {
