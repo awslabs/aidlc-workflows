@@ -14,6 +14,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -902,6 +903,52 @@ describe("utility handlers and reservation chokepoints", () => {
       } finally {
         cleanup(projectDir);
       }
+    }
+  });
+
+  test("space-create refuses a Windows device name on Windows, and on macOS and Linux makes it and says the risk once", () => {
+    // Windows keeps these names for devices, so git there cannot add the
+    // folder: refused. Elsewhere the space is made under its stored name, and
+    // the first line says what a teammate on Windows meets and the way back.
+    const stored: Record<string, string> = {
+      aux: "aux", Aux: "aux", AUX: "aux", CON: "con", "con.": "con", nul: "nul", prn: "prn", com1: "com1", LPT9: "lpt9",
+    };
+    for (const [raw, name] of Object.entries(stored)) {
+      const projectDir = scratchProject();
+      try {
+        const r = runUtility(projectDir, ["space-create", raw]);
+        const spaces = join(projectDir, "aidlc", "spaces");
+        if (process.platform === "win32") {
+          expect(r.status, raw).not.toBe(0);
+          expect(JSON.parse(r.stderr.trim().split("\n").at(-1) ?? "{}").error, raw).toBe(
+            `"${name}" is a device name on Windows, where git cannot add or check out a folder with that name. Pick another name, such as "${name}-team".`,
+          );
+          // Listed, not probed: on Windows a path that ends in a device name
+          // can answer "exists" with no folder there.
+          expect(existsSync(spaces) ? readdirSync(spaces) : [], raw).not.toContain(name);
+        } else {
+          expect(r.status, r.out).toBe(0);
+          expect(r.stdout.split("\n").slice(0, 3), raw).toEqual([
+            `Space created: ${name}. A teammate on Windows cannot check out a folder with this name; to pick another, delete aidlc/spaces/${name} and create it again.`,
+            "  memory/org.md (copied from default), team.md, project.md, phases/, templates/, codekb/, knowledge/",
+            `Switch to it with /aidlc space ${name}.`,
+          ]);
+          expect(existsSync(join(spaces, name)), raw).toBe(true);
+        }
+      } finally {
+        cleanup(projectDir);
+      }
+    }
+    // Only the whole name is a device: these are ordinary names everywhere.
+    const projectDir = scratchProject();
+    try {
+      for (const raw of ["console", "aux-team", "com10", "nullable"]) {
+        const r = runUtility(projectDir, ["space-create", raw]);
+        expect(r.status, r.out).toBe(0);
+        expect(r.stdout.split("\n")[0], raw).toBe(`Space created: ${raw}`);
+      }
+    } finally {
+      cleanup(projectDir);
     }
   });
 

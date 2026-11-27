@@ -1565,6 +1565,20 @@ describe("t164 query layer (listSpaces / listIntents + --json)", () => {
     expect(existsSync(join(proj, "aidlc", "spaces", "h"))).toBe(false);
   });
 
+  test("space-create refuses a name with no letter or digit to keep, and creates nothing", () => {
+    // slugify falls back to "intent" for these, so each would have created (or
+    // collided with) a space called "intent" the person never asked for.
+    for (const raw of ["   ", "..", "!!!", "日本語", "Привет"]) {
+      const r = util(["space-create", raw]);
+      expect(r.status).not.toBe(0);
+      expect(r.out).toContain("has no letter or digit a space name can keep");
+    }
+    expect(existsSync(join(proj, "aidlc", "spaces", "intent"))).toBe(false);
+    // A name that keeps something is still created under what it keeps.
+    expect(util(["space-create", "日本語 team 2"]).status).toBe(0);
+    expect(existsSync(join(proj, "aidlc", "spaces", "team-2"))).toBe(true);
+  });
+
   test("an unknown-space switch fails without inviting creation", () => {
     // Pins the wording the same way the unknown-intent case below is pinned:
     // the error must steer to switching between EXISTING spaces only, never
