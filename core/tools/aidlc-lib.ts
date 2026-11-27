@@ -35905,11 +35905,13 @@ export function currentSwarmSourceMergeChain(
     allRows.filter((row) =>
       row.event !== "INTENT_REPOS_CHANGED" || openingRow === null || !attemptEventDefinitelyBefore(openingRow, row)),
   );
-  if (opening?.state === "invalid") {
+  // Lost on this machine (a fresh clone, a teammate's), the record proves
+  // nothing against a first link that was checked where it was made.
+  if (opening?.state === "invalid" && opening.baseline !== "missing") {
     return opening;
   }
   if (
-    opening !== null &&
+    opening?.state === "ready" &&
     openingPrevious !== opening.fingerprint &&
     !(openingPrevious !== null && openingRow !== null && keptChange(opening.fingerprint, openingPrevious, openingRow))
   ) {
