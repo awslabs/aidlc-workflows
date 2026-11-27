@@ -91,6 +91,7 @@ import {
   writeFileAtomic,
   repoNameRefusal,
   entrySkillInvocation,
+  findStageBySlug,
   asksForHelp,
   printUsageAndExit,
 } from "./aidlc-lib.js";
@@ -100,6 +101,7 @@ import { mainCheckoutChangeStep } from "./aidlc-message-store.ts";
 import { swarmSourceChanged, swarmSourceChangedSince } from "./aidlc-swarm-source.ts";
 import { aidlcDispatcherInvocation } from "./aidlc-runtime-paths.ts";
 import { captureCodeGenerationDiscardApproval } from "./aidlc-testing-posture.ts";
+import { STAGE_START_UNAVAILABLE, stageStartUncheckedLine } from "./aidlc-swarm-source.ts";
 
 // kebab-case slug shape: lowercase letter, then lowercase letters / digits /
 // hyphens. Mirrors SLUG_RE in aidlc-stage-schema.ts: the codebase already
@@ -2009,7 +2011,7 @@ function keptByStagedLanding(
   recorded: string,
   intent?: string,
   space?: string,
-): { kept?: string } {
+): { kept?: string; opened?: string } {
   const rows = readAuditShardEvents(pd, intent, space);
   const converged = sortWorktreeAuditRows(rows.filter((row) =>
     row.event === "SWARM_UNIT_CONVERGED" &&
@@ -2026,7 +2028,8 @@ function keptByStagedLanding(
     !auditBlockField(candidate.block, "Message Id") &&
     rowAfter(candidate, converged))).at(-1);
   const kept = row === undefined ? null : auditBlockField(row.block, "Details");
-  return kept ? { kept } : {};
+  const opened = row === undefined ? null : auditBlockField(row.block, "Current");
+  return kept ? { kept, ...(opened ? { opened } : {}) } : {};
 }
 
 function assertAggregateSourceBeforeMerge(
@@ -2053,10 +2056,14 @@ function assertAggregateSourceBeforeMerge(
   // with the message they asked in; that step already told them. The line is
   // not said here: the merge can still stop, and a run that stopped already
   // wrote the row the run that lands finds.
-  const keepChange = (recorded: string, changed: string[] | null, asked: string[] | null = null) => {
-    const notice = changed && changed.length > 0
+  const keepChange = (
+    recorded: string,
+    changed: string[] | null,
+    asked: string[] | null = null,
+    notice = changed && changed.length > 0
       ? `You changed ${renderChangedPaths(changed)} during the build${asked ? ", as you asked" : ""}; kept them and merged unit ${record.unit}.`
-      : `The main checkout changed during the build; kept it and merged unit ${record.unit}.`;
+      : `The main checkout changed during the build; kept it and merged unit ${record.unit}.`,
+  ) => {
     recordAcceptedChanges(pd, [{
       checkpoint: "swarm-batch", stage: record.stage, unit: record.unit, changed,
       recorded, current: current!.fingerprint, notice, ...(asked ? { messageIds: asked } : {}),
@@ -2127,9 +2134,24 @@ function assertAggregateSourceBeforeMerge(
     space,
   );
   if (opening.state === "invalid") {
+    // The record of what the stage started from cannot be read here: the
+    // landing starts from the main checkout as it is, unless strict holds it.
+    const stage = findStageBySlug(record.stage)?.name ?? record.stage;
+    const unchecked = opening.baseline === undefined ? null : stageStartUncheckedLine(opening.baseline, stage, acceptsChanges);
+    if (unchecked !== null) {
+      // A landing finished after it stopped staged opens where its first run did.
+      const opened = resuming ? keptByStagedLanding(pd, record, STAGE_START_UNAVAILABLE, intent, space).opened : undefined;
+      if (opened !== undefined) return { state: current, openingFingerprint: opened, kept: unchecked };
+      return keepChange(STAGE_START_UNAVAILABLE, null, null, unchecked);
+    }
     errorWithSlug(
       slug,
-      `refusing to merge: the current stage has no verifiable predecessor for the first aggregate link (${opening.reason})`,
+      opening.baseline === undefined
+        ? `refusing to merge: the current stage has no verifiable predecessor for the first aggregate link (${opening.reason})`
+        : `refusing to merge: AI-DLC ${opening.baseline === "unbindable" ? "could not record" : "has no usable record of"} what ` +
+          `${stage} started from, so changes outside the units cannot be checked. Restart the stage with ` +
+          `\`${entrySkillInvocation()} --stage ${record.stage}\` to check again from here, or, with the person's go-ahead, ` +
+          "set Guard Policy relaxed for this piece of work and run the merge again.",
     );
   }
   if (resuming) {

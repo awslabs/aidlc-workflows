@@ -35555,7 +35555,8 @@ export type SwarmSourceMergeChain =
     };
 
 export type SwarmSourceOpeningFingerprint =
-  | { state: "invalid"; reason: string }
+  // `baseline`: the stage-start record's state, when that is what cannot be read.
+  | { state: "invalid"; reason: string; baseline?: Exclude<SourceBaselineResult["state"], "ready"> }
   | {
       state: "ready";
       fingerprint: string;
@@ -35690,6 +35691,7 @@ export function currentSwarmSourceOpeningFingerprint(
     return {
       state: "invalid",
       reason: "current source baseline is unavailable for the opening aggregate link",
+      baseline: baseline.state,
     };
   }
   return {
@@ -35886,10 +35888,16 @@ export function currentSwarmSourceMergeChain(
     }
     start = end;
   }
+  // A first link that opened from the main checkout as it was, because the
+  // record of what the stage started from could not be read there (the
+  // CHANGE_ACCEPTED row STAGE_START_UNAVAILABLE in aidlc-swarm-source.ts names),
+  // stands whatever that record reads as now.
+  const unchecked = openingPrevious !== null && openingRow !== null &&
+    keptChange("(stage start unavailable)", openingPrevious, openingRow);
   // The opening link was checked against the stage baseline as it stood then:
   // a repo that joined the work after that landing (withRepoBaselineAdditions
   // reads its INTENT_REPOS_CHANGED row) does not move it.
-  const opening = currentSwarmSourceOpeningFingerprint(
+  const opening = unchecked ? null : currentSwarmSourceOpeningFingerprint(
     projectDir,
     slug,
     intent,
@@ -35897,10 +35905,11 @@ export function currentSwarmSourceMergeChain(
     allRows.filter((row) =>
       row.event !== "INTENT_REPOS_CHANGED" || openingRow === null || !attemptEventDefinitelyBefore(openingRow, row)),
   );
-  if (opening.state === "invalid") {
+  if (opening?.state === "invalid") {
     return opening;
   }
   if (
+    opening !== null &&
     openingPrevious !== opening.fingerprint &&
     !(openingPrevious !== null && openingRow !== null && keptChange(opening.fingerprint, openingPrevious, openingRow))
   ) {

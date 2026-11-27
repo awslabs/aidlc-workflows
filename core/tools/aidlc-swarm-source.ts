@@ -199,6 +199,27 @@ export function swarmSourceChangedSince(
   return swarmSourceChanged(projectDir, before, current.listing);
 }
 
+// The record of what a stage started from, when it cannot be read on this
+// machine: a copy that is not here (a fresh clone, a teammate's machine) is
+// AI-DLC's own lost bookkeeping, so the work carries on under every Guard
+// Policy; one that is here and does not match, or that could not be taken,
+// carries on unless strict holds it. Stage completion and the swarm's first
+// landing both decide here (a record of an earlier release, `legacy`, reaches
+// neither: completion skips its check, and a converged Unit is modern
+// evidence). The line the person reads when it carries on; null when strict
+// holds it.
+export const STAGE_START_UNAVAILABLE = "(stage start unavailable)";
+
+export function stageStartUncheckedLine(
+  state: "legacy" | "unbindable" | "invalid" | "missing",
+  stageName: string,
+  acceptsChanges: boolean,
+): string | null {
+  return acceptsChanges || state === "missing"
+    ? `I could not check ${stageName} for files changed outside the units on this machine; carrying on.`
+    : null;
+}
+
 // Whether the person's source is as the build last verified it (the last
 // landing's listing, else the stage's opening listing): the comparison a landing
 // makes. False when no listing reads back or the evidence cannot be read; the
