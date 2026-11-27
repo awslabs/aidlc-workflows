@@ -20,6 +20,7 @@ import {
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS * 2);
@@ -259,7 +260,7 @@ describe("work a newer AI-DLC wrote: installs AI-DLC does not update itself", ()
     const message = step.message ?? "";
     expect(message).toContain("This plan was set up with AI-DLC 2.12 or newer, and this project has AI-DLC");
     expect(message).toContain("copied in by hand");
-    expect(message).toContain("`bun .claude/tools/aidlc.ts config --harness claude --from <that file>`");
+    expect(message).toContain(`\`${withCopyLaunchOptions("bun .claude/tools/aidlc.ts config --harness claude --from <that file>")}\``);
     expect(message).toEndWith(" Then stop.");
   });
 

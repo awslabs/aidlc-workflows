@@ -37,6 +37,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { projectionPluginRoot, readPluginTargets } from "../../dist/claude/.claude/tools/aidlc-plugin-emit.ts";
 import { quoteCommandArgument } from "../../core/tools/aidlc-runtime-paths.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -44,6 +45,8 @@ const REPO_ROOT = resolve(import.meta.dir, "../..");
 const TOOLS = join(REPO_ROOT, "dist", "claude", ".claude", "tools");
 const TARGETS = readPluginTargets(join(TOOLS, "data", "plugin-targets.json"));
 const HARNESSES = ["claude", "codex", "copilot", "cursor", "kiro", "kiro-ide", "opencode"] as const;
+// The dispatcher of the copy tree in `leaf` as it prints itself, with the copy launch's two Bun options.
+const launch = (leaf: string): string => withCopyLaunchOptions(`bun ${leaf}/tools/aidlc.ts`);
 const scratch = mkdtempSync(join(tmpdir(), "aidlc-t354-"));
 let counter = 0;
 
@@ -492,7 +495,7 @@ describe("t354 session-start hooks need no order", () => {
       expect(ran.status, ran.stdout + ran.stderr).toBe(0);
       expect(ran.stdout).toContain(
         "alpha is not composed: it needs zeta ^0.1.0, which this project does not have yet. If zeta is installed, " +
-          `alpha composes when you run \`bun ${leaf}/tools/aidlc.ts engine plugin sync --plugin-root ${quoteCommandArgument(team)}\` ` +
+          `alpha composes when you run \`${launch(leaf)} engine plugin sync --plugin-root ${quoteCommandArgument(team)}\` ` +
           "after zeta composes; if not, install zeta.",
       );
     },
@@ -774,7 +777,7 @@ describe("t354 turning a base off pauses the plugin built on it", () => {
       expect(off.status, off.stdout + off.stderr).toBe(0);
       expect(off.stdout).toContain(
         "What alpha added to other stages and agents is taken out; turn alpha back on and it returns when you run " +
-          `\`bun ${leaf}/tools/aidlc.ts engine plugin sync --plugin-root <alpha's folder>\`.`,
+          `\`${launch(leaf)} engine plugin sync --plugin-root <alpha's folder>\`.`,
       );
     },
   );
@@ -887,7 +890,7 @@ describe("t354 every line that sends the person to sync names a command that wor
       expect(bare.status).toBe(1);
       expect(bare.stderr).toContain(
         "Nothing synced: this tool keeps no list of your plugins, so name each one's folder: " +
-          `\`bun ${leaf}/tools/aidlc.ts engine plugin sync --plugin-root <alpha's folder>\`.`,
+          `\`${launch(leaf)} engine plugin sync --plugin-root <alpha's folder>\`.`,
       );
     },
   );
@@ -898,7 +901,7 @@ describe("t354 every line that sends the person to sync names a command that wor
     expect(bare.status, bare.stdout + bare.stderr).toBe(0);
     expect(bare.stdout).toContain(
       "Nothing synced: this tool keeps no list of your plugins, so name each one's folder: " +
-        "`bun .kiro/tools/aidlc.ts engine plugin sync --plugin-root <alpha's folder>`.",
+        `\`${launch(".kiro")} engine plugin sync --plugin-root <alpha's folder>\`.`,
     );
     const stage = join(dir, ".kiro", "aidlc-common", "stages", "construction", "build-and-test.md");
     writeFileSync(stage, readFileSync(join(REPO_ROOT, "dist", "kiro", ".kiro", "aidlc-common", "stages", "construction", "build-and-test.md")));
@@ -916,7 +919,7 @@ describe("t354 every line that sends the person to sync names a command that wor
     const refused = run("aidlc.ts", ["engine", "plugin", "sync", "--plugin-root", built]);
     expect(refused.status).toBe(1);
     expect(refused.stderr).toContain(
-      `then run \`bun .kiro/tools/aidlc.ts engine plugin sync --plugin-root ${quoteCommandArgument(built)}\` again`,
+      `then run \`${launch(".kiro")} engine plugin sync --plugin-root ${quoteCommandArgument(built)}\` again`,
     );
   });
 
@@ -938,7 +941,7 @@ describe("t354 every line that sends the person to sync names a command that wor
     expect(ran.status).toBe(1);
     expect(String(ran.stderr)).toContain(
       "plugin sync finished but alpha is not composed; " +
-        `run bun .kiro/tools/aidlc.ts engine plugin sync --plugin-root ${quoteCommandArgument(built)} again`,
+        `run ${launch(".kiro")} engine plugin sync --plugin-root ${quoteCommandArgument(built)} again`,
     );
   });
 
@@ -952,10 +955,10 @@ describe("t354 every line that sends the person to sync names a command that wor
     const checks = (JSON.parse(doctor.stdout) as { data: { checks: Array<{ label: string; pass: boolean; fix?: string }> } }).data.checks;
     const surface = checks.find((check) => check.label.startsWith("Composed plugin surface"));
     expect(surface?.pass).toBe(false);
-    expect(surface?.fix).toContain("then re-run `bun .kiro/tools/aidlc.ts engine plugin sync --plugin-root <alpha's folder>`.");
+    expect(surface?.fix).toContain(`then re-run \`${launch(".kiro")} engine plugin sync --plugin-root <alpha's folder>\`.`);
     const uncompiled = checks.find((check) => check.label.startsWith("Uncompiled stage files"));
     expect(uncompiled?.label).toContain(
-      "plugin-owned files alpha-example-stage (alpha) require `bun .kiro/tools/aidlc.ts engine plugin sync --plugin-root <alpha's folder>`",
+      `plugin-owned files alpha-example-stage (alpha) require \`${launch(".kiro")} engine plugin sync --plugin-root <alpha's folder>\``,
     );
   });
 
@@ -1043,7 +1046,7 @@ describe("t354 turning a paused plugin's base back on says how the plugin comes 
   }
   const backLine = (leaf: string): string =>
     "zeta is on again, so alpha runs again; anything alpha adds to other stages and agents comes back when you run " +
-    `\`bun ${leaf}/tools/aidlc.ts engine plugin sync --plugin-root <alpha's folder>\`.`;
+    `\`${launch(leaf)} engine plugin sync --plugin-root <alpha's folder>\`.`;
 
   test.each([["kiro", ".kiro"], ["opencode", ".aidlc"]] as const)(
     "on %s, the select that turns zeta back on names the sync once",
@@ -1095,7 +1098,7 @@ describe("t354 turning a paused plugin's base back on says how the plugin comes 
     const back = run(["config", "project", "--plugins", "aidlc,alpha,zeta", "--harness", "kiro-v2", "--yes"], ".claude");
     expect(back.status, back.stdout + back.stderr).toBe(0);
     expect(back.stdout).toContain(
-      "comes back when you run `bun .claude/tools/aidlc.ts engine plugin sync --harness-dir .kiro --plugin-root <alpha's folder>`.",
+      `comes back when you run \`${launch(".claude")} engine plugin sync --harness-dir .kiro --plugin-root <alpha's folder>\`.`,
     );
   });
 });

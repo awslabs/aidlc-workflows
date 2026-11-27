@@ -241,6 +241,10 @@ describe("t290 code-generation coverage requires per-unit test instructions", ()
     expect(codeGeneration).toContain(
       "A bare project-wide command like\n`npm test` is not acceptable",
     );
+    expect(codeGeneration.replace(/\s+/g, " ")).toContain(
+      "Write each command to run as written from the workspace root, with any folder it needs inside the command " +
+        "and never in a note beside it: the review and Build and Test run it exactly as recorded.",
+    );
     expect(buildAndTest).toContain("Deduplicate identical commands");
     expect(buildAndTest).toContain("run each distinct command ONCE");
     expect(buildAndTest).toContain("run that command\n   once, never N");

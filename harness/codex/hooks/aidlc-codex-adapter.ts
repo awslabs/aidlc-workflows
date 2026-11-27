@@ -6,7 +6,7 @@
 // subprocess-pipes into the named core hook, forwarding stdout/exit code.
 //
 // Codex payloads are near-isomorphic to Claude Code's (live corpus,
-// tmp/codex-dist/payload-corpus/ in the framework repo) with five
+// tmp/codex-dist/payload-corpus/ in the framework repo) with six
 // load-bearing differences:
 //   1. Edits arrive as tool_name "apply_patch" with the file paths INSIDE
 //      the patch envelope text (tool_input.command) — no file_path field.
@@ -37,6 +37,9 @@
 //      thread. record-human-turn never counts either as the person's turn
 //      (#1411), and the preamble maps either thread to this chat so an engine
 //      command run in it acts on this chat's work.
+//   6. On a shell call (Codex 0.166.0 and later) `cwd` is the call's own
+//      working folder, which can lie outside the project; Codex still starts
+//      the hook in the session's folder, and that is the project.
 //
 // Output contracts:
 //   - session-start: the core hook prints
@@ -83,6 +86,7 @@ import {
   stateFilePath,
   validSessionId,
 } from "../tools/aidlc-lib.ts";
+import { bunLaunchFlags } from "../tools/aidlc-runtime-paths.ts";
 import { patchTargets } from "./review-freeze-command.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
@@ -286,8 +290,8 @@ if (!process.stdin.isTTY) {
   }
 }
 
-const projectDirRaw =
-  process.env.AIDLC_PROJECT_DIR ?? codex.cwd ?? process.cwd();
+// The folder Codex starts the hook in, never the payload's cwd (difference 6).
+const projectDirRaw = process.env.AIDLC_PROJECT_DIR ?? process.cwd();
 const projectDir = isAbsolute(projectDirRaw)
   ? projectDirRaw
   : resolve(process.cwd(), projectDirRaw);
@@ -488,11 +492,11 @@ function runCore(hookFile: string, input: string): { stdout: string; code: numbe
     : authorityToken
       ? [
           process.execPath,
-          join(HOOKS_DIR, "..", "tools", "aidlc.ts"),
+          ...bunLaunchFlags(), join(HOOKS_DIR, "..", "tools", "aidlc.ts"),
           "--internal-aidlc-record-human-turn",
           join(HOOKS_DIR, hookFile),
         ]
-      : [process.execPath, join(HOOKS_DIR, hookFile)];
+      : [process.execPath, ...bunLaunchFlags(), join(HOOKS_DIR, hookFile)];
   const r = Bun.spawnSync(command, {
     stdin: Buffer.from(input, "utf-8"),
     stdout: "pipe",
@@ -521,11 +525,11 @@ function runCoreWithStderr(
     : authorityToken
       ? [
           process.execPath,
-          join(HOOKS_DIR, "..", "tools", "aidlc.ts"),
+          ...bunLaunchFlags(), join(HOOKS_DIR, "..", "tools", "aidlc.ts"),
           "--internal-aidlc-record-human-turn",
           join(HOOKS_DIR, hookFile),
         ]
-      : [process.execPath, join(HOOKS_DIR, hookFile)];
+      : [process.execPath, ...bunLaunchFlags(), join(HOOKS_DIR, hookFile)];
   const r = Bun.spawnSync(command, {
     stdin: Buffer.from(input, "utf-8"),
     stdout: "pipe",
@@ -646,7 +650,9 @@ function reconcilePriorSession(): void {
 
 // --- apply_patch envelope parsing --------------------------------------------
 
-const projectPath = (rel: string): string => isAbsolute(rel) ? rel : join(projectDir, rel);
+// A patch's relative file resolves from the payload's cwd, where Codex applies it.
+const patchDir = codex.cwd ? resolve(projectDir, codex.cwd) : projectDir;
+const projectPath = (rel: string): string => isAbsolute(rel) ? rel : join(patchDir, rel);
 
 function patchedFiles(command: string): Array<{ path: string; tool: "Write" | "Edit" }> {
   return patchTargets(command)

@@ -44,7 +44,9 @@
 //   renderRunner(scope, description) - emits the SKILL.md body: `name:
 //        aidlc-<scope>` frontmatter, a `description: >` folded block, NO `hooks:`
 //        block, and the `aidlc-orchestrate.ts next --scope <scope>` forwarding
-//        loop. Spec-conformant: name == dir == aidlc-<scope>.
+//        loop (`next --entry --scope <scope>` on Claude Code, whose first
+//        command carries none of the person's words). Spec-conformant: name ==
+//        dir == aidlc-<scope>.
 //   discoverScopes() - reads the `.md` files under `.claude/scopes/`
 //        (AIDLC_SCOPES_DIR seam via scopesDir), keyed by frontmatter `name`.
 //   handleScopes - `--check` (drift guard, exits 1 listing the drifted runners)
@@ -62,7 +64,8 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { AIDLC_SRC } from "../harness/fixtures.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
+import { AIDLC_SRC, REPO_ROOT } from "../harness/fixtures.ts";
 import {
   defaultScopeBatch,
   discoverScopes,
@@ -146,14 +149,17 @@ describe("t130 scope-runners — structural conformance of the shipped first-bat
   // Spot-check bugfix carries the engine forwarding-loop call with its scope —
   // the Bun source-channel form for an orchestrate next call.
   // ===========================================================================
+  // On Claude Code the first command carries none of the person's words; every other tree's still forwards them.
   test("aidlc-bugfix: shell drives the engine with --scope bugfix [.sh test f]", () => {
     const body = readFileSync(runnerPath("bugfix"), "utf-8");
-    expect(body).toContain(
-      "bun .claude/tools/aidlc-orchestrate.ts next --scope bugfix",
-    );
+    const entry = withCopyLaunchOptions("bun .claude/tools/aidlc-orchestrate.ts next --entry --scope bugfix");
+    expect(body).toContain(`\`directive = ${entry}\`, whatever they typed`);
+    expect(body).not.toContain("$ARGUMENTS");
     const rendered = renderRunner("bugfix", DISCOVERED.bugfix?.description ?? "");
-    expect(rendered).toContain(
-      "bun .claude/tools/aidlc-orchestrate.ts next --scope bugfix",
+    expect(rendered).toContain(`\`directive = ${entry}\`, whatever they typed`);
+    const codex = readFileSync(join(REPO_ROOT, "dist", "codex", ".agents", "skills", "aidlc-bugfix", "SKILL.md"), "utf-8");
+    expect(codex).toContain(
+      `\`directive = ${withCopyLaunchOptions("bun .codex/tools/aidlc-orchestrate.ts next --scope bugfix $ARGUMENTS")}\``,
     );
   });
 
@@ -200,23 +206,28 @@ describe("t130 scope-runners — structural conformance of the shipped first-bat
   // ===========================================================================
   // A recorded step continues with a bare `next` (#1411). Re-sending the
   // runner's own arguments would repeat a jump or a setting the person already
-  // asked for; a person who asked to stop there gets `park`.
+  // asked for; a person who asked to stop there gets `park`. On Claude Code step
+  // 1 carries nothing of theirs either, and every pass after it is bare.
   // ===========================================================================
   for (const scope of BATCH) {
     test(`aidlc-${scope}: continues a recorded step with bare next and parks when asked`, () => {
       const rendered = renderRunner(scope, DISCOVERED[scope]?.description ?? "");
       for (const body of [readFileSync(runnerPath(scope), "utf-8"), rendered]) {
         const collapsed = body.replace(/\s+/g, " ");
-        // $ARGUMENTS reach only the first next; every later pass is bare.
         expect(collapsed).toContain(
-          "Pass `$ARGUMENTS` only to the first `next` in step 1: every later pass runs bare `bun .claude/tools/aidlc-orchestrate.ts next`, with no `--scope` and no `$ARGUMENTS`",
+          `Every pass after step 1 runs bare \`${withCopyLaunchOptions("bun .claude/tools/aidlc-orchestrate.ts next")}\`, with no \`--scope\` and nothing else after it.`,
         );
         expect(collapsed).not.toContain("Repeat from step 1");
         expect(collapsed).toContain("A `done` that carries it only recorded a step: run that bare `next` at once");
         expect(collapsed).toContain(
-          "also asked to stop the workflow there for now (not to pause on one decision inside the work), run `bun .claude/tools/aidlc-orchestrate.ts park --person-asked` instead",
+          `also asked to stop the workflow there for now (not to pause on one decision inside the work), run \`${withCopyLaunchOptions("bun .claude/tools/aidlc-orchestrate.ts park --person-asked")}\` instead`,
         );
       }
+      // $ARGUMENTS reach only the first next on a tree that forwards them; every later pass is bare.
+      const codex = readFileSync(join(REPO_ROOT, "dist", "codex", ".agents", "skills", `aidlc-${scope}`, "SKILL.md"), "utf-8");
+      expect(codex.replace(/\s+/g, " ")).toContain(
+        `Pass \`$ARGUMENTS\` only to the first \`next\` in step 1: every later pass runs bare \`${withCopyLaunchOptions("bun .codex/tools/aidlc-orchestrate.ts next")}\`, with no \`--scope\` and no \`$ARGUMENTS\``,
+      );
     });
   }
 
@@ -285,7 +296,7 @@ describe("t130 scope-runners — structural conformance of the shipped first-bat
     const emitted = join(tmpOut, "aidlc-hotfix", "SKILL.md");
     expect(existsSync(emitted)).toBe(true);
     const emittedBody = readFileSync(emitted, "utf-8");
-    expect(emittedBody).toContain("next --scope hotfix");
+    expect(emittedBody).toContain("next --entry --scope hotfix");
     expect(frontmatterName(emittedBody)).toBe("aidlc-hotfix");
   }, 30000);
 });

@@ -97,7 +97,7 @@ function moveAt(
     }
     expect(answer.kind, JSON.stringify(answer)).toBe("print");
     // The step the line names, run as the agent runs it; its reply is what the person is shown.
-    const step = /`(bun \.claude\/tools\/[^`]+)`/.exec(String(answer.message ?? ""))?.[1];
+    const step = /`(bun (?:--config=\S+ --no-env-file )?\.claude\/tools\/[^`]+)`/.exec(String(answer.message ?? ""))?.[1];
     expect(step, String(answer.message)).toBeDefined();
     const ran = agent.host.bash(step!);
     expect(ran.status, ran.stdout + ran.stderr).toBe(0);
@@ -105,7 +105,7 @@ function moveAt(
     // A jump typed with the change is the `next` the step says to run and
     // follow after it, and the jump that `next` names is made as the agent
     // makes it. A `next --resume` offered "if they say yes" waits for them.
-    const jump = /run `bun \.claude\/tools\/aidlc-orchestrate\.ts next ([^`]+)` and follow what it returns/
+    const jump = /run `bun (?:--config=\S+ --no-env-file )?\.claude\/tools\/aidlc-orchestrate\.ts next ([^`]+)` and follow what it returns/
       .exec(String(answer.message ?? ""))?.[1];
     if (jump) {
       const jumped = agent.next(...jump.split(" "));

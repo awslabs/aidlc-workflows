@@ -67,7 +67,9 @@ function editCorePlan(agent: AgentStandIn, seen: Seen): void {
   agent.person.say("ok, do what you suggested");
   const printed = host.bash(`bun .claude/tools/aidlc-orchestrate.ts next --stage ${step[2]} --unit ${step[3]}`);
   const message = String((JSON.parse(printed.stdout.trim()) as { message?: string }).message ?? "");
-  for (const [, command] of message.split("then tell the person")[0].matchAll(/`(bun \.claude\/tools\/[^`]+)`/g)) {
+  // A copy tree prints its launch with Bun's own config and --no-env-file before the script.
+  const named = /`(bun (?:--config=\.claude\/tools\/aidlc-bunfig\.toml --no-env-file )?\.claude\/tools\/[^`]+)`/g;
+  for (const [, command] of message.split("then tell the person")[0].matchAll(named)) {
     host.bash(command);
   }
   const retried = write();

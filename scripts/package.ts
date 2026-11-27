@@ -67,6 +67,7 @@ import {
   inlineAgentSet,
   injectDelegatedKnowledgePreflight,
   reviewerAgentSet,
+  sharedKnowledgeResources,
 } from "./agent-knowledge.ts";
 import { renderNeutralOnboarding, renderOnboarding } from "./onboarding.ts";
 import { keepOwnHarnessBindings } from "./harness-bindings.ts";
@@ -101,11 +102,11 @@ import {
   trustedCommand,
 } from "../core/tools/aidlc-command.ts";
 import { copyChannelDispatcherCommands, copyChannelToolScripts, ROUTES, TOOLS } from "../core/tools/aidlc.ts";
+import { BUN_LAUNCH_CONFIG, copyLaunchPrefix } from "../core/tools/aidlc-runtime-paths.ts";
 import { AIDLC_VERSION } from "../core/tools/aidlc-version.ts";
 import { BUILD_VERSION_ENV, releaseBuildVersion } from "../core/tools/aidlc-channel.ts";
 import { copyStartsWithout, harnessChoiceTextIsPlain, sha256Bytes, writtenRootIntegration } from "../core/tools/aidlc-distribution.ts";
 import { kiroIdeSteering } from "../core/tools/aidlc-includes.ts";
-import { SHIPPED_FORMAT_DOCS } from "../core/tools/aidlc-inline-context.ts";
 import { AIDLC_SETTINGS_SCHEMA } from "../core/tools/aidlc-settings.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -204,12 +205,17 @@ function discoverHarnessNames(): string[] {
 // Transform: token substitution on authored prose and the
 // TypeScript invocation seam; compiled JSON is regenerated per tree.
 // ---------------------------------------------------------------------------
+// The copy channel's dispatcher, as every copy tree writes and prints it.
+function copyInvoke(harnessDir: string): string {
+  return `${copyLaunchPrefix(harnessDir)} ${harnessDir}/tools/aidlc.ts`;
+}
+
 function substituteInvocationTokens(
   s: string,
   harnessDir: string,
-  invoke = `bun ${harnessDir}/tools/aidlc.ts`,
+  invoke = copyInvoke(harnessDir),
 ): string {
-  const toolPrefix = invoke === "aidlc" ? `${TRUSTED_COMMAND_PREFIX} ` : `bun ${harnessDir}/tools/`;
+  const toolPrefix = invoke === "aidlc" ? `${TRUSTED_COMMAND_PREFIX} ` : `${copyLaunchPrefix(harnessDir)} ${harnessDir}/tools/`;
   return s
     .replace(INVOKE_TOKEN, invoke)
     .replace(TOOL_PREFIX_TOKEN, toolPrefix)
@@ -232,7 +238,7 @@ function optionLetters(m: HarnessManifest): string {
 function substituteToken(
   s: string,
   harnessDir: string,
-  invoke = `bun ${harnessDir}/tools/aidlc.ts`,
+  invoke = copyInvoke(harnessDir),
   letters?: string,
 ): string {
   const lettered = letters === undefined ? s : s.replace(OPTION_LETTERS_TOKEN, letters);
@@ -363,15 +369,12 @@ function projectKiroAgentJson(srcPath: string, content: Buffer): Buffer {
 
 // The authored Kiro agent JSONs preload the shared knowledge with a glob; a
 // dispatched agent gets the shared methodology files only, as every other
-// harness's preflight names them (SHIPPED_FORMAT_DOCS is the one list).
+// harness's preflight names them (sharedKnowledgeResources is the one list).
 function projectKiroSharedKnowledge(content: Buffer): Buffer {
   const parsed = JSON.parse(content.toString("utf-8")) as { resources?: unknown };
   const glob = "file://.kiro/knowledge/aidlc-shared/*.md";
   if (!Array.isArray(parsed.resources) || !parsed.resources.includes(glob)) return content;
-  const files = readdirSync(join(CORE_ROOT, "knowledge", "aidlc-shared"))
-    .filter((file) => file.endsWith(".md") && !SHIPPED_FORMAT_DOCS.has(file))
-    .sort()
-    .map((file) => `file://.kiro/knowledge/aidlc-shared/${file}`);
+  const files = sharedKnowledgeResources(CORE_ROOT, ".kiro");
   parsed.resources = parsed.resources.flatMap((entry) => (entry === glob ? files : [entry]));
   return Buffer.from(`${JSON.stringify(parsed, null, 2)}\n`, "utf-8");
 }
@@ -410,7 +413,7 @@ function transform(
   harnessDir: string,
   rulesRename: string | null,
   harness?: Harness,
-  invoke = `bun ${harnessDir}/tools/aidlc.ts`,
+  invoke = copyInvoke(harnessDir),
   letters?: string,
 ): Buffer {
   if (srcPath.endsWith(".md")) {
@@ -888,7 +891,7 @@ function emitActiveSpace(outRoot: string): void {
 function buildTree(
   m: HarnessManifest,
   outRoot: string,
-  invoke = `bun ${m.harnessDir}/tools/aidlc.ts`,
+  invoke = copyInvoke(m.harnessDir),
 ): string[] {
   const harnessDir = m.harnessDir;
   const treeRoot = join(outRoot, harnessDir);
@@ -1109,8 +1112,9 @@ function buildTree(
   }
   expandCursorToolAllows(treeRoot, m);
   expandClaudeToolAllows(treeRoot, m);
-  expandKiroToolAllows(treeRoot, m);
+  expandKiroToolAllows(treeRoot, m, invoke !== "aidlc");
   expandKiroIdeConductorAllows(treeRoot, m, invoke);
+  if (invoke !== "aidlc") rewriteCopyLaunches(outRoot, m);
   writeProjectionData(outRoot, treeRoot, m);
 
   // 6. Generated table regions are build products, not authored prose. Refresh
@@ -1119,7 +1123,60 @@ function buildTree(
   refreshGeneratedSkillRegions(outRoot, treeRoot, harnessDir, m);
   // 7. The place an earlier release's refresh writes the tables into the skill.
   keepEarlierReleaseRegions(outRoot, m);
+  if (invoke !== "aidlc") checkCopyLaunches(outRoot, m);
   return [...walk(outRoot)];
+}
+
+// The empty Bun config file every copy tree ships (BUN_LAUNCH_CONFIG), its one line.
+const COPY_LAUNCH_CONFIG_TEXT =
+  "# AI-DLC starts its own Bun with this file in place of your project's bunfig.toml. It holds no settings on purpose.\n";
+
+// A copy tree starts Bun with that file and `--no-env-file` (copyLaunchPrefix),
+// so a project's own bunfig.toml and .env stay out of AI-DLC's processes.
+// Authored text spells a launch `bun <dir>/tools/...`, `bun <dir>/hooks/...`, or
+// rooted at $CLAUDE_PROJECT_DIR for Claude Code's hooks and status line, the
+// spelling rewriteNativeInvocations turns into `aidlc` for the native tree; here
+// the copy tree's launches get the two options after `bun`, the config path
+// written as the script's path is. Allow, ask and deny lines are launches too.
+// TypeScript files are left alone: their code takes the owner itself.
+function rewriteCopyLaunches(outRoot: string, m: HarnessManifest): void {
+  const dir = escapeRegExp(m.harnessDir);
+  const options = copyLaunchPrefix(m.harnessDir).slice("bun ".length);
+  const launch = new RegExp(
+    String.raw`\bbun([ \t]+)(\\?["'])?(\$\{?CLAUDE_PROJECT_DIR\}?/)?(?=${dir}/(?:tools|hooks)/aidlc)`,
+    "g",
+  );
+  const cursorShell = `Shell(bun:${m.harnessDir}/`;
+  for (const file of walk(outRoot)) {
+    if (!/\.(?:md|mdc|json|toml|hook)$/.test(file)) continue;
+    const value = readFileSync(file, "utf-8");
+    const rewritten = value
+      .replace(launch, (_match, space: string, quote = "", root = "") =>
+        root
+          ? `bun${space}${quote}--config=${root}${m.harnessDir}/tools/${BUN_LAUNCH_CONFIG}${quote} --no-env-file ${quote}${root}`
+          : `bun${space}${options} ${quote}`)
+      .replaceAll(cursorShell, `Shell(bun:${options} ${m.harnessDir}/`);
+    if (rewritten !== value) writeFileSync(file, rewritten);
+  }
+  writeFileSync(join(outRoot, m.harnessDir, "tools", BUN_LAUNCH_CONFIG), COPY_LAUNCH_CONFIG_TEXT);
+}
+
+// The finished copy tree, every file but the TypeScript ones, whatever wrote it
+// (the rewrite above, an emit, a generated table): no launch of an AI-DLC script
+// in the tree's own harness folder, `bun run` included, without the copy
+// options. A folder of another name is not this tree's (a port that renames
+// the folder keeps text naming the one it was ported from).
+function checkCopyLaunches(outRoot: string, m: HarnessManifest): void {
+  const dir = escapeRegExp(m.harnessDir);
+  const plain = new RegExp(
+    String.raw`\bbun[ \t]+(?:run[ \t]+)?(?:\\?["'])?(?:\$\{?CLAUDE_PROJECT_DIR\}?/)?${dir}/(?:tools|hooks)/aidlc|Shell\(bun:${dir}/`,
+  );
+  for (const file of walk(outRoot)) {
+    if (file.endsWith(".ts")) continue;
+    const value = readFileSync(file, "utf-8");
+    if (value.includes("\0")) continue;
+    if (plain.test(value)) throw new Error(`[${m.name}] a launch without the copy options survived in ${relative(outRoot, file)}`);
+  }
 }
 
 function escapeRegExp(value: string): string {
@@ -1276,10 +1333,12 @@ function expandClaudeToolAllows(treeRoot: string, m: HarnessManifest): void {
 // but the read-only forms, then waits for the person in Kiro CLI. Both trees
 // get it; the native rewrite then turns every bun entry into the one trusted
 // prefix.
-function expandKiroToolAllows(treeRoot: string, m: HarnessManifest): void {
+function expandKiroToolAllows(treeRoot: string, m: HarnessManifest, copy: boolean): void {
   if (m.name !== "kiro") return;
   const agentsDir = join(treeRoot, "agents");
-  const bun = (path: string) => `bun (run )?(${path}|"${path}"|'${path}')`;
+  // A copy tree's commands carry its launch options after `bun` (copyLaunchPrefix).
+  const options = copy ? `${escapeRegExp(copyLaunchPrefix(m.harnessDir).slice("bun ".length))} ` : "";
+  const bun = (path: string) => `bun ${options}(run )?(${path}|"${path}"|'${path}')`;
   let expanded = 0;
   for (const file of walk(agentsDir).filter((path) => path.endsWith(".json"))) {
     const value = JSON.parse(readFileSync(file, "utf-8")) as {

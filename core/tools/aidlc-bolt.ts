@@ -87,7 +87,7 @@ import {
   resolveInvokingSessionId,
 } from "./aidlc-lib.js";
 import { chatTookStepHere } from "./aidlc-record-core.ts";
-import { aidlcDispatcherInvocation, compiledExecutable, entrySkillInvocation } from "./aidlc-runtime-paths.ts";
+import { aidlcDispatcherInvocation, bunLaunchFlags, compiledExecutable, entrySkillInvocation } from "./aidlc-runtime-paths.ts";
 import { type EngineInvocation, renderEngineInvocation } from "./aidlc-guard-operation.ts";
 import {
   askConstructionCheckpoint,
@@ -215,7 +215,7 @@ function spawnSibling(
   } else {
     command = [
       process.execPath,
-      fileURLToPath(new URL(`./${toolName}`, import.meta.url)),
+      ...bunLaunchFlags(), fileURLToPath(new URL(`./${toolName}`, import.meta.url)),
       "--project-dir",
       pd,
       ...subargs,

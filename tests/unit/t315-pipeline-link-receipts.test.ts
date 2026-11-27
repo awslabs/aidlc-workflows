@@ -43,6 +43,7 @@ import {
   seedStateFile,
 } from "../harness/fixtures.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import {
   codekbRepoName,
   codekbStoreIsCurrent,
@@ -68,6 +69,8 @@ const NATIVE_ORCH = join(
   "../../dist-release/claude/.claude/tools/aidlc-orchestrate.ts",
 );
 const RE_STAGE = "reverse-engineering";
+// The copy tree's link command, as it prints it.
+const COPY_LINK = withCopyLaunchOptions("bun .claude/tools/aidlc-log.ts link");
 const LEAD = "aidlc-developer-agent";
 const FINAL = "aidlc-architect-agent";
 const PRODUCES = [
@@ -164,7 +167,7 @@ function owed(
   links: string[],
   options: { repo?: string; single?: boolean; invocation?: string } = {},
 ): Array<{ link: string; repo?: string; command: string }> {
-  const invocation = options.invocation ?? "bun .claude/tools/aidlc-log.ts link";
+  const invocation = options.invocation ?? COPY_LINK;
   return links.map((link) => ({
     link,
     ...(options.repo ? { repo: options.repo } : {}),
@@ -590,10 +593,10 @@ describe("t315 pipeline link receipts", () => {
       const orchestrator = transport === "native" ? NATIVE_ORCH : ORCH;
       const nextCommand = transport === "native"
         ? "aidlc engine orchestrate next"
-        : "bun .claude/tools/aidlc-orchestrate.ts next";
+        : withCopyLaunchOptions("bun .claude/tools/aidlc-orchestrate.ts next");
       const linkCommand = transport === "native"
         ? "aidlc engine log link"
-        : "bun .claude/tools/aidlc-log.ts link";
+        : COPY_LINK;
       const feedback = "Add a Persistence Design (Target State) section to architecture.md.";
       writeAllCodekbArtifacts(proj);
       expect(state(proj, ["checkbox", `${RE_STAGE}=in-progress`]).rc).toBe(0);
@@ -998,7 +1001,7 @@ describe("t315 pipeline link receipts", () => {
       expect(refused.out).not.toContain("Re-run `");
       expect(refused.out).not.toContain("which shows the gate again");
       expect(refused.out).toContain(via === "report"
-        ? "then run `bun .claude/tools/aidlc-orchestrate.ts report --stage reverse-engineering --result approved"
+        ? `then run \`${withCopyLaunchOptions("bun .claude/tools/aidlc-orchestrate.ts report --stage reverse-engineering --result approved")}`
         : "then run the same approve command again");
       expect(refused.out).toContain("the person's approval stands, so they are not asked again");
 
@@ -1914,7 +1917,7 @@ describe("t315 each link's exact command, and a held link lands again", () => {
 
   const handoffArg = (proj: string, repo?: string): string => toPosix(relative(proj, developerHandoffPath(proj, repo)));
   const linkCommand = (link: string, tail = ""): string =>
-    `bun .claude/tools/aidlc-log.ts link --stage ${RE_STAGE} --link ${link}${tail}`;
+    `${COPY_LINK} --stage ${RE_STAGE} --link ${link}${tail}`;
   type Recorded = { link: string; repo?: string; command: string };
   const recordOf = (directive: Record<string, unknown> | null | undefined): Recorded[] =>
     ((directive?.pipeline as { record?: Recorded[] } | undefined)?.record) ?? [];

@@ -23,6 +23,7 @@ import {
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import {
   probeHarnessCli,
   providerDoctorCheck,
@@ -181,6 +182,9 @@ function configuredNativeProject(): { project: string; machine: NodeJS.ProcessEn
 function harnessJson(project: string): { project: { mcp: string } } {
   return JSON.parse(readFileSync(join(project, ".claude", "tools", "data", "harness.json"), "utf-8"));
 }
+
+// The dispatcher as a copied project prints it, with the copy launch's two Bun options.
+const COPY_LAUNCH = withCopyLaunchOptions("bun .claude/tools/aidlc.ts");
 
 function fixLine(output: string): string {
   const line = output.split("\n").find((item) => item.startsWith("fix: "));
@@ -464,7 +468,7 @@ describe("t304 copied projection configuration", () => {
     });
     expect(result.stdout).toMatch(/Fix the \d+ sections? that needs? you now\? \[Y\/n\]:/);
     expect(result.stdout).toContain(
-      "Stopped: this needs an answer, and the input is closed. Run bun .claude/tools/aidlc.ts config again where you can answer.",
+      `Stopped: this needs an answer, and the input is closed. Run ${COPY_LAUNCH} config again where you can answer.`,
     );
     expect(result.stdout + result.stderr).not.toContain('{"error"');
   });
@@ -479,7 +483,7 @@ describe("t304 copied projection configuration", () => {
     expect(result.status).toBe(4);
     expect(result.stdout).toContain(`error: ${JSON.stringify(empty)} holds no AI-DLC release files\n`);
     expect(fixLine(result.stdout)).toBe(
-      "pass --from the release files: aidlc-copy-runtime-X.Y.Z.tar.gz, the runtime/ folder inside it, or one harness folder such as runtime/claude/; or fetch them with bun .claude/tools/aidlc.ts config --harness claude --yes --download",
+      `pass --from the release files: aidlc-copy-runtime-X.Y.Z.tar.gz, the runtime/ folder inside it, or one harness folder such as runtime/claude/; or fetch them with ${COPY_LAUNCH} config --harness claude --yes --download`,
     );
     expect(result.stdout).not.toContain("valid-release-data");
   });
@@ -541,7 +545,7 @@ describe("t304 copied projection configuration", () => {
       `offline: get https://github.com/awslabs/aidlc-workflows/releases/download/v${AIDLC_VERSION}/aidlc-copy-runtime-${AIDLC_VERSION}.tar.gz and its .sha256 into one folder, then add --from <that file>`,
     );
     expect(fixLine(back.stdout)).toBe(
-      "bun .claude/tools/aidlc.ts config project --mcp defaults --yes --download",
+      `${COPY_LAUNCH} config project --mcp defaults --yes --download`,
     );
     expectCopyChannelPurity(back.stdout);
   }, 120_000);
@@ -802,19 +806,19 @@ describe("t304 copied projection configuration", () => {
       );
       // models takes no source flag, so offline it refreshes from the file first.
       expect(result.stdout).toContain(
-        `offline: get ${release.baseUrl}/download/v${OTHER_VERSION}/${asset} and its .sha256 into one folder, run bun .claude/tools/aidlc.ts config --harness claude --from <that file>, then rerun this command`,
+        `offline: get ${release.baseUrl}/download/v${OTHER_VERSION}/${asset} and its .sha256 into one folder, run ${COPY_LAUNCH} config --harness claude --from <that file>, then rerun this command`,
       );
       const fix = fixLine(result.stdout);
-      expect(fix).toBe("bun .claude/tools/aidlc.ts config models --preset balanced --project --yes --download");
+      expect(fix).toBe(`${COPY_LAUNCH} config models --preset balanced --project --yes --download`);
       expectCopyChannelPurity(result.stdout);
       expect(release.requests.some((path) => path.endsWith(asset))).toBe(false);
 
       // Scripts get the one runnable command, in both machine-readable modes.
       expect((await runCopiedAsync(project, [...args, "--quiet"], { env })).stdout)
-        .toBe("bun .claude/tools/aidlc.ts config models --preset balanced --project --yes --quiet --download\n");
+        .toBe(`${COPY_LAUNCH} config models --preset balanced --project --yes --quiet --download\n`);
       const json = JSON.parse((await runCopiedAsync(project, [...args, "--json"], { env })).stdout);
       expect(json.remediation)
-        .toBe("bun .claude/tools/aidlc.ts config models --preset balanced --project --yes --json --download");
+        .toBe(`${COPY_LAUNCH} config models --preset balanced --project --yes --json --download`);
 
       const followed = await followFix(fix, project, env);
       expect(followed.status, followed.stdout + followed.stderr).toBe(0);
@@ -890,7 +894,7 @@ describe("t304 copied projection configuration", () => {
       const refused = await runCopiedAsync(pinned, section, { env: tty(newer), input: "y\n" });
       expect(refused.status, refused.stdout + refused.stderr).toBe(4);
       const force = /run `([^`]+)`, then the same command again\./.exec(fixLine(refused.stdout))?.[1];
-      expect(force).toBe("bun .claude/tools/aidlc.ts config --download --force");
+      expect(force).toBe(`${COPY_LAUNCH} config --download --force`);
       // Run as printed where nothing can be answered: it must need no answer.
       const forced = await followFix(force ?? "", pinned, plain(newer));
       expect(forced.status, forced.stdout + forced.stderr).toBe(0);
@@ -976,7 +980,7 @@ describe("t304 copied projection configuration", () => {
       expect(result.status).toBe(4);
       expect(result.stdout).toContain(`error: adding codex needs the ${AIDLC_VERSION} release files\n`);
       const fix = fixLine(result.stdout);
-      expect(fix).toBe("bun .claude/tools/aidlc.ts config --harness codex --yes --download");
+      expect(fix).toBe(`${COPY_LAUNCH} config --harness codex --yes --download`);
       const followed = await followFix(fix, project, env);
       expect(followed.status, followed.stdout + followed.stderr).toBe(0);
       expect(existsSync(join(project, ".codex", "tools", "data", "harness.json"))).toBe(true);
@@ -1098,9 +1102,9 @@ describe("t304 copied projection configuration", () => {
     const result = await runAsync(show, { cwd: project });
     expect(result.status, result.stdout + result.stderr).toBe(0);
     const preset = /nothing yet - run '(.+)'$/m.exec(result.stdout)?.[1] ?? "";
-    expect(preset).toBe("bun .claude/tools/aidlc.ts config models --preset balanced --project --yes --harness codex");
+    expect(preset).toBe(`${COPY_LAUNCH} config models --preset balanced --project --yes --harness codex`);
     const list = /Full per-agent list: (.+)$/m.exec(result.stdout)?.[1] ?? "";
-    expect(list).toBe("bun .claude/tools/aidlc.ts config models --show --json --harness codex");
+    expect(list).toBe(`${COPY_LAUNCH} config models --show --json --harness codex`);
     const listed = await followFix(list, project, {});
     expect(listed.status, listed.stdout + listed.stderr).toBe(0);
     expect(JSON.parse(listed.stdout).data.harness).toBe("codex");
@@ -1416,12 +1420,12 @@ describe("t304 copied projection configuration", () => {
         const human = runCopied(project, args);
         expect(human.status).toBe(2);
         expect(human.stdout).toContain(".aidlc-version must contain one release version id");
-        expect(human.stdout).toContain("usage: bun .claude/tools/aidlc.ts config --unpin\n");
+        expect(human.stdout).toContain(`usage: ${COPY_LAUNCH} config --unpin\n`);
         expect(human.stdout).not.toContain("pwned");
         expect(runCopied(project, [...args, "--quiet"]).stdout)
-          .toBe("bun .claude/tools/aidlc.ts config --unpin\n");
+          .toBe(`${COPY_LAUNCH} config --unpin\n`);
         const json = JSON.parse(runCopied(project, [...args, "--json"]).stdout);
-        expect(json.remediation).toBe("bun .claude/tools/aidlc.ts config --unpin");
+        expect(json.remediation).toBe(`${COPY_LAUNCH} config --unpin`);
         expect(JSON.stringify(json)).not.toContain("pwned");
       }
     }
@@ -1439,7 +1443,7 @@ describe("t304 copied projection configuration", () => {
     expect(result.status).toBe(2);
     expect(result.stdout).toStartWith("error:");
     expect(result.stdout).toContain(
-      "\nusage: bun .claude/tools/aidlc.ts config models --preset balanced --project --yes",
+      `\nusage: ${COPY_LAUNCH} config models --preset balanced --project --yes`,
     );
     expect(result.stdout).not.toContain("ERROR ");
     expect(result.stdout).not.toContain("Run: ");
@@ -1460,7 +1464,7 @@ describe("t304 copied projection configuration", () => {
     // A machine that never checked for updates is not a warning; the passing
     // row names the check in the copy channel's own spelling.
     expect(doctor.stdout).toContain(
-      "Update: not checked yet (run `bun .claude/tools/aidlc.ts update --check` to check)",
+      `Update: not checked yet (run \`${COPY_LAUNCH} update --check\` to check)`,
     );
     // The generic fix never quotes the doctor command itself (#1411).
     expect(doctor.stdout).toContain(
@@ -1470,7 +1474,7 @@ describe("t304 copied projection configuration", () => {
     const topTypo = runCopied(project, ["confg"], { env });
     expect(topTypo.status).toBe(2);
     expect(topTypo.stderr).toContain(
-      "usage: bun .claude/tools/aidlc.ts <command> [flags]",
+      `usage: ${COPY_LAUNCH} <command> [flags]`,
     );
 
     const sectionTypo = runCopied(project, ["config", "modles"], {
@@ -1479,7 +1483,7 @@ describe("t304 copied projection configuration", () => {
     });
     expect(sectionTypo.status).toBe(2);
     expect(sectionTypo.stderr).toContain(
-      "usage: bun .claude/tools/aidlc.ts config <section> [flags]",
+      `usage: ${COPY_LAUNCH} config <section> [flags]`,
     );
 
     const noYes = runCopied(project, [

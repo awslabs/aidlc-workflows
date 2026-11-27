@@ -22,6 +22,7 @@ import {
   seedStateFile,
   seededStateFile,
 } from "../harness/fixtures.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -74,10 +75,10 @@ function followChangeThenJump(proj: string, step: Directive, jumpArgs: string[])
   const scope = /engine scope change (.+)$/.exec(change ?? "");
   expect(scope, step.message).not.toBeNull();
   run(UTILITY, proj, ["scope-change", ...scope![1].split(" ")]);
-  expect(jump).toBe(`bun .claude/tools/aidlc-orchestrate.ts next ${jumpArgs.join(" ")}`);
+  expect(jump).toBe(withCopyLaunchOptions(`bun .claude/tools/aidlc-orchestrate.ts next ${jumpArgs.join(" ")}`));
   const after = next(proj, jumpArgs);
   const execute = commands(after).find((c) => c.includes("aidlc-jump.ts execute"));
-  if (execute) run(JUMP, proj, execute.replace(/^bun \S+ /, "").split(" "));
+  if (execute) run(JUMP, proj, execute.replace(/^bun (?:--config=\S+ --no-env-file )?\S+ /, "").split(" "));
 }
 
 describe("t-jump-keeps-typed-scope: a scope typed with a jump over running work changes the scope, then jumps", () => {
@@ -90,7 +91,7 @@ describe("t-jump-keeps-typed-scope: a scope typed with a jump over running work 
       const step = next(proj, args);
       expect(step.kind, JSON.stringify(step)).toBe("print");
       const named = commands(step);
-      expect(named[0]).toBe("bun .claude/tools/aidlc.ts engine scope change --scope enterprise");
+      expect(named[0]).toBe(withCopyLaunchOptions("bun .claude/tools/aidlc.ts engine scope change --scope enterprise"));
       expect(String(step.message)).not.toContain("aidlc-jump.ts execute");
       // Nothing says where the work picks up before the jump moves it.
       expect(step.narration).toBeUndefined();
@@ -103,22 +104,22 @@ describe("t-jump-keeps-typed-scope: a scope typed with a jump over running work 
   test("a phase jump with a scope names the scope change, then the phase jump", () => {
     const proj = runningBugfix();
     const step = next(proj, ["--scope", "enterprise", "--phase", "construction"]);
-    expect(commands(step)[0]).toBe("bun .claude/tools/aidlc.ts engine scope change --scope enterprise");
-    expect(commands(step)[1]).toBe("bun .claude/tools/aidlc-orchestrate.ts next --phase construction");
+    expect(commands(step)[0]).toBe(withCopyLaunchOptions("bun .claude/tools/aidlc.ts engine scope change --scope enterprise"));
+    expect(commands(step)[1]).toBe(withCopyLaunchOptions("bun .claude/tools/aidlc-orchestrate.ts next --phase construction"));
   });
 
   test("a setting typed beside the scope rides the scope change, as the guide's --depth example does", () => {
     const proj = runningBugfix();
     const step = next(proj, ["--scope", "enterprise", "--depth", "standard", "--stage", "code-generation"]);
-    expect(commands(step)[0]).toBe("bun .claude/tools/aidlc.ts engine scope change --scope enterprise --depth standard");
-    expect(commands(step)[1]).toBe("bun .claude/tools/aidlc-orchestrate.ts next --stage code-generation");
+    expect(commands(step)[0]).toBe(withCopyLaunchOptions("bun .claude/tools/aidlc.ts engine scope change --scope enterprise --depth standard"));
+    expect(commands(step)[1]).toBe(withCopyLaunchOptions("bun .claude/tools/aidlc-orchestrate.ts next --stage code-generation"));
   });
 
   test("a setting typed alone with a jump is set first, then the jump", () => {
     const proj = runningBugfix();
     const step = next(proj, ["--depth", "comprehensive", "--stage", "code-generation"]);
-    expect(commands(step)[0]).toBe("bun .claude/tools/aidlc.ts engine config set depth comprehensive");
-    expect(commands(step)[1]).toBe("bun .claude/tools/aidlc-orchestrate.ts next --stage code-generation");
+    expect(commands(step)[0]).toBe(withCopyLaunchOptions("bun .claude/tools/aidlc.ts engine config set depth comprehensive"));
+    expect(commands(step)[1]).toBe(withCopyLaunchOptions("bun .claude/tools/aidlc-orchestrate.ts next --stage code-generation"));
   });
 
   test("the scope the work already has, with nothing else, still jumps alone", () => {

@@ -46,7 +46,9 @@
 // zero-Unit directive selects construction/code-generation. Step 4 dispatches
 // carry that choice explicitly as `AIDLC-UNIT: <unit>` or
 // `AIDLC-STAGE: code-generation`, plus the exact `AIDLC-TESTING-CONTRACT`
-// marker. The selected target must have a non-empty plan and test instructions,
+// marker, except where the developer's start hands it the plan
+// (briefHandedAtStart): there a start naming no target is for the step's one
+// target. The selected target must have a non-empty plan and test instructions,
 // a structured contract matching current memory/scope/strategy/type, an
 // explicit "Approve Plan" answer, and a matching approval fingerprint over
 // those exact bytes. Missing, conflicting, unknown, stale, and
@@ -165,7 +167,7 @@ import {
 } from "../tools/aidlc-lock-line.ts";
 import { mainCheckoutChangeStep, personTurnStands } from "../tools/aidlc-message-store.ts";
 import type { planApprovalAskState } from "../tools/aidlc-plan-approval-ask.ts";
-import { aidlcToolInvocation, quoteCommandArgument, runtimeHarnessName } from "../tools/aidlc-runtime-paths.ts";
+import { aidlcToolInvocation, bunLaunchOptionWords, quoteCommandArgument, runtimeHarnessName } from "../tools/aidlc-runtime-paths.ts";
 import { claimedCheckoutReopens } from "../tools/aidlc-unit-landing.ts";
 import { RECORDABLE_PROJECT_BYPASSES } from "../tools/aidlc-settings.ts";
 import {
@@ -183,12 +185,16 @@ import {
   evaluateCodeGenerationApproval,
   parkedWhereItStands,
   planReviewAppendix,
+  briefHandedAtStart,
+  handedBriefTarget,
+  promptStageMarkers,
   promptTestingContractMarkers,
+  promptUnitMarkers,
   setAsideBuildUnderOff,
   stepNextCommand,
   WORKER_BRIEF_SECTIONS,
 } from "../tools/aidlc-testing-posture.ts";
-import { codexPatchMode, shellPatchPaths } from "./review-freeze-command.ts";
+import { codexPatchMode, RG_SHORT_VALUE_OPTIONS, RG_VALUE_OPTIONS, shellPatchPaths } from "./review-freeze-command.ts";
 import { refuseRuntimeIntegrityViolation } from "./runtime-integrity.ts";
 import { unaskedSystemInstall } from "./system-install.ts";
 
@@ -376,7 +382,7 @@ export interface UnitEvidence {
   reviewAppendix?: string;
 }
 
-/** The decision's verdict. `mentioned` carries the explicit marker value(s). */
+/** The decision's verdict. `mentioned` carries the marker value(s), or the handed target where the prompt names none. */
 export interface PlanApprovalVerdict {
   block: boolean;
   mentioned: string[];
@@ -407,40 +413,15 @@ function approvalEvidenceIsCurrent(evidence: UnitEvidence | undefined): boolean 
 
 export { normalizeStageName };
 
-const UNIT_MARKER_RE = /^[ \t]*AIDLC-UNIT[ \t]*:[ \t]*(.*?)[ \t]*$/;
-const STAGE_MARKER_RE = /^[ \t]*AIDLC-STAGE[ \t]*:[ \t]*(.*?)[ \t]*$/;
-
-/**
- * Return the distinct, non-empty target markers in encounter order. Repeated
- * copies of the same marker are harmless (some harnesses carry both task and
- * prompt-template text); different values are ambiguous and block.
- */
-export function promptUnitMarkers(text: string): string[] {
-  const units = new Set<string>();
-  for (const line of text.split(/\r?\n/)) {
-    const marker = line.match(UNIT_MARKER_RE);
-    const unit = marker?.[1].trim() ?? "";
-    if (unit.length > 0) units.add(unit);
-  }
-  return Array.from(units);
-}
-
-export function promptStageMarkers(text: string): string[] {
-  const stages = new Set<string>();
-  for (const line of text.split(/\r?\n/)) {
-    const marker = line.match(STAGE_MARKER_RE);
-    const stage = marker?.[1].trim() ?? "";
-    if (stage.length > 0) stages.add(normalizeStageName(stage));
-  }
-  return Array.from(stages);
-}
+export { promptStageMarkers, promptUnitMarkers };
 
 /**
  * The plan-approval dispatch decision. Pure: no I/O, no environment.
  *
  * Blocks when the dispatch targets the developer agent for code-generation
  * unless the prompt carries exactly one target marker (`AIDLC-UNIT` or the
- * stage-level `AIDLC-STAGE: code-generation`), that marker identifies a known
+ * stage-level `AIDLC-STAGE: code-generation`), or none where `ctx.handed`
+ * names the target the start hands the plan for, that target is a known
  * approval target, and that target has approved plan evidence.
  */
 export function evaluatePlanApprovalDispatch(
@@ -450,6 +431,8 @@ export function evaluatePlanApprovalDispatch(
   ctx: {
     currentStage: string;
     units: UnitEvidence[];
+    /** The target a tool hands the brief for as the developer starts (briefHandedAtStart), when it does. */
+    handed?: string | null;
   },
 ): PlanApprovalVerdict {
   const allow: PlanApprovalVerdict = { block: false, mentioned: [] };
@@ -457,8 +440,15 @@ export function evaluatePlanApprovalDispatch(
   if (subagentType !== GUARDED_AGENT) return allow;
   if (normalizeStageName(ctx.currentStage) !== GUARDED_STAGE) return allow;
 
+  // Where a tool hands the developer its brief as it starts, a message that
+  // names no target is for the step's own, and the brief is the tool's to carry.
+  const handed = ctx.handed;
   const markedUnits = promptUnitMarkers(promptText);
   const markedStages = promptStageMarkers(promptText);
+  if (handed !== undefined && markedUnits.length + markedStages.length === 0) {
+    if (handed === null) markedStages.push(GUARDED_STAGE);
+    else markedUnits.push(handed);
+  }
   const mentioned = [
     ...markedUnits,
     ...markedStages.map((stage) => `stage:${stage}`),
@@ -480,11 +470,12 @@ export function evaluatePlanApprovalDispatch(
   const appendixInBrief =
     target !== undefined && promptCarriesReviewAppendix(promptText, target.reviewAppendix);
   const approved = approvalEvidenceIsCurrent(target);
-  const contractMatches = contractMarkers.length === 1 && contractMarkers[0] === target?.contractHash;
+  const contractMatches = (handed !== undefined && contractMarkers.length === 0) ||
+    (contractMarkers.length === 1 && contractMarkers[0] === target?.contractHash);
   // The marker lines head the brief; alone they hand the developer none of the
   // plan or instructions the approval covers. The brief's own sections, as the
   // brief command prints them, say the brief is there.
-  const briefCarried = promptCarriesBriefSections(promptText);
+  const briefCarried = handed !== undefined || promptCarriesBriefSections(promptText);
   const handoff: HandoffDefect | undefined = target === undefined
     ? "unknown-target"
     : approved && !contractMatches ? "contract" : approved && !briefCarried ? "brief" : undefined;
@@ -1563,34 +1554,166 @@ function installedEngine(path: string): "launcher" | "executable" | null {
   return null;
 }
 
-// A file a command writes through an option or a second operand, which the
-// lexer does not place among the write targets: it is a write all the same.
-function writesThroughOption(name: string, args: readonly string[]): boolean {
-  if (name === "sort" || name === "git") {
-    return args.some((arg) => (name === "sort" && arg === "-o") || arg === "--output" || arg.startsWith("--output="));
+// One command's options of a kind. `long` pairs each option with the shortest
+// spelling that selects it: sort, file and git grep take a long option cut to
+// any prefix that names only it; ripgrep and git's own `--output` take the
+// whole name. `short` are its letters. `values` and `longValues` are the
+// command's other options that take a value, by short letter and by long
+// name, so a value is never read as an option (`rg --regexp --pre` searches
+// for the text `--pre`).
+interface OptionSpec {
+  long: [option: string, shortest: string][];
+  short: string;
+  values: string;
+  longValues: ReadonlySet<string>;
+}
+
+function optionGiven(options: OptionSpec, args: readonly string[]): boolean {
+  for (let i = 0; i < args.length && args[i] !== "--"; i++) {
+    const arg = args[i];
+    if (arg.startsWith("--")) {
+      const spelled = arg.split("=", 1)[0];
+      if (options.long.some(([option, shortest]) => option.startsWith(spelled) && spelled.startsWith(shortest))) return true;
+      // Written apart from its value, the option takes the next word.
+      if (spelled === arg && options.longValues.has(arg)) i++;
+      continue;
+    }
+    if (!arg.startsWith("-")) continue;
+    for (let at = 1; at < arg.length; at++) {
+      if (options.short.includes(arg[at])) return true;
+      if (options.values.includes(arg[at])) {
+        // The value is the rest of this word, or the next word.
+        if (at === arg.length - 1) i++;
+        break;
+      }
+    }
   }
-  if (name === "uniq") return args.filter((arg) => !arg.startsWith("-")).length >= 2;
   return false;
 }
 
-function gitSubcommand(args: string[]): string | null {
+// The options through which a read command writes a file: sort's and git's
+// output file, and the compiled magic file `file -C` leaves beside its source.
+const SORT_VALUE_OPTIONS: ReadonlySet<string> = new Set([
+  "--batch-size", "--buffer-size", "--field-separator", "--files0-from", "--key",
+  "--parallel", "--random-source", "--sort", "--temporary-directory",
+]);
+const FILE_VALUE_OPTIONS: ReadonlySet<string> = new Set([
+  "--exclude", "--exclude-quiet", "--files-from", "--magic-file", "--parameter", "--separator",
+]);
+const WRITING_OPTIONS = new Map<string, OptionSpec>([
+  ["sort", { long: [["--output", "--o"]], short: "o", values: "kSTt", longValues: SORT_VALUE_OPTIONS }],
+  ["file", { long: [["--compile", "--co"]], short: "C", values: "eFfmP", longValues: FILE_VALUE_OPTIONS }],
+  ["git", { long: [["--output", "--output"]], short: "", values: "", longValues: new Set() }],
+]);
+
+// A file a command writes through an option or a second operand, which the
+// lexer does not place among the write targets: it is a write all the same.
+function writesThroughOption(name: string, args: readonly string[]): boolean {
+  if (name === "uniq") return args.filter((arg) => !arg.startsWith("-")).length >= 2;
+  const options = WRITING_OPTIONS.get(name);
+  return options !== undefined && optionGiven(options, args);
+}
+
+// The options through which a read command starts another program: one the
+// command line names (ripgrep's preprocessor and hostname command, sort's
+// compression program) or one of the machine's decompressors (ripgrep and file
+// looking inside compressed files).
+const PROGRAM_STARTING_OPTIONS = new Map<string, OptionSpec>([
+  ["rg", {
+    long: [["--pre", "--pre"], ["--pre-glob", "--pre-glob"], ["--hostname-bin", "--hostname-bin"], ["--search-zip", "--search-zip"]],
+    short: "z",
+    values: RG_SHORT_VALUE_OPTIONS,
+    longValues: RG_VALUE_OPTIONS,
+  }],
+  ["sort", { long: [["--compress-program", "--co"]], short: "", values: "kSTto", longValues: SORT_VALUE_OPTIONS }],
+  ["file", {
+    long: [["--uncompress-noreport", "--uncompress"]],
+    short: "zZ",
+    values: "eFfmP",
+    longValues: FILE_VALUE_OPTIONS,
+  }],
+]);
+// git grep opens the files it finds in the program this option names.
+const GIT_GREP_PAGER: OptionSpec = {
+  long: [["--open-files-in-pager", "--op"]],
+  short: "O",
+  values: "efABCm",
+  longValues: new Set(["--after-context", "--before-context", "--context", "--max-count", "--max-depth", "--threads"]),
+};
+
+// The variables that hand a read command a program on its own command line:
+// ripgrep's config file (its lines are options, the preprocessor among them),
+// git's external diff program and the configuration that names one, and the
+// input preprocessor of the less that answers to `more` on macOS.
+const PROGRAM_STARTING_VARIABLES = new Map<string, RegExp>([
+  ["rg", /^RIPGREP_CONFIG_PATH$/i],
+  ["git", /^GIT_(?:EXTERNAL_DIFF|CONFIG_(?:COUNT|GLOBAL|SYSTEM|PARAMETERS))$/i],
+  ["more", /^LESS(?:OPEN|CLOSE)$/i],
+]);
+
+// The settings through which git starts a program for one of its read
+// subcommands: an external diff or a diff driver, a file-system monitor or a
+// hook, a content filter, a signature checker, or another config file, which
+// can name any of them. A pager is not among them: it never starts without a
+// terminal.
+const GIT_PROGRAM_SETTING =
+  /^(?:diff\.external|diff\..+\.(?:command|textconv)|core\.(?:fsmonitor|hookspath)|hook\..+\.command|filter\..+\.(?:clean|smudge|process)|include\.path|includeif\..+\.path|gpg\.(?:.+\.)?program)$/i;
+
+// One `-c` or `--config-env` setting (`name=value`, or `name=VARIABLE` whose
+// value is not on the line) that hands git a program. The monitor setting is
+// on, off or a program, and only the program counts.
+function gitSettingNamesProgram(setting: string, valueOnLine: boolean): boolean {
+  const equals = setting.indexOf("=");
+  const key = equals === -1 ? setting : setting.slice(0, equals);
+  if (!GIT_PROGRAM_SETTING.test(key)) return false;
+  const onOrOff = equals === -1 || /^(?:true|false|yes|no|on|off|1|0|)$/i.test(setting.slice(equals + 1));
+  return !(valueOnLine && key.toLowerCase() === "core.fsmonitor" && onOrOff);
+}
+
+// A read command that starts another program, through an option or through a
+// variable set on its command line, is not a read: the lexer sees nothing of
+// what that program does. For git this is one of its read subcommands handed a
+// program through configuration on the command line (`-c`, `--config-env` or
+// a variable), or `git grep` handed a pager; any other setting (`-c
+// core.quotePath=false`) is a read. What the person's own git configuration or
+// environment already names is theirs.
+function startsProgram(name: string, args: readonly string[], variables: readonly string[] = []): boolean {
+  const handed = PROGRAM_STARTING_VARIABLES.get(name);
+  const handedProgram = handed !== undefined && variables.some((variable) => handed.test(variable));
+  if (name === "git") {
+    const at = gitSubcommandIndex(args);
+    if (at === -1 || !READ_ONLY_GIT_SUBCOMMANDS.has(args[at])) return false;
+    const own = args.slice(0, at);
+    return handedProgram ||
+      own.some((arg, i) =>
+        (arg === "-c" && gitSettingNamesProgram(own[i + 1] ?? "", true)) ||
+        (arg === "--config-env" && gitSettingNamesProgram(own[i + 1] ?? "", false)) ||
+        (arg.startsWith("--config-env=") && gitSettingNamesProgram(arg.slice("--config-env=".length), false))
+      ) ||
+      (args[at] === "grep" && optionGiven(GIT_GREP_PAGER, args.slice(at + 1)));
+  }
+  const options = PROGRAM_STARTING_OPTIONS.get(name);
+  return handedProgram || (options !== undefined && optionGiven(options, args));
+}
+
+// Where git's subcommand sits among its arguments, after git's own options and
+// the values they take; -1 when the line names none.
+function gitSubcommandIndex(args: readonly string[]): number {
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
-    if (["-C", "--git-dir", "--work-tree", "--namespace"].includes(arg)) {
+    if (["-C", "-c", "--config-env", "--git-dir", "--work-tree", "--namespace"].includes(arg)) {
       i++;
       continue;
     }
-    if (
-      arg.startsWith("--git-dir=") ||
-      arg.startsWith("--work-tree=") ||
-      arg.startsWith("--namespace=")
-    ) {
-      continue;
-    }
     if (arg.startsWith("-")) continue;
-    return arg;
+    return i;
   }
-  return null;
+  return -1;
+}
+
+function gitSubcommand(args: readonly string[]): string | null {
+  const at = gitSubcommandIndex(args);
+  return at === -1 ? null : args[at];
 }
 
 // The native engine by name (`aidlc`, `aidlc.exe`) or, where the shell keeps
@@ -1629,7 +1752,11 @@ function installedEngineArgs(
       arg === "-r" || arg === "--require" || arg === "--preload" ||
       arg.startsWith("--require=") || arg.startsWith("--preload="))
   ) return null;
-  const scriptIndex = args[0] === "run" ? 1 : 0;
+  // A copy launch's two Bun options read as the launch without them, when the
+  // config file is the install's own: another file could preload code.
+  const options = bunLaunchOptionWords(args, 0);
+  if (options > 0 && !isTrustedToolFile(projectDir, cwd, args[0].slice("--config=".length))) return null;
+  const scriptIndex = options + (args[options] === "run" ? 1 : 0);
   const script = args[scriptIndex];
   if (!script || script.startsWith("-") || !isTrustedToolFile(projectDir, cwd, script)) return null;
   const stem = basename(isAbsolute(script) ? resolve(script) : resolve(cwd, script));
@@ -1647,10 +1774,14 @@ function isSelectedGuardRestartContinuation(
   marker: ActiveDirectiveMarker | null,
 ): boolean {
   const continuation = parseGuardRestartContinuationCommand(command, { harnessDir: harnessDir() });
-  // The source spelling names a script: it must be the installed tool itself.
-  const script = command.split(" ")[1] ?? "";
+  // The source spelling names a script: it must be the installed tool itself,
+  // and a copy launch's config file the install's own.
+  const words = command.split(" ");
+  const options = bunLaunchOptionWords(words, 1);
+  const script = words[1 + options] ?? "";
   if (
     continuation === null ||
+    (options > 0 && !isTrustedToolFile(projectDir, cwd, words[1].slice("--config=".length))) ||
     (command.startsWith("bun ") && !isTrustedToolFile(projectDir, cwd, script)) ||
     marker?.version !== 2 ||
     marker.kind !== "ask" ||
@@ -2050,10 +2181,9 @@ function shellInvocationNeedsApproval(
   if (dialect.powerShell && dialect.pathBoundWriter(name)) {
     return executable.toLowerCase() !== name || !unwrapped || !hasConcreteTargets;
   }
-  if (name === "sort" || name === "uniq") return writesThroughOption(name, invocation.args);
+  if (startsProgram(name, invocation.args) || writesThroughOption(name, invocation.args)) return true;
   if (READ_ONLY_SHELL_COMMANDS.has(name)) return false;
   if (name === "git") {
-    if (writesThroughOption(name, invocation.args)) return true;
     const subcommand = gitSubcommand(invocation.args);
     if (subcommand === "branch") {
       return !invocation.args.includes("--show-current");
@@ -2162,6 +2292,7 @@ async function mutationIntent(
       leadingDirectoryChange,
       shellCommandAltersExecutableResolution,
       shellCommandInvocationDetails,
+      shellCommandVariables,
       powerShellPathBoundWriter,
       heredocReading,
       shellPatchTargets,
@@ -2224,8 +2355,10 @@ async function mutationIntent(
     const dynamic =
       shellUsesDynamicEvaluation(analysed) ||
       shellCommandAltersExecutableResolution(analysed);
+    const handedProgram = shellCommandVariables(analysed).some(({ invocation, variables }) =>
+      startsProgram(normalizedCommandName(invocation.executable ?? invocation.name), invocation.args, variables));
     opaqueShell =
-      dynamic || unseen !== null ||
+      dynamic || unseen !== null || handedProgram ||
       invocations.some((invocation) =>
         !isPatchCall(invocation, from) &&
         shellInvocationNeedsApproval(projectDir, from, invocation, concreteTargets, analysed, dialect, context)
@@ -2273,13 +2406,15 @@ async function mutationIntent(
     }
     // An escaped operator (`\>`, `\&`) is read as the lexer decodes it, which
     // is not trusted here; a variable, substitution or backtick (`dynamic`) can
-    // hide a command or a write target, and a shell script run by name hides
-    // commands the lexer never sees.
+    // hide a command or a write target, and a shell script run by name, or a
+    // program a read command starts through an option or a variable on its
+    // line, hides commands the lexer never sees.
     readable = !dynamic && !/[^\S \t\n]/u.test(read) && !read.includes("\\\n") && !/\\[<>&|;]/.test(read) &&
-      !(powerShellHint && powerShellCommand === null) && !wildcardTargets && unseen === null &&
+      !(powerShellHint && powerShellCommand === null) && !wildcardTargets && unseen === null && !handedProgram &&
       !invocations.some((invocation) => {
         const program = normalizedCommandName(invocation.executable ?? invocation.name);
         return SHELL_INTERPRETERS.has(program) || writesThroughOption(program, invocation.args) ||
+          startsProgram(program, invocation.args) ||
           /\.(?:ps1|sh|bash|zsh|ksh|cmd|bat)$/.test(program) ||
           (INLINE_CODE_RUNTIMES.has(program) && invocation.args.some((arg) => INLINE_CODE_FLAGS.has(arg)));
       });
@@ -2907,9 +3042,11 @@ async function evaluate(
       const recordDir = docsRoot(projectDir);
       units = gatherApprovalEvidence(projectDir, knownUnits(projectDir, recordDir), setAside ?? undefined);
       if (guardedDispatch) {
+        const handed = briefHandedAtStart(projectDir) ? handedBriefTarget(projectDir, dispatchPrompt) : null;
         verdict = evaluatePlanApprovalDispatch(toolName, subagentType, dispatchPrompt, {
           currentStage: activeDirective.stage,
           units,
+          ...(handed !== null ? { handed: handed.unit } : {}),
         });
         // A directive that names no target (a step gone stale, a question, a
         // pause) carries no approval to a worker, so this is the same refusal

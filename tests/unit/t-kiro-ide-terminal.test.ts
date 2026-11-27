@@ -702,9 +702,12 @@ describe("the reply file and its pointer under Command Prompt", () => {
   // A compiled binary's argv is ["bun", "/$bunfs/root/<entry>", ...args], so
   // the respawn drops the embedded entry there and keeps the script path only
   // when bun runs the source (measured with `bun build --compile`, bun 1.3.14).
+  // Under bun the child also gets the launch's Bun options; this module is the
+  // source tree's, whose tools folder holds no launch config, so that is
+  // `--no-env-file` alone.
   test("the child command is the same tool again: the script under bun, the binary's own arguments when compiled", () => {
     expect(terminal.commandPromptChildCommand(["/usr/bin/bun", "/p/.kiro/tools/aidlc-utility.ts", "version"], "/usr/bin/bun", false))
-      .toEqual(["/usr/bin/bun", "/p/.kiro/tools/aidlc-utility.ts", "version"]);
+      .toEqual(["/usr/bin/bun", "--no-env-file", "/p/.kiro/tools/aidlc-utility.ts", "version"]);
     expect(terminal.commandPromptChildCommand(["bun", "/$bunfs/root/aidlc", "engine", "orchestrate", "next"], "C:\\aidlc\\bin\\aidlc.exe", true))
       .toEqual(["C:\\aidlc\\bin\\aidlc.exe", "engine", "orchestrate", "next"]);
   });

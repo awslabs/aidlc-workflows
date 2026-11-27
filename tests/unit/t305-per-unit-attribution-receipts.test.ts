@@ -1098,8 +1098,10 @@ describe("t305 content-addressed source review evidence", () => {
 });
 
 
-function runtimeFixture(): { project: string; record: string } {
+// `seed` runs in the project before the stage's start listing is taken.
+function runtimeFixture(seed: (project: string) => void = () => {}): { project: string; record: string } {
   const { project, record } = fixture();
+  seed(project);
   let state = readFileSync(join(FIXTURES_DIR, "state-mid-ideation.md"), "utf-8");
   state = state
     .replace("- **Current Stage**: feasibility", "- **Current Stage**: code-generation\n- **Construction Iteration**: stage-major")
@@ -1728,6 +1730,154 @@ describe("t305 real receipt and guard flows", () => {
     writeFileSync(join(other.project, "app.ts"), "export const app = 2;\n");
     review(other.project, other.record, "alpha", []); review(other.project, other.record, "beta", []);
     expect(approve(other.project).out).toContain("no Unit's review covers");
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  // After a git pull, a teammate's commit is nobody's change in this work: the
+  // project is a clone whose branch tracks a branch of a team remote (a bare
+  // repository here), and a teammate pushes to it.
+  const teamFixture = (policy: "strict" | "relaxed" = "strict"): { project: string; record: string; pullMove: () => void } => {
+    let mate = "";
+    const made = runtimeFixture((project) => {
+      for (const [path, body] of Object.entries({ "README.md": "# shop\n", "web/app.js": "render();\n", "web/index.html": "<html></html>\n" })) {
+        mkdirSync(join(project, path, ".."), { recursive: true });
+        writeFileSync(join(project, path), body);
+      }
+      git(project, ["add", "-A"]); git(project, ["commit", "-qm", "the shop"]);
+      const remote = `${project}-origin.git`;
+      mate = `${project}-mate`;
+      dirs.push(remote, mate);
+      git(project, ["init", "-q", "--bare", remote]);
+      git(project, ["remote", "add", "origin", remote]);
+      git(project, ["push", "-q", "-u", "origin", "HEAD"]);
+      const branch = spawnSync("git", ["-C", project, "rev-parse", "--abbrev-ref", "HEAD"], { encoding: "utf-8" }).stdout.trim();
+      git(project, ["clone", "-q", "-b", branch, remote, mate]);
+      git(mate, ["config", "user.email", "mate@test"]); git(mate, ["config", "user.name", "mate"]);
+    });
+    if (policy === "relaxed") {
+      const state = join(made.record, "aidlc-state.md");
+      writeFileSync(state, readFileSync(state, "utf-8").replace("- **Change Control**: strict (from scope feature)", "- **Guard Policy**: relaxed (from scope feature)"));
+    }
+    const pullMove = (): void => {
+      git(mate, ["rm", "-q", "-r", "--", "web"]);
+      writeFileSync(join(mate, "README.md"), "# shop\n\nThe web page now lives in its own repository.\n");
+      git(mate, ["commit", "-qam", "move web out"]); git(mate, ["push", "-q"]);
+      git(made.project, ["pull", "-q", "--no-rebase"]);
+    };
+    return { ...made, pullMove };
+  };
+
+  test("strict: a teammate's commit pulled before or after the Units' reviews is no change of theirs, and Code Generation completes", () => {
+    for (const when of ["before", "after"] as const) {
+      const { project, record, pullMove } = teamFixture();
+      if (when === "before") pullMove();
+      review(project, record, "alpha", [{ path: "app.ts" }]); review(project, record, "beta", []);
+      if (when === "after") pullMove();
+      const approved = approve(project);
+      expect(approved.out, when).not.toContain("no Unit's review covers");
+      expect(approved.rc, `${when}: ${approved.out}`).toBe(0);
+    }
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("after a git pull, the build's own file no Unit claims is still the one named: refused under strict, kept and said under relaxed", () => {
+    const strict = teamFixture();
+    strict.pullMove();
+    writeFileSync(join(strict.project, "extra.ts"), "export const extra = 1;\n");
+    review(strict.project, strict.record, "alpha", [{ path: "app.ts" }]); review(strict.project, strict.record, "beta", []);
+    const refused = approve(strict.project);
+    expect(refused.rc).toBe(1);
+    expect(refused.out).toContain("1 change made during Code Generation that no Unit's review covers (extra.ts)");
+    const relaxed = teamFixture("relaxed");
+    relaxed.pullMove();
+    writeFileSync(join(relaxed.project, "extra.ts"), "export const extra = 1;\n");
+    review(relaxed.project, relaxed.record, "alpha", [{ path: "app.ts" }]); review(relaxed.project, relaxed.record, "beta", []);
+    const kept = approve(relaxed.project);
+    expect(kept.rc, kept.out).toBe(0);
+    expect(kept.out).toContain("These files changed outside any unit's work in Code Generation: extra.ts. Kept them.");
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  // The shop keeps web as a submodule with its own team remote; a teammate moves it on, and the person pulls and
+  // updates it.
+  const submoduleFixture = (policy: "strict" | "relaxed" = "strict"): { project: string; record: string; pullMove: () => void } => {
+    let mate = "";
+    const made = runtimeFixture((project) => {
+      const web = `${project}-web`;
+      dirs.push(web, `${web}.git`);
+      mkdirSync(web, { recursive: true });
+      writeFileSync(join(web, "app.js"), "render();\n"); writeFileSync(join(web, "index.html"), "<html></html>\n");
+      git(web, ["init", "-q"]); git(web, ["config", "user.email", "t@test"]); git(web, ["config", "user.name", "t"]);
+      git(web, ["add", "-A"]); git(web, ["commit", "-qm", "the web page"]);
+      git(web, ["init", "-q", "--bare", `${web}.git`]); git(web, ["remote", "add", "origin", `${web}.git`]); git(web, ["push", "-q", "-u", "origin", "HEAD"]);
+      git(project, ["-c", "protocol.file.allow=always", "submodule", "add", "-q", `${web}.git`.replaceAll("\\", "/"), "web"]);
+      git(project, ["commit", "-qm", "the web page as a submodule"]);
+      const remote = `${project}-origin.git`;
+      mate = `${project}-mate`;
+      dirs.push(remote, mate);
+      git(project, ["init", "-q", "--bare", remote]);
+      git(project, ["remote", "add", "origin", remote]);
+      git(project, ["push", "-q", "-u", "origin", "HEAD"]);
+      const branch = spawnSync("git", ["-C", project, "rev-parse", "--abbrev-ref", "HEAD"], { encoding: "utf-8" }).stdout.trim();
+      git(project, ["clone", "-q", "-b", branch, remote, mate]);
+      git(mate, ["-c", "protocol.file.allow=always", "submodule", "update", "-q", "--init"]);
+      for (const dir of [mate, join(mate, "web")]) { git(dir, ["config", "user.email", "mate@test"]); git(dir, ["config", "user.name", "mate"]); }
+    });
+    if (policy === "relaxed") {
+      const state = join(made.record, "aidlc-state.md");
+      writeFileSync(state, readFileSync(state, "utf-8").replace("- **Change Control**: strict (from scope feature)", "- **Guard Policy**: relaxed (from scope feature)"));
+    }
+    const pullMove = (): void => {
+      const web = join(mate, "web");
+      writeFileSync(join(web, "app.js"), "render(wishlist);\n");
+      git(web, ["commit", "-qam", "the wishlist"]);
+      const branch = spawnSync("git", ["-C", web, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"], { encoding: "utf-8" }).stdout.trim().replace(/^origin\//, "");
+      git(web, ["push", "-q", "origin", `HEAD:refs/heads/${branch}`]);
+      git(mate, ["add", "--", "web"]); git(mate, ["commit", "-qm", "web moved on"]); git(mate, ["push", "-q"]);
+      git(made.project, ["pull", "-q", "--no-rebase"]);
+      git(made.project, ["-c", "protocol.file.allow=always", "submodule", "update", "-q"]);
+    };
+    return { ...made, pullMove };
+  };
+
+  test("a teammate's move of the web submodule, pulled and updated, is no change of the Units': Code Generation completes under relaxed and strict with nothing said", () => {
+    for (const policy of ["relaxed", "strict"] as const) {
+      const { project, record, pullMove } = submoduleFixture(policy);
+      pullMove();
+      review(project, record, "alpha", [{ path: "app.ts" }]); review(project, record, "beta", []);
+      const approved = approve(project);
+      expect(approved.out, policy).not.toContain("no Unit's review covers");
+      expect(approved.out, policy).not.toContain("changed outside any unit's work");
+      expect(approved.rc, `${policy}: ${approved.out}`).toBe(0);
+    }
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("beside a teammate's move of the web submodule, the build's own file inside it is named: refused under strict, kept and said under relaxed", () => {
+    const strict = submoduleFixture();
+    strict.pullMove();
+    writeFileSync(join(strict.project, "web", "extra.js"), "export const extra = 1;\n");
+    review(strict.project, strict.record, "alpha", [{ path: "app.ts" }]); review(strict.project, strict.record, "beta", []);
+    const refused = approve(strict.project);
+    expect(refused.rc).toBe(1);
+    expect(refused.out).toContain("1 change made during Code Generation that no Unit's review covers (web/extra.js)");
+    const relaxed = submoduleFixture("relaxed");
+    relaxed.pullMove();
+    writeFileSync(join(relaxed.project, "web", "extra.js"), "export const extra = 1;\n");
+    review(relaxed.project, relaxed.record, "alpha", [{ path: "app.ts" }]); review(relaxed.project, relaxed.record, "beta", []);
+    const kept = approve(relaxed.project);
+    expect(kept.rc, kept.out).toBe(0);
+    expect(kept.out).toContain("These files changed outside any unit's work in Code Generation: web/extra.js. Kept them.");
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("a remote branch git cannot read: the pulled files are counted as before, and the close refuses in its own words", () => {
+    const { project, record, pullMove } = teamFixture();
+    pullMove();
+    const branch = spawnSync("git", ["-C", project, "rev-parse", "--abbrev-ref", "HEAD"], { encoding: "utf-8" }).stdout.trim();
+    writeFileSync(join(project, ".git", "refs", "remotes", "origin", branch), `${"1".repeat(40)}\n`);
+    review(project, record, "alpha", [{ path: "app.ts" }]); review(project, record, "beta", []);
+    const refused = approve(project);
+    expect(refused.rc).toBe(1);
+    const said = JSON.parse(refused.out.trim().split("\n").at(-1) ?? "{}") as { error?: string };
+    expect(said.error, refused.out).toContain(
+      "3 changes made during Code Generation that no Unit's review covers (README.md, web/app.js, web/index.html)",
+    );
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("a setting recorded during the stage is not unclaimed source", () => {

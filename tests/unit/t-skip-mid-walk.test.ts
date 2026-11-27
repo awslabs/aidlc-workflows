@@ -22,6 +22,7 @@ import {
   NATIVE_STARTUP_TIMEOUT_MS,
   remainingOperationTimeoutMs,
 } from "../harness/test-budget.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import { cleanupTestProject, runOrchestrateNext, setupIntegrationProject } from "../harness/fixtures.ts";
 import {
   artifactFilename, auditBlockField, MESSAGE_FILL, MESSAGE_SLOT, readAllAuditShards, readAuditShardEvents,
@@ -37,6 +38,9 @@ setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS * 3);
 
 const SESSION = "01995000-7a11-7000-8000-00000000e3e3";
 const PERSON = "the person asked to skip it";
+// The project's copy tree names its tools with the copy launch's two Bun options.
+const ORCHESTRATE = withCopyLaunchOptions("bun .claude/tools/aidlc-orchestrate.ts");
+const DISPATCHER = withCopyLaunchOptions("bun .claude/tools/aidlc.ts");
 
 const env: Record<string, string | undefined> = { ...process.env, AIDLC_SESSION_OVERRIDE: SESSION, AIDLC_UNATTENDED: "0" };
 for (const key of ["AIDLC_SCOPE_MAPPING", "AIDLC_SCOPE_GRID", "AIDLC_SCOPES_DIR", "AIDLC_COMPOSED_SCOPES_DIR", "AIDLC_STAGE_GRAPH", "AWS_AIDLC_DEFAULT_SCOPE"]) {
@@ -196,12 +200,12 @@ function runNamed(proj: string, command: string): { status: number; out: string 
   return run(proj, words[at].endsWith("aidlc.ts") ? "aidlc.ts" : "aidlc-orchestrate.ts", args);
 }
 
-const THIS_UNIT = `bun .claude/tools/aidlc-orchestrate.ts report --stage code-generation --unit alpha --result skipped --reason '${PERSON}'`;
-const EVERY_UNIT = `bun .claude/tools/aidlc.ts engine recompose --skip code-generation --reason '${PERSON}'`;
+const THIS_UNIT = `${ORCHESTRATE} report --stage code-generation --unit alpha --result skipped --reason '${PERSON}'`;
+const EVERY_UNIT = `${DISPATCHER} engine recompose --skip code-generation --reason '${PERSON}'`;
 // The walk's first stage is the record's Current Stage itself: skipped for one
 // Unit at its beat, and for every Unit from here by the stage's own skip.
-const FIRST_THIS_UNIT = `bun .claude/tools/aidlc-orchestrate.ts report --stage functional-design --unit alpha --result skipped --reason '${PERSON}'`;
-const FIRST_EVERY_UNIT = `bun .claude/tools/aidlc-orchestrate.ts report --stage functional-design --result skipped --reason '${PERSON}'`;
+const FIRST_THIS_UNIT = `${ORCHESTRATE} report --stage functional-design --unit alpha --result skipped --reason '${PERSON}'`;
+const FIRST_EVERY_UNIT = `${ORCHESTRATE} report --stage functional-design --result skipped --reason '${PERSON}'`;
 const EVERY_FROM = "If they name no Unit, they mean every Unit from here";
 
 describe("a skip the person asks for while Construction walks Unit by Unit is carried out", () => {
@@ -284,7 +288,7 @@ describe("a skip the person asks for while Construction walks Unit by Unit is ca
     expect(step.message).toContain('"Skipped Code Generation for every Unit from here. You can undo that until Build and Test starts."');
     expect(step.message).toContain(
       "If they later ask to undo skipping it for every Unit, run " +
-        "`bun .claude/tools/aidlc.ts engine recompose --add code-generation`.",
+        `\`${DISPATCHER} engine recompose --add code-generation\`.`,
     );
     const replanned = runNamed(proj, EVERY_UNIT);
     expect(replanned.status, replanned.out).toBe(0);
@@ -359,7 +363,7 @@ describe("a skip the person asks for while Construction walks Unit by Unit is ca
   test("Build and Test said mid-walk is taken off the plan, and the Unit carries on", () => {
     const proj = walk(["alpha", "beta"]);
     const step = next(proj, ["--skip", "build-and-test"]);
-    expect(named(step)).toEqual([`bun .claude/tools/aidlc.ts engine recompose --skip build-and-test --reason '${PERSON}'`]);
+    expect(named(step)).toEqual([`${DISPATCHER} engine recompose --skip build-and-test --reason '${PERSON}'`]);
     // Build and Test is no step of the walk: its undo holds until the work moves past it (t-skip-undo-window).
     expect(step.message).toContain('"Skipped Build and Test. You can undo that until the work moves past it."');
     const replanned = runNamed(proj, named(step)[0]);
@@ -400,7 +404,7 @@ describe("a skip the person asks for while Construction walks Unit by Unit is ca
     ]);
     expect(own.out).toContain("only a CONDITIONAL stage can report skipped");
     expect(own.out).toContain(
-      "If the person asked to skip it, run `bun .claude/tools/aidlc-orchestrate.ts next --skip code-generation`: " +
+      `If the person asked to skip it, run \`${ORCHESTRATE} next --skip code-generation\`: ` +
         "its step skips it the way they asked, for one Unit only or for every Unit.",
     );
     expect(readFileSync(stateFile(proj), "utf-8")).toBe(before);
@@ -418,7 +422,7 @@ describe("a skip the person asks for while Construction walks Unit by Unit is ca
     const step = next(proj, ["skip code generation for this unit"]);
     expect(step.kind, JSON.stringify(step)).toBe("print");
     expect(step.message).toContain(
-      "If it asks to skip this stage, run `bun .claude/tools/aidlc-orchestrate.ts next --skip code-generation` and follow what it returns.",
+      `If it asks to skip this stage, run \`${ORCHESTRATE} next --skip code-generation\` and follow what it returns.`,
     );
   });
 
@@ -435,7 +439,7 @@ describe("a skip the person asks for while Construction walks Unit by Unit is ca
     const step = next(proj, ["skip code generation for this unit"]);
     expect(step.kind, JSON.stringify(step)).toBe("print");
     expect(step.message).toContain(
-      "If it asks to skip Code Generation, run `bun .claude/tools/aidlc-orchestrate.ts next --skip code-generation` and follow what it returns.",
+      `If it asks to skip Code Generation, run \`${ORCHESTRATE} next --skip code-generation\` and follow what it returns.`,
     );
   });
 
@@ -502,7 +506,7 @@ describe("a skip the person asks for while Construction walks Unit by Unit is ca
       expect(done.status, done.out).toBe(0);
     }
     const step = next(proj, ["--skip", "nfr-requirements"]);
-    expect(named(step)).toEqual([`bun .claude/tools/aidlc.ts engine recompose --skip nfr-requirements --reason '${PERSON}'`]);
+    expect(named(step)).toEqual([`${DISPATCHER} engine recompose --skip nfr-requirements --reason '${PERSON}'`]);
     expect(step.message).toContain("covers every Unit");
     expect(step.message).toContain(
       '"NFR Requirements can be skipped for one Unit while that Unit is working on it; the alpha Unit is paused on NFR Requirements now."',
@@ -613,11 +617,11 @@ describe("a skip the person asks for at the walk's first stage, while a Unit is 
     const step = next(proj, ["--scope", "refactor", "--skip", "functional-design"]);
     expect(step.kind, JSON.stringify(step)).toBe("print");
     const message = String(step.message);
-    expect(message).toStartWith("Run `bun .claude/tools/aidlc.ts engine scope change --scope refactor`");
+    expect(message).toStartWith(`Run \`${DISPATCHER} engine scope change --scope refactor\``);
     expect(message).not.toContain("engine recompose --skip functional-design");
     expect(named(segment(message, "If their words mean the alpha Unit only", EVERY_FROM)), message).toEqual([FIRST_THIS_UNIT]);
     expect(named(segment(message, EVERY_FROM)), message).toEqual([FIRST_EVERY_UNIT]);
-    const switched = runNamed(proj, "bun .claude/tools/aidlc.ts engine scope change --scope refactor");
+    const switched = runNamed(proj, `${DISPATCHER} engine scope change --scope refactor`);
     expect(switched.status, switched.out).toBe(0);
     const skipped = runNamed(proj, FIRST_EVERY_UNIT);
     expect(skipped.status, skipped.out).toBe(0);
@@ -660,7 +664,7 @@ describe("a skip the person asks for at the walk's first stage, while a Unit is 
     const step = next(proj, ["--skip", "functional-design,nfr-requirements"]);
     const commands = named(segment(String(step.message), EVERY_FROM));
     expect(commands, String(step.message)).toEqual([
-      `bun .claude/tools/aidlc.ts engine recompose --skip nfr-requirements --reason '${PERSON}'`,
+      `${DISPATCHER} engine recompose --skip nfr-requirements --reason '${PERSON}'`,
       FIRST_EVERY_UNIT,
     ]);
     for (const command of commands) {

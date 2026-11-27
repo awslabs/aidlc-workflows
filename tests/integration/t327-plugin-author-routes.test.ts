@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { asShippedBuild } from "../harness/plugin-host-names.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import { ROUTES, type Route, routeOptions } from "../../dist/claude/.claude/tools/aidlc.ts";
 import {
   comparablePluginTest,
@@ -171,6 +172,8 @@ describe("t327 top-level plugin authoring routes", () => {
     return project;
   }
 
+  // The select line as a copy tree that holds the launch config prints it.
+  const SELECT = withCopyLaunchOptions("bun .claude/tools/aidlc-utility.ts select-plugins aidlc,test-pro");
   const drops = (stdout: string): string[] =>
     (JSON.parse(stdout) as { drops: Array<{ message: string }> }).drops.map((drop) => drop.message);
 
@@ -179,7 +182,8 @@ describe("t327 top-level plugin authoring routes", () => {
     const notInstalled = run(["plugin", "test", "--install", missing, "--json"], plugins.clean);
     expect(notInstalled.status, notInstalled.stderr).toBe(1);
     expect(drops(notInstalled.stdout)).toEqual([
-      'plugin "test-pro" composed but is not enabled by tools/data/harness.json; test-pro is not installed in this project yet: install it there first, then run `bun .claude/tools/aidlc-utility.ts select-plugins aidlc,test-pro` to expose its stages, scopes, and runners',
+      'plugin "test-pro" composed but is not enabled by tools/data/harness.json; test-pro is not installed in this project yet: install it there first, then run ' +
+        `\`${SELECT}\` to expose its stages, scopes, and runners`,
     ]);
     expect(utility(missing, ["select-plugins", "aidlc,test-pro"]).stderr).toContain("Unknown plugin name(s): test-pro");
 
@@ -187,14 +191,16 @@ describe("t327 top-level plugin authoring routes", () => {
     const installedOff = run(["plugin", "test", "--install", off, "--json"], plugins.clean);
     expect(installedOff.status, installedOff.stderr).toBe(1);
     expect(drops(installedOff.stdout)).toEqual([
-      'plugin "test-pro" composed but is not enabled by tools/data/harness.json; run `bun .claude/tools/aidlc-utility.ts select-plugins aidlc,test-pro` to expose its stages, scopes, and runners',
+      `plugin "test-pro" composed but is not enabled by tools/data/harness.json; run \`${SELECT}\` to expose its stages, scopes, and runners`,
     ]);
     const enabled = utility(off, ["select-plugins", "aidlc,test-pro"]);
     expect(enabled.status, enabled.stderr).toBe(0);
   });
 
   test("plugin test --help names exactly its options, and a usage error exits 2 with the verb's usage", () => {
-    const usage = "bun .claude/tools/aidlc.ts plugin test [path] --install <project-root> [--harness <name>] [--with <base-root>] [--json]";
+    const usage = withCopyLaunchOptions(
+      "bun .claude/tools/aidlc.ts plugin test [path] --install <project-root> [--harness <name>] [--with <base-root>] [--json]",
+    );
     const help = run(["plugin", "test", "--help"]);
     expect(help.status, help.stderr).toBe(0);
     expect(help.stdout).toContain(`\n  ${usage}\n`);

@@ -970,7 +970,7 @@ describe("t299 (5) authored consumers use the same contract", () => {
     const stage = read(STAGE_REL);
     expect(stage).toContain("aidlc-testing-posture.ts render");
     expect(stage).toContain("aidlc-testing-posture.ts fingerprint");
-    expect(stage).toContain("AIDLC-TESTING-CONTRACT: <contract_sha256>");
+    expect(stage).toContain("the current Testing Contract in the tool-produced brief is\n  authoritative for Part 2");
     expect(stage).toContain("BDD");
     expect(stage).toContain("ATDD");
     expect(stage).toContain("Custom/mixed");

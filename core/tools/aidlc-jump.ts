@@ -10,7 +10,7 @@ import { keptSinceFinished } from "./aidlc-message-store.ts";
 import { isNonAnswer } from "./aidlc-reply-reader.ts";
 import { readReviewArtifactContexts } from "./aidlc-review-brief.ts";
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
-import { isCompiledExecutable } from "./aidlc-runtime-paths.ts";
+import { bunLaunchFlags, isCompiledExecutable } from "./aidlc-runtime-paths.ts";
 import { stageLabel } from "./aidlc-validity.ts";
 import {
   addedStagesPassedOver,
@@ -1100,7 +1100,7 @@ function executeUnitsForward(
 function runStateTool(pd: string, args: string[]): { ok: boolean; stdout: string; stderr: string } {
   const command = isCompiledExecutable()
     ? [process.execPath, "engine", "state", ...args, "--project-dir", pd]
-    : [process.execPath, join(TOOLS_DIR, "aidlc-state.ts"), ...args, "--project-dir", pd];
+    : [process.execPath, ...bunLaunchFlags(), join(TOOLS_DIR, "aidlc-state.ts"), ...args, "--project-dir", pd];
   const result = spawnSync(command[0], command.slice(1), {
     encoding: "utf-8",
     cwd: pd,

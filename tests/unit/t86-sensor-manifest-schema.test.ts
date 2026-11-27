@@ -32,8 +32,9 @@
 // Schema being frozen:
 //   - id matches filename stem (filename-id contract)
 //   - kind == deterministic
-//   - command points at the source-channel dispatcher (canonical execution
-//     shape: `bun .claude/tools/aidlc.ts engine sensor-<id>`)
+//   - command points at the copy tree's dispatcher (canonical execution
+//     shape: `bun --config=.claude/tools/aidlc-bunfig.toml --no-env-file
+//     .claude/tools/aidlc.ts engine sensor-<id>`)
 //   - applies_to ABSENT from the manifest bytes (scope lives on the stage side
 //     via stage.sensors[]; the resolver gets no info from applies_to)
 //   - default_severity and description present
@@ -50,6 +51,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { AIDLC_SRC, FIXTURES_DIR } from "../harness/fixtures.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import {
   parseSensorManifest,
   validateSensorManifest,
@@ -130,7 +132,7 @@ describe("t86 sensor manifest schema (extended from t86-sensor-manifest-schema.s
       expect(obj.id).toBe(name);
       expect(obj.kind).toBe("deterministic");
       expect(obj.command).toBe(
-        `bun .claude/tools/aidlc.ts engine sensor-${name}`,
+        withCopyLaunchOptions(`bun .claude/tools/aidlc.ts engine sensor-${name}`),
       );
       // applies_to ABSENT from the frontmatter bytes; scope lives on the stage side
       // via stage.sensors[].

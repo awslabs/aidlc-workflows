@@ -43,6 +43,7 @@ import {
   writeBaselineSourceSnapshot,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { writeSessionPidEntry } from "../../dist/copilot/.aidlc/tools/aidlc-lib.ts";
+import { withCopyLaunchOptions } from "./copy-launch.ts";
 
 /** Worktree fixtures a state built; the sweep cleans them with cleanupWorktreeFixtures(). */
 const worktreeFixtures: string[] = [];
@@ -220,7 +221,7 @@ export function latestHumanTurnWords(proj: string): string | null {
 /** Every engine command a text names in backticks, in the tree's own spelling. */
 export function namedCommands(text: string): string[] {
   const found: string[] = [];
-  for (const match of text.matchAll(/`((?:bun \.[A-Za-z-]+\/tools\/[^`]+|aidlc [^`]+))`/g)) {
+  for (const match of text.matchAll(/`((?:bun (?:--config=\S+ --no-env-file )?\.[A-Za-z-]+\/tools\/[^`]+|aidlc [^`]+))`/g)) {
     const command = match[1].trim();
     if (!found.includes(command)) found.push(command);
   }
@@ -1006,7 +1007,7 @@ export function copilotRuns(proj: string, command: string): { refused: string | 
 }
 
 export function copilotStep(proj: string, args: string): Step {
-  const ran = copilotRuns(proj, `bun .aidlc/tools/aidlc-orchestrate.ts ${args}`);
+  const ran = copilotRuns(proj, withCopyLaunchOptions(`bun .aidlc/tools/aidlc-orchestrate.ts ${args}`));
   expect(ran.refused).toBeNull();
   return JSON.parse(ran.stdout.trim()) as Step;
 }

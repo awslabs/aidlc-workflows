@@ -35,6 +35,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { TextDecoder } from "node:util";
 import { inflateSync } from "node:zlib";
 import {
+  bunLaunchFlags,
+  bunLaunchOptionWords,
   aidlcDispatcherInvocation,
   aidlcInvocation,
   aidlcToolInvocation,
@@ -55,6 +57,7 @@ import {
   repoNameProblem,
   repoNameRefusal,
   typedHarnessName,
+  withoutBunLaunchOptions,
 } from "./aidlc-runtime-paths.ts";
 export { entrySkillInvocation, repoNameProblem, repoNameRefusal, SPACE_NAME_REGEX } from "./aidlc-runtime-paths.ts";
 import { humanTurnMintAllowed, personGitNameField } from "./aidlc-git-name.ts";
@@ -3152,7 +3155,7 @@ const sourceEngineDispatcher = new RegExp(
 // Canonicalize only the engine tools these detectors own so the Bun and native
 // spellings share one classification policy. Other engine tools remain untouched.
 function canonicalEngineCommand(text: string): string {
-  return text
+  return withoutBunLaunchOptions(text)
     .replace(sourceEngineDispatcher, "aidlc ")
     .replace(
       /\baidlc\s+engine\s+orchestrate\s+help\b/g,
@@ -3454,7 +3457,9 @@ function engineInvocationFromWords(
   }
   if (commandIndex >= tokens.length) return null;
   const viaBun = base(tokens[commandIndex]) === "bun";
-  if (viaBun) commandIndex++;
+  const bunIndex = commandIndex;
+  // A copy launch's two Bun options (bunLaunchOptionWords) read as the launch without them.
+  if (viaBun) commandIndex += 1 + bunLaunchOptionWords(tokens, commandIndex + 1);
   if (commandIndex >= tokens.length) return null;
   if (!/^(?:aidlc|aidlc\.ts|aidlc-(?:orchestrate|state|jump|bolt|swarm|unit)(?:\.ts)?)$/.test(base(tokens[commandIndex]))) {
     // Unsupported interpreters do not become Bun transports merely because a
@@ -3464,7 +3469,7 @@ function engineInvocationFromWords(
   let command = tokens[commandIndex].replaceAll("\\", "/").split("/").pop() ?? "";
   if (command === "aidlc.ts") {
     if (
-      !/(?:^|[/\\])bun$/.test(tokens[commandIndex - 1] ?? "") ||
+      !viaBun || !/(?:^|[/\\])bun$/.test(tokens[bunIndex] ?? "") ||
       !new RegExp(`${sourceEngineDispatcherPath}$`).test(tokens[commandIndex])
     ) return "opaque";
     command = "aidlc";
@@ -3607,7 +3612,7 @@ export function settingsBesideDecision(
   const run = Bun.spawnSync({
     cmd: isCompiledExecutable()
       ? [process.execPath, ...args]
-      : [process.execPath, join(dirname(fileURLToPath(import.meta.url)), "aidlc.ts"), ...args],
+      : [process.execPath, ...bunLaunchFlags(), join(dirname(fileURLToPath(import.meta.url)), "aidlc.ts"), ...args],
     env: hookChildEnv(projectDir, session ?? undefined),
     stdout: "pipe",
     stderr: "pipe",
@@ -4972,12 +4977,16 @@ export function uuidv7(): string {
   return `${body.slice(0, 8)}-${body.slice(8, 12)}-${body.slice(12, 16)}-${body.slice(16, 20)}-${body.slice(20, 32)}`;
 }
 
-// Deterministic free-text → SLUG_RE-valid kebab: lowercase; non-alphanumerics →
-// hyphens; collapse + trim hyphens; cap length; ensure a leading letter. Pure +
-// idempotent (slugify(slugify(x)) === slugify(x)). Falls back to "intent" when
-// the input reduces to empty.
+// Deterministic free-text → SLUG_RE-valid kebab: accents dropped (as
+// folderRepoName drops them, so "Cálculo" is calculo and not c-lculo, and a
+// macOS (NFD) and a Windows or Linux (NFC) spelling of one name agree);
+// lowercase; non-alphanumerics → hyphens; collapse + trim hyphens; cap length;
+// ensure a leading letter. Pure + idempotent (slugify(slugify(x)) ===
+// slugify(x)). Falls back to "intent" when the input reduces to empty.
 export function slugify(text: string, maxLength = 48): string {
   let s = text
+    .normalize("NFKD")
+    .replace(/\p{M}+/gu, "")
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
@@ -11434,7 +11443,8 @@ function copilotGuardRestartPrintHashes(
       (parseStateStageSuffixes(stateContent).get(operation.stage) ?? mapping.stages[operation.stage]) !== "EXECUTE"
     ) return [];
     const direction = targetIndex === currentIndex ? "redo" : "backward";
-    return ["aidlc engine jump", `bun ${runtimeHarnessDir()}/tools/aidlc-jump.ts`].map(
+    // The jump tool's line in either spelling of a copy launch (aidlcToolInvocation prints the one with its options).
+    return [...new Set(["aidlc engine jump", `bun ${runtimeHarnessDir()}/tools/aidlc-jump.ts`, aidlcToolInvocation("jump")])].map(
       (invocation) => contentSha256(JSON.stringify(withPersonsWordsFirst({
         kind: "print",
         message: `Run \`${invocation} execute --target ${operation.stage} --direction ${direction} --scope ${scopeArg(scope)}\` to perform the jump, then re-run \`next\` to continue from the jump target.`,
@@ -19644,7 +19654,7 @@ export interface PendingReviewRequestStatus {
   retryable: boolean;
   verdictRecordable: boolean;
   // Its outputs or source changed since the request (every output and any unit
-  // source manifest still reads), so it can never finish and a new request may
+  // source manifest still reads), so it is not retried and a new request may
   // replace it. A missing output is not this: restoring it can make the request
   // current again.
   replaceable: boolean;
@@ -20378,8 +20388,8 @@ export function freshReviewReceipts(
   >();
   let stageVerdict: ReviewVerdict | null = null;
   let newestSourceFingerprint: string | null = null;
-  // The listing that receipt kept (`Source Listing`), absent on receipts an
-  // earlier release wrote and when the source moved during the review.
+  // The listing that receipt kept (`Source Listing`), absent on receipts an earlier
+  // release wrote and when the source moved in the review (strict: past ignored files).
   let newestSourceListing: string | undefined;
   let newestSourceRow: AuditShardEvent | null = null;
   let newestSourceUnit: string | null = null;
@@ -20842,8 +20852,8 @@ export function freshReviewReceipts(
   const awaitingVerdict = new Set<string>();
   for (const request of pendingRequests.values()) {
     awaitingVerdict.add(request.unit ?? "");
-    // A pending request whose outputs or source changed before its verdict can
-    // never finish (a retry re-dispatches the old bytes); the next move is a new
+    // A pending request whose outputs or source changed before its verdict is
+    // not retried (a retry re-dispatches the old bytes); the next move is a new
     // request at the same pass, which is what `outstanding` names to every
     // reader (wave entries, gates, recovery).
     const currency =
@@ -27322,8 +27332,8 @@ function baselineSourceSnapshotMissing(
 // Source]` tag, then the receipt's certified source). The fingerprint alone can
 // say that source moved, never which files. These snapshots keep the per-path
 // listing that produced a fingerprint so a later drift can be told to the human
-// as paths, under either Change Control value. They are advisory to the human
-// line only: the decision compares fingerprints, never these bytes.
+// as paths, under either Change Control value. Plan Approval decides by
+// fingerprints, never these bytes; a review verdict reads the request's one.
 
 const WORKSPACE_SNAPSHOT_HEADER = "workspace";
 
@@ -31300,7 +31310,7 @@ export function humanPresenceGuardDisabled(projectDir?: string): boolean {
 // The same hard signal `next`'s stop reads, for the current workflow: a stage
 // or gate event and no heartbeat at all, with no link on the way to the
 // status files. Anything unreadable proves nothing.
-function hooksNeverRanHere(projectDir?: string): boolean {
+export function hooksNeverRanHere(projectDir?: string): boolean {
   try {
     const project = resolveProjectDir(projectDir);
     return hookLiveness(project).neverFired && !hookStatusPathLinked(project);
@@ -32958,8 +32968,8 @@ export function guardAttemptState(
     iteration,
   });
   const nextReviewAt = (iteration: number) => ({ nextReview: { iteration, request: requestAt(iteration) } });
-  // A pending request that can never finish (its outputs or source changed
-  // before a verdict) is requested again at the same pass, once per attempt.
+  // A pending request whose outputs or source changed before a verdict is
+  // requested again at the same pass, once per attempt.
   const pendingReviewFor = (iteration: number) =>
     pendingStatus?.iteration === iteration && pendingStatus.replaceable
       ? nextReviewAt(iteration)
@@ -38648,11 +38658,16 @@ const APPROVED_TOGETHER_ENDS = new Set([
 
 // A later listed stage's approval stands on the person's one reply while the
 // approval that listed it still covers it: no question, rejection or decision
-// since, and no gate for a stage outside the list. Ledger order only. The row
-// is that approval's own, so what it recorded travels with it.
+// since, no gate for a stage outside the list, and the latest review of this stage
+// since, if any, brings no finding the reply never saw (`reviewBringsFinding`, given
+// the review and the row that opened the gate the reply came at; the caller owns
+// the test, and this file must not import its owner, which imports this one).
+// Ledger order only. The row is that approval's own, so what it recorded travels
+// with it.
 export function approvedTogetherCover(
   projectDir: string,
   slug: string,
+  reviewBringsFinding: (review: AuditShardEvent, opened: AuditShardEvent) => boolean,
 ): { first: string; row: AuditShardEvent } | null {
   let rows: AuditShardEvent[];
   try {
@@ -38666,7 +38681,15 @@ export function approvedTogetherCover(
     const listed = approvesTogetherField(row.block);
     const first = auditBlockField(row.block, "Stage");
     if (!first || first === slug || !listed.includes(slug)) continue;
-    for (const later of rows.slice(i + 1)) {
+    const since = rows.slice(i + 1);
+    const review = since.findLast((later) => later.event === "REVIEW_COMPLETED" && auditBlockField(later.block, "Stage") === slug);
+    if (review !== undefined) {
+      const opened = rows.slice(0, i).findLast((earlier) =>
+        earlier.event === "STAGE_AWAITING_APPROVAL" && auditBlockField(earlier.block, "Stage") === first
+      ) ?? row;
+      if (reviewBringsFinding(review, opened)) return null;
+    }
+    for (const later of since) {
       if (APPROVED_TOGETHER_ENDS.has(later.event)) return null;
       if (later.event !== "GATE_APPROVED" && later.event !== "STAGE_AWAITING_APPROVAL") continue;
       const stage = auditBlockField(later.block, "Stage") ?? "";
@@ -41444,7 +41467,7 @@ export function sayOnceNoteLine(
  * including an older one still installed in a project, reads the top-level key
  * and rewraps it for its own host. So the line carries both, with the same text.
  * `firstStepNote` goes only to an adapter that asked the human-turn hook for
- * it, to say its own way (opencode, Kiro CLI's V2 engine).
+ * it, to say its own way (opencode).
  */
 export function hookContextLine(
   event: "SessionStart" | "UserPromptSubmit" | "PostToolUse",

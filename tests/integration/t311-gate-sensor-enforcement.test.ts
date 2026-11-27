@@ -1163,7 +1163,9 @@ describe("t311 after the person picks Override blocking sensors", () => {
       // One spelling: the step names the report the refusal already named.
       expect(refusal.replaceAll('\\"', '"')).toContain(command as string);
       const argv = ((command as string).match(/"[^"]*"|\S+/g) ?? []).map((part) => part.replace(/^"|"$/g, ""));
-      const reported = await run(ORCHESTRATE, argv.slice(2));
+      // A copy tree starts Bun with its own config and --no-env-file before the script.
+      const script = argv.findIndex((word, at) => at > 0 && word !== "--no-env-file" && !/^--config=\S*aidlc-bunfig\.toml$/.test(word));
+      const reported = await run(ORCHESTRATE, argv.slice(script + 1));
       expect(reported.status, reported.stdout + reported.stderr).toBe(0);
       expect(reported.stdout).not.toContain('"ask_type":"guard-recovery"');
       expect(readFileSync(statePath, "utf-8")).toContain(`- [?] ${RA}`);

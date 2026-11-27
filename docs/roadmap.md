@@ -1,7 +1,7 @@
 # AI-DLC Workflows roadmap
 
-**Reviewed October 29, 2026.** The latest stable release at this review is
-[v2.11.2](https://github.com/awslabs/aidlc-workflows/releases/tag/v2.11.2).
+**Reviewed November 25, 2026.** The latest stable release at this review is
+[v2.11.5](https://github.com/awslabs/aidlc-workflows/releases/tag/v2.11.5).
 
 This roadmap records delivered capabilities and the project's North Star
 direction. Issues and pull requests hold current implementation status.
@@ -21,14 +21,17 @@ stable promotion, and release decisions.
 
 ## Recently shipped
 
-These are selected customer-facing improvements from the releases since the
-previous roadmap review. Follow each release link for its full scope and upgrade
+These are selected customer-facing improvements from recent stable releases.
+Follow each release link for its full scope, compatibility notes, and upgrade
 requirements.
 
 <!-- markdownlint-disable MD013 -->
 
 | Stable release | Published | Delivered capabilities |
 | --- | --- | --- |
+| [2.11.5](https://github.com/awslabs/aidlc-workflows/releases/tag/v2.11.5) | November 25, 2026 | More reliable plan answers and approvals across chats; protection against config downgrading a newer project; stronger mockup, story, and Unit traceability; team merge conflicts detected before approval; HTML knowledge imports. |
+| [2.11.4](https://github.com/awslabs/aidlc-workflows/releases/tag/v2.11.4) | November 13, 2026 | One Kiro harness for the IDE and CLI v3 engine; simpler team Unit handoffs; Inception reads team documents; built-in Word, Excel, and PDF readers; plugin commands and house rules; redacted issue reports. |
+| [2.11.3](https://github.com/awslabs/aidlc-workflows/releases/tag/v2.11.3) | November 4, 2026 | Native runtime security update; team Unit claim, publish, pin, and landing repairs; more reliable request text and repeat reviews; OpenCode 2 support; Windows argument handling and exFAT support. |
 | [2.11.2](https://github.com/awslabs/aidlc-workflows/releases/tag/v2.11.2) | October 28, 2026 | More reliable handling of replies and workflow control across chats; fixes to existing parallel Unit builds and landings; multi-repository Reverse Engineering and adding repositories during work; configuration and Windows repairs. |
 | [2.11.1](https://github.com/awslabs/aidlc-workflows/releases/tag/v2.11.1) | October 20, 2026 | Code Generation approvals for work in worktrees, nested checkouts, and clones; plugin identity and composition improvements; project refresh from older releases. |
 | [2.11.0](https://github.com/awslabs/aidlc-workflows/releases/tag/v2.11.0) | October 8, 2026 | Human-directed workflow changes and Plan Approval; preservation of finished Unit work when plans change; leaner starting workflows and configuration that preserves team files. |

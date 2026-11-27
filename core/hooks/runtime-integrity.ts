@@ -1261,7 +1261,8 @@ function installedRelativeProtected(path: string, root: string, harnessName = ba
   const rel = relative(root, path).replaceAll("\\", "/");
   if (!pathWithin(path, root)) return false;
   if (rel === "" || rel === "hooks" || rel.startsWith("hooks/") || rel === "tools") return true;
-  if (/^tools\/aidlc(?:-[a-z0-9-]+)?(?:\.ts|\.exe)?$/.test(rel)) return true;
+  // The copy launch's config file (aidlc-runtime-paths.ts BUN_LAUNCH_CONFIG): a preload written into it would run in every launch.
+  if (/^tools\/aidlc(?:-[a-z0-9-]+)?(?:\.ts|\.exe)?$/.test(rel) || rel === "tools/aidlc-bunfig.toml") return true;
   if (/^bin\/aidlc(?:\.exe)?$/.test(rel) || rel === "bin") return true;
   if (rel === "hooks.json") return true;
   if (harnessName === ".claude" && rel === "settings.json") return true;

@@ -37,6 +37,7 @@ import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { parse } from "smol-toml";
 import { TRUSTED_ROUTE_NAMESPACE } from "../../core/tools/aidlc-command.ts";
+import { COPY_LAUNCH_CONFIG, withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -72,7 +73,9 @@ type TrustEntries = (
   invoke?: string,
 ) => string;
 
-const SOURCE_INVOKE = "bun .codex/tools/aidlc.ts";
+const SOURCE_INVOKE = withCopyLaunchOptions("bun .codex/tools/aidlc.ts");
+// The copy launch without its two Bun options: the spelling the pinned trust anchors were taken on.
+const PLAIN_SOURCE_INVOKE = "bun .codex/tools/aidlc.ts";
 
 function parseTrustDocument(source: string): TrustDocument {
   return parse(source) as unknown as TrustDocument;
@@ -225,6 +228,9 @@ describe("t150 dist/codex packaging determinism + trust", () => {
         let codex = readFileSync(file, "utf-8");
         const claude = readFileSync(src, "utf-8");
         codex = codex.replaceAll(
+          withCopyLaunchOptions("bun .codex/tools/"),
+          withCopyLaunchOptions("bun .claude/tools/"),
+        ).replaceAll(
           "bun .codex/tools/",
           "bun .claude/tools/",
         );
@@ -243,7 +249,8 @@ describe("t150 dist/codex packaging determinism + trust", () => {
   test("3: shipped codex prose carries no bun .claude/tools commands", () => {
     const r = spawnSync(
       "grep",
-      ["-rn", "bun .claude/tools/", join(REPO_ROOT, "dist", "codex")],
+      // A copy launch names the tree in its Bun config as well as its script.
+      ["-rnE", "bun (--config=[^ ]* --no-env-file )?\\.claude/tools/|--config=\\.claude/tools/", join(REPO_ROOT, "dist", "codex")],
       { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
     );
     // grep exits 1 on no matches — exactly what we want.
@@ -262,7 +269,7 @@ describe("t150 dist/codex packaging determinism + trust", () => {
     }
     // Paths keep their slash, and the Claude tree keeps its slash commands.
     expect(read("aidlc-replay")).toContain("`<record>/aidlc-state.md`");
-    expect(read("aidlc-replay")).toContain("bun .codex/tools/aidlc.ts engine runtime summary");
+    expect(read("aidlc-replay")).toContain(withCopyLaunchOptions("bun .codex/tools/aidlc.ts engine runtime summary"));
     expect(readFileSync(join(CLAUDE_SRC, "skills", "aidlc-replay", "SKILL.md"), "utf-8")).toContain("/aidlc-replay.");
   });
 
@@ -282,10 +289,12 @@ describe("t150 dist/codex packaging determinism + trust", () => {
     const nativeRules = readdirSync(join(CODEX_DST, "rules"));
     expect(nativeRules).toEqual(["default.rules"]);
     const defaultRules = readFileSync(join(CODEX_DST, "rules", "default.rules"), "utf-8");
+    const launch = `"bun", "--config=.codex/tools/${COPY_LAUNCH_CONFIG}", "--no-env-file"`;
     expect(defaultRules).toContain(
-      `prefix_rule(pattern = ["bun", ".codex/tools/aidlc.ts", "${TRUSTED_ROUTE_NAMESPACE}"], decision = "allow")`,
+      `prefix_rule(pattern = [${launch}, ".codex/tools/aidlc.ts", "${TRUSTED_ROUTE_NAMESPACE}"], decision = "allow")`,
     );
     expect(defaultRules).not.toContain('pattern = ["bun", ".codex/tools/"]');
+    expect(defaultRules).not.toContain(`pattern = [${launch}, ".codex/tools/"]`);
     expect(defaultRules).not.toContain('prefix_rule(pattern = ["aidlc"]');
     // No resolver seam: the engine reads the active space directly. The member
     // 2.11.0 shipped stays, empty, since 2.11.0's own refresh cannot take it out.
@@ -348,12 +357,12 @@ describe("t150 dist/codex packaging determinism + trust", () => {
     expect(
       wiring.hooks.PostToolUse.find((group) => group.matcher === "request_user_input")
         ?.hooks[0]?.command,
-    ).toBe("bun .codex/tools/aidlc.ts engine adapter codex record-human-turn");
+    ).toBe(`${SOURCE_INVOKE} engine adapter codex record-human-turn`);
     // One matcher-free PreToolUse group runs the five checks in one process
     // (#2066); deliver-stage-rules keeps its spawn_agent row.
     expect(wiring.hooks.PreToolUse.map((group) => group.matcher)).toEqual([undefined, "spawn_agent"]);
     expect(wiring.hooks.PreToolUse[0]?.hooks[0]?.command).toBe(
-      "bun .codex/tools/aidlc.ts engine adapter codex guard-tool-call",
+      `${SOURCE_INVOKE} engine adapter codex guard-tool-call`,
     );
     expect(wiring.hooks.PreToolUse[0]?.hooks).toHaveLength(1);
     // Every registration routes through the single authored adapter.
@@ -361,7 +370,7 @@ describe("t150 dist/codex packaging determinism + trust", () => {
       for (const g of groups) {
         for (const h of g.hooks) {
           expect(h.command).toMatch(
-            /^bun \.codex\/tools\/aidlc\.ts engine adapter codex [a-z-]+$/,
+            /^bun --config=\.codex\/tools\/aidlc-bunfig\.toml --no-env-file \.codex\/tools\/aidlc\.ts engine adapter codex [a-z-]+$/,
           );
           const compound = /(?:continue-workflow|audit-and-sensors)$/.test(h.command);
           expect(h.timeout, h.command).toBe(compound ? 3600 : 1800);
@@ -393,7 +402,7 @@ describe("t150 dist/codex packaging determinism + trust", () => {
     expect(bodyStart).toBeGreaterThan(-1);
     const header = shipped.slice(0, bodyStart);
     expect(header).toContain(
-      "projected `bun .codex/tools/aidlc.ts engine adapter codex ...`",
+      `projected \`${SOURCE_INVOKE} engine adapter codex ...\``,
     );
     expect(header).toContain("replace the full set");
     expect(header).toContain("appending a second set creates invalid TOML");
@@ -409,8 +418,17 @@ describe("t150 dist/codex packaging determinism + trust", () => {
     expect(produced).toBe(shippedBody);
     // And the real session_start hash is a sha256 over the live adapter identity
     // — a concrete anchor so a silent recipe change can't pass by emitting a
-    // self-consistent but wrong hash for every entry.
-    expect(shippedBody).toContain(
+    // self-consistent but wrong hash for every entry. The anchors were taken
+    // for the plain copy launch, so the recipe is held to them on that
+    // spelling; the shipped body is held to the recipe above.
+    const anchored = emitTrustEntries(
+      "<PROJECT_DIR>",
+      undefined,
+      ".codex",
+      "codex",
+      PLAIN_SOURCE_INVOKE,
+    ).trimEnd();
+    expect(anchored).toContain(
       'session_start:0:0"]\ntrusted_hash = "sha256:58956c1f8f0b66e96c0f4d02e26946e79979e0f30599e8dc06a512ebecf03843"',
     );
     // Codex hashes a group's matcher too. This is the hash Codex 0.160.0
@@ -418,10 +436,10 @@ describe("t150 dist/codex packaging determinism + trust", () => {
     // seed without the matcher left every matched hook untrusted, and they
     // never ran. (The matcher-free guard-tool-call PreToolUse group's hash is the
     // recipe's, pinned below.)
-    expect(shippedBody).toContain(
+    expect(anchored).toContain(
       'post_tool_use:3:0"]\ntrusted_hash = "sha256:5f9a79604c580af77ffe63c58e0b76871e229f051df824b8add818dfbd44c388"',
     );
-    expect(shippedBody).toContain(
+    expect(anchored).toContain(
       'pre_tool_use:0:0"]\ntrusted_hash = "sha256:b1ea78813660ef5ca5039c39fa0c7c6b0a67d9cf1f88cdb3a73f789eab1884ae"',
     );
   });
@@ -627,7 +645,7 @@ describe("t150 dist/codex packaging determinism + trust", () => {
     }
     const probe = readFileSync(join(skillsDir, "aidlc-intent-capture", "SKILL.md"), "utf-8");
     expect(probe).toContain(
-      "bun .codex/tools/aidlc-orchestrate.ts next --stage intent-capture --single",
+      withCopyLaunchOptions("bun .codex/tools/aidlc-orchestrate.ts next --stage intent-capture --single"),
     );
   });
 
@@ -647,8 +665,8 @@ describe("t150 dist/codex packaging determinism + trust", () => {
     expect(entries.length).toBe(groupCount);
     expect(entries).toEqual(expectedTrustKeys("/tmp/example-proj/.codex/hooks.json"));
     expect(r.stdout).not.toContain("<PROJECT_DIR>");
-    // It trusts the hooks the copied dist/codex runs (`bun .codex/tools/aidlc.ts
-    // ...`): the shipped seed's entries for this project, hash for hash. Native
+    // It trusts the hooks the copied dist/codex runs (`bun --config=... --no-env-file
+    // .codex/tools/aidlc.ts ...`): the shipped seed's entries for this project, hash for hash. Native
     // `aidlc ...` hashes here left every hook in a copied project untrusted.
     const seed = readFileSync(join(CODEX_DST, "trust-seed.toml"), "utf-8");
     expect(r.stdout.trimEnd()).toBe(

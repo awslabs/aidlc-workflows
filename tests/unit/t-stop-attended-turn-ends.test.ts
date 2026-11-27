@@ -20,10 +20,11 @@ import {
 } from "../harness/test-budget.ts";
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { setGuardPolicyLine } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
-import { cleanupTestProject, seededStateFile, setupIntegrationProject } from "../harness/fixtures.ts";
+import { cleanupTestProject, intentsDirOf, seededStateFile, setupIntegrationProject } from "../harness/fixtures.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -151,6 +152,146 @@ describe("t-stop-attended-turn-ends", () => {
       const proj = project();
       await askedInProse(proj);
       expect(stop(proj, shape, { AIDLC_UNATTENDED: "1" })).toContain("AI-DLC is carrying on with Requirements Analysis.");
+    });
+  }
+});
+
+// AI-DLC's first command no longer carries the person's words, so a person who asks only for a command of AI-DLC's
+// own over work in hand (a list, a new space, a setting, the configuration, a refused or retired flag) reaches it
+// through `next --entry`. Where the work carries on by itself (autonomous Construction, a run nobody attends) that
+// command ends the turn as the agent passing it after next did: the engine marks the turn end for a `next` whose
+// arguments its own terminal classifier calls terminal, whatever the command's text, and a `next` that hands out
+// stage work after it clears the mark.
+describe("a command of AI-DLC's own asked over work in hand ends the turn where the work carries on by itself", () => {
+  // The dispatcher as a copy tree prints it, so the stand-in finds and runs the command a print names.
+  const INVOKE = withCopyLaunchOptions("bun .claude/tools/aidlc.ts");
+  const chat = (unattended: boolean): NodeJS.ProcessEnv =>
+    ({ AIDLC_SESSION_OVERRIDE: SESSION, ...(unattended ? { AIDLC_UNATTENDED: "1" } : {}) });
+
+  // The command a print names for the agent to run, its first span that runs AI-DLC's dispatcher, with a placeholder
+  // filled as the agent fills it; none when the print says the engine already ran it, or when the span is one the
+  // agent would have to fill some other way (`<verb>`).
+  function named(output: string): string[] | null {
+    let message = "";
+    try {
+      message = String((JSON.parse(output) as { message?: unknown }).message ?? "");
+    } catch {
+      return null;
+    }
+    if (message.includes("` completed.")) return null;
+    const span = [...message.matchAll(/`([^`]+)`/g)].map((match) => match[1]).find((text) => text.startsWith(`${INVOKE} `));
+    const filled = span?.slice(INVOKE.length + 1).replace("<section>", "runtime");
+    return filled === undefined || filled.includes("<") ? null : filled.split(" ");
+  }
+
+  // The turn as the agent runs it, with the engine's own results: the first command, then (with no record of their
+  // line, unattended) the command the request-file step leaves on the command line, then the command its print
+  // names, then anything after it.
+  function turn(proj: string, typed: string, unattended: boolean, after: string[][] = [], tool: "claude" | "codex" = "claude"): string {
+    const said = engine(proj, ["engine", "hook", "record-human-turn"], JSON.stringify({
+      hook_event_name: "UserPromptSubmit", session_id: SESSION, prompt: `${tool === "codex" ? "$aidlc" : "/aidlc"} ${typed}`,
+    }), chat(unattended));
+    expect(said.status, said.out).toBe(0);
+    const calls: Array<{ command: string; output: string }> = [];
+    const call = (args: string[]) => {
+      const result = engine(proj, args, undefined, chat(unattended));
+      calls.push({ command: `${INVOKE} ${args.join(" ")}`, output: result.stdout.trim() || result.out.trim() });
+      return result.stdout.trim();
+    };
+    let out = call(["engine", "orchestrate", "next", "--entry"]);
+    if (unattended) out = call(["engine", "orchestrate", "next", ...typed.split(" ")]);
+    const then = named(out);
+    if (then !== null) call(then);
+    for (const args of after) call(args);
+    if (tool === "codex") return codexRollout(proj, typed, calls);
+    const stamp = { version: "2.1.330" };
+    const entries: unknown[] = [{ ...stamp, type: "user", message: { role: "user", content: `/aidlc ${typed}` } }];
+    calls.forEach(({ command, output }, i) => {
+      entries.push({ ...stamp, type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: `c${i}`, name: "Bash", input: { command } }] } });
+      entries.push({ ...stamp, type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: `c${i}`, content: output }] } });
+    });
+    entries.push({ ...stamp, type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "Here it is." }] } });
+    const path = join(proj, "own-command-transcript.jsonl");
+    writeFileSync(path, `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`);
+    return path;
+  }
+  // The same turn as Codex records it: the person's `$aidlc` line, then each command as an exec_command call (its
+  // command under `cmd`, Codex's own tool path) and its output, then the agent's words. The Stop hook reads a
+  // `rollout-*.jsonl` path as a Codex rollout.
+  function codexRollout(proj: string, typed: string, calls: Array<{ command: string; output: string }>): string {
+    const row = (payload: Record<string, unknown>) => ({ type: "response_item", payload });
+    const rows: unknown[] = [row({ type: "message", role: "user", content: [{ type: "input_text", text: `$aidlc ${typed}` }] })];
+    calls.forEach(({ command, output }, i) => {
+      const cmd = command.replace(INVOKE, withCopyLaunchOptions("bun .codex/tools/aidlc.ts"));
+      rows.push(row({ type: "function_call", name: "exec_command", arguments: JSON.stringify({ cmd }), call_id: `call_${i}` }));
+      rows.push(row({ type: "function_call_output", call_id: `call_${i}`, output: `Process exited with code 0\nOutput:\n${output}` }));
+    });
+    rows.push(row({ type: "message", role: "assistant", content: [{ type: "output_text", text: "Here it is." }] }));
+    const path = join(proj, "rollout-2026-11-23T00-00-00-own-command.jsonl");
+    writeFileSync(path, `${rows.map((entry) => JSON.stringify(entry)).join("\n")}\n`);
+    return path;
+  }
+  function stop(proj: string, transcript: string, unattended: boolean, tool: "claude" | "codex" = "claude") {
+    const result = engine(proj, ["engine", "hook", "continue-workflow"], JSON.stringify({
+      hook_event_name: "Stop", stop_hook_active: false, session_id: SESSION, transcript_path: transcript,
+    }), { AIDLC_HARNESS_NAME: tool, ...chat(unattended) });
+    expect(result.status, result.out).toBe(0);
+    return result.stdout.trim();
+  }
+  const PLACES = [["attended under autonomous Construction", true, false], ["in a run nobody attends", false, true]] as const;
+
+  const LINES = [
+    "intent list", "space list", "space create probe-space", "--statusline", "--init", "--depth bogus", "--config",
+    "config set plan-approval off", "intent no-such-intent",
+  ];
+  for (const line of LINES) {
+    for (const [place, autonomous, unattended] of PLACES) {
+      test(`/aidlc ${line}, ${place}: the turn ends after it`, () => {
+        const proj = project(autonomous);
+        expect(stop(proj, turn(proj, line, unattended), unattended)).toBe("");
+      });
+    }
+  }
+
+  // On Codex the first command is `next --entry` too, and Codex's rollout shows only that command's text, so the turn
+  // end rests on the engine's own mark, as on Claude Code.
+  for (const [place, autonomous, unattended] of PLACES) {
+    test(`$aidlc intent list on Codex, ${place}: the turn ends after it`, () => {
+      const proj = project(autonomous);
+      expect(stop(proj, turn(proj, "intent list", unattended, [], "codex"), unattended, "codex")).toBe("");
+    });
+  }
+
+  // A switch keeps its own stop rule: a switch that only selects (the person asked for it, nothing after) still ends
+  // the turn, through `next --entry` as through the switch passed after next.
+  for (const [place, autonomous, unattended] of PLACES) {
+    test(`/aidlc intent other, ${place}: a switch that only selects ends the turn`, () => {
+      const proj = project(autonomous);
+      const other = { uuid: "00000000-0000-7000-8000-000000000002", slug: "other", status: "in-flight" };
+      const registry = join(intentsDirOf(proj), "intents.json");
+      writeFileSync(registry, `${JSON.stringify([...JSON.parse(readFileSync(registry, "utf-8")), other], null, 2)}\n`);
+      const record = join(intentsDirOf(proj), `${other.slug}-${other.uuid.replace(/-/g, "").slice(-16)}`);
+      mkdirSync(join(record, "audit"), { recursive: true });
+      writeFileSync(join(record, "aidlc-state.md"), readFileSync(seededStateFile(proj), "utf-8"));
+      expect(stop(proj, turn(proj, "intent other", unattended), unattended)).toBe("");
+    });
+  }
+
+  // A switch with words after the name hands the agent work for the intent it selects: back to the work in hand, once
+  // the next after the switch hands out its stage work, an agent that stops there is carried on.
+  for (const [place, autonomous, unattended] of PLACES) {
+    test(`/aidlc intent fixture-8000000000000001 with words after it, ${place}: an agent that stops after the stage work is handed out is carried on`, () => {
+      const proj = project(autonomous);
+      const transcript = turn(proj, "intent fixture-8000000000000001 carry on with the requirements", unattended, [["engine", "orchestrate", "next"]]);
+      expect(stop(proj, transcript, unattended)).toContain("AI-DLC is carrying on with");
+    });
+  }
+
+  for (const [place, autonomous, unattended] of PLACES) {
+    test(`/aidlc --status, ${place}, then a next that hands out stage work: an agent that stops there is carried on`, () => {
+      const proj = project(autonomous);
+      const transcript = turn(proj, "--status", unattended, [["engine", "orchestrate", "next"]]);
+      expect(stop(proj, transcript, unattended)).toContain("AI-DLC is carrying on with");
     });
   }
 });

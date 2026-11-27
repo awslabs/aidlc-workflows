@@ -602,8 +602,11 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
   // A `next` before a done Unit's completion receipt (a resume, a second chat)
   // got the stage body back, so the Unit started over. The team route names
   // the step the Unit still owes, as the solo routes do.
+  // The tool and its arguments of each command a step names, the launch (with or without the copy launch's two Bun
+  // options) cut.
   const named = (step: Directive): string[] =>
-    [...String(step.message).matchAll(/`([^`]+)`/g)].map((match) => match[1].replace(/^bun \S*aidlc-(\w+)\.ts /, "$1 "));
+    [...String(step.message).matchAll(/`([^`]+)`/g)]
+      .map((match) => match[1].replace(/^bun (?:--config=\S+ --no-env-file )?\S*aidlc-(\w+)\.ts /, "$1 "));
 
   test("a Unit written and reviewed, with no completion receipt, is named its receipt, then its gate", () => {
     const proj = seedProject({ ownership: "team" });

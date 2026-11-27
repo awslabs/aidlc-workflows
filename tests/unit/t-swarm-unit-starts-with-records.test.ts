@@ -15,6 +15,7 @@ import { appendFileSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, wr
 import { dirname, join } from "node:path";
 import { recordDir } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { codeGenerationRecordDir } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import { AIDLC_SRC } from "../harness/fixtures.ts";
 import {
   ISOLATED_GIT_ENV, cleanupCheckpointFixtures, fixture, git, prepare, reviewRevisedSource, swarm, wt, writeUnitSource,
@@ -134,7 +135,7 @@ describe("a side-by-side Unit starts with the intent's design records as the pro
     const row = (JSON.parse(r.stdout.toString()) as { units: Array<{ ok: boolean; error?: string }> }).units[0];
     expect(row.ok).toBe(false);
     expect(row.error).toContain("injected copy failure");
-    expect(row.error).toContain("source was preserved; run bun .claude/tools/aidlc.ts engine worktree discard --slug");
+    expect(row.error).toContain(`source was preserved; run ${withCopyLaunchOptions("bun .claude/tools/aidlc.ts engine worktree discard")} --slug`);
     expect(existsSync(record(wt(pd), ".aidlc-engine/unit-start-records.json"))).toBe(false);
   });
 

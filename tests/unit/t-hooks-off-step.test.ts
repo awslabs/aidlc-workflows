@@ -21,6 +21,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, normalize } from "node:path";
 import { HOOKS_OFF_RERUN, hooksHealthDir, unattendedHumanPresenceHint } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { REQUEST_MAX_BYTES } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import { cleanupTestProject, REPO_ROOT, toPortablePath } from "../harness/fixtures.ts";
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
@@ -74,7 +75,7 @@ const HARNESSES: Harness[] = [
     lines: () => [
       "Type /agent and pick aidlc, then carry on. If aidlc is not in that list, type /upgrade-agent and choose the " +
         "workspace agents, then quit Kiro and start `kiro-cli --v3` again in this folder; or, to switch this project " +
-        "to Kiro, quit Kiro, run `bun .kiro/tools/aidlc.ts config --harness kiro` in a terminal in this folder and, " +
+        `to Kiro, quit Kiro, run \`${withCopyLaunchOptions("bun .kiro/tools/aidlc.ts config --harness kiro")}\` in a terminal in this folder and, ` +
         "once it has finished, start `kiro-cli --v3`; or quit Kiro and start it again in this folder with: " +
         "kiro-cli --v2 --agent aidlc (Kiro CLI 2.21.4 or later; for an older one, see the AI-DLC Kiro CLI guide), " +
         "and type /aidlc there to carry on.",
@@ -1151,6 +1152,81 @@ describe("a next stopped inside a workflow is named in the restart line and runs
   });
 });
 
+// AI-DLC's first command no longer carries the person's words (`next --entry`):
+// the engine reads their typed line from its own record, and with the hooks off
+// nothing kept it. The first command has the agent hand their words over in the
+// request file; that command is the one the stop keeps, so the restart line
+// names it by its id and the new chat carries on with their words.
+describe("with the hooks off, the first command hands the request file and the restart carries on with it", () => {
+  const CLAUDE = HARNESSES[0];
+  const REQUEST = 'Fix the bug where formatPrice(0) returns an empty string instead of "$0.00"';
+  const FILE = "aidlc/.aidlc-request-text/request.txt";
+  const idIn = (directive: Printed): string => (directive.message ?? "").match(/ --request ([0-9a-f]{8})\b/)?.[1] ?? "";
+
+  for (const work of ["fresh", "over work in hand"] as const) {
+    test(`claude, ${work}`, () => {
+      const proj = installed(CLAUDE);
+      if (work === "over work in hand") intentCreate(proj, CLAUDE);
+      const step = next(proj, CLAUDE, {}, ["--entry"]);
+      expect(step.kind, JSON.stringify(step)).toBe("print");
+      expect(step.message ?? "").toStartWith("AI-DLC has no copy of what the person typed in this chat.");
+      expect(isStop(step)).toBe(false);
+      mkdirSync(join(proj, "aidlc", ".aidlc-request-text"), { recursive: true });
+      writeFileSync(join(proj, ...FILE.split("/")), REQUEST, "utf-8");
+      const stopped = next(proj, CLAUDE, {}, ["--request-file", FILE]);
+      expect(isStop(stopped), JSON.stringify(stopped)).toBe(true);
+      const id = idIn(stopped);
+      expect(stopped.message ?? "").toContain(`then type /aidlc --request ${id}.`);
+      expect(stopped.message ?? "").not.toContain("formatPrice");
+      beat(proj, work === "fresh" ? "record-human-turn" : "reviewer-scope");
+      const picked = next(proj, CLAUDE, {}, ["--request", id]);
+      expect(JSON.stringify(picked)).toContain("formatPrice(0) returns an empty string");
+    });
+  }
+
+  // The restart line names the kept request by its id; typed in the new chat, the first command runs it. Over work in
+  // hand only the id carries it (before any work a bare next finds it too).
+  test("claude, over work in hand, the restart line typed in the new chat: the first command carries on with their request", () => {
+    const proj = installed(CLAUDE);
+    intentCreate(proj, CLAUDE);
+    expect(next(proj, CLAUDE, {}, ["--entry"]).message ?? "").toStartWith("AI-DLC has no copy of what the person typed in this chat.");
+    mkdirSync(join(proj, "aidlc", ".aidlc-request-text"), { recursive: true });
+    writeFileSync(join(proj, ...FILE.split("/")), REQUEST, "utf-8");
+    const id = idIn(next(proj, CLAUDE, {}, ["--request-file", FILE]));
+    expect(id).toMatch(/^[0-9a-f]{8}$/);
+    const typed = run(
+      proj,
+      [join(proj, ".claude", "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
+      attendedEnv({ CLAUDE_PROJECT_DIR: proj }),
+      JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: SESSION, prompt: `/aidlc --request ${id}` }),
+    );
+    expect(typed.code, typed.stderr).toBe(0);
+    const picked = next(proj, CLAUDE, { AIDLC_SESSION_OVERRIDE: SESSION }, ["--entry"]);
+    expect(picked.message ?? "", JSON.stringify(picked).slice(0, 300)).toStartWith("The person's words, typed before the restart and kept by AI-DLC");
+    expect(JSON.stringify(picked)).toContain("formatPrice(0) returns an empty string");
+  });
+
+  // Their line on record does not lift the stop, which comes before the record is read: the first command still
+  // hands the request file, so the restart keeps their words rather than naming a bare /aidlc.
+  test("claude, their /aidlc line on record and no heartbeat since", () => {
+    const proj = installed(CLAUDE);
+    const typed = run(
+      proj,
+      [join(proj, ".claude", "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
+      attendedEnv({ CLAUDE_PROJECT_DIR: proj }),
+      JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: SESSION, prompt: `/aidlc ${REQUEST}` }),
+    );
+    expect(typed.code, typed.stderr).toBe(0);
+    const health = hooksHealthDir(proj);
+    for (const name of readdirSync(health)) unlinkSync(join(health, name));
+    const chat = { AIDLC_SESSION_OVERRIDE: SESSION };
+    expect(isStop(next(proj, CLAUDE, chat)), "the hooks are off for the bare next").toBe(true);
+    const step = next(proj, CLAUDE, chat, ["--entry"]);
+    expect(step.kind, JSON.stringify(step)).toBe("print");
+    expect(step.message ?? "").toStartWith("AI-DLC has no copy of what the person typed in this chat.");
+  });
+});
+
 describe("a refusal for a reply that was not recorded carries the same step when the hooks never ran", () => {
   test("it never asks the person to answer again, and gives the tool's own line only while no hook has run", () => {
     const h = HARNESSES[0];
@@ -1165,7 +1241,7 @@ describe("a refusal for a reply that was not recorded carries the same step when
       expect(hint).toContain(RULES);
       expect(hint).toContain(`"${h.lines("")[0]}"`);
       // The refusal's step runs the engine's own next, so the waiting question shows again.
-      expect(hint).toContain("Then run `bun .claude/tools/aidlc.ts engine orchestrate next` and act on what it returns");
+      expect(hint).toContain(`Then run \`${withCopyLaunchOptions("bun .claude/tools/aidlc.ts engine orchestrate next")}\` and act on what it returns`);
       // With a heartbeat the hooks run: no step that sends the person after a setting already on.
       beat(proj, "reviewer-scope");
       const running = unattendedHumanPresenceHint();
@@ -1188,9 +1264,10 @@ describe("a refusal for a reply that was not recorded carries the same step when
 describe("claude: a .claude/settings.json that is missing, not valid JSON or without AI-DLC's hooks gets its repair, not a setting", () => {
   const h = HARNESSES[0];
   const restart = "then exit Claude Code and start it again in this folder, and type /aidlc";
+  const config = withCopyLaunchOptions("bun .claude/tools/aidlc.ts config --harness claude");
   const MISSING =
     ".claude/settings.json is missing from this project, so Claude Code runs none of AI-DLC's hooks here. In a " +
-    "terminal in this folder, run `bun .claude/tools/aidlc.ts config --harness claude --from <the runtime/claude " +
+    `terminal in this folder, run \`${config} --from <the runtime/claude ` +
     `root you copied from>\` to put back AI-DLC's hooks (your own hooks are kept), ${restart}`;
   const INVALID =
     "Claude Code cannot read this project's .claude/settings.json because it is not valid JSON, so it runs none " +
@@ -1224,7 +1301,7 @@ describe("claude: a .claude/settings.json that is missing, not valid JSON or wit
 
   const UNWIRED =
     ".claude/settings.json in this project does not register AI-DLC's hooks, so Claude Code runs none of them " +
-    "here. In a terminal in this folder, run `bun .claude/tools/aidlc.ts config --harness claude --from <the " +
+    `here. In a terminal in this folder, run \`${config} --from <the ` +
     `runtime/claude root you copied from>\` to put back AI-DLC's hooks (your own hooks are kept), ${restart}`;
 
   test("registers none of AI-DLC's hooks: the line names the config command that puts them back", () => {

@@ -5,7 +5,7 @@ import { CODEX_FILE, coordinatorReportPath } from "../lib/e2e-deferred-cleanup.t
 import { FILE_CLEANUP_RESERVE_MS, remainingOperationTimeoutMs } from "./test-budget.ts";
 import { keepLegAudit } from "./leg-evidence.ts";
 import { PersonTurnLedger, unbackedFailure } from "./person-turns.ts";
-import { codexSandboxProblems } from "./stock-permissions.ts";
+import { codexSandboxProblems, folderCommandsBlock } from "./stock-permissions.ts";
 
 export interface CodexExecution {
   rc: number;
@@ -69,9 +69,10 @@ export function codexPersonTurn(proj: string, prompt: string): PersonTurnLedger 
 
 // Every live exec passes its turn (codexPersonTurn, before the spawn), so no
 // journey can record a decision the check never sees. A `--json` turn also
-// shows each command the shipped workspace-write sandbox refused: one of
-// AI-DLC's own is a prompt (or, with approvals off, a dead end) for a person on
-// stock settings, so it fails the turn.
+// shows each command the shipped workspace-write sandbox refused: one that runs
+// AI-DLC's own tool is a prompt (or, with approvals off, a dead end) for a
+// person on stock settings, so it fails the turn; one that only names AI-DLC's
+// folders is printed under its counted heading when the exec has any.
 export function recordCodexExec(
   label: string,
   cwd: string,
@@ -86,6 +87,8 @@ export function recordCodexExec(
   const sandbox = codexSandboxProblems(result.stdout ?? "");
   const refusals = [...sandbox.problems, ...sandbox.listed];
   const refused = refusals.length > 0 ? `Sandbox refusals:\n${refusals.map((line) => `  ${line}`).join("\n")}\n` : "";
+  // Kept out of the failure summary, which a failing exec prints again: the job log shows each heading once.
+  const folders = sandbox.folderCommands.length > 0 ? `${folderCommandsBlock(sandbox.folderCommands)}\n` : "";
   const header = `Command: ${JSON.stringify(argv)}\nCwd: ${cwd}\n${decisions}${refused}`;
   const summary = header + codexExecDiagnostic(result);
   const context = diagnostics.getStore();
@@ -93,10 +96,11 @@ export function recordCodexExec(
   if (context?.onFailure) context.execution = { cwd, stdout: result.stdout, rc: result.rc };
   if (process.env.AIDLC_TEST_LOG_DIR) {
     writeFileSync(join(process.env.AIDLC_TEST_LOG_DIR, `exec-codex-${label}-${++executionNumber}.log`),
-      `${header}Exit code: ${result.rc}\nSignal: ${result.signal ?? "none"}\nSpawn error: ${result.error ?? "none"}\n\n` +
+      `${header}${folders}Exit code: ${result.rc}\nSignal: ${result.signal ?? "none"}\nSpawn error: ${result.error ?? "none"}\n\n` +
       (result.out ?? `STDOUT:\n${result.stdout ?? ""}\nSTDERR:\n${result.stderr ?? ""}`));
   }
   keepLegAudit(cwd);
+  if (folders) console.log(folders.trimEnd());
   if (unbacked.length > 0) throw unbackedFailure(`The codex exec "${label}"`, unbacked);
   if (sandbox.problems.length > 0) {
     throw new Error(`The codex exec "${label}" met the sandbox a person on stock settings meets:\n${sandbox.problems.map((line) => `  ${line}`).join("\n")}`);

@@ -246,6 +246,8 @@ Run `/aidlc` in the claimed checkout. The engine routes only the stamped Unit:
 
 Plan Approval remains mandatory during Code Generation.
 
+You can ask for changes to the step your Unit is on, even if you paused it. Other Units keep their work.
+
 Gate rhythm controls the team review points:
 
 - `per-stage`: one gate after each settled `(stage, Unit)`;

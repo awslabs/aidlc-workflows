@@ -13,7 +13,7 @@ import { installRoot, windowsUninstallFencePath } from "./aidlc-install-paths.ts
 import { setByDotenvFile } from "./aidlc-kiro-session.ts";
 import { insideKiroIde, kiroIdeUserSettingsPath } from "./aidlc-kiro-ide-workflows.ts";
 import { atATerminal, writeFileAtomic } from "./aidlc-lib.ts";
-import { isCompiledExecutable } from "./aidlc-runtime-paths.ts";
+import { bunLaunchFlags, isCompiledExecutable } from "./aidlc-runtime-paths.ts";
 
 export const KIRO_TERMINAL_SETTING = "terminal.integrated.defaultProfile.windows";
 const KIRO_TERMINAL_PROFILES = "terminal.integrated.profiles.windows";
@@ -389,7 +389,7 @@ export function commandPromptChildCommand(
   execPath: string = process.execPath,
   compiled: boolean = isCompiledExecutable(),
 ): string[] {
-  return [execPath, ...argv.slice(compiled ? 2 : 1)];
+  return compiled ? [execPath, ...argv.slice(2)] : [execPath, ...bunLaunchFlags(), ...argv.slice(1)];
 }
 
 // Kiro reads the terminal one second after sending the command. The child's

@@ -12,6 +12,7 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import { AgentStandIn, PersonScript, type RunResult, ScopeHost, ScopeRunRefused } from "../harness/scope-run.ts";
 import {
   CodexScopeHost,
@@ -37,8 +38,8 @@ const codexWiring = json("dist/codex/.codex/hooks.json");
 const copilotWiring = json("dist/copilot/.github/hooks/aidlc.json");
 const recorded = (tool: string) => json(`tests/fixtures/${tool}-hook-payloads/payloads.json`) as Record<string, Record<string, unknown>>;
 const keys = (payload: Record<string, unknown>) => Object.keys(payload).sort();
-const codexAdapter = (target: string) => `bun .codex/tools/aidlc.ts engine adapter codex ${target}`;
-const copilotAdapter = (target: string) => `bun .aidlc/hooks/aidlc-copilot-adapter.ts ${target}`;
+const codexAdapter = (target: string) => withCopyLaunchOptions(`bun .codex/tools/aidlc.ts engine adapter codex ${target}`);
+const copilotAdapter = (target: string) => withCopyLaunchOptions(`bun .aidlc/hooks/aidlc-copilot-adapter.ts ${target}`);
 
 const dirs: string[] = [];
 afterAll(() => {
@@ -213,7 +214,8 @@ describe("Copilot CLI: .github/hooks/aidlc.json and Copilot's own payloads", () 
 
 describe("Kiro CLI: the agent JSON's hooks and Kiro CLI 2.29's own payloads", () => {
   const agent = (name: string) => json(`dist/kiro/.kiro/agents/${name}.json`);
-  const kiro = (target: string) => `bun .kiro/tools/aidlc.ts engine adapter kiro ${target}${kiroManifest.hookCommandSuffix}`;
+  const kiro = (target: string) =>
+    withCopyLaunchOptions(`bun .kiro/tools/aidlc.ts engine adapter kiro ${target}${kiroManifest.hookCommandSuffix}`);
   const cli = json("tests/fixtures/kiro-hook-payloads/cli-2.29.0.json") as Record<string, Record<string, unknown>>;
 
   test("a matcher is a glob over the tool's name and its alias, as the CLI reads it", () => {
@@ -267,7 +269,7 @@ describe("Kiro IDE: the hook cards and Kiro IDE 1.2.37's own payloads", () => {
   const dir = join(REPO_ROOT, "dist", "kiro-ide", ".kiro", "hooks");
   const cards: KiroIdeCard[] = readdirSync(dir).filter((file) => file.endsWith(".json"))
     .map((file) => ({ file, ...(JSON.parse(readFileSync(join(dir, file), "utf-8")) as { hooks: KiroIdeCard["hooks"] }) }));
-  const ide = (target: string) => `bun .kiro/tools/aidlc.ts engine adapter kiro-ide ${target}`;
+  const ide = (target: string) => withCopyLaunchOptions(`bun .kiro/tools/aidlc.ts engine adapter kiro-ide ${target}`);
 
   test("each trigger fires the cards that register it, a matcher read as an unanchored regex on the tool name", () => {
     expect(kiroIdeWired(cards, "SessionStart", null)).toEqual([ide("session-start")]);
@@ -324,7 +326,7 @@ describe("the stand-in takes the step a person-turn hook set", () => {
 describe("Cursor: .cursor/hooks.json and cursor-agent's own payloads", () => {
   const wiring = json("dist/cursor/.cursor/hooks.json") as { hooks: Record<string, { command: string }[]> };
   const cursor = recorded("cursor");
-  const adapter = (target: string) => `bun .cursor/hooks/aidlc-cursor-adapter.ts ${target}`;
+  const adapter = (target: string) => withCopyLaunchOptions(`bun .cursor/hooks/aidlc-cursor-adapter.ts ${target}`);
 
   test("each event fires the adapter targets the shipped wiring registers, with no matchers", () => {
     const host = new CursorScopeHost(scratch());

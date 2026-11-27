@@ -12,6 +12,7 @@ import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { COPY_LAUNCH_CONFIG } from "../harness/copy-launch.ts";
 import { AIDLC_SRC, cleanupTestProject, createOrchestrationTestProject, removeWorkspaceRecord } from "../harness/fixtures.ts";
 import { env, exec, next, say, type Exec } from "../harness/aidlc-input-corpus.ts";
 import {
@@ -55,12 +56,21 @@ function invalidated(proj: string): string {
   return auditBlockField(row?.block ?? "", "Invalidated Downstream Artifacts") ?? "";
 }
 
-/** A command a step names (`bun .claude/tools/<tool>.ts ...`), run from the shipped tree on this project. */
+/**
+ * A command a step names (`bun .claude/tools/<tool>.ts ...`, with the copy launch's two Bun options), run from the
+ * shipped tree on this project: its config file is the shipped tree's, as its script is.
+ */
 async function runNamed(proj: string, command: string, extra: Record<string, string> = {}): Promise<Exec> {
   const parts = (command.match(/'[^']*'|"[^"]*"|\S+/g) ?? []).map((part) => part.replace(/^['"]|['"]$/g, ""));
   if (parts[0] === "bun") parts.shift();
+  const options: string[] = [];
+  if (new RegExp(`^--config=.*tools/${COPY_LAUNCH_CONFIG.replace(".", "\\.")}$`).test(parts[0] ?? "")) {
+    parts.shift();
+    options.push(`--config=${join(AIDLC_SRC, "tools", COPY_LAUNCH_CONFIG)}`);
+  }
+  if (parts[0] === "--no-env-file") options.push(parts.shift() as string);
   const tool = join(AIDLC_SRC, "tools", (parts.shift() ?? "").replace(/^.*tools\//, ""));
-  return exec([process.execPath, tool, ...parts, "--project-dir", proj], { cwd: proj, env: env(proj, { env: extra }) });
+  return exec([process.execPath, ...options, tool, ...parts, "--project-dir", proj], { cwd: proj, env: env(proj, { env: extra }) });
 }
 /** The commands a step names that match `pattern`, in order. */
 function named(message: string, pattern: RegExp): string[] {

@@ -75,6 +75,7 @@ import {
   seedStateFile,
 } from "../harness/fixtures.ts";
 import { setupTuiProject } from "../harness/tui-fixtures.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
@@ -290,8 +291,12 @@ function expectSameRun(actual: RunResult, expected: RunResult, label: string): v
   expect(actual.stderr.equals(expected.stderr), `${label} stderr\nactual:\n${actual.stderr}\nexpected:\n${expected.stderr}`).toBe(true);
 }
 
+// The dev run names a projected tool's launch the way the copy tree prints it, and the
+// source dispatcher's own the way the source prints it.
 function asCompiledInvocation(result: RunResult): RunResult {
-  const named = (bytes: Buffer) => Buffer.from(bytes.toString("utf-8").replaceAll("bun .claude/tools/aidlc.ts", "aidlc"));
+  const named = (bytes: Buffer) => Buffer.from(bytes.toString("utf-8")
+    .replaceAll(withCopyLaunchOptions("bun .claude/tools/aidlc.ts"), "aidlc")
+    .replaceAll("bun .claude/tools/aidlc.ts", "aidlc"));
   return { ...result, stdout: named(result.stdout), stderr: named(result.stderr) };
 }
 

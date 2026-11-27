@@ -566,12 +566,16 @@ import { projectPluginCommands } from "./aidlc-plugin-commands.ts";
 import { pluginScriptLaunch } from "./aidlc-plugin-script.ts";
 import { executePlan, withTransactionFix } from "./aidlc-transaction.ts";
 import {
+  bunLaunchAt,
+  bunLaunchFlags,
   aidlcDispatcherInvocation,
   aidlcInvocation,
   aidlcToolInvocation,
   compiledExecutable,
   discoverProjectHarnesses,
   isCompiledExecutable,
+  LAUNCHED_WITHOUT_CONFIG_ENV,
+  launchedWithConfig,
   type ProjectHarness,
   pinNamedHarness,
   quoteCommandArgument,
@@ -584,6 +588,7 @@ import {
   SYNC_FOLDER_STEP,
   syncFolderLabel,
   syncServiceHolding,
+  withoutBunLaunchOptions,
 } from "./aidlc-runtime-paths.ts";
 import { HARNESS_PRODUCT_NAMES } from "./aidlc-model-policy.ts";
 import { copyRuntimeUrl } from "./aidlc-release.ts";
@@ -1098,7 +1103,7 @@ function runBunTool(projectDir: string, rel: string, args: string[], label: stri
     ? [executable, ...dispatcherArgs]
     : [
         process.execPath,
-        resolveHarnessPath(["tools", rel], { projectDir }),
+        ...bunLaunchFlags(), resolveHarnessPath(["tools", rel], { projectDir }),
         ...args,
         "--project-dir",
         projectDir,
@@ -1828,7 +1833,7 @@ async function handlePluginSync(projectDir: string, pluginRoot: string | undefin
       continue;
     }
 
-    const result = spawnSync(process.execPath, [item.compose], {
+    const result = spawnSync(process.execPath, [...bunLaunchFlags(), item.compose], {
       cwd: projectDir,
       encoding: "utf-8",
       env: composeEnv,
@@ -2483,7 +2488,7 @@ ${validityOutput ? `${validityOutput}\n` : ""}${lastLine}${nextLine}${alsoOpen}$
       ]
       : [
         process.execPath,
-        resolveHarnessPath(["tools", "aidlc-orchestrate.ts"], { projectDir }),
+        ...bunLaunchFlags(), resolveHarnessPath(["tools", "aidlc-orchestrate.ts"], { projectDir }),
         "team-board",
         "--snapshot",
         ...selectorArgs,
@@ -3947,7 +3952,7 @@ export function harnessTreeVersionsCheck(projectDir: string): DoctorCheck | null
   // flag they use; an older tree's tool may not.
   const tool = native || fromProject
     ? aidlcInvocation()
-    : `bun ${quoteCommandArgument(join(projectDir, runtimeHarnessDir(), "tools", "aidlc.ts"))}`;
+    : `${bunLaunchAt(join(projectDir, runtimeHarnessDir(), "tools"))} ${quoteCommandArgument(join(projectDir, runtimeHarnessDir(), "tools", "aidlc.ts"))}`;
   // Under a pin, config fetches the pinned release itself. Otherwise a copied
   // tree takes the newest release's file; one that no config run has recorded
   // the files of reads every file as unowned against another release, so it
@@ -4047,6 +4052,103 @@ export function registeredRepoDoctorChecks(projectDir: string): DoctorCheck[] {
     });
   }
   return rows;
+}
+
+// The host files where a project registers AI-DLC's hooks, status line and
+// allow entries on its harness: its settings or hooks file, Cursor's cli.json,
+// Copilot's .github/hooks/aidlc.json, the agents' JSON, and the hook files a
+// dropped plugin's build did not write (that registration, exactly as written,
+// is the plugin's own). Doctor's native trust row and its copy launch row read them.
+function hostRegistrationFiles(projectDir: string, harnessDir: string, harnessName: string): string[] {
+  const harnessRoot = join(projectDir, harnessDir);
+  const files = [join(harnessRoot, "settings.json"), join(harnessRoot, "hooks.json")];
+  if (harnessDir === ".cursor") files.push(join(harnessRoot, "cli.json"));
+  if (harnessName === "copilot") files.push(join(projectDir, ".github", "hooks", "aidlc.json"));
+  const agentsDir = join(harnessRoot, "agents");
+  if (existsSync(agentsDir)) {
+    files.push(...readdirSync(agentsDir).filter((name) => name.endsWith(".json")).map((name) => join(agentsDir, name)));
+  }
+  const hooksDir = join(harnessRoot, "hooks");
+  if (existsSync(hooksDir)) {
+    const pluginOwned = new Set(droppedPluginRegistrations(projectDir, harnessDir));
+    files.push(...readdirSync(hooksDir)
+      .filter((name) => name.endsWith(".kiro.hook") || name.endsWith(".json"))
+      .filter((name) => !pluginOwned.has(`${harnessDir}/hooks/${name}`))
+      .map((name) => join(hooksDir, name)));
+  }
+  return files;
+}
+
+// What a folder's bunfig.toml preloads for a script (its top-level `preload`;
+// `[test] preload` reaches only `bun test`), as the file has it, or null.
+function scriptPreloads(folder: string): string[] | null {
+  let parsed: unknown;
+  try {
+    parsed = Bun.TOML.parse(readFileSync(join(folder, "bunfig.toml"), "utf-8"));
+  } catch {
+    return null;
+  }
+  const preload = (parsed as { preload?: unknown } | null)?.preload;
+  const entries = (Array.isArray(preload) ? preload : [preload]).filter(
+    (entry): entry is string => typeof entry === "string" && entry !== "",
+  );
+  return entries.length > 0 ? entries : null;
+}
+
+// A repository's words, in one line: the first three, then how many more.
+function preloadList(entries: readonly string[]): string {
+  const shown = entries.slice(0, 3).map((entry) => entry.replace(/\p{Cc}/gu, "?")).join(", ");
+  return entries.length > 3 ? `${shown} and ${entries.length - 3} more` : shown;
+}
+
+// A copy install starts Bun with its own empty config file and --no-env-file
+// (copyLaunchPrefix), so the project's bunfig.toml stays out. A launch without
+// them runs the file's preload inside AI-DLC: an AI-DLC hook or status line
+// registered before this release, or the command this doctor run was started
+// with. One line, only here, and only when the file preloads something for a script.
+function copyLaunchPreloadRow(projectDir: string): DoctorCheck | null {
+  const harness = harnessDir();
+  const name = runtimeHarnessName(projectDir, harness);
+  const projectPreloads = scriptPreloads(projectDir);
+  if (projectPreloads !== null) {
+    const launch = new RegExp(String.raw`\bbun\b[^\n]*(?:^|[\s"'\\/])${harness.replace(".", "\\.")}[\\/](?:tools[\\/]aidlc|hooks[\\/]aidlc-)`);
+    const files = [...hostRegistrationFiles(projectDir, harness, name), join(projectDir, harness, "settings.local.json")];
+    const older = files.some((file) => {
+      try {
+        return registrationCommands(JSON.parse(readFileSync(file, "utf-8"))).some((command) =>
+          launch.test(command) && !/aidlc-plugin-compose\.ts|[\\/]hooks[\\/]compose\.ts/.test(command) &&
+          withoutBunLaunchOptions(command) === command
+        );
+      } catch {
+        return false;
+      }
+    });
+    if (older) {
+      return {
+        pass: true,
+        severity: "warn",
+        label: `Your project's bunfig.toml preloads ${preloadList(projectPreloads)}, and AI-DLC's hooks here were set up before AI-DLC kept that file out of its own runs, so the preload still runs inside each hook`,
+        fix: projectSettingsRepair(name),
+      };
+    }
+  }
+  const typed = process.env[LAUNCHED_WITHOUT_CONFIG_ENV] === "1" || !launchedWithConfig();
+  const ranHere = typed ? scriptPreloads(process.cwd()) : null;
+  if (ranHere === null) return null;
+  return {
+    pass: true,
+    severity: "warn",
+    label: `Your project's bunfig.toml preloads ${preloadList(ranHere)}, and this command was typed without AI-DLC's two Bun options, so the preload ran inside this doctor run`,
+    fix: `AI-DLC's own hooks and commands pass them; to run doctor the same way: \`${aidlcInvocation()} doctor\``,
+  };
+}
+
+// Every command string a registration file holds: `command`, and Copilot's `bash` and `powershell`.
+function registrationCommands(value: unknown): string[] {
+  if (Array.isArray(value)) return value.flatMap(registrationCommands);
+  if (!value || typeof value !== "object") return [];
+  return Object.entries(value as Record<string, unknown>).flatMap(([key, item]) =>
+    typeof item === "string" && (key === "command" || key === "bash" || key === "powershell") ? [item] : registrationCommands(item));
 }
 
 export async function collectDoctorReport(
@@ -4187,22 +4289,10 @@ export async function collectDoctorReport(
         }
       };
       const harnessRoot = join(projectDir, currentHarnessDir);
-      const trustFiles = [
-        join(harnessRoot, "settings.json"),
-        join(harnessRoot, "hooks.json"),
-      ];
-      if (currentHarnessDir === ".cursor") {
-        trustFiles.push(join(harnessRoot, "cli.json"));
-      }
-      if (currentHarnessName === "copilot") {
-        trustFiles.push(join(projectDir, ".github", "hooks", "aidlc.json"));
-      }
+      const trustFiles = hostRegistrationFiles(projectDir, currentHarnessDir, currentHarnessName);
       const agentsDir = join(harnessRoot, "agents");
       const personaCommands: string[] = [];
       if (existsSync(agentsDir)) {
-        trustFiles.push(...readdirSync(agentsDir)
-          .filter((name) => name.endsWith(".json"))
-          .map((name) => join(agentsDir, name)));
         // Kiro's Markdown agents grant their shell commands in frontmatter
         // permissions rules rather than in JSON. Only the conductor's grant
         // counts toward native trust — a persona carrying the same allow must
@@ -4216,17 +4306,6 @@ export async function collectDoctorReport(
             // Existing structure checks report unreadable agent files.
           }
         }
-      }
-      const hooksDir = join(harnessRoot, "hooks");
-      if (existsSync(hooksDir)) {
-        // A dropped plugin's session-start registration, exactly as its build
-        // wrote it, is the plugin's own: its Bun fallback is not an AI-DLC
-        // entry left from before the native install.
-        const pluginOwned = new Set(droppedPluginRegistrations(projectDir, currentHarnessDir));
-        trustFiles.push(...readdirSync(hooksDir)
-          .filter((name) => name.endsWith(".kiro.hook") || name.endsWith(".json"))
-          .filter((name) => !pluginOwned.has(`${currentHarnessDir}/hooks/${name}`))
-          .map((name) => join(hooksDir, name)));
       }
       for (const path of trustFiles) {
         if (!existsSync(path)) continue;
@@ -4332,6 +4411,11 @@ export async function collectDoctorReport(
       pass: true,
       label: "Execution mode: source checkout (no machine runtime expected)",
     });
+  }
+
+  if (!compiled) {
+    const row = copyLaunchPreloadRow(projectDir);
+    if (row !== null) results.push(row);
   }
 
   // Project-domain transactions (init, plugin sync) root at the project dir,
@@ -6358,6 +6442,7 @@ export async function collectDoctorReport(
   try {
     const proc = Bun.spawnSync({
       cmd: ["git", "-C", projectDir, "branch", "--list", "bolt-*"],
+      env: process.env,
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -7473,6 +7558,14 @@ const LANG_BY_EXT: Record<string, string> = {
   ".hpp": "C++",
   ".swift": "Swift",
   ".php": "PHP",
+  // Scripts are code: installers, ops tooling and admin modules are often
+  // nothing but shell or PowerShell.
+  ".sh": "Shell",
+  ".bash": "Shell",
+  ".zsh": "Shell",
+  ".ksh": "Shell",
+  ".ps1": "PowerShell",
+  ".psm1": "PowerShell",
   // Infrastructure code is code (Terraform, Terragrunt and Packer, Bicep).
   ".tf": "Terraform",
   ".hcl": "HCL",
@@ -7957,6 +8050,7 @@ function gitRmFlatTree(projectDir: string, flatTree: string): void {
     // Untrack (cached only — the data already moved). Ignore failure (non-git
     // project, or already untracked) — the rmSync below still tidies disk.
     Bun.spawnSync(["git", "-C", projectDir, "rm", "-r", "--cached", "--quiet", "--", flatTree], {
+      env: process.env,
       stdout: "ignore",
       stderr: "ignore",
     });

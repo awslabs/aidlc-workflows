@@ -22,6 +22,7 @@ import {
   NATIVE_STARTUP_TIMEOUT_MS,
   remainingOperationTimeoutMs,
 } from "../harness/test-budget.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import {
   cleanupTestProject,
   runOrchestrateNext,
@@ -259,7 +260,7 @@ describe("a stage the person asks to skip at its own approval question is skippe
     const step = words.directive as { kind?: string; message?: string } | null;
     expect(step?.kind, words.out).toBe("print");
     expect(step?.message).toContain(
-      "If it asks to skip this stage, run `bun .claude/tools/aidlc-orchestrate.ts next --skip build-and-test` and follow what it returns.",
+      `If it asks to skip this stage, run \`${withCopyLaunchOptions("bun .claude/tools/aidlc-orchestrate.ts next --skip build-and-test")}\` and follow what it returns.`,
     );
     personSkips(proj, "build-and-test");
     expect(readFileSync(stateFile(proj), "utf-8")).toContain("- **Status**: Completed");
@@ -385,9 +386,9 @@ describe("a stage the person asks to skip with a scope switch in the same comman
     return proj;
   }
 
-  const SWITCH = "bun .claude/tools/aidlc.ts engine scope change --scope bugfix";
+  const SWITCH = withCopyLaunchOptions("bun .claude/tools/aidlc.ts engine scope change --scope bugfix");
   const skipsIt = (stage: string): string =>
-    `bun .claude/tools/aidlc-orchestrate.ts report --stage ${stage} --result skipped --reason 'the person asked to skip it'`;
+    withCopyLaunchOptions(`bun .claude/tools/aidlc-orchestrate.ts report --stage ${stage} --result skipped --reason 'the person asked to skip it'`);
 
   for (const [where, at] of [["in progress", startedAt], ["at its own approval question", atItsQuestion]] as const) {
     test(`${where}: the scope changes, then the stage is skipped, and the work goes on`, () => {
@@ -437,7 +438,7 @@ describe("a stage the person asks to skip with a scope switch in the same comman
     const { message, commands } = switchesAndSkips(proj, "bugfix", "user-stories");
     expect(message).not.toContain("already skipped");
     expect(commands, message).toEqual([
-      SWITCH, "bun .claude/tools/aidlc.ts engine recompose --skip user-stories --reason 'the person asked to skip it'",
+      SWITCH, withCopyLaunchOptions("bun .claude/tools/aidlc.ts engine recompose --skip user-stories --reason 'the person asked to skip it'"),
     ]);
   });
 
@@ -455,7 +456,7 @@ describe("a stage the person asks to skip with a scope switch in the same comman
     const message = String((res.directive as { message?: string } | null)?.message);
     expect(message, res.out).not.toContain("already on the plan");
     const commands = namedCommands(message);
-    expect(commands).toEqual([SWITCH, "bun .claude/tools/aidlc.ts engine recompose --add reverse-engineering"]);
+    expect(commands).toEqual([SWITCH, withCopyLaunchOptions("bun .claude/tools/aidlc.ts engine recompose --add reverse-engineering")]);
     for (const command of commands) {
       const ran = runNamed(proj, command);
       expect(ran.status, ran.out).toBe(0);
@@ -469,10 +470,12 @@ describe("a stage the person asks to skip with a scope switch in the same comman
     const proj = atItsQuestion("feature", "requirements-analysis");
     const { message, commands } = switchesAndSkips(proj, "bugfix", "deployment-pipeline");
     expect(commands[0], message).toBe(SWITCH);
-    expect(commands[1]).toBe("bun .claude/tools/aidlc.ts engine recompose --skip deployment-pipeline --reason 'the person asked to skip it'");
+    expect(commands[1]).toBe(
+      withCopyLaunchOptions("bun .claude/tools/aidlc.ts engine recompose --skip deployment-pipeline --reason 'the person asked to skip it'"),
+    );
     expect(message).toContain(
       "If their message also answered the open Requirements Analysis question, record it now with " +
-        "`bun .claude/tools/aidlc-orchestrate.ts report --stage requirements-analysis --result approved --user-input Approve`",
+        `\`${withCopyLaunchOptions("bun .claude/tools/aidlc-orchestrate.ts report --stage requirements-analysis --result approved --user-input Approve")}\``,
     );
   });
 

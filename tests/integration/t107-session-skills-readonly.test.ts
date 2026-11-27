@@ -38,6 +38,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { AIDLC_SRC } from "../harness/fixtures.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 
 const SKILLS_DIR = join(AIDLC_SRC, "skills");
 
@@ -153,7 +154,7 @@ describe("t107 session skills — data-plane sourcing (summary --json)", () => {
   // Every skill must pull its numbers from the deterministic tool, no LLM-side
   // counting. Assert on the body so a stray frontmatter mention couldn't
   // satisfy it.
-  const NEEDLE = "bun .claude/tools/aidlc.ts engine runtime summary --json";
+  const NEEDLE = withCopyLaunchOptions("bun .claude/tools/aidlc.ts engine runtime summary --json");
   test("session-cost body sources aidlc engine runtime summary --json [.sh 13]", () => {
     expect(split(COST).body).toContain(NEEDLE);
   });

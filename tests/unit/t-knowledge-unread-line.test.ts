@@ -127,6 +127,36 @@ describe("t-knowledge-unread-line: documents the agents cannot read are named on
     expect(later).not.toContain('"mapping.xls"');
   });
 
+  test("a .csv or .txt that is not UTF-8 is named with its encoding, not told to become the .csv or .txt it is", async () => {
+    seedStateFile(proj, "state-mid-ideation.md");
+    seedAidlcMemory(proj);
+    // "Cliente;Situação" as Excel's "CSV" and an "ANSI" Notepad file write it
+    // (Windows-1252: ç is 0xE7, ã is 0xE3), and as a "Unicode" Notepad file does (UTF-16 with a BOM).
+    const cp1252 = Buffer.from([...Buffer.from("Cliente;Situa"), 0xe7, 0xe3, ...Buffer.from("o\n")]);
+    put("clientes.csv", cp1252);
+    put("notas.TXT", cp1252);
+    put("unicode.txt", Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from("Situação\n", "utf16le")]));
+    put("mapping.xls", XLS_BYTES);
+    add();
+    expect(unreadDocuments(proj, DEFAULT_SPACE)).toEqual([
+      { path: "documents/clientes.csv", reason: "not-utf8" },
+      { path: "documents/mapping.xls", reason: "no-reader" },
+      { path: "documents/notas.TXT", reason: "not-utf8" },
+      { path: "documents/unicode.txt", reason: "not-utf8" },
+    ]);
+    const line = unreadLine(nextDirective());
+    expect(line).toContain('"clientes.csv", "notas.TXT" and "unicode.txt" are not UTF-8 text');
+    expect(line).toContain("save each again as UTF-8");
+    // The advice to save as .md, .txt or .csv is kept for the file it can help.
+    expect(line).toContain('The knowledge base has no reader for "mapping.xls": save it as .md, .txt or .csv beside it.');
+    expect(line).toContain("knowledge sync` after that.");
+    expect(await doctorRow()).toContain('are not UTF-8 text');
+    // Saved again as UTF-8, as the line asks, the file is read on the next sync.
+    put("clientes.csv", "Cliente;Situação\n");
+    add();
+    expect(unreadDocuments(proj, DEFAULT_SPACE).map((file) => file.path)).not.toContain("documents/clientes.csv");
+  });
+
   test("a Word or Excel file added before AI-DLC read them is named as one the next sync reads", () => {
     seedStateFile(proj, "state-mid-ideation.md");
     seedAidlcMemory(proj);

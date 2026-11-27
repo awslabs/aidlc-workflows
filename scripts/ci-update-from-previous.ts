@@ -33,7 +33,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, 
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { runtimePathsReadTypedNames, typedHarnessName } from "../core/tools/aidlc-runtime-paths.ts";
+import { runtimePathsReadTypedNames, typedHarnessName, withoutBunLaunchOptions } from "../core/tools/aidlc-runtime-paths.ts";
 import { KIRO_HOOK_GROUPS } from "../harness/kiro-ide/hooks/aidlc-kiro-tool-names.ts";
 import kiro from "../harness/kiro/manifest.ts";
 import type { WorkResult } from "../tests/harness/work-open.ts";
@@ -101,7 +101,9 @@ export function hookCommands(treeDir: string): string[] {
   const found = new Set<string>();
   const visit = (value: unknown) => {
     if (typeof value === "string") {
-      if (DISPATCHED.test(hookCommandOf(value)) || ADAPTER_FILE.test(value.trim())) found.add(value.trim());
+      // A copy launch reads with or without its two Bun options.
+      const launch = withoutBunLaunchOptions(value.trim());
+      if (DISPATCHED.test(hookCommandOf(launch)) || ADAPTER_FILE.test(launch)) found.add(value.trim());
     } else if (Array.isArray(value)) {
       for (const item of value) visit(item);
     } else if (value && typeof value === "object") {
@@ -153,7 +155,7 @@ export function opencodeHookCommands(pluginFile: string): string[] {
  * file itself, which writes none, so their exit code is what shows.
  */
 export function dispatched(command: string): boolean {
-  return DISPATCHED.test(hookCommandOf(command));
+  return DISPATCHED.test(hookCommandOf(withoutBunLaunchOptions(command)));
 }
 
 /**

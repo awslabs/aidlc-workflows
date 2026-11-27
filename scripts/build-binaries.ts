@@ -1001,10 +1001,13 @@ function delegatePluginSyncGate(artifact: string): GateResult {
   try {
     const registry = join(fixture, "installed_plugins.json");
     const settings = join(fixture, "settings.json");
+    // Plugin sync runs only in an AI-DLC project; a spaces folder is the least that makes one.
+    const project = join(fixture, "project");
+    mkdirSync(join(project, "aidlc", "spaces"), { recursive: true });
     writeFileSync(registry, '{"version":2,"plugins":{}}\n');
     writeFileSync(settings, '{"enabledPlugins":{}}\n');
     const result = run(artifact, ["engine", "plugin", "sync"], {
-      cwd: standaloneGateCwd(),
+      cwd: project,
       env: {
         ...process.env,
         AIDLC_HARNESS_DIR: ".claude",
