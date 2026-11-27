@@ -18,6 +18,7 @@ import { join } from "node:path";
 import { CORE_COMMAND_WORDS } from "../../core/tools/aidlc-command.ts";
 import { pluginCommandTable } from "../../core/tools/aidlc-plugin-commands.ts";
 import { readPluginCommands, validatePluginRoot } from "../../core/tools/aidlc-plugin-validate.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 
@@ -334,7 +335,7 @@ describe("/aidlc <name> in the chat", () => {
   test("/aidlc test-pro-hello names the command and stops; with a sentence after the name it is a reading step; the seams agree", () => {
     const exact = aidlc(main, ["engine", "orchestrate", "next", COMMAND, "--since", "7d"]);
     expect(exact.status, exact.stderr).toBe(0);
-    expect(exact.stdout).toContain(`Run \`bun .claude/tools/aidlc.ts ${COMMAND} --since 7d\``);
+    expect(exact.stdout).toContain(`Run \`${withCopyLaunchOptions(`bun .claude/tools/aidlc.ts ${COMMAND} --since 7d`)}\``);
     expect(exact.stdout).not.toContain("--depth");
 
     // The reading step, as any reading step, waits behind the hooks-off step in
@@ -363,7 +364,7 @@ describe("/aidlc <name> in the chat", () => {
     setPlugins(off, ["aidlc"]);
     const next = aidlc(off, ["engine", "orchestrate", "next", COMMAND]);
     expect(next.status, next.stderr).toBe(0);
-    expect(next.stdout).toContain(`Run \`bun .claude/tools/aidlc.ts ${COMMAND}\``);
+    expect(next.stdout).toContain(`Run \`${withCopyLaunchOptions(`bun .claude/tools/aidlc.ts ${COMMAND}`)}\``);
   });
 });
 

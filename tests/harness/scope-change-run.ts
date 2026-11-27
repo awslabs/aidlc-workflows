@@ -75,7 +75,7 @@ export function betaInProgress(flags: string[], answers: Partial<PersonAnswers> 
  */
 function switchTo(agent: AgentStandIn, scope: string, at: SwitchPoint): { said: string; next: Directive } {
   const typed = agent.personTypes(`/aidlc --scope ${scope}`);
-  const command = /`(bun \.claude\/tools\/[^`]+)`/.exec(String(typed.message ?? ""))?.[1];
+  const command = /`(bun (?:--config=\S+ --no-env-file )?\.claude\/tools\/[^`]+)`/.exec(String(typed.message ?? ""))?.[1];
   expect(command, JSON.stringify(typed)).toBeDefined();
   const ran = agent.host.bash(command!);
   const said = `${ran.stdout}${ran.stderr}`;

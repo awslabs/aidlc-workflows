@@ -21,6 +21,7 @@ import {
 import { homedir, platform, tmpdir } from "node:os";
 import { delimiter, join, posix, resolve } from "node:path";
 import { parse as parseToml } from "smol-toml";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import { cleanupTestProject, createOrchestrationTestProject, REPO_ROOT } from "../harness/fixtures.ts";
 import { appendAuditEntry } from "../../core/tools/aidlc-audit.ts";
 import { sha256Bytes } from "../../core/tools/aidlc-distribution.ts";
@@ -2588,7 +2589,7 @@ describe("t294 trust diagnostics", () => {
       expect(repair).toContain("config --harness claude");
       expect(repair).not.toContain("--force");
       if (source === DIST) {
-        expect(repair).toContain("bun .claude/tools/aidlc.ts config --harness claude --from");
+        expect(repair).toContain(withCopyLaunchOptions("bun .claude/tools/aidlc.ts config --harness claude --from"));
       }
       expect(unwired.failed).toBeGreaterThan(pristine.failed);
       expect(unwired.status).toBe(1);

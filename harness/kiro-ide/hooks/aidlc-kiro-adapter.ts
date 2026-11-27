@@ -189,7 +189,7 @@ import {
 } from "../tools/aidlc-testing-posture.ts";
 import { normalizeRetiredGuardPolicyField } from "../tools/aidlc-guard-switch.ts";
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
-import { aidlcEngineCommand, aidlcInvocation } from "../tools/aidlc-runtime-paths.ts";
+import { aidlcEngineCommand, aidlcInvocation, bunLaunchFlags, bunLaunchOptionWords, withoutBunLaunchOptions } from "../tools/aidlc-runtime-paths.ts";
 import { aidlcEntryWords } from "../tools/aidlc-reply-reader.ts";
 import { kiroChatRecordPaths, kiroDefaultAgentName } from "../tools/aidlc-kiro-chat-record.ts";
 import { terminalDispatcherArgv } from "../tools/aidlc.ts";
@@ -1364,7 +1364,9 @@ function posixReading(tool: string, command: string): string | null {
 // plain `aidlc version` or `aidlc doctor` printed to a file is the person's
 // business and passes.
 function isEngineCommand(segment: string): boolean {
-  const words = segment.trim().replace(/^[&.]\s+/, "").split(/\s+/).map((word) => word.replace(/^["']|["']$/g, ""));
+  const all = segment.trim().replace(/^[&.]\s+/, "").split(/\s+/).map((word) => word.replace(/^["']|["']$/g, ""));
+  // A copy launch's two Bun options read as the launch without them.
+  const words = [all[0] ?? "", ...all.slice(1 + bunLaunchOptionWords(all, 1))];
   const [program = "", first = "", second = ""] = words;
   if (/(?:^|[\\/])aidlc(?:\.cmd|\.exe)?$/i.test(program)) return first.toLowerCase() === "engine";
   if (!/(?:^|[\\/])bun(?:\.exe)?$/i.test(program)) return false;
@@ -1534,6 +1536,7 @@ function copyChannelCommandArgs(words: PowerShellWord[]): PowerShellWord[] | nul
   const program = words[start];
   if (program === undefined || program.opaque || !/(?:^|[\\/])bun(?:\.exe)?$/i.test(program.value)) return null;
   let at = start + 1;
+  if (words.slice(at, at + 2).every((word) => !word.opaque)) at += bunLaunchOptionWords(words.map((word) => word.value), at);
   if (words[at] !== undefined && !words[at].opaque && words[at].value === "run") at++;
   const script = words[at];
   if (
@@ -2039,7 +2042,8 @@ function promptTerminalInvocation(prompt: string): TerminalInvocation {
 }
 
 function toolTerminalInvocation(command: string): TerminalInvocation | null {
-  const match = command.trim().match(
+  // A copy launch's two Bun options read as the launch without them.
+  const match = withoutBunLaunchOptions(command).trim().match(
     /^(?:env\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|[^\s"']*)\s+)*(?:(?:"([^"]+)"|'([^']+)'|(\S+))\s+)?["']?\.kiro[\\/]tools[\\/]aidlc-orchestrate\.ts["']?\s+next(?:\s+([\s\S]*))?$/i,
   );
   if (match === null) return null;
@@ -2129,7 +2133,7 @@ function runTerminalCommand(command: TerminalCommand): TerminalResult | null {
     const result = Bun.spawnSync(
       executable
         ? [executable, ...terminalDispatcherArgv(command)]
-        : [process.execPath, ...sourceArgs],
+        : [process.execPath, ...bunLaunchFlags(), ...sourceArgs],
       {
         cwd: projectDir,
         stdout: "pipe",
@@ -2360,7 +2364,7 @@ function nextLoweringGuardFlags(args: string[]): GuardLowering {
 function loweringGuardInvocation(
   rawCommand: string,
 ): GuardLowering {
-  const match = rawCommand.trim().match(
+  const match = withoutBunLaunchOptions(rawCommand).trim().match(
     /^(?:env\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|[^\s"']*)\s+)*(?:(?:"([^"]+)"|'([^']+)'|(\S+))\s+)?["']?(\.kiro[\\/]tools[\\/]aidlc(?:-utility)?\.ts)["']?(?:\s+([\s\S]*))?$/i,
   );
   if (match === null) return null;
@@ -4046,11 +4050,11 @@ function runCore(
     : authorityToken
       ? [
           process.execPath,
-          join(HOOKS_DIR, "..", "tools", "aidlc.ts"),
+          ...bunLaunchFlags(), join(HOOKS_DIR, "..", "tools", "aidlc.ts"),
           "--internal-aidlc-record-human-turn",
           join(HOOKS_DIR, hookFile),
         ]
-      : [process.execPath, join(HOOKS_DIR, hookFile)];
+      : [process.execPath, ...bunLaunchFlags(), join(HOOKS_DIR, hookFile)];
   // The core hook runs from the same payload, so hand it this adapter's project
   // rather than let it derive one from its own path.
   const env = {

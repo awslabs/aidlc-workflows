@@ -49,10 +49,12 @@ import { recordedDigestMatches } from "./aidlc-review-manifest.ts";
 import { refreshActiveMemory } from "./aidlc-includes.ts";
 import { resolveInvokingSessionId } from "./aidlc-record-core.ts";
 import {
+  bunLaunchFlags,
   aidlcInvocation,
   compiledExecutable,
   discoverProjectHarnesses,
   entrySkillInvocation,
+  isAidlcProjectFolder,
   LinkedFolderError,
   pinNamedHarness,
   quoteCommandArgument,
@@ -1341,7 +1343,7 @@ async function runComposer(
       }
     }
   } else {
-    const result = spawnSync(process.execPath, [composePath], {
+    const result = spawnSync(process.execPath, [...bunLaunchFlags(), composePath], {
       cwd: stagedProject,
       encoding: "utf-8",
       env,
@@ -2406,7 +2408,7 @@ function runStagedTool(
       : args[0] === "scopes"
       ? ["engine", "gen", "runner-scopes", ...args.slice(1)]
       : ["engine", "gen", ...args]
-    : [join(stagedProject, harnessDir, "tools", `aidlc-${tool}.ts`), ...args];
+    : [...bunLaunchFlags(), join(stagedProject, harnessDir, "tools", `aidlc-${tool}.ts`), ...args];
   const result = spawnSync(command, commandArgs, {
     cwd: stagedProject,
     encoding: "utf-8",
@@ -2444,7 +2446,7 @@ function refreshGeneratedTable(
   const command = executable ?? process.execPath;
   const args = executable
     ? ["engine", "gen", verb]
-    : [join(stagedProject, harnessDir, "tools", "aidlc-utility.ts"), verb];
+    : [...bunLaunchFlags(), join(stagedProject, harnessDir, "tools", "aidlc-utility.ts"), verb];
   const result = spawnSync(command, args, {
     cwd: stagedProject,
     encoding: "utf-8",
@@ -3227,6 +3229,10 @@ export async function main(argv: string[]): Promise<void> {
       if (flags["plugin-root"]) process.env.AIDLC_PLUGIN_ROOT = resolve(flags["plugin-root"]);
       // A plugin hook names its harness too.
       if (flags["harness-dir"]) pinNamedHarness(projectDir, flags["harness-dir"]);
+      if (!isAidlcProjectFolder(projectDir)) {
+        if (flags.json === "true") process.stdout.write(jsonEnvelope(0, "not an AI-DLC project; nothing to sync", null));
+        return;
+      }
       const result = await syncPlugins(projectDir, argv);
       sayRulesPlacement(projectDir, result.rules);
       const message = result.nothingToSync ? "no installed plugins; nothing to sync" : `plugin sync complete: ${result.synced.length} plugin(s)` +

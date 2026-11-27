@@ -11,6 +11,10 @@ on:
       - 'docs/**'
       - 'zensical.toml'
       - 'scripts/docs-rewrite-links.ts'
+      - 'scripts/docs-composer-data.ts'
+      - 'core/scopes/**'
+      - 'core/aidlc-common/stages/**'
+      - 'core/tools/aidlc-lib.ts'
       - 'pyproject.toml'
       - 'uv.lock'
       - '.github/workflows/docs.yml'
@@ -21,6 +25,10 @@ on:
       - 'docs/**'
       - 'zensical.toml'
       - 'scripts/docs-rewrite-links.ts'
+      - 'scripts/docs-composer-data.ts'
+      - 'core/scopes/**'
+      - 'core/aidlc-common/stages/**'
+      - 'core/tools/aidlc-lib.ts'
       - 'pyproject.toml'
       - 'uv.lock'
       - '.github/workflows/docs.yml'
@@ -65,6 +73,12 @@ jobs:
       # a linked file is missing, failing the build before a dead link ships.
       - name: Rewrite out-of-tree links to GitHub URLs
         run: bun scripts/docs-rewrite-links.ts
+
+      # The Interactive composer page reads its scopes, stages and flag values
+      # from a JSON file generated from core/ here, so the published page
+      # always matches the source it was built from.
+      - name: Generate Interactive composer data
+        run: bun scripts/docs-composer-data.ts
 
       - name: Build documentation
         run: uv run zensical build --strict

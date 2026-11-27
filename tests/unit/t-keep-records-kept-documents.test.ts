@@ -264,11 +264,14 @@ class Work {
     return result;
   }
 
-  // An engine command as a step prints it: `bun .claude/tools/<tool>.ts ...`.
+  // An engine command as a step prints it: `bun <options> .claude/tools/<tool>.ts ...`,
+  // the copy tree's two Bun options first; it runs with them, from the project.
   printed(command: string): Run {
-    const [bun, tool, ...args] = shellWords(command.trim());
+    const [bun, ...words] = shellWords(command.trim());
     expect(bun, command).toBe("bun");
-    const argv = [BUN, join(this.dir, tool), ...args];
+    const options = words.slice(0, words.findIndex((word) => !word.startsWith("--")));
+    const [tool, ...args] = words.slice(options.length);
+    const argv = [BUN, ...options, join(this.dir, tool), ...args];
     if (!args.includes("--project-dir")) argv.push("--project-dir", this.dir);
     const result = this.run(argv);
     this.outputs.push(`${command}\n${result.stdout}\n${result.stderr}`);

@@ -73,7 +73,7 @@ import { terminalDispatcherArgv } from "../tools/aidlc.ts";
 import { SAY_ONCE_BEFORE_THEY_REPLY } from "../tools/aidlc-directive.ts";
 import { ACTIVE_MEMORY_DIR, refreshActiveMemory } from "../tools/aidlc-includes.ts";
 import { HOOK_PRE_DISPATCH_ENV } from "../tools/aidlc-locks.ts";
-import { aidlcInvocation, typedHarnessName } from "../tools/aidlc-runtime-paths.ts";
+import { aidlcInvocation, bunLaunchFlags, typedHarnessName } from "../tools/aidlc-runtime-paths.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
 // The agent-v1 hook's default max_output_size is 10 KiB, independently of
@@ -555,7 +555,7 @@ if (target === "verb-intercept") {
           ? [executable, "engine", "orchestrate", "next", ...args]
           : [
               process.execPath,
-              join(".kiro", "tools", "aidlc-orchestrate.ts"),
+              ...bunLaunchFlags(), join(".kiro", "tools", "aidlc-orchestrate.ts"),
               "next",
               ...args,
             ];
@@ -664,7 +664,7 @@ if (target === "verb-intercept") {
     const run = Bun.spawnSync(
       executable
         ? [executable, ...terminalDispatcherArgv(cmd)]
-        : [process.execPath, ...utilArgs],
+        : [process.execPath, ...bunLaunchFlags(), ...utilArgs],
       { cwd, stdout: "pipe", stderr: "pipe", env: projectEnv },
     );
     out = (
@@ -794,7 +794,7 @@ if (target === "state-transition-guard") {
   const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
   const hookCommand = executable
     ? [executable, "engine", "hook", "state-transition-guard"]
-    : [process.execPath, join(HOOKS_DIR, "aidlc-state-transition-guard.ts")];
+    : [process.execPath, ...bunLaunchFlags(), join(HOOKS_DIR, "aidlc-state-transition-guard.ts")];
   const r = Bun.spawnSync(
     hookCommand,
     {
@@ -879,7 +879,7 @@ if (target === "plan-approval-guard") {
   const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
   const command = executable
     ? [executable, "engine", "hook", "plan-approval-guard"]
-    : [process.execPath, join(HOOKS_DIR, "aidlc-plan-approval-guard.ts")];
+    : [process.execPath, ...bunLaunchFlags(), join(HOOKS_DIR, "aidlc-plan-approval-guard.ts")];
   const r = Bun.spawnSync(
     command,
     {
@@ -940,7 +940,7 @@ if (target === "reviewer-scope") {
   const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
   const command = executable
     ? [executable, "engine", "hook", "reviewer-scope"]
-    : [process.execPath, join(HOOKS_DIR, "aidlc-reviewer-scope.ts")];
+    : [process.execPath, ...bunLaunchFlags(), join(HOOKS_DIR, "aidlc-reviewer-scope.ts")];
   const r = Bun.spawnSync(command, {
     stdin: Buffer.from(
       JSON.stringify({
@@ -988,7 +988,7 @@ if (target === "review-freeze") {
   const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
   const command = executable
     ? [executable, "engine", "hook", "review-freeze"]
-    : [process.execPath, join(HOOKS_DIR, "aidlc-review-freeze.ts")];
+    : [process.execPath, ...bunLaunchFlags(), join(HOOKS_DIR, "aidlc-review-freeze.ts")];
   const r = Bun.spawnSync(command, {
     stdin: Buffer.from(
       JSON.stringify({
@@ -1053,7 +1053,7 @@ if (target === "deliver-stage-rules") {
   const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
   const command = executable
     ? [executable, "engine", "hook", "deliver-stage-rules"]
-    : [process.execPath, join(HOOKS_DIR, "aidlc-deliver-stage-rules.ts")];
+    : [process.execPath, ...bunLaunchFlags(), join(HOOKS_DIR, "aidlc-deliver-stage-rules.ts")];
   const r = Bun.spawnSync(command, {
     stdin: Buffer.from(
       JSON.stringify({
@@ -1269,11 +1269,11 @@ function runCore(hookFile: string, input: Record<string, unknown>): { stdout: st
     : authorityToken
       ? [
           process.execPath,
-          join(HOOKS_DIR, "..", "tools", "aidlc.ts"),
+          ...bunLaunchFlags(), join(HOOKS_DIR, "..", "tools", "aidlc.ts"),
           "--internal-aidlc-record-human-turn",
           join(HOOKS_DIR, hookFile),
         ]
-      : [process.execPath, join(HOOKS_DIR, hookFile)];
+      : [process.execPath, ...bunLaunchFlags(), join(HOOKS_DIR, hookFile)];
   const r = Bun.spawnSync(command, {
     stdin: Buffer.from(JSON.stringify(input), "utf-8"),
     stdout: "pipe",

@@ -58,8 +58,15 @@ async function switchToBugfix(eol: "\n" | "\r\n"): Promise<Switched> {
   expect(command, message).toBeDefined();
   const parts = (command?.match(/'[^']*'|"[^"]*"|\S+/g) ?? []).map((part) => part.replace(/^['"]|['"]$/g, ""));
   if (parts[0] === "bun") parts.shift();
+  // The copy tree's two Bun options come first; its config is taken from the shipped tree as the tool is.
+  const options: string[] = [];
+  while (parts[0]?.startsWith("--")) {
+    const word = parts.shift() ?? "";
+    const config = /^--config=.*tools\/([^/]+)$/.exec(word);
+    options.push(config ? `--config=${join(AIDLC_SRC, "tools", config[1])}` : word);
+  }
   const tool = join(AIDLC_SRC, "tools", (parts.shift() ?? "").replace(/^.*tools\//, ""));
-  const ran = await exec([process.execPath, tool, ...parts, "--project-dir", proj], { cwd: proj, env: env(proj) });
+  const ran = await exec([process.execPath, ...options, tool, ...parts, "--project-dir", proj], { cwd: proj, env: env(proj) });
   expect(ran.status, `${command}\n${ran.stdout}${ran.stderr}`).toBe(0);
   return { lines: ran.stdout.trim().split("\n"), content: state(proj), after: (await next(proj, [])).directive };
 }

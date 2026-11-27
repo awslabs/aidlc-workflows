@@ -11,6 +11,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { readConductorSurface } from "../harness/conductor-skill.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
 
@@ -29,7 +30,7 @@ describe("a model or effort request runs config models", () => {
     expect(HARNESS_MATRIX.length).toBe(8);
     for (const harness of HARNESS_MATRIX) {
       const invokes = [
-        { path: harness.harnessOnboardingDist, invoke: `bun ${harness.manifest.harnessDir}/tools/aidlc.ts` },
+        { path: harness.harnessOnboardingDist, invoke: withCopyLaunchOptions(`bun ${harness.manifest.harnessDir}/tools/aidlc.ts`) },
         { path: releasePath(harness.harnessOnboardingDist), invoke: "aidlc" },
       ];
       for (const { path, invoke } of invokes) {

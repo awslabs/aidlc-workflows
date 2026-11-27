@@ -27,6 +27,7 @@ import {
   seededStateFile,
 } from "../harness/fixtures.ts";
 import { testGuardEnvironment } from "../harness/runner-profile.ts";
+import { COPY_LAUNCH_CONFIG } from "../harness/copy-launch.ts";
 import {
   argumentIsFlagShaped,
   auditBlockField,
@@ -804,10 +805,13 @@ describe("the chain from a bare next ends, and sets each thing once", () => {
           ended = "said";
           break;
         }
+        // The script and the copy launch's config file both come from the shipped tree, which this project lacks.
         const argv = command.split(/\s+/).map((token) =>
           /^\.[\\/]?[a-z-]*[\\/]tools[\\/]aidlc[a-z-]*\.ts$/.test(token)
             ? join(AIDLC_SRC, "tools", token.split(/[\\/]/).pop() as string)
-            : token);
+            : /^--config=\.[a-z-]*[\\/]tools[\\/]aidlc-bunfig\.toml$/.test(token)
+              ? `--config=${join(AIDLC_SRC, "tools", COPY_LAUNCH_CONFIG)}`
+              : token);
         const result = spawnSync(argv[0] === "bun" ? BUN : argv[0], argv.slice(1), {
           cwd: proj,
           env: env(proj),

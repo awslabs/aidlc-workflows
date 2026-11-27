@@ -76,6 +76,9 @@ setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 const BUN = process.execPath;
 const SENSOR = join(AIDLC_SRC, "tools", "aidlc-sensor-upstream-coverage.ts");
 
+const UNREFERENCED_HINT =
+	"Name each one in a deliverable: its slug as a standalone word, a [[wikilink]] or a backticked filename.";
+
 const tempDirs: string[] = [];
 afterAll(() => {
 	for (const d of tempDirs) rmSync(d, { recursive: true, force: true });
@@ -88,6 +91,7 @@ interface SensorResult {
 	scanned_files: string[];
 	reason?: string;
 	findings_count: number;
+	message?: string;
 }
 
 function makeStageDir(files: Record<string, string>): string {
@@ -547,6 +551,7 @@ describe("t233 one fire over every repository's folder", () => {
 			findings_count: 1,
 			folders_evaluated: 2,
 			failed_outputs: ["codekb/repo-b/architecture.md"],
+			message: UNREFERENCED_HINT,
 			folders: [{
 				file: "codekb/repo-b/architecture.md",
 				unreferenced: ["workspace-scan"],
@@ -570,7 +575,18 @@ describe("t233 one fire over every repository's folder", () => {
 				unreferenced: ["workspace-scan"],
 				scanned_files: [join(dir, "architecture.md"), join(dir, "dependencies.md")],
 				findings_count: 1,
+				message: UNREFERENCED_HINT,
 			})}\n`,
 		);
+	});
+});
+
+describe("t233 a failing check says how to cover what it names", () => {
+	test("unreferenced upstream artifacts keep their slugs and gain the way to cover them", () => {
+		const dir = makeStageDir({ "intent-statement.md": "# Intent Statement\n\nProse only.\n" });
+		const result = run(dir, "intent-statement.md", "team-practices:practices-discovery", "intent-statement");
+		expect(result.pass).toBe(false);
+		expect(result.unreferenced).toEqual(["team-practices"]);
+		expect(result.message).toBe(UNREFERENCED_HINT);
 	});
 });

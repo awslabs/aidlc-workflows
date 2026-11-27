@@ -178,7 +178,7 @@ describe("a second review the review cap refuses part way through a Unit's step"
 
       // The agent takes the step with nothing put to the person.
       const saidBefore = person.said.length;
-      const named = /`(bun \.claude\/tools\/[^`]+)`/.exec(finish.action)?.[1];
+      const named = /`(bun (?:--config=\S+ --no-env-file )?\.claude\/tools\/[^`]+)`/.exec(finish.action)?.[1];
       expect(named, finish.action).toBeDefined();
       const words = commandWords(named!);
       expect(words).toEqual(expect.arrayContaining(["unit", "complete", "--unit", "extra"]));

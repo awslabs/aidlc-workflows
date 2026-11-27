@@ -1,8 +1,9 @@
 // aidlc-claude-own-command.ts: Claude Code runs AI-DLC's own command without a prompt however a
 // helper spells this project's path.
 //
-// The copy channel's settings allow AI-DLC's tool commands in their relative spelling
-// (`Bash(bun <harness>/tools/aidlc.ts engine *)`, `Bash(bun <harness>/tools/aidlc-utility.ts *)`, ...),
+// The copy channel's settings allow AI-DLC's tool commands in their relative spelling, after the copy
+// launch's two Bun options (`Bash(bun --config=<harness>/tools/aidlc-bunfig.toml --no-env-file
+// <harness>/tools/aidlc.ts engine *)`, the same for `aidlc-utility.ts *`, ...),
 // and Claude Code matches a Bash rule against the command text as written, so a helper that spelled
 // this project's path absolute (`bun /work/app/<harness>/tools/aidlc.ts engine now`, or
 // `C:/work/app/...`) met a prompt for a step AI-DLC runs for itself, and so did a helper's one-line
@@ -22,6 +23,7 @@ import {
   pathContainedBy,
   sameDirectory,
 } from "./aidlc-lib.ts";
+import { BUN_LAUNCH_CONFIG, bunLaunchOptionWords, copyLaunchPrefix } from "./aidlc-runtime-paths.ts";
 import { workspaceRoot } from "./aidlc-locks.ts";
 import { managedSettingsFiles, resolveManagedSettingsCandidates } from "./aidlc-statusline-choice.ts";
 
@@ -89,17 +91,26 @@ function relativeToolCommand(
   harness: string,
 ): string | null {
   if (words.directory !== null || words.rawWords[0] !== "bun") return null;
-  const path = words.argv[1] ?? "";
   const asWritten = (file: string): string => process.platform === "win32" ? resolvePath(file).toLowerCase() : resolvePath(file);
+  const tools = asWritten(join(projectDir, harness, "tools"));
+  // A copy launch's two Bun options, its config file this project's own,
+  // relative or rooted (copyLaunchPrefix).
+  const options = bunLaunchOptionWords(words.argv, 1);
+  if (options > 0) {
+    const config = words.argv[1].slice("--config=".length);
+    const at = rootedPath(config) ? config : join(projectDir, config);
+    if (asWritten(at) !== asWritten(join(projectDir, harness, "tools", BUN_LAUNCH_CONFIG))) return null;
+  }
+  const path = words.argv[1 + options] ?? "";
   const file = basename(path);
-  if (!rootedPath(path) || !/^[A-Za-z0-9._-]+$/.test(file) || asWritten(dirname(path)) !== asWritten(join(projectDir, harness, "tools"))) return null;
-  for (let i = 2; i < words.argv.length; i++) {
+  if (!rootedPath(path) || !/^[A-Za-z0-9._-]+$/.test(file) || asWritten(dirname(path)) !== tools) return null;
+  for (let i = 2 + options; i < words.argv.length; i++) {
     const arg = words.argv[i];
     if (arg !== "--project-dir" && !arg.startsWith("--project-dir=")) continue;
     const value = arg === "--project-dir" ? words.argv[++i] : arg.slice("--project-dir=".length);
     if (value === undefined || !rootedPath(value) || !sameDirectory(value, projectDir)) return null;
   }
-  return ["bun", `${harness}/tools/${file}`, ...words.rawWords.slice(2)].join(" ");
+  return [options > 0 ? copyLaunchPrefix(harness) : "bun", `${harness}/tools/${file}`, ...words.rawWords.slice(2 + options)].join(" ");
 }
 
 // A shipped rule's two shapes: the exact command, or a prefix before ` *`.
@@ -163,7 +174,7 @@ export function claudeAllowsOwnCommand(command: string, projectDir: string): boo
     const relative = relativeToolCommand(words, projectDir, harness);
     if (relative === null) return false;
     return claudeOwnCommandRules(projectDir, harness, false)?.allow.some((rule) =>
-      rule.startsWith(`Bash(bun ${harness}/tools/`) && ruleAllows(rule, relative)) === true;
+      /^Bash\(bun /.test(rule) && rule.includes(` ${harness}/tools/`) && ruleAllows(rule, relative)) === true;
   }
   return ownRecordRead(command, projectDir) && claudeOwnCommandRules(projectDir, harness, true) !== null;
 }

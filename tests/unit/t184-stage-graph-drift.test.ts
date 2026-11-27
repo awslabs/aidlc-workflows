@@ -40,6 +40,7 @@ import {
   seedStateFile,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 
 const BUN = process.execPath;
 
@@ -280,7 +281,7 @@ describe("t184 stage-graph drift detection (issue #364)", () => {
       const r = doctor(proj);
       expect(r.out).toContain("not in the compiled graph");
       expect(r.out).toContain(CUSTOM_SLUG);
-      expect(r.out).toContain("bun .claude/tools/aidlc-graph.ts compile");
+      expect(r.out).toContain(withCopyLaunchOptions("bun .claude/tools/aidlc-graph.ts compile"));
       // ADVISORY: an uncompiled stage alone must NOT fail the health check.
       // (A clean sandbox doctor exits 0; injecting only this drift keeps it 0.)
       expect(r.status).toBe(0);
@@ -311,7 +312,7 @@ describe("t184 stage-graph drift detection (issue #364)", () => {
       const ctx = sessionStartContext(proj);
       expect(ctx).toContain("not in the compiled stage graph");
       expect(ctx).toContain(CUSTOM_SLUG);
-      expect(ctx).toContain("bun .claude/tools/aidlc-graph.ts compile");
+      expect(ctx).toContain(withCopyLaunchOptions("bun .claude/tools/aidlc-graph.ts compile"));
       // Hook still emits its normal workflow context (advisory is additive).
       expect(ctx).toContain("AIDLC WORKFLOW ACTIVE");
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);

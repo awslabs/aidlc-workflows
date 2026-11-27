@@ -311,8 +311,9 @@ import { swarmSourceChangedSince } from "./aidlc-swarm-source.ts";
 import { memoryDirFor, PATH_SET_SENSOR_IDS, STAGE_WIDE_SENSOR_IDS, templateEligibleArtifacts, withStageProgressRow } from "./aidlc-graph.ts";
 import { generateFireId, recordUnfinishedFire, sensorMatchesPath, unfinishedFire } from "./aidlc-sensor-record.ts";
 import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
-import { aidlcDispatcherInvocation, aidlcToolInvocation, compiledExecutable, entrySkillInvocation, syncFolderClause } from "./aidlc-runtime-paths.ts";
+import { aidlcDispatcherInvocation, aidlcToolInvocation, bunLaunchFlags, compiledExecutable, entrySkillInvocation, syncFolderClause } from "./aidlc-runtime-paths.ts";
 import { markdownBlocks, projectVisibleMarkdownLines } from "./aidlc-markdown.ts";
+import { newlineOf } from "./aidlc-distribution.ts";
 import { type EngineUnitDirective, readEngineUnitDirective, reviewHasUnseenFinding, routesUnitStep, routesWave } from "./aidlc-log.ts";
 import {
   stageLabel,
@@ -2973,6 +2974,22 @@ function handleUnit(args: string[]): void {
       // a unit set aside for another can be picked up again (#1411).
       const own = open.find((entry) => entry.unit === unit);
       const active = open.find((entry) => entry.unit !== unit && entry.state === "in-progress");
+      if (active === undefined && own?.state === "in-progress") {
+        let healed = setOrInsertField(content, "## Runtime State", "Active Unit", unit);
+        healed = setOrInsertField(healed, "## Runtime State", "Unit Stage", slug);
+        healed = setOrInsertField(healed, "## Runtime State", "Unit State", "in-progress");
+        healed = removeField(healed, "Unit Pause Reason");
+        healed = removeField(healed, "Unit Next Action");
+        if (healed !== content) writeStateFile(pd, healed);
+        console.log(JSON.stringify({
+          unit,
+          stage: slug,
+          state: "in-progress",
+          already_active: true,
+          warning: `Unit "${unit}" is already in progress on "${slug}"; nothing to resume.`,
+        }));
+        return;
+      }
       if (own?.state !== "paused" || active) {
         const shown = active ?? checkpoint;
         error(
@@ -3178,7 +3195,7 @@ function requireEngineRoutedWaveUnit(
       ? [executable, "engine", "orchestrate", ...subargs]
       : [
           process.execPath,
-          fileURLToPath(new URL("./aidlc-orchestrate.ts", import.meta.url)),
+          ...bunLaunchFlags(), fileURLToPath(new URL("./aidlc-orchestrate.ts", import.meta.url)),
           ...subargs,
         ];
     const result = spawnSync(command[0], command.slice(1), {
@@ -4086,7 +4103,7 @@ function fireGateSensors(
       ];
       const command = executable
         ? [executable, "engine", "sensor", ...args]
-        : [process.execPath, sensorTool, ...args];
+        : [process.execPath, ...bunLaunchFlags(), sensorTool, ...args];
       const startedAt = Date.now();
       const result = spawnSync(command[0], command.slice(1), {
         cwd: pd,
@@ -6180,7 +6197,7 @@ function reviewerPreconditionError(
       receipts,
     });
   }
-  // A request that can never finish is requested again at its own pass.
+  // A request whose outputs or source changed is requested again at its own pass.
   const ordinal = pending?.state === "outstanding" ? String(pending.iteration) : "<next ordinal>";
   if (action === "present-approval-gate") {
     const message =
@@ -10022,8 +10039,8 @@ function handlePracticesPromote(args: string[]): void {
   let teamPracticesDraft: string;
   let discoveredRulesDraft: string;
   try {
-    teamPracticesDraft = readFileSync(teamPracticesPath, "utf-8");
-    discoveredRulesDraft = readFileSync(discoveredRulesPath, "utf-8");
+    teamPracticesDraft = readFileSync(teamPracticesPath, "utf-8").replaceAll("\r\n", "\n");
+    discoveredRulesDraft = readFileSync(discoveredRulesPath, "utf-8").replaceAll("\r\n", "\n");
   } catch (e) {
     fail(`could not read drafts: ${errorMessage(e)}`);
     return;
@@ -10036,9 +10053,15 @@ function handlePracticesPromote(args: string[]): void {
 
   let teamMd: string;
   let guardrailsMd: string;
+  let teamNewline: string;
+  let guardrailsNewline: string;
   try {
     teamMd = readFileSync(teamMdPath, "utf-8");
     guardrailsMd = readFileSync(guardrailsPath, "utf-8");
+    teamNewline = newlineOf(teamMd);
+    guardrailsNewline = newlineOf(guardrailsMd);
+    teamMd = teamMd.replaceAll("\r\n", "\n");
+    guardrailsMd = guardrailsMd.replaceAll("\r\n", "\n");
   } catch (e) {
     fail(`could not read targets: ${errorMessage(e)}`);
     return;
@@ -10113,13 +10136,13 @@ function handlePracticesPromote(args: string[]): void {
   // the user re-enters the gate. Identical project rules are deduplicated
   // above, so a retry cannot accumulate copies after this partial-write path.
   try {
-    writeFileSync(guardrailsPath, newGuardrailsMd, "utf-8");
+    writeFileSync(guardrailsPath, newGuardrailsMd.replaceAll("\n", guardrailsNewline), "utf-8");
   } catch (e) {
     fail(`writing project.md failed: ${errorMessage(e)}`);
     return;
   }
   try {
-    writeFileSync(teamMdPath, newTeamMd, "utf-8");
+    writeFileSync(teamMdPath, newTeamMd.replaceAll("\n", teamNewline), "utf-8");
   } catch (e) {
     fail(
       `writing team.md failed AFTER project.md was written: ${errorMessage(e)}`

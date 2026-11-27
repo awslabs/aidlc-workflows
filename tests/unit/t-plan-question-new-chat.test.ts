@@ -47,6 +47,13 @@ const TODAY_GATE = `Stage "${GATE_STAGE}" is waiting for the person's approval, 
 type Json = Record<string, unknown>;
 type Run = { code: number; stdout: string; stderr: string };
 
+// A printed launch's words after `bun`, run in `dir`: a copy tree's own Bun options as printed (the folder is
+// where it runs), then the script by its full path here, and its arguments.
+function launch(dir: string, words: string[]): string[] {
+  const at = words.findIndex((word) => !word.startsWith("--"));
+  return [BUN, ...words.slice(0, at), join(dir, words[at]), ...words.slice(at + 1)];
+}
+
 const created: string[] = [];
 afterEach(() => {
   while (created.length > 0) cleanupTestProject(created.pop());
@@ -175,8 +182,8 @@ class Chat {
   next(args: string[] = []): Json {
     let step = this.folder.json(this.tool("orchestrate", ["next", ...args]), `next ${args.join(" ")}`);
     for (let i = 0; step.kind === "load-steering" && i < 40; i++) {
-      const [, tool, ...rest] = String(step.next).trim().split(/\s+/);
-      step = this.folder.json(this.folder.run([BUN, join(this.folder.dir, tool), ...rest], this.id), "rule part");
+      const [, ...words] = String(step.next).trim().split(/\s+/);
+      step = this.folder.json(this.folder.run(launch(this.folder.dir, words), this.id), "rule part");
     }
     return step;
   }
@@ -318,12 +325,12 @@ describe("t-plan-question-new-chat: the code plan question, words in a chat that
     const answer = String((routing as { continue_command?: string }).continue_command ?? "");
     expect(answer, JSON.stringify(routing)).toContain("next");
     chat.said("1");
-    const [bun, file, ...rest] = answer.trim().split(/\s+/).map((word) => word.replace(/^'|'$/g, ""));
+    const [bun, ...words] = answer.trim().split(/\s+/).map((word) => word.replace(/^'|'$/g, ""));
     expect(bun).toBe("bun");
-    let step = folder.json(folder.run([BUN, join(folder.dir, file), ...rest], chat.id), "the routing answer");
+    let step = folder.json(folder.run(launch(folder.dir, words), chat.id), "the routing answer");
     for (let i = 0; step.kind === "load-steering" && i < 40; i++) {
-      const [, tool, ...more] = String(step.next).trim().split(/\s+/);
-      step = folder.json(folder.run([BUN, join(folder.dir, tool), ...more], chat.id), "rule part");
+      const [, ...more] = String(step.next).trim().split(/\s+/);
+      step = folder.json(folder.run(launch(folder.dir, more), chat.id), "rule part");
     }
     return step;
   }

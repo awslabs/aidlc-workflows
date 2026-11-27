@@ -73,6 +73,13 @@ export interface SwarmCheckpoint {
   /** Under strict, the batch's files or outputs changed after it was checked:
    *  `ask` then offers Request Changes, so the person always has a way on. */
   changed_after_check: boolean;
+  /** The batch was checked with an earlier approved Construction Verification
+   *  Command than the one authorized now, and was not approved under it. */
+  checked_with_earlier_command: boolean;
+  /** The batch is complete and its only errors are the two above: `ask` then
+   *  offers Request Changes alone, so it can be sent back and checked again,
+   *  even after its source landed and its worktrees were removed. */
+  send_back_only: boolean;
   /** Lines for changes kept under a relaxed or off Guard Policy. */
   notices?: string[];
 }
@@ -129,12 +136,14 @@ function snapshot(pd: string, batch: number, requested: string[], stateContent?:
   const acceptsChanges = guardPolicyAcceptsChanges(pd, state);
   const accepted: AcceptedChange[] = [];
   const driftErrors = new Set<string>();
+  const sendBackErrors = new Set<string>();
   const changedAfterCheck = (unit: string, error: string, change: Omit<AcceptedChange, "checkpoint" | "stage" | "unit">) => {
     if (acceptsChanges) {
       accepted.push({ checkpoint: "swarm-batch", stage: STAGE, unit, ...change });
       return;
     }
     driftErrors.add(error);
+    sendBackErrors.add(error);
     errors.push(error);
   };
   const enabled = getField(state, "Construction Checkpoints") === "enabled" &&
@@ -334,9 +343,13 @@ function snapshot(pd: string, batch: number, requested: string[], stateContent?:
   const earlierCommands = new Set(units.filter((unit) => olderCommand.has(unit)).map((unit) => commandSha256s[unit]));
   const keptUnderEarlierCommand = olderCommand.size === units.length && earlierCommands.size === 1 &&
     gateApproved([...earlierCommands][0]);
-  if (olderCommand.size > 0 && !keptUnderEarlierCommand) {
+  const checkedWithEarlierCommand = olderCommand.size > 0 && !keptUnderEarlierCommand;
+  if (checkedWithEarlierCommand) {
     for (const unit of units) {
-      if (olderCommand.has(unit)) errors.push(`${unit}: batch was not checked with the authorized Construction Verification Command.`);
+      if (!olderCommand.has(unit)) continue;
+      const error = `${unit}: batch was not checked with the authorized Construction Verification Command.`;
+      sendBackErrors.add(error);
+      errors.push(error);
     }
   }
   const ready = errors.length === 0;
@@ -344,6 +357,8 @@ function snapshot(pd: string, batch: number, requested: string[], stateContent?:
   const approved = ready && (keptUnderEarlierCommand || gateApproved(verificationCommand?.sha256));
   const result: SwarmCheckpoint = {
     batch, units, fingerprint, ready, approved, human_required: humanRequired, errors, changed_after_check: changedOnly,
+    checked_with_earlier_command: checkedWithEarlierCommand,
+    send_back_only: !ready && errors.every((error) => sendBackErrors.has(error)),
   };
   return { result, root, intent, rows, floor, floors, enabled, verificationCommand, commandSha256s, accepted };
 }
@@ -366,9 +381,8 @@ export function askSwarmCheckpoint(pd: string, batch: number, units: string[], s
   return locked(pd, (selection) => {
     const current = snapshot(pd, batch, units);
     if (!current.enabled) throw new Error("Swarm checkpoints are not enabled for this execution policy.");
-    // A batch whose files changed after it was checked cannot be approved
-    // under strict, but the person can still send it back for changes.
-    if (!current.result.ready && !current.result.changed_after_check) {
+    // A complete batch that cannot be approved can still be sent back.
+    if (!current.result.ready && !current.result.send_back_only) {
       throw new Error(`Swarm checkpoint is not ready: ${current.result.errors.join(" ")}`);
     }
     const notices = recordAcceptedChanges(pd, current.accepted);

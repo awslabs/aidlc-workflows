@@ -74,6 +74,18 @@ const PROJECTED_TRUSTED_NAMESPACE = TRUSTED_NAMESPACE.startsWith("{{")
 const DEFAULT_AIDLC_COMMAND = PROJECTED_INVOKE.startsWith("{{")
   ? ["bun", ".aidlc/tools/aidlc.ts", PROJECTED_TRUSTED_NAMESPACE]
   : [...PROJECTED_INVOKE.trim().split(/\s+/), PROJECTED_TRUSTED_NAMESPACE];
+// The copy launch's Bun options between `bun` and the dispatcher, as the packager
+// spells this tree's launch (copyLaunchPrefix in aidlc-runtime-paths.ts, which
+// this plugin does not load: it runs inside opencode, and loads leaf modules only).
+const LAUNCH_OPTIONS = DEFAULT_AIDLC_COMMAND.slice(1, -2);
+const literalPattern = (word: string): string => word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const LAUNCH_OPTIONS_TEXT = LAUNCH_OPTIONS.length === 0
+  ? ""
+  : `(?:${LAUNCH_OPTIONS.map(literalPattern).join("[ \\t]+")}[ \\t]+)?`;
+// Where a command's script word is: after `bun` and the launch options when it carries them.
+function scriptWordIndex(words: readonly string[]): number {
+  return LAUNCH_OPTIONS.length > 0 && LAUNCH_OPTIONS.every((word, i) => words[1 + i] === word) ? 1 + LAUNCH_OPTIONS.length : 1;
+}
 
 function runCoreHook(
   hookFile: string,
@@ -199,7 +211,7 @@ export type PluginInput = {
   platform?: NodeJS.Platform;
 };
 
-const AIDLC_BUN_PREFIX = /^bun[ \t]+\.aidlc\/(?:tools|hooks)\//;
+const AIDLC_BUN_PREFIX = new RegExp(`^bun[ \\t]+${LAUNCH_OPTIONS_TEXT}\\.aidlc/(?:tools|hooks)/`);
 const AIDLC_ENTRYPOINT = /^\.aidlc\/(tools|hooks)\/([A-Za-z0-9][A-Za-z0-9._-]*\.ts)$/;
 
 // emit.ts replaces the empty array with every packaged .aidlc/{tools,hooks}/*.ts
@@ -210,7 +222,7 @@ const shippedAidlcEntrypoints: ReadonlySet<string> = new Set<string>(
 );
 
 const PROJECTED_BUN_TOOLS = DEFAULT_AIDLC_COMMAND[0] === "bun"
-  ? (DEFAULT_AIDLC_COMMAND[1] ?? "").replace(/aidlc\.ts$/, "")
+  ? (DEFAULT_AIDLC_COMMAND.at(-2) ?? "").replace(/aidlc\.ts$/, "")
   : null;
 
 const PROJECTED_HARNESS_DIR = PROJECTED_BUN_TOOLS?.split("/")[0] ?? null;
@@ -434,7 +446,7 @@ const REQUEST_FILE_STEP =
   `${REQUEST_FILE} in this project, and run the same command with --request-file ${REQUEST_FILE} ` +
   "in place of the request's words. AI-DLC reads the file and removes it.";
 const NEXT_COMMAND = new RegExp(
-  `^(?:aidlc|bun[ \\t]+\\.aidlc/tools/aidlc\\.ts)[ \\t]+${PROJECTED_TRUSTED_NAMESPACE}[ \\t]+orchestrate[ \\t]+next(?:[ \\t]|$)`,
+  `^(?:aidlc|bun[ \\t]+${LAUNCH_OPTIONS_TEXT}\\.aidlc/tools/aidlc\\.ts)[ \\t]+${PROJECTED_TRUSTED_NAMESPACE}[ \\t]+orchestrate[ \\t]+next(?:[ \\t]|$)`,
 );
 const CMD_REQUEST_REFUSAL =
   `A line break or a %NAME% or !NAME! pair cannot reach AI-DLC through cmd.exe. ${REQUEST_FILE_STEP}`;
@@ -506,7 +518,7 @@ function aidlcBashBoundaryViolation(
   if (!AIDLC_BUN_PREFIX.test(command)) return null;
   if (dialect === "strict") return UNKNOWN_SHELL;
   const words = directShellWords(command, dialect);
-  const target = words?.[1]?.match(AIDLC_ENTRYPOINT);
+  const target = words?.[words === null ? 1 : scriptWordIndex(words)]?.match(AIDLC_ENTRYPOINT);
   if (words?.[0] === "bun" && target) {
     const entrypoint = `${target[1]}/${target[2]}`;
     if (allowedEntrypoints.has(entrypoint)) return null;

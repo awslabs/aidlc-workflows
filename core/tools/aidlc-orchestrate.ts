@@ -681,6 +681,7 @@ import {
 } from "./aidlc-utility.ts";
 import { checkboxIsUnitProjection, ledgerStageActivity } from "./aidlc-doctor-bundle.ts";
 import {
+  bunLaunchFlags,
   aidlcDispatcherInvocation,
   aidlcEngineCommand,
   aidlcInvocation,
@@ -3372,7 +3373,7 @@ function toolCommand(toolFile: string, args: string[]): string[] {
     }
     throw new Error(`No compiled dispatcher route for ${toolFile} ${args.join(" ")}`);
   }
-  return [process.execPath, toolPath(toolFile), ...args];
+  return [process.execPath, ...bunLaunchFlags(), toolPath(toolFile), ...args];
 }
 
 // The result of spawning a sibling tool: its exit code plus captured streams.
@@ -4029,8 +4030,10 @@ function scopeConfirmAskDirective(
 // word is considered, not the first, so "Update README.md from docs/spec.pdf"
 // finds the spec. The note offers the step and leaves the judgement with the
 // person: the agent asks them before onboarding something they may have named
-// for another reason.
-const NAMED_DOCUMENT = /(?:^|[\s"'`(<])([\w.][\w./-]*\.(?:pdf|docx))(?=$|[\s"'`)>,;])/gi;
+// for another reason. A file name is letters and digits of any script
+// (docs/Вимоги.docx, docs/需求.pdf), including accents stored as combining
+// marks (\p{M}).
+const NAMED_DOCUMENT = /(?:^|[\s"'`(<])([\p{L}\p{N}_.][\p{L}\p{M}\p{N}_./-]*\.(?:pdf|docx))(?=$|[\s"'`)>,;])/giu;
 
 function onboardableDocument(raw: string, projectDir: string): string | null {
   for (const match of raw.matchAll(NAMED_DOCUMENT)) {
@@ -5657,7 +5660,13 @@ function teamShareOffer(
 // at this HEAD. Null when not due.
 function teamPublishOffer(projectDir: string, unit: string): AskDirective | null {
   if (publishedAtHead(projectDir)) return null;
-  const head = Bun.spawnSync({ cmd: ["git", "rev-parse", "HEAD"], cwd: projectDir, stdout: "pipe", stderr: "ignore" });
+  const head = Bun.spawnSync({
+    cmd: ["git", "rev-parse", "HEAD"],
+    cwd: projectDir,
+    env: process.env,
+    stdout: "pipe",
+    stderr: "ignore",
+  });
   const key = `${unit}-${head.exitCode === 0 ? new TextDecoder().decode(head.stdout).trim().slice(0, 12) : "none"}`;
   const mark = teamHandoverMarkName("publish", key);
   if (handoverOffered(projectDir, mark)) return null;
@@ -6213,6 +6222,7 @@ function localClaimCheckouts(
   const listed = Bun.spawnSync({
     cmd: ["git", "worktree", "list", "--porcelain"],
     cwd: projectDir,
+    env: process.env,
     stdout: "pipe",
     stderr: "ignore",
   });
@@ -18538,8 +18548,7 @@ function finishedUnitNotRedoneHere(
 // Unit's stages itself (claimedCheckoutReopens): back to one the Unit has
 // reached, for that Unit only, with the steps after it, as a solo walk reopens
 // one Unit's step (unitMajorReopen), so the redone work is the person's to
-// approve again. "route" when the walk is on that stage and the Unit has done
-// nothing there yet. Any other move waits until the Unit has landed.
+// approve again. Any other move waits until the Unit has landed.
 function claimedCheckoutMove(
   projectDir: string,
   stateContent: string,
@@ -18615,6 +18624,36 @@ function claimedCheckoutMove(
     const redo = picked ? unitMajorRedo(projectDir, scope, stateContent, cursorSlug, { unit: claimedUnit, stage: target }) : null;
     if (redo?.jump) return jumpStepPrint(redo.message, redo.jump);
     const at = unitStages.indexOf(target);
+    if (flags.change === true) {
+      const beat = teamUnitMajorWalkBeat(projectDir, scope, stateContent, target);
+      const matched = beat === null ? null : unitStepWorkOrPause(projectDir, scope, stateContent, beat, target, claimedUnit);
+      if (matched !== null && !(beat?.step.kind === "work" && beat.step.ledger.receipts.has(claimedUnit))) {
+        if (existsSync(unitParkedPath(projectDir))) return "route";
+        if (matched.owed !== null) {
+          const jump = [
+            "reopen", "--target", target, "--stages", unitStages.slice(at).join(","), "--units", claimedUnit,
+            "--scope", scope, "--via", "change",
+          ];
+          return jumpStepPrint(
+            `Run \`${jumpCommandText(jump)}\` to reopen "${target}" and the steps after it for unit "${claimedUnit}" only, ` +
+              `as the person's change, then tell the person in one line: "Making your change in ${name} for unit ${claimedUnit}." ` +
+              `and re-run \`next\` to continue. When "${target}" comes back for unit "${claimedUnit}", ` +
+              "make the change from their own words; they already said what to change, so do not ask whether to keep, " +
+              "change or redo its files.",
+            jump,
+          );
+        }
+        if (matched.step.kind === "paused") {
+          const resume = `${aidlcToolInvocation("state")} unit resume --stage ${shellArg(target)} --unit ${shellArg(claimedUnit)}`;
+          return {
+            kind: "print",
+            message: `Run \`${resume}\` to pick unit "${claimedUnit}" up where it stopped, ` +
+              `then tell the person in one line: "Picked unit ${claimedUnit} up at ${name}." and re-run \`next\` to continue.`,
+          };
+        }
+        return "route";
+      }
+    }
     // The walk keeps Current Stage on the step it routes the Unit to, until
     // every Unit's row is done and the record moves on past the Unit's stages
     // (to Build and Test, the work's stage). There the Unit's own walk says
@@ -18669,7 +18708,7 @@ function walkStepUnit(step: UnitJumpStep): string | null {
   return step.kind === "paused" ? step.checkpoint.unit : step.kind === "covered" ? null : step.unit;
 }
 
-function unitStepOwedOnlyReceipt(
+function unitStepOwesOnlyRecords(
   projectDir: string,
   scope: string,
   stateContent: string,
@@ -18677,24 +18716,34 @@ function unitStepOwedOnlyReceipt(
   stageSlug: string,
   unit: string,
 ): boolean {
-  const step = walk.step;
-  const paused = unitPausedOnStep(step, stageSlug, unit);
-  if (!paused && (step.kind !== "work" || step.stage.slug !== stageSlug || step.unit !== unit)) return false;
-  const target = walk.block.find((stage) => stage.slug === stageSlug);
-  if (target === undefined) return false;
-  const owed = unitReceiptOnlyStep(
-    projectDir, target, unit, walk.context.recordPrefix, walk.context.codekbCtx,
-    walk.context.kinds?.get(unit) ?? null, unitLedgerFor(projectDir, stageSlug), stateContent, scope, paused,
-  );
-  // Paused with its files all written, a Unit owes only its records (its review
-  // or its completion): picking it up would leave no work to make the person's
-  // change in, so that counts too.
-  return paused ? owed !== null : owed?.receipt === true;
+  const matched = unitStepWorkOrPause(projectDir, scope, stateContent, walk, stageSlug, unit);
+  return matched !== null && matched.owed !== null;
 }
 
 // The walk's step is that Unit's own pause on that stage.
 function unitPausedOnStep(step: UnitJumpStep, stageSlug: string, unit: string): boolean {
   return step.kind === "paused" && step.stage === stageSlug && step.checkpoint.unit === unit;
+}
+
+function unitStepWorkOrPause(
+  projectDir: string,
+  scope: string,
+  stateContent: string,
+  walk: { step: UnitJumpStep; block: GraphStage[]; context: UnitWorkContext },
+  stageSlug: string,
+  unit: string,
+): { step: Extract<UnitJumpStep, { kind: "work" | "paused" }>; owed: UnitRecordStep | null } | null {
+  const step = walk.step;
+  const paused = unitPausedOnStep(step, stageSlug, unit);
+  if (step.kind !== "paused" && step.kind !== "work") return null;
+  if (!paused && (step.kind !== "work" || step.stage.slug !== stageSlug || step.unit !== unit)) return null;
+  const target = walk.block.find((stage) => stage.slug === stageSlug);
+  if (target === undefined) return null;
+  const owed = unitReceiptOnlyStep(
+    projectDir, target, unit, walk.context.recordPrefix, walk.context.codekbCtx,
+    walk.context.kinds?.get(unit) ?? null, unitLedgerFor(projectDir, stageSlug), stateContent, scope, paused,
+  );
+  return { step, owed };
 }
 
 function unitStepChangeReopen(
@@ -18709,7 +18758,7 @@ function unitStepChangeReopen(
   const walk = unitJumpWalk(projectDir, scope, stateContent, true);
   if (
     walk === null ||
-    !(unitPausedOnStep(walk.step, stageSlug, unit) || unitStepOwedOnlyReceipt(projectDir, scope, stateContent, walk, stageSlug, unit))
+    !(unitPausedOnStep(walk.step, stageSlug, unit) || unitStepOwesOnlyRecords(projectDir, scope, stateContent, walk, stageSlug, unit))
   ) return null;
   const reopen = unitMajorReopen(projectDir, scope, stateContent, stageSlug, {
     stage: stageSlug, jumpUnit: unit, everyUnit: false, change: true,
@@ -18794,14 +18843,9 @@ function unitMajorReopen(
         message: `${outside.said} ${outside.nameOne} with \`${entrySkillInvocation()} --stage ${targetSlug} --unit <name>\`.`,
       };
     }
-    // The Unit in flight on the target itself: that is where the walk already is.
-    // Asked for by name with no change, it carries on there; only the person's
-    // change reopens it, once nothing but its completion is left (paused there,
-    // nothing but its records). Paused with work still to do, their change picks
-    // it up, and is made on the step as live.
     const onItsStep = named === inFlight && liveStage === targetSlug;
     const reopens = onItsStep && flags.change === true &&
-      unitStepOwedOnlyReceipt(projectDir, scope, stateContent, walk, targetSlug, named);
+      unitStepOwesOnlyRecords(projectDir, scope, stateContent, walk, targetSlug, named);
     const picksUp = onItsStep && flags.change === true && !reopens && unitPausedOnStep(step, targetSlug, named);
     if (onItsStep && !reopens && !picksUp) return "route";
     // A Unit set aside on the target is picked up where it stopped.
@@ -21533,6 +21577,27 @@ function practicesDraftPostureProblem(pd: string): string | null {
   return promotableTestingPosture(extractMarkdownSection(content, "## Testing Posture")).problem;
 }
 
+function practicesDraftRuleFormProblem(pd: string): string | null {
+  const prefix = engineRelativeRecordDir(pd);
+  if (prefix === null) return null;
+  let draft: string;
+  try {
+    draft = readFileSync(join(pd, prefix, "inception", "practices-discovery", "discovered-rules.md"), "utf-8");
+  } catch {
+    return null;
+  }
+  const { mandated, forbidden } = practicesRulesToAdd(draft, "");
+  const stray = [
+    ...mandated.filter((rule) => !/^ALWAYS\s+\S/.test(rule)).map((rule) => `"${rule}" under ## Mandated`),
+    ...forbidden.filter((rule) => !/^NEVER\s+\S/.test(rule)).map((rule) => `"${rule}" under ## Forbidden`),
+  ];
+  if (stray.length === 0) return null;
+  return (
+    `these list items are not rules: ${stray.join("; ")}. Each list item under ## Mandated is one rule starting ALWAYS, ` +
+    "each under ## Forbidden one starting NEVER, and a heading with no new rule holds only a plain None. line with no list marker."
+  );
+}
+
 // The rules Approve at Practices Discovery adds to the project's rules, said
 // with the gate from the reading practices-promote writes them from; said too
 // when it adds none, so a summary that counts rules the draft does not hold as
@@ -21597,6 +21662,7 @@ function checkStageCompletionEvidence(
   const pipelineEvidence = checkPipelineLinkEvidence(node, slug, pd, approval && retry ? { approval: retry } : {});
   if (!pipelineEvidence.ok) return pipelineEvidence;
 
+  const reportAgain = retry ?? `\`${gateReportCommand(slug, "awaiting-approval")}\` again`;
   if (slug === "practices-discovery") {
     const problem = practicesDraftPostureProblem(pd);
     if (problem !== null) {
@@ -21607,12 +21673,23 @@ function checkStageCompletionEvidence(
           "Once that line is fixed, Practices Discovery comes back for approval.",
       };
     }
+    // At the approved report the person has already answered the gate:
+    // refusing then would lose their Approve.
+    const ruleProblem = approval ? null : practicesDraftRuleFormProblem(pd);
+    if (ruleProblem !== null) {
+      return {
+        ok: false,
+        step: true,
+        message:
+          `Practices Discovery is not ready for approval yet. In discovered-rules.md: ${ruleProblem} ` +
+          `Fix those items, then run ${reportAgain}.`,
+      };
+    }
   }
 
   // Construction walks its Units from Units Generation's units block, so the
   // stage's gate never opens over a block the engine cannot read: the agent
   // writes it, then runs the same report again.
-  const reportAgain = retry ?? `\`${gateReportCommand(slug, "awaiting-approval")}\` again`;
   if (slug === "units-generation") {
     const dag = resolveBoltDag(pd);
     if (dag.state === "malformed") {
@@ -23918,12 +23995,14 @@ function handleTeamBoard(
     const top = Bun.spawnSync({
       cmd: ["git", "rev-parse", "--show-toplevel"],
       cwd: requestedProjectDir,
+      env: process.env,
       stdout: "pipe",
       stderr: "pipe",
     });
     const common = Bun.spawnSync({
       cmd: ["git", "rev-parse", "--git-common-dir"],
       cwd: requestedProjectDir,
+      env: process.env,
       stdout: "pipe",
       stderr: "pipe",
     });

@@ -36,11 +36,12 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import { AIDLC_SRC } from "../harness/fixtures.ts";
 
 const SKILL_PATH = join(AIDLC_SRC, "skills", "aidlc", "SKILL.md");
 const SKILL = readFileSync(SKILL_PATH, "utf-8");
-const ORCHESTRATE_INVOKE = "bun .claude/tools/aidlc.ts engine orchestrate";
+const ORCHESTRATE_INVOKE = withCopyLaunchOptions("bun .claude/tools/aidlc.ts engine orchestrate");
 
 describe("t41 SKILL.md forwarding-loop contract (migrated from t41-jump-flag-validation.sh, plan 15)", () => {
   test("SKILL.md exists and is non-empty (precondition)", () => {

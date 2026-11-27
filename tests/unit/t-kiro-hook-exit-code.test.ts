@@ -15,6 +15,7 @@ import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writ
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import kiro from "../../harness/kiro/manifest.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -22,6 +23,8 @@ setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const KIRO_TREE = join(REPO_ROOT, "dist", "kiro", ".kiro");
 const WINDOWS = process.platform === "win32";
+// The copy tree's dispatcher launch, its two Bun options included.
+const DISPATCHER = withCopyLaunchOptions("bun .kiro/tools/aidlc.ts");
 
 type Agent = { hooks?: Record<string, Array<{ command: string }>> };
 
@@ -60,10 +63,11 @@ describe("a Kiro CLI hook's exit code reaches Kiro as the hook set it", () => {
     expect(suffix).toBe("; exit $LASTEXITCODE");
     const commands = shippedCommands();
     expect(commands.length).toBeGreaterThan(0);
+    const escaped = DISPATCHER.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
     for (const { agent, event, command } of commands) {
       expect(command.endsWith(suffix ?? "\0"), `${agent} ${event}: ${command}`).toBe(true);
       expect(command.slice(0, -(suffix ?? "").length), `${agent} ${event}`)
-        .toMatch(/^bun \.kiro\/tools\/aidlc\.ts engine adapter kiro [a-z-]+(?: [a-z-]+)?$/);
+        .toMatch(new RegExp(`^${escaped} engine adapter kiro [a-z-]+(?: [a-z-]+)?$`));
     }
   });
 
@@ -80,7 +84,7 @@ describe("a Kiro CLI hook's exit code reaches Kiro as the hook set it", () => {
         session_id: "t-kiro-hook-exit-code",
         prompt: skill.replaceAll("$ARGUMENTS", typed),
       }), path);
-      const entry = "bun .kiro/tools/aidlc.ts engine orchestrate next --entry";
+      const entry = `${DISPATCHER} engine orchestrate next --entry`;
       const guard = () => asKiroRuns(shipped("guard-tool-call"), dir, JSON.stringify({
         hook_event_name: "preToolUse",
         cwd: dir,
@@ -104,7 +108,7 @@ describe("a Kiro CLI hook's exit code reaches Kiro as the hook set it", () => {
   });
 
   test("the native release's line keeps the launcher's exit code through the same shell", () => {
-    // The native release ships the same line with `aidlc` for the copy's `bun .kiro/tools/aidlc.ts`;
+    // The native release ships the same line with `aidlc` for the copy's launch of `.kiro/tools/aidlc.ts`;
     // a stand-in launcher that refuses stands for it here (aidlc.cmd on Windows).
     const bin = mkdtempSync(join(tmpdir(), "t-kiro-hook-exit-bin-"));
     try {
@@ -113,7 +117,7 @@ describe("a Kiro CLI hook's exit code reaches Kiro as the hook set it", () => {
       } else {
         writeFileSync(join(bin, "aidlc"), "#!/bin/sh\necho refused >&2\nexit 2\n", { mode: 0o755 });
       }
-      const line = shipped("guard-tool-call").replace("bun .kiro/tools/aidlc.ts", "aidlc");
+      const line = shipped("guard-tool-call").replace(DISPATCHER, "aidlc");
       mkdirSync(join(bin, "proj"));
       const run = asKiroRuns(line, join(bin, "proj"), "{}", `${bin}${delimiter}${process.env.PATH ?? ""}`);
       expect(run.status, `${line}: ${run.stderr}`).toBe(2);

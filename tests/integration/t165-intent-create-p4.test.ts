@@ -1001,6 +1001,24 @@ describe("t164 slugify", () => {
     expect(slugify("")).toMatch(SLUG_RE);
     expect(slugify("!!!")).toMatch(SLUG_RE);
   });
+  test("an accented letter keeps its base letter", () => {
+    expect(slugify("Cálculo de dividendos")).toBe("calculo-de-dividendos");
+    expect(slugify("héllo wörld")).toBe("hello-world");
+    expect(slugify("Ação & Cia")).toBe("acao-cia");
+    expect(slugify("Über Straße")).toBe("uber-stra-e"); // ß has no accent to drop
+  });
+  test("a composed (NFC) and a decomposed (NFD) spelling give one slug", () => {
+    const composed = "Relatório".normalize("NFC");
+    const decomposed = "Relatório".normalize("NFD");
+    expect(composed).not.toBe(decomposed);
+    expect(slugify(decomposed)).toBe(slugify(composed));
+    expect(slugify(composed)).toBe("relatorio");
+  });
+  test("a name with no accents is unchanged by the accent step", () => {
+    expect(slugify("Build the Auth Service")).toBe("build-the-auth-service");
+    expect(slugify("  Fix #123: login!! ")).toBe("fix-123-login");
+    expect(slugify("123 starts with a digit")).toBe("intent-123-starts-with-a-digit");
+  });
 });
 
 // ============================================================
@@ -1545,6 +1563,20 @@ describe("t164 query layer (listSpaces / listIntents + --json)", () => {
     expect(c.status).not.toBe(0);
     expect(c.out).toContain("Did you mean /aidlc --help");
     expect(existsSync(join(proj, "aidlc", "spaces", "h"))).toBe(false);
+  });
+
+  test("space-create refuses a name with no letter or digit to keep, and creates nothing", () => {
+    // slugify falls back to "intent" for these, so each would have created (or
+    // collided with) a space called "intent" the person never asked for.
+    for (const raw of ["   ", "..", "!!!", "日本語", "Привет"]) {
+      const r = util(["space-create", raw]);
+      expect(r.status).not.toBe(0);
+      expect(r.out).toContain("has no letter or digit a space name can keep");
+    }
+    expect(existsSync(join(proj, "aidlc", "spaces", "intent"))).toBe(false);
+    // A name that keeps something is still created under what it keeps.
+    expect(util(["space-create", "日本語 team 2"]).status).toBe(0);
+    expect(existsSync(join(proj, "aidlc", "spaces", "team-2"))).toBe(true);
   });
 
   test("an unknown-space switch fails without inviting creation", () => {

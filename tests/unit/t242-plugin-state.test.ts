@@ -1325,6 +1325,15 @@ describe("t242 transactional sync and ownership-safe prune", () => {
     return { printed, code };
   }
 
+  // A plugin's session-start hook runs in every repository a session opens in.
+  test("sync in a folder that is not an AI-DLC project writes nothing and exits 0", async () => {
+    const folder = temp("aidlc-not-a-project-");
+    withClaudeFixture(TEST_PRO);
+    const { code } = await pluginOutput(["sync", "--project-dir", folder]);
+    expect(code).toBe(0);
+    expect(readdirSync(folder)).toEqual([]);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("sync writes nothing through a data folder that links outside the project and names it", async () => {
     const project = installedProject();
     withClaudeFixture(TEST_PRO);

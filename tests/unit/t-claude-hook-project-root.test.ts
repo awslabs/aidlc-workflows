@@ -21,6 +21,7 @@ import {
   REPO_ROOT,
   seededStateFile,
 } from "../harness/fixtures.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -38,7 +39,7 @@ function settings(channel: "dist" | "dist-release"): Settings {
   return { ...shared, statusLine };
 }
 
-const SOURCE_ENTRY = 'bun "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts"';
+const SOURCE_ENTRY = withCopyLaunchOptions('bun "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts"');
 
 describe("Claude hook project-root anchoring", () => {
   test("every source hook and statusline anchors its entry; native preserves routes without Bun", () => {

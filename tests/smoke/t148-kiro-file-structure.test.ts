@@ -16,6 +16,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readConductorSurface } from "../harness/conductor-skill.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import {
   HARNESS_MATRIX,
   manifestGrantsIdeAgentTools,
@@ -348,7 +349,7 @@ describe("t148 dist/kiro file structure", () => {
       expect(fm).toContain("  rules:");
       expect(fm).toContain("    - capability: shell");
       expect(fm).toContain("      effect: allow");
-      expect(fm).toContain(`        - "bun .kiro/tools/aidlc-*"`);
+      expect(fm).toContain(`        - "${withCopyLaunchOptions("bun .kiro/tools/aidlc-*")}"`);
       expect(fm).toContain("    - capability: fs_read");
       // Engine-owned trees are denied to every persona, the composer too: it
       // writes only its grid proposal, never a scope or the scope grid.
@@ -663,9 +664,17 @@ describe("t148 dist/kiro file structure", () => {
     // namespace, so its persona deny covers the native channel's routes
     // spelled through the copy dispatcher.
     const [copy, native] = channels;
+    // The copy tree starts every AI-DLC launch, a nested one included, with
+    // its two Bun options, so its allow and deny entries carry them too.
+    const copyLaunch = (command: string): string =>
+      command.replaceAll("bun .kiro/tools/", withCopyLaunchOptions("bun .kiro/tools/"));
+    for (const list of ["allows", "refused", "unadmitted", "roleOnly", "hostOnly", "allowed"] as const) {
+      copy[list] = copy[list].map(copyLaunch);
+    }
+    copy.foreign = copyLaunch(copy.foreign);
     const viaDispatcher = (commands: string[]): string[] =>
       commands.filter((command) => command.startsWith("aidlc engine"))
-        .map((command) => command.replaceAll("aidlc engine", "bun .kiro/tools/aidlc.ts engine"));
+        .map((command) => command.replaceAll("aidlc engine", copyLaunch("bun .kiro/tools/aidlc.ts engine")));
     copy.refused.push(...viaDispatcher(native.refused));
     copy.unadmitted.push(...viaDispatcher(native.unadmitted));
     copy.roleOnly.push(...viaDispatcher(native.roleOnly));
@@ -740,7 +749,7 @@ describe("t148 dist/kiro file structure", () => {
     // Settings changes and the per-harness hook entry ask the person even
     // though the tool grant allows the rest (ask outranks allow in Kiro IDE).
     expect(fm).toContain(
-      `      effect: ask\n      match:\n        - "bun .kiro/tools/aidlc.ts engine config set *"\n        - "bun .kiro/tools/aidlc.ts engine adapter *"\n`,
+      `      effect: ask\n      match:\n        - "${withCopyLaunchOptions("bun .kiro/tools/aidlc.ts engine config set *")}"\n        - "${withCopyLaunchOptions("bun .kiro/tools/aidlc.ts engine adapter *")}"\n`,
     );
     // Every delegation target is pre-approved by name, so a routine dispatch
     // does not stop for an approval prompt; toolsSettings.subagent.trustedAgents
@@ -788,7 +797,7 @@ describe("t148 dist/kiro file structure", () => {
       .reduce((worst, effect) => EFFECT_ORDER.indexOf(effect) < EFFECT_ORDER.indexOf(worst) ? effect : worst, "allow");
   }
   const KIRO_IDE_CHANNELS = [
-    { tree: "dist", invoke: "bun .kiro/tools/aidlc.ts" },
+    { tree: "dist", invoke: withCopyLaunchOptions("bun .kiro/tools/aidlc.ts") },
     { tree: "dist-release", invoke: "aidlc" },
   ];
   // A project's own commands as a build or a probe writes them, redirects and
@@ -843,7 +852,7 @@ describe("t148 dist/kiro file structure", () => {
       ROUTES.filter((route) => route.mutationScope === "machine" || route.mutationScope === "project-and-machine")
         .flatMap((route) => route.tool === undefined ? [] : [route.tool]),
     ),
-  ].flatMap((tool) => [`bun .kiro/tools/${tool}`, `bun .kiro/tools/${tool} use 2.10.0`]);
+  ].flatMap((tool) => [`bun .kiro/tools/${tool}`, `bun .kiro/tools/${tool} use 2.10.0`].map(withCopyLaunchOptions));
 
   test("the Kiro IDE conductor runs AI-DLC's own engine commands as printed, in both channels", () => {
     // Every engine command goes through the dispatcher's engine namespace; a
@@ -865,7 +874,7 @@ describe("t148 dist/kiro file structure", () => {
         `${invoke} engine orchestrate report --stage requirements-analysis --result approved --user-input 'Approve (Recommended)'`,
         `${invoke} engine orchestrate continue AbC-12_x`,
         `${invoke} engine log decision --stage delivery-planning --checkpoint verification-command --command-file verification-command.txt --decision "Use this command to verify each completed Unit?" --options "Approve,Request Changes"`,
-        ...(tree === "dist" ? ["bun .kiro/tools/aidlc-utility.ts codekb-path"] : []),
+        ...(tree === "dist" ? [withCopyLaunchOptions("bun .kiro/tools/aidlc-utility.ts codekb-path")] : []),
       ]) {
         expect(kiroShellEffect(fm, command), `${tree} conductor: ${command}`).toBe("allow");
       }
@@ -936,7 +945,7 @@ describe("t148 dist/kiro file structure", () => {
       }
       expect(kiroShellEffect(fm, `${invoke} engine orchestrate next && echo x`), `${tree} conductor: && echo x`).not.toBe("allow");
       const prefixes = [`${invoke} engine log decision --stage s --decision`, `${invoke} engine now`];
-      if (tree === "dist") prefixes.push("bun .kiro/tools/aidlc-utility.ts codekb-path --repo");
+      if (tree === "dist") prefixes.push(withCopyLaunchOptions("bun .kiro/tools/aidlc-utility.ts codekb-path --repo"));
       for (const prefix of prefixes) {
         for (const tail of SHELL_FORM_TAILS) {
           expect(kiroShellEffect(fm, `${prefix} ${tail}`), `${tree} conductor: ${prefix} ${tail}`).not.toBe("allow");
@@ -1008,7 +1017,7 @@ describe("t148 dist/kiro file structure", () => {
       for (const persona of personas) {
         const fm = frontmatter(join(agentsDir, persona));
         const prefixes = [`${invoke} engine now`, `${invoke} engine log answers --stage x --details`];
-        if (tree === "dist") prefixes.push("bun .kiro/tools/aidlc-log.ts answers --stage x --details");
+        if (tree === "dist") prefixes.push(withCopyLaunchOptions("bun .kiro/tools/aidlc-log.ts answers --stage x --details"));
         for (const prefix of prefixes) {
           for (const tail of SHELL_FORM_TAILS) {
             expect(kiroShellEffect(fm, `${prefix} ${tail}`), `${tree} ${persona}: ${prefix} ${tail}`).not.toBe("allow");
@@ -1027,7 +1036,7 @@ describe("t148 dist/kiro file structure", () => {
         // among them) is refused outright, whatever ask Kiro applies to the
         // call; the plain command still runs.
         const admitted = [`${invoke} engine log answers --stage x`, `${invoke} engine now`];
-        if (tree === "dist") admitted.push("bun .kiro/tools/aidlc-log.ts answers --stage x");
+        if (tree === "dist") admitted.push(withCopyLaunchOptions("bun .kiro/tools/aidlc-log.ts answers --stage x"));
         for (const command of admitted) {
           expect(kiroShellEffect(fm, command), `${tree} ${persona}: ${command}`).not.toBe("deny");
           for (const tail of ["$HOME", "`id`", "x > out.txt", "x < in.txt", "x & y", "@(1)", "@{a=1}", "x\ny", "x\r\ny"]) {
@@ -1298,8 +1307,8 @@ describe("t148 dist/kiro file structure", () => {
       .map((h) => h.command)
       .sort();
     expect(subagentCommands).toEqual([
-      `bun .kiro/tools/aidlc.ts engine adapter kiro deliver-stage-rules${kiroManifest.hookCommandSuffix}`,
-      `bun .kiro/tools/aidlc.ts engine adapter kiro plan-approval-guard${kiroManifest.hookCommandSuffix}`,
+      withCopyLaunchOptions(`bun .kiro/tools/aidlc.ts engine adapter kiro deliver-stage-rules${kiroManifest.hookCommandSuffix}`),
+      withCopyLaunchOptions(`bun .kiro/tools/aidlc.ts engine adapter kiro plan-approval-guard${kiroManifest.hookCommandSuffix}`),
     ]);
     const matchers = (hooks.postToolUse ?? []).map((h) => h.matcher).sort();
     expect(matchers).toEqual(["execute_bash", "fs_write", "subagent", "todo_list"]);
@@ -1422,7 +1431,8 @@ describe("t148 dist/kiro file structure", () => {
 
   test("kiro skills carry the kiro tool prefix, never the claude one", () => {
     const skill = readFileSync(join(K, "skills", "aidlc", "SKILL.md"), "utf-8");
-    expect(skill).toContain("bun .kiro/tools/");
+    expect(skill).toContain(withCopyLaunchOptions("bun .kiro/tools/"));
+    expect(skill).not.toContain(withCopyLaunchOptions("bun .claude/tools/"));
     expect(skill).not.toContain("bun .claude/tools/");
     expect(skill).not.toContain("AskUserQuestion");
   });

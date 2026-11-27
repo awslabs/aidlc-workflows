@@ -9,6 +9,7 @@
 // the old pinned candidate and never counts for the new one.
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { chmodSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -76,7 +77,7 @@ describe("a stale approved Unit merge", () => {
         seed,
       );
       expect(reject.status).not.toBe(0);
-      expect(reject.out).toContain("run bun .claude/tools/aidlc.ts unit pin alpha again");
+      expect(reject.out).toContain(`run ${withCopyLaunchOptions("bun .claude/tools/aidlc.ts unit pin alpha again")}`);
 
       const repin = runMergeTool(UNIT, ["pin", "alpha"], seed);
       expect(repin.status, repin.out).toBe(0);
@@ -112,7 +113,7 @@ describe("a stale approved Unit merge", () => {
 
     const repin = runMergeTool(UNIT, ["pin", "alpha"], seed);
     expect(repin.status).not.toBe(0);
-    expect(repin.out).toContain("recover it with bun .claude/tools/aidlc.ts unit land alpha");
+    expect(repin.out).toContain(`recover it with ${withCopyLaunchOptions("bun .claude/tools/aidlc.ts unit land alpha")}`);
     const landed = runMergeTool(UNIT, ["land", "alpha"], seed);
     expect(landed.status, landed.out).toBe(0);
   });

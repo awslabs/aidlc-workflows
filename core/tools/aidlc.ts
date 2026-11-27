@@ -33,6 +33,9 @@ import {
 import { AIDLC_VERSION } from "./aidlc-version.ts";
 import {
   aidlcInvocation,
+  bunLaunchFlags,
+  LAUNCHED_WITHOUT_CONFIG_ENV,
+  launchedWithConfig,
   discoverProjectHarnesses,
   enclosingProjectDir,
   isCompiledExecutable,
@@ -2714,9 +2717,16 @@ function delegatedProjectDir(args: readonly string[]): string | undefined {
   return projectDirFlag(args.slice(0, ourFlagLimit([...args]))).value;
 }
 
+// The child always gets the launch's options, so whether this dispatcher ran
+// without them (and the folder's bunfig.toml with it) is handed down for doctor.
+function withLaunchedWithoutConfig(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const { [LAUNCHED_WITHOUT_CONFIG_ENV]: _inherited, ...rest } = env;
+  return launchedWithConfig() ? rest : { ...rest, [LAUNCHED_WITHOUT_CONFIG_ENV]: "1" };
+}
+
 function runDelegateDev(tool: string, args: string[]): number {
   try {
-    const child = Bun.spawnSync([bunExecutable(), toolPath(tool), ...args], { /* dev-mode bun spawn */
+    const child = Bun.spawnSync([bunExecutable(), ...bunLaunchFlags(), toolPath(tool), ...args], { /* dev-mode bun spawn */
       cwd: process.cwd(),
       // The tool reads the same stdin it would read in the compiled binary,
       // so input piped to the command (`--proposal /dev/stdin`) arrives.
@@ -2724,7 +2734,7 @@ function runDelegateDev(tool: string, args: string[]): number {
       stdout: "inherit",
       stderr: "inherit",
       env: {
-        ...process.env,
+        ...withLaunchedWithoutConfig(process.env),
         ...(delegatedProjectDir(args)
           ? { AIDLC_PROJECT_DIR: delegatedProjectDir(args) }
           : {}),
@@ -2885,7 +2895,7 @@ async function runHook(action: Extract<Action, { type: "hook" }>): Promise<numbe
     const processToken = crypto.randomUUID();
     const dispatcher = isCompiledExecutable()
       ? [process.execPath]
-      : [bunExecutable(), fileURLToPath(import.meta.url)];
+      : [bunExecutable(), ...bunLaunchFlags(), fileURLToPath(import.meta.url)];
     const child = Bun.spawn([
       ...dispatcher,
       "--internal-aidlc-record-human-turn",

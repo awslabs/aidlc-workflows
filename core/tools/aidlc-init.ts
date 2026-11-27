@@ -191,7 +191,11 @@ import {
 } from "./aidlc-utility.ts";
 import {
   aidlcInvocation,
+  BUN_LAUNCH_CONFIG,
+  bunLaunchAt,
+  bunLaunchFlags,
   compiledExecutable,
+  copyLaunchPrefix,
   discoverProjectHarnesses,
   isCompiledExecutable,
   projectedDispatcher,
@@ -2925,12 +2929,15 @@ function configInvocationFor(projectDir = process.cwd()): string {
   const harnessDir = ran === null
     ? configTargetHarnessDir ?? runtimeHarnessDir()
     : basename(dirname(dirname(ran)));
-  const own = `bun ${harnessDir}/tools/aidlc.ts`;
+  // A tool spelled from the project folder, or by its full path, with its tree's launch options.
+  const relativeIn = (root: string) =>
+    `${existsSync(join(root, harnessDir, "tools", BUN_LAUNCH_CONFIG)) ? copyLaunchPrefix(harnessDir) : "bun"} ${harnessDir}/tools/aidlc.ts`;
+  const full = (tool: string) => `${bunLaunchAt(dirname(tool))} ${quoteCommandArgument(tool)}`;
   const toolIn = (root: string) => join(root, harnessDir, "tools", "aidlc.ts");
   if (ran === null || sameFile(ran, toolIn(projectDir))) {
-    return ranFromProject(projectDir) ? own : `bun ${quoteCommandArgument(toolIn(projectDir))}`;
+    return ranFromProject(projectDir) ? relativeIn(projectDir) : full(toolIn(projectDir));
   }
-  return sameFile(ran, toolIn(process.cwd())) ? own : `bun ${quoteCommandArgument(ran)}`;
+  return sameFile(ran, toolIn(process.cwd())) ? relativeIn(process.cwd()) : full(ran);
 }
 
 // The copied tool that handed this config run over, if one did.
@@ -6974,7 +6981,7 @@ export function runnerGenerator(
   }
   const tool = join(stagedHarness, "tools", "aidlc-runner-gen.ts");
   if (!existsSync(tool)) return null;
-  return { release, commands: [[process.execPath, tool, "write"], [process.execPath, tool, "scopes"]] };
+  return { release, commands: [[process.execPath, ...bunLaunchFlags(), tool, "write"], [process.execPath, ...bunLaunchFlags(), tool, "scopes"]] };
 }
 
 // What the pinned release's generator said when it could not write the runner
@@ -7745,7 +7752,7 @@ function kiroUpgradedNote(count: number, harnessDir: string, force: string): str
 }
 
 // When the release changes what such a file allows, config puts the release's
-// file back where Kiro upgrades it again by itself (kiroAutoUpgradeOn) and
+// file back where Kiro upgrades it again by itself (kiroAutoUpgradeSetting) and
 // Kiro's copy is its untouched upgrade of the file AI-DLC wrote
 // (kiroUpgradeOfOwnFile); otherwise it keeps Kiro's copy and says what that
 // leaves.
@@ -7817,18 +7824,21 @@ function modelsRunExplains(context: ModelsMutationContext): Set<string> {
 }
 
 // Whether Kiro puts an agent file back into its 3.0 format by itself at its
-// next 3.0 start: `chat.enableAutoAgentUpgrade` true in the person's own Kiro
-// settings, read and never written (kiro-cli 2.29.0: without it, Kiro asks
-// first or runs its default agent in the file's place). A project's
-// settings/cli.json would win, but a refresh stops on a change to AI-DLC's
-// copy and leaves one without the setting. Under the test runner only a
-// KIRO_HOME the test names is read, never the host's ~/.kiro.
-function kiroAutoUpgradeOn(env: NodeJS.ProcessEnv = process.env): boolean {
+// next 3.0 start: `chat.enableAutoAgentUpgrade` in the person's own Kiro
+// settings, read and never written; undefined when it is not set, which
+// kiro-cli 2.37 and later read as on (kiro-cli 2.29.0 asked first). A file
+// that does not parse reads as off. A project's settings/cli.json would win,
+// but a refresh stops on a change to AI-DLC's copy and leaves one without the
+// setting. Under the test runner only a KIRO_HOME the test names is read,
+// never the host's ~/.kiro.
+function kiroAutoUpgradeSetting(env: NodeJS.ProcessEnv = process.env): boolean | undefined {
   const home = kiroEnv(env).KIRO_HOME;
   if (!home && env.AIDLC_TEST_NAME !== undefined) return false;
+  const path = join(home || join(homedir(), ".kiro"), "settings", "cli.json");
+  if (!existsSync(path)) return undefined;
   try {
-    const path = join(home || join(homedir(), ".kiro"), "settings", "cli.json");
-    return JSON.parse(readFileSync(path, "utf-8"))?.["chat.enableAutoAgentUpgrade"] === true;
+    const value = JSON.parse(readFileSync(path, "utf-8"))?.["chat.enableAutoAgentUpgrade"];
+    return value === true || value === false ? value : undefined;
   } catch {
     return false;
   }
@@ -8835,7 +8845,7 @@ function runConfigChild(
   const commandArgs = isCompiledExecutable()
     ? ["config", ...typedArgs]
     : [fileURLToPath(import.meta.url), "config", ...typedArgs];
-  const result = spawnSync(process.execPath, commandArgs, {
+  const result = spawnSync(process.execPath, [...bunLaunchFlags(), ...commandArgs], {
     cwd,
     env,
     encoding: "utf-8",
@@ -10455,7 +10465,10 @@ function planManagedFiles(
           continue;
         }
         const known = [priorHash, ...(descriptor.legacyManagedFileHashes?.[rel] ?? [])];
-        if (!kiroAutoUpgradeOn() || priorHash === undefined || !kiroUpgradeOfOwnFile(projectDir, rel, known, true)) {
+        // A copy Kiro did not stamp is proved only by the fields Kiro kept, so it
+        // goes back only on an explicit true.
+        const setting = kiroAutoUpgradeSetting();
+        if (setting === false || priorHash === undefined || !kiroUpgradeOfOwnFile(projectDir, rel, known, setting === true)) {
           actions.push({ path: rel, action: "preserve", detail: KIRO_KEPT_CHANGED_DETAIL });
           continue;
         }
@@ -12814,10 +12827,11 @@ function treesLeftBehindLines(
   // and an older tool may not read its files. Its --harness names are that
   // release's.
   const writtenTool = join(projectDir, written.harnessDir, "tools", "aidlc.ts");
+  const writtenTools = dirname(writtenTool);
   const tool = source.copyChannel
-    ? `bun ${
-      quoteCommandArgument(ranFromProject(projectDir) ? `${written.harnessDir}/tools/aidlc.ts` : writtenTool)
-    }`
+    ? ranFromProject(projectDir)
+      ? `${existsSync(join(writtenTools, BUN_LAUNCH_CONFIG)) ? copyLaunchPrefix(written.harnessDir) : "bun"} ${written.harnessDir}/tools/aidlc.ts`
+      : `${bunLaunchAt(writtenTools)} ${quoteCommandArgument(writtenTool)}`
     : configInvocationFor(projectDir);
   const command = (args: string): string => `\`${tool} config ${args}${projectTarget(projectDir)}\``;
   return behind.map((tree) => {
@@ -14105,7 +14119,7 @@ export async function main(
       }
       const args = stripVerb([...input]);
       if (downloadCleanup && !args.includes("--download")) args.push("--download");
-      const handed = spawnSync(process.execPath, [newerTool, "config", ...args], {
+      const handed = spawnSync(process.execPath, [...bunLaunchFlags(), newerTool, "config", ...args], {
         cwd: process.cwd(),
         env: { ...process.env, AIDLC_CONFIG_HANDOFF: ranTool, AIDLC_PROJECT_DIR: projectDir },
         stdio: "inherit",

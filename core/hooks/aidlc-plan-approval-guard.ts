@@ -167,7 +167,7 @@ import {
 } from "../tools/aidlc-lock-line.ts";
 import { mainCheckoutChangeStep, personTurnStands } from "../tools/aidlc-message-store.ts";
 import type { planApprovalAskState } from "../tools/aidlc-plan-approval-ask.ts";
-import { aidlcToolInvocation, quoteCommandArgument, runtimeHarnessName } from "../tools/aidlc-runtime-paths.ts";
+import { aidlcToolInvocation, bunLaunchOptionWords, quoteCommandArgument, runtimeHarnessName, singleOrSyncUploadLinked } from "../tools/aidlc-runtime-paths.ts";
 import { claimedCheckoutReopens } from "../tools/aidlc-unit-landing.ts";
 import { RECORDABLE_PROJECT_BYPASSES } from "../tools/aidlc-settings.ts";
 import {
@@ -1130,7 +1130,7 @@ function isRepliedPlanFileTarget(projectDir: string, target: string, editable: s
     if (!editable.some((file) => normalizeDriveLetter(resolve(file)) === normalizeDriveLetter(targetAbs))) return false;
     assertNoSymlinkInChainOrThrow(realpathSync(projectLexical), relative(projectLexical, targetAbs));
     const existing = lstatSync(targetAbs, { throwIfNoEntry: false });
-    return existing === undefined || (existing.isFile() && existing.nlink === 1);
+    return existing === undefined || (existing.isFile() && singleOrSyncUploadLinked(targetAbs, existing));
   } catch {
     return false;
   }
@@ -1202,7 +1202,7 @@ async function landingClashFilesOnly(projectDir: string, targets: string[], unit
       if (!files.has(inside.split(sep).join("/"))) return false;
       assertNoSymlinkInChainOrThrow(projectReal, inside);
       const existing = lstatSync(targetAbs, { throwIfNoEntry: false });
-      return existing === undefined || (existing.isFile() && existing.nlink === 1);
+      return existing === undefined || (existing.isFile() && singleOrSyncUploadLinked(targetAbs, existing));
     });
   } catch {
     return false;
@@ -1239,7 +1239,7 @@ function isStageRecordOutput(projectDir: string, target: string): boolean {
     }
     assertNoSymlinkInChainOrThrow(realpathSync(projectLexical), relative(projectLexical, targetAbs));
     const existing = lstatSync(targetAbs, { throwIfNoEntry: false });
-    return existing === undefined || (existing.isFile() && existing.nlink === 1);
+    return existing === undefined || (existing.isFile() && singleOrSyncUploadLinked(targetAbs, existing));
   } catch {
     return false;
   }
@@ -1258,7 +1258,7 @@ function isEngineTextTarget(projectDir: string, target: string): boolean {
       return false;
     }
     const existing = lstatSync(resolve(target), { throwIfNoEntry: false });
-    return existing === undefined || (existing.isFile() && existing.nlink === 1);
+    return existing === undefined || (existing.isFile() && singleOrSyncUploadLinked(resolve(target), existing));
   } catch {
     return false;
   }
@@ -1274,7 +1274,7 @@ function isRequestTextTarget(projectDir: string, target: string): boolean {
     if (normalizeDriveLetter(dirname(resolve(target))) !== normalizeDriveLetter(resolve(folder))) return false;
     if (!isTrustedRecordTarget(projectDir, target, folder)) return false;
     const existing = lstatSync(resolve(target), { throwIfNoEntry: false });
-    return existing === undefined || (existing.isFile() && existing.nlink === 1);
+    return existing === undefined || (existing.isFile() && singleOrSyncUploadLinked(resolve(target), existing));
   } catch {
     return false;
   }
@@ -1289,7 +1289,7 @@ function isComposerProposalTarget(projectDir: string, target: string): boolean {
     }
     assertNoSymlinkInChainOrThrow(realpathSync(projectLexical), relative(projectLexical, targetAbs));
     const existing = lstatSync(targetAbs, { throwIfNoEntry: false });
-    return existing === undefined || (existing.isFile() && existing.nlink === 1);
+    return existing === undefined || (existing.isFile() && singleOrSyncUploadLinked(targetAbs, existing));
   } catch {
     return false;
   }
@@ -1752,7 +1752,11 @@ function installedEngineArgs(
       arg === "-r" || arg === "--require" || arg === "--preload" ||
       arg.startsWith("--require=") || arg.startsWith("--preload="))
   ) return null;
-  const scriptIndex = args[0] === "run" ? 1 : 0;
+  // A copy launch's two Bun options read as the launch without them, when the
+  // config file is the install's own: another file could preload code.
+  const options = bunLaunchOptionWords(args, 0);
+  if (options > 0 && !isTrustedToolFile(projectDir, cwd, args[0].slice("--config=".length))) return null;
+  const scriptIndex = options + (args[options] === "run" ? 1 : 0);
   const script = args[scriptIndex];
   if (!script || script.startsWith("-") || !isTrustedToolFile(projectDir, cwd, script)) return null;
   const stem = basename(isAbsolute(script) ? resolve(script) : resolve(cwd, script));
@@ -1770,10 +1774,14 @@ function isSelectedGuardRestartContinuation(
   marker: ActiveDirectiveMarker | null,
 ): boolean {
   const continuation = parseGuardRestartContinuationCommand(command, { harnessDir: harnessDir() });
-  // The source spelling names a script: it must be the installed tool itself.
-  const script = command.split(" ")[1] ?? "";
+  // The source spelling names a script: it must be the installed tool itself,
+  // and a copy launch's config file the install's own.
+  const words = command.split(" ");
+  const options = bunLaunchOptionWords(words, 1);
+  const script = words[1 + options] ?? "";
   if (
     continuation === null ||
+    (options > 0 && !isTrustedToolFile(projectDir, cwd, words[1].slice("--config=".length))) ||
     (command.startsWith("bun ") && !isTrustedToolFile(projectDir, cwd, script)) ||
     marker?.version !== 2 ||
     marker.kind !== "ask" ||

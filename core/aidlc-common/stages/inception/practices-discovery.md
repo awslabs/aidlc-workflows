@@ -167,10 +167,6 @@ question text as much as to the options:
   connect before the real features go in."** and offer the yes/no choice
   beneath it. Later mentions need no gloss.
 
-Log every interview question with `aidlc-log.ts decision` before presenting it
-and every interview answer with `aidlc-log.ts answer` after the response,
-following the standard non-gate question flow.
-
 ### Step 5: Lead Integration
 
 Delegate a final integration turn to `aidlc-pipeline-deploy-agent`. Pass the

@@ -749,6 +749,7 @@ export function assertTransactionFilesystem(path: string): void {
         fsyncSync(descriptor);
         const opened = fstatSync(descriptor);
         const current = lstatSync(candidate);
+        // No sync-upload allowance: a second link on a file the probe just made means the filesystem cannot be trusted.
         if (opened.dev !== current.dev || opened.ino !== current.ino || current.nlink !== 1) {
           throw new Error("the open descriptor does not identify the published file");
         }

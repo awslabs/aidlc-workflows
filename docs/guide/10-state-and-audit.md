@@ -197,7 +197,7 @@ Events are organized into 27 categories:
 - **Every stage start and completion** is logged with `STAGE_STARTED` and `STAGE_COMPLETED` events
 - **Every file the agent writes or edits with its file tools** in the intent's record dir or the space's `codekb/` (except the `audit/` shards themselves) is logged by the write-audit-log hook; a file written by a shell command is not
 - **Every approval gate decision** (approve, request changes, accept-as-is) is logged
-- **Every question answer** you provide is recorded
+- **Every question answer** you provide is recorded, in the stage's questions file or the audit log
 - **Every subagent completion** is logged by the log-subagent hook, and every helper sent is logged when it is sent
 - **Every error and recovery** is logged
 

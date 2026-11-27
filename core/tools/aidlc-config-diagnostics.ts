@@ -66,6 +66,8 @@ import {
 } from "./aidlc-distribution.ts";
 import {
   aidlcInvocation,
+  bunLaunchFor,
+  copyLaunchPrefix,
   discoverProjectHarnesses,
   inHostShell,
   kiroTreeLayout,
@@ -224,7 +226,7 @@ export type ConfigDiagnosticOverrides = {
 function invocationForHarness(harnessDir: string): string {
   return aidlcInvocation() === "aidlc"
     ? "aidlc"
-    : `bun ${harnessDir}/tools/aidlc.ts`;
+    : `${bunLaunchFor(harnessDir)} ${harnessDir}/tools/aidlc.ts`;
 }
 
 // The fixes doctor and config print are written for the project folder ("run
@@ -2359,15 +2361,19 @@ export function completionInstruction(
   harnessDir: string,
   shell: Exclude<CompletionShell, "none">,
 ): string {
-  const usesBun = runtimeCommandFiles(projectDir, harnessDir).some((file) => {
-    if (file.replaceAll("\\", "/").includes("/skills/")) return false;
+  // The tree's files name its launch, with a copy launch's two Bun options or (an older tree) without.
+  const launches = runtimeCommandFiles(projectDir, harnessDir).flatMap((file) => {
+    if (file.replaceAll("\\", "/").includes("/skills/")) return [];
     try {
-      return readFileSync(file, "utf-8").includes(`bun ${harnessDir}/tools/aidlc.ts`);
+      const text = readFileSync(file, "utf-8");
+      const flagged = `${copyLaunchPrefix(harnessDir)} ${harnessDir}/tools/aidlc.ts`;
+      if (text.includes(flagged)) return [flagged];
+      return text.includes(`bun ${harnessDir}/tools/aidlc.ts`) ? [`bun ${harnessDir}/tools/aidlc.ts`] : [];
     } catch {
-      return false;
+      return [];
     }
   });
-  const invoke = usesBun ? `bun ${harnessDir}/tools/aidlc.ts` : "aidlc";
+  const invoke = launches[0] ?? "aidlc";
   if (shell === "fish") {
     return `${invoke} system completions fish | source`;
   }

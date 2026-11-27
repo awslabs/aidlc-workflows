@@ -377,9 +377,12 @@ class Journey {
     const step = json(this.tool("orchestrate", ["next", ...prompt.replace(/^\/aidlc\s+/, "").split(/\s+/)]));
     const named = /Run `([^`]+)` to update the configuration/.exec(String(step.message))?.[1];
     expect(named, JSON.stringify(step)).toBeDefined();
-    const [bun, tool, ...args] = named!.split(/\s+/);
+    const [bun, ...words] = named!.split(/\s+/);
     expect(bun, named).toBe("bun");
-    return succeeded(this.command([BUN, join(this.dir, tool), ...args]), `Run the setter next names: ${named}`);
+    // The copy tree's two Bun options come first; they run with it, from the project.
+    const options = words.slice(0, words.findIndex((word) => !word.startsWith("--")));
+    const [tool, ...args] = words.slice(options.length);
+    return succeeded(this.command([BUN, ...options, join(this.dir, tool), ...args]), `Run the setter next names: ${named}`);
   }
 
   pick(question: string, labels: string[], choice: string): void {
