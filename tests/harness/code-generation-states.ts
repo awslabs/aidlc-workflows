@@ -43,6 +43,7 @@ import {
   writeBaselineSourceSnapshot,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { writeSessionPidEntry } from "../../dist/copilot/.aidlc/tools/aidlc-lib.ts";
+import { withCopyLaunchOptions } from "./copy-launch.ts";
 
 /** Worktree fixtures a state built; the sweep cleans them with cleanupWorktreeFixtures(). */
 const worktreeFixtures: string[] = [];
@@ -127,13 +128,13 @@ export function stageDir(proj: string, unit: string | null = null): string {
   return join(seededRecordDir(proj), "construction", ...(unit ? [unit] : []), "code-generation");
 }
 
-export function writePlan(proj: string, extra = "", unit: string | null = null): void {
+export function writePlan(proj: string, extra = "", unit: string | null = null, contract = resolveTestingPosture(proj)): void {
   mkdirSync(stageDir(proj, unit), { recursive: true });
   writeFileSync(
     join(stageDir(proj, unit), "code-generation-plan.md"),
     "# Code Generation Plan\n\n## Summary\n\n- Builds: slugify for titles\n- Touches: src/slugify.ts\n" +
       `- Tests: 3 unit tests\n\n## Steps\n\n- [ ] Step 1: write slugify\n${extra}\n` +
-      renderTestingContract(resolveTestingPosture(proj)),
+      renderTestingContract(contract),
     "utf-8",
   );
   writeFileSync(
@@ -220,7 +221,7 @@ export function latestHumanTurnWords(proj: string): string | null {
 /** Every engine command a text names in backticks, in the tree's own spelling. */
 export function namedCommands(text: string): string[] {
   const found: string[] = [];
-  for (const match of text.matchAll(/`((?:bun \.[A-Za-z-]+\/tools\/[^`]+|aidlc [^`]+))`/g)) {
+  for (const match of text.matchAll(/`((?:bun (?:--config=\S+ --no-env-file )?\.[A-Za-z-]+\/tools\/[^`]+|aidlc [^`]+))`/g)) {
     const command = match[1].trim();
     if (!found.includes(command)) found.push(command);
   }
@@ -508,6 +509,23 @@ export const STATES: StateBuilder[] = [
         throw new Error(`expected the plan asked about again, got ${JSON.stringify(step)}`);
       }
       return { proj, session: SESSION, approved: false, how: "approved, then the plan edited under strict: next asks again" };
+    },
+  },
+  {
+    id: "S13", name: "Guard Policy strict, the Testing Contract moved after approval",
+    build: () => {
+      const proj = createCodeGenerationProject("strict");
+      next(proj);
+      askOpen(proj);
+      approve(proj);
+      next(proj);
+      // A practice added to the posture, as a teammate's merged change brings it.
+      const memory = join(proj, "aidlc", "spaces", "default", "memory", "project.md");
+      const text = readFileSync(memory, "utf-8");
+      if (!text.includes("## Testing Posture\n")) throw new Error("project.md has no Testing Posture section");
+      writeFileSync(memory, text.replace("## Testing Posture\n",
+        "## Testing Posture\n\n- Run the unit tests of each changed module before reporting a build.\n"), "utf-8");
+      return { proj, session: SESSION, approved: false, how: "approved and building, then a Testing Posture line added under strict" };
     },
   },
   {
@@ -989,7 +1007,7 @@ export function copilotRuns(proj: string, command: string): { refused: string | 
 }
 
 export function copilotStep(proj: string, args: string): Step {
-  const ran = copilotRuns(proj, `bun .aidlc/tools/aidlc-orchestrate.ts ${args}`);
+  const ran = copilotRuns(proj, withCopyLaunchOptions(`bun .aidlc/tools/aidlc-orchestrate.ts ${args}`));
   expect(ran.refused).toBeNull();
   return JSON.parse(ran.stdout.trim()) as Step;
 }

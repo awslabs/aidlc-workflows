@@ -61,7 +61,7 @@ diagnostic and lifecycle routes.
 | `/aidlc --stage <slug\|#>` | Jump to a specific stage |
 | `/aidlc --stage <slug> --single` | Run one stage in isolation, without advancing your workflow |
 | `/aidlc --phase <name\|#>` | Jump to the start of a phase |
-| `/aidlc --scope <name>` | Change the active scope |
+| `/aidlc --scope <name>` | Change the active scope; to generate a start command with a scope, settings and stage changes, use the [Interactive Composer](05-1-interactive-composer.md) |
 | `/aidlc --depth <level>` | Override depth level (minimal, standard, comprehensive) |
 | `/aidlc --test-strategy <level>` | Override test strategy (minimal, standard, comprehensive) |
 | `/aidlc --project-type <type>` | Say whether this work is a new project or existing code (greenfield, brownfield); mid-workflow it scans again and runs Reverse Engineering for existing code |
@@ -519,7 +519,7 @@ switching examples, and what is committed.
 
 ### `/aidlc knowledge <verb>` — Index and read your own documents
 
-Put your documents (PDFs, Word and Excel files, Markdown, plain text, CSV) under
+Put your documents (PDFs, Word and Excel files, HTML pages, Markdown, plain text, CSV) under
 `aidlc/spaces/<space>/knowledge/documents/`, organised however you like, then index
 them so agents can cite them instead of guessing.
 
@@ -543,7 +543,9 @@ are worth reading, because "no output changed" and "nothing happened" are differ
 results.
 
 **Batch limits.** A pathless `onboard` and `sync` apply the 20-document/256 MiB
-limits to new, changed, or retrying work, not to already-current catalog rows. An
+limits to new and changed work, not to already-current catalog rows. Rows `sync`
+reads again unchanged (an extractor installed, a reader added) take the room the
+limits leave, and the rest are read by the following runs of `sync`. An
 already-reconciled catalog can be larger. When a work batch exceeds a cap, onboard
 the affected files individually before syncing again. Nothing is indexed when a cap
 is hit, so the refusal is never half-finished. A single document over 32 MiB is
@@ -562,14 +564,19 @@ document). Scoping to an intent that has finished is refused unless you add
 (`.docx`) and Excel (`.xlsx`) files are read by AI-DLC itself, with nothing to
 install: a Word file's paragraphs and tables, and every sheet of a workbook as a
 table, with each formula's last saved result (dates and numbers as the file stores
-them; images, charts, comments and headers are not read). A project can configure
+them; images, charts, comments and headers are not read). HTML pages (`.html`,
+`.htm`) are read by AI-DLC itself too: their text, without markup, styles, scripts or
+embedded images, and their tables as tables, read as UTF-8 when the bytes are UTF-8,
+otherwise in the charset the page declares, otherwise as Windows-1252. To keep a
+page's markup instead (a UI mockup), add a copy of it saved with a `.txt` name. A project can configure
 its own extractor for any type, and a configured one wins. PDF gets a default
 extractor (`pdftotext`) if none is configured; any other type is catalogued and
 citable as `unsupported_type`; after configuring an extractor, run `sync` to retry
 unchanged rows of that detected type. A Word or Excel file AI-DLC cannot open (one
 that is password-protected, damaged, or in the older `.doc` or `.xls` format saved
 under the new name) is catalogued as `extraction_failed` with the reason. A Word or
-Excel file added before AI-DLC read them gets its text on the next `sync`. If a CONFIGURED extractor is not installed the
+Excel file or an HTML page added before AI-DLC read them gets its text on the next
+`sync` (up to 20 a run, see Batch limits). If a CONFIGURED extractor is not installed the
 document is catalogued as `extractor_unavailable` — visible in `list`, and fixed by
 installing the tool and running `/aidlc knowledge sync`. Re-running `onboard` on the
 same unchanged path reports `already` and does NOT retry extraction — only `sync`
@@ -577,7 +584,7 @@ re-probes rows in this state. Nothing is silently skipped.
 
 **Extraction is capped**: 50 pages for PDF with the default extractor
 (`pdftotext -l 50`, then a check for a page 51) and 200,000
-characters of extractor output (a Word or Excel file's text too). Past a cap the text is cut and the row records
+characters of extractor output (a Word, Excel or HTML file's text too). Past a cap the text is cut and the row records
 `truncated` — `show` prints a `truncated  yes` line above the content (`after
 page 50` when the page cap cut it) and the `--json` payload carries the flag
 inside `extraction`, with `pages_kept` for a page cut. Treat a truncated
@@ -689,7 +696,9 @@ Unit gate rhythm is used. Claims are refused until dependencies and any required
 walking skeleton are complete, and a checkout with a live claim routes only its
 stamped Unit. While main is back at Units Generation changing the Unit plan, a
 claim still goes ahead, and its result says once that if the approved plan
-changes that Unit's own entry, pin asks for a rebase onto main.
+changes that Unit's own entry, pin asks for a rebase onto main. A step you
+skipped on main for every Unit before this claim stays skipped for the claimed
+Unit: its walk goes on past it, and the merge question says it was skipped.
 
 ### `/aidlc unit adopt <unit>` — Adopt a teammate's live claim
 
@@ -808,8 +817,13 @@ Run from unscoped main:
 Pinning fetches the claim ref, records its exact OID/generation and a fresh pin
 transaction ID, and reads
 artifacts, Unit receipts, team gates, reviewer verdicts, Plan Approval, state,
-and audit-shard transport directly from that commit. It does not merge or create
-a worktree. The claim-bound team shard may carry only that Unit's attempt
+and audit-shard transport directly from that commit. It does not merge into main
+or create a worktree; it tries the merge with `git merge-tree`, and a candidate
+that conflicts with main is refused before the merge question, with the files
+and the step for the Unit's owner (merge main in the claimed checkout, resolve,
+publish again). When main here has commits the remote's integration branch does
+not have yet (a landing not pushed), the step says to push main first, since
+the owner's merge reads the remote. The claim-bound team shard may carry only that Unit's attempt
 receipts; main-authority rows, another Unit's record/receipt paths, extra shards,
 and other workflow-record paths are refused. Pin also compares the candidate
 base's entry for the Unit (its kind and dependencies) and the active per-Unit
@@ -1003,9 +1017,10 @@ When a workflow has issues, `--doctor` also lists the structured findings in its
 | Keyword overlap | A hint more than one plan has is a warning, naming the plans (the plan proposal lists it under each) |
 | Rule drift | Surfaces live team/project headings that overlap populated org policy for contradiction review, and reports lifecycle-stale overlaps in a separate stale-suppressed row (advisory — never fails) |
 | Paired sensor coverage | Confirms every rule that names a paired Sensor resolves to a Sensor some stage actually fires (advisory — never fails) |
-| Workspace records | Reports uncommitted changes under `aidlc/` so shared records are not left only in one checkout, leaving out `aidlc/.aidlc-request-text/`, the forwarding latch earlier Kiro CLI (V2) releases wrote as `aidlc/.aidlc-forwarding-latch`, and an audit log whose only change is the entries doctor writes about its own runs (when those are all there is, the row passes and says so); while git tracks or shows a request file or the latch, or holds a removed one its ignore rules do not cover, it gives no commit command, since `git add aidlc/` would take your request in (advisory - never fails) |
+| Workspace records | Reports uncommitted changes under `aidlc/` so shared records are not left only in one checkout, leaving out `aidlc/.aidlc-request-text/`, the forwarding latch earlier Kiro CLI (V2) releases wrote as `aidlc/.aidlc-forwarding-latch`, and an audit log whose only change is the entries doctor writes about its own runs (when those are all there is, the row passes and says so); while git tracks or shows a request file or the latch, or holds a removed one its ignore rules do not cover, it gives no commit command, since `git add aidlc/` would take your request in; while a Setup git does not track row stands, it gives no command either, since `git add aidlc/` alone would leave that setup out (advisory - never fails) |
+| Setup git does not track | One row for each installed harness while git neither holds nor ignores its install record and lists files AI-DLC wrote for it: the line `aidlc config` says once when it first sets that harness up, naming the folders and files to commit so teammates who use that tool get the same setup. Silent while a request file or the forwarding latch keeps the records row from giving a command (advisory - never fails) |
 | Request folder | Only when git can see files in `aidlc/.aidlc-request-text/`: they hold your own requests, so it names the steps, never running them: add the line `aidlc/.aidlc-request-text/` to the project folder's `.gitignore` when the folder is not ignored yet (and check no later rule of yours un-ignores it), and, in the project folder, `git rm --cached -r -f -- aidlc/.aidlc-request-text/` (the files stay) when git tracks them, then commit and push the removal and the `.gitignore` change (a refresh may have left it uncommitted) so teammates' clones drop it too; a removal not committed yet keeps the row (advisory - never fails) |
-| Forwarding latch | Only when git can see `aidlc/.aidlc-forwarding-latch`, a file earlier Kiro CLI (V2) releases left: it holds the words of a request of yours (the first call the hook named for it), and a `git add aidlc/` before the `.gitignore` part listed it took it in (the hook now writes inside `aidlc/.aidlc-sessions/`): the same steps as the request folder, for that one file: the ignore line `aidlc/.aidlc-forwarding-latch` when it is not ignored yet, `git rm --cached -f -- aidlc/.aidlc-forwarding-latch` (the file stays) when git tracks it, then commit and push (advisory - never fails) |
+| Forwarding latch | Only when git can see `aidlc/.aidlc-forwarding-latch`, a file earlier Kiro CLI (V2) releases left: it holds the words of a request of yours (the first call the hook named for it), and a `git add aidlc/` before the `.gitignore` part listed it took it in (the hook no longer writes it): the same steps as the request folder, for that one file: the ignore line `aidlc/.aidlc-forwarding-latch` when it is not ignored yet, `git rm --cached -f -- aidlc/.aidlc-forwarding-latch` (the file stays) when git tracks it, then commit and push (advisory - never fails) |
 | Declared workspace repos | When `repos.json` exists, compares its declared set with the sibling repos runtime discovery sees on disk (advisory - never fails) |
 | Workspace gitignore | When `repos.json` exists, checks that the managed `.gitignore` block matches the declared repo set (advisory - never fails) |
 
@@ -1644,7 +1659,9 @@ section says `Mode: strict`, an explicit `relaxed` or `off` refuses the whole
 command, including any other supplied settings, and names that file: edit the
 memory line there to relax it for everyone. An explicit strict setting is still
 allowed. At creation the flag can be given with the scope
-(`/aidlc --scope poc --guard-policy strict "..."`).
+(`/aidlc --scope poc --guard-policy strict "..."`); under a memory
+`Mode: strict`, a `relaxed` or `off` value given there is left off, and the
+work starts at strict with the sentence naming that file said once.
 
 The retired flag `--change-control` and the retired config key `change-control`
 still resolve for one release and print one deprecation line naming their removal
@@ -2718,7 +2735,14 @@ comes from the completed batch's current evidence, including each Unit's native
 authorized Construction Verification Command. Batch approval binds that digest
 too: a batch already approved keeps its approval when the person approves a new
 command, a batch not yet approved needs fresh verification with it, and older
-native receipts without the digest require fresh verification. When the batch's
+native receipts without the digest require fresh verification. A batch not yet
+approved that was checked with an earlier approved command reports
+`checked_with_earlier_command: true`; when that, or a change after the check,
+is its only error (`send_back_only: true`), `ask` offers the person Request
+Changes only, and sending it back rebuilds it from its landed source, so it is
+checked with the current command even after its worktrees were removed.
+`finalize` refuses a claimed Unit whose source already landed in the batch and
+whose worktree is gone, and records nothing. When the batch's
 claimed files or outputs changed after it was checked, a strict Guard Policy
 makes it unready with `changed_after_check: true`, and `ask` then offers the
 person Request Changes only; under relaxed or off the change is kept, recorded
@@ -3129,6 +3153,10 @@ the workspace root (see
 ```bash
 aidlc system workspace-sync [--force]
 ```
+
+If your shell has no `aidlc` command (a copied project, or a teammate's clone
+of one), run `bun .claude/tools/aidlc-workspace-sync.ts` instead, with your
+harness folder in place of `.claude`.
 
 It serializes reconciles with a workspace lock whose live owner is never reaped
 for age, then runs a read-only preflight before staging clones and generated

@@ -554,7 +554,8 @@ describe("a typed line and their own terminal stay theirs", () => {
       expect(routing.ask_type, asked.out).toBe("new-work-routing");
       said(proj, answer);
       // A number or other words: the agent maps the reply to the continue route.
-      const route = String(routing.continue_command).split(" ").slice(3);
+      const continued = String(routing.continue_command);
+      const route = continued.slice(continued.indexOf(" next ") + 6).split(" ");
       const step = runOrchestrateNext(ORCHESTRATE, proj, route, { env: env(proj, SESSION) });
       const message = String((step.directive as { message?: unknown } | null)?.message);
       expect(message).toContain("config set learnings off` to update the configuration");
@@ -574,7 +575,8 @@ describe("a typed line and their own terminal stay theirs", () => {
     expect(routing.ask_type, asked.out).toBe("new-work-routing");
     said(proj, "3");
     // The agent reads "3" and runs the reshape answer's own command.
-    const step = runOrchestrateNext(ORCHESTRATE, proj, String(routing.compose_command).split(" ").slice(3), { env: env(proj, SESSION) });
+    const compose = String(routing.compose_command);
+    const step = runOrchestrateNext(ORCHESTRATE, proj, compose.slice(compose.indexOf(" next ") + 6).split(" "), { env: env(proj, SESSION) });
     const message = String((step.directive as { message?: unknown } | null)?.message);
     expect(message).toContain("config set sensors off` to apply the settings typed with this request to the work being reshaped");
     expect(configSet(proj, ["sensors", "off"]).status).toBe(0);

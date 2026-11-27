@@ -65,6 +65,7 @@ import {
   createTestProject,
   seededRecordDir,
 } from "../harness/fixtures.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import {
   adaptLegacyResult,
   isRecoveryBypass,
@@ -937,7 +938,7 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
     expect(plain.status).toBe(0);
     const plainDir = JSON.parse((plain.stdout ?? "").trim());
     expect(plainDir.kind).toBe("print");
-    expect(plainDir.message).toContain("bun .claude/tools/aidlc.ts doctor");
+    expect(plainDir.message).toContain(withCopyLaunchOptions("bun .claude/tools/aidlc.ts doctor"));
     expect(plainDir.message).not.toContain("--export");
   });
 

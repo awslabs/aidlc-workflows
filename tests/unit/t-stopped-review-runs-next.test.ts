@@ -27,6 +27,7 @@ import {
   AIDLC_SRC, cleanupTestProject, createTestProject, resetAidlcEnv,
   runOrchestrateNext, seedAidlcMemory, seedBoltDag, seededAuditDir, seededRecordDir, seededStateFile, seedStateFile,
 } from "../harness/fixtures.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
   artifactFilename, auditBlockField, findStageBySlug, latestMainWorkflowStageRunFloorForProject,
@@ -56,7 +57,7 @@ const REVIEWER = findStageBySlug(CG)!.reviewer!;
 const SESSION = "01995000-7a11-7000-8000-00000000a516";
 const AS_IT_IS = "approve it as it is";
 const NOTE = "A review was asked for and has no verdict yet (it may have been stopped).";
-const CLAUDE_NEXT = "`bun .claude/tools/aidlc-orchestrate.ts next`";
+const CLAUDE_NEXT = `\`${withCopyLaunchOptions("bun .claude/tools/aidlc-orchestrate.ts next")}\``;
 const QUESTION = "Approve alpha? Its Code Generation review did not finish.";
 const NOTICE = "Approved. The Code Generation review for alpha did not finish.";
 const RA = "requirements-analysis";
@@ -364,7 +365,7 @@ describe("(a) the person writes while a review has no verdict: the agent hears t
     });
     expect(r.status, r.stderr).toBe(0);
     expect(r.stdout).toContain(NOTE);
-    expect(r.stdout).toContain("`bun .kiro/tools/aidlc-orchestrate.ts next`");
+    expect(r.stdout).toContain(`\`${withCopyLaunchOptions("bun .kiro/tools/aidlc-orchestrate.ts next")}\``);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 

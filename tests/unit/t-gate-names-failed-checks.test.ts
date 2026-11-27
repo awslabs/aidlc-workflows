@@ -12,7 +12,11 @@
 // never ran, says nothing. A check whose script crashed or did not start (the
 // dispatcher's could-not-run row) is one line for all of them, after the
 // failures, including a check on the code the stage wrote; the gate-open row's
-// `Sensor State` says `could-not-run` for a declared output.
+// `Sensor State` says `could-not-run` for a declared output. When the gate
+// opens, the reply's agent-only `message` names the file that holds each
+// failing check's findings (the sensors protocol has the agent correct from it
+// when the person asks), so the agent need not list the sensors folder for the
+// newest; the narration and the gate box never carry the path.
 
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
@@ -159,6 +163,35 @@ describe("t-gate-names-failed-checks: a check that still fails is said with the 
     expect(auditBlockField(row!.block, "Sensor State") ?? "").toContain(`required-sections@${rel}=failed(3)`);
   });
 
+  test("opening the gate names the file of the findings to the agent, never in the person's lines", () => {
+    const rel = outputPath(writeArtifact("feasibility-assessment"));
+    sensorRow("SENSOR_FAILED", "aaaa0001", rel, 2);
+    sensorRow("SENSOR_FAILED", "aaaa0002", rel, 3);
+    const opened = openGate();
+    expect(opened.kind).toBe("print");
+    expect(String(opened.message)).toEndWith(` The findings are in ${DETAIL("aaaa0002")}.`);
+    expect(String(opened.message)).not.toContain(DETAIL("aaaa0001"));
+    const narration = String(opened.narration ?? "");
+    expect(narration.split("\n").at(-1)).toBe("The required-sections check reports 3 findings in feasibility-assessment.md.");
+    expect(narration).not.toContain(".aidlc-engine");
+    expect(narration).not.toContain("The findings are in");
+    expect(opened.change_notices).toBeUndefined();
+  });
+
+  test("a failed row that names no detail file adds no file", () => {
+    const rel = outputPath(writeArtifact("feasibility-assessment"));
+    appendAuditEntry("SENSOR_FAILED", {
+      "Fire id": "aaaa0007",
+      "Sensor ID": "required-sections",
+      "Stage slug": STAGE,
+      "Output path": rel,
+      "Findings count": "1",
+    }, proj);
+    const opened = openGate();
+    expect(String(opened.narration ?? "")).toContain("The required-sections check reports 1 finding in feasibility-assessment.md.");
+    expect(String(opened.message)).not.toContain("The findings are in");
+  });
+
   test("the gate shown again carries the line; once the check passes, nothing is said", () => {
     const rel = outputPath(writeArtifact("feasibility-assessment"));
     sensorRow("SENSOR_FAILED", "aaaa0002", rel, 1);
@@ -182,6 +215,7 @@ describe("t-gate-names-failed-checks: a check that still fails is said with the 
     writeArtifact("constraint-register");
     const opened = openGate();
     expect(String(opened.narration ?? "")).not.toContain("check reports");
+    expect(String(opened.message)).not.toContain("The findings are in");
     expect(opened.change_notices).toBeUndefined();
   });
 
@@ -196,6 +230,21 @@ describe("t-gate-names-failed-checks: a check that still fails is said with the 
     const narration = String(openGate().narration ?? "");
     expect(narration.match(/The [a-z-]+ check reports \d+ findings? in [a-z-]+\.md\./g) ?? []).toHaveLength(3);
     expect(narration).toContain("1 more check reports findings on this stage's outputs.");
+    expect(narration).not.toContain(".aidlc-engine");
+  });
+
+  test("more than three failing checks: the agent is told every findings file, the person hears three lines and a count", () => {
+    const assessment = outputPath(writeArtifact("feasibility-assessment"));
+    const register = outputPath(writeArtifact("constraint-register"));
+    const raid = outputPath(writeArtifact("raid-log"));
+    sensorRow("SENSOR_FAILED", "aaaa0001", assessment, 2);
+    sensorRow("SENSOR_FAILED", "aaaa0002", register, 1);
+    sensorRow("SENSOR_FAILED", "aaaa0003", raid, 4);
+    sensorRow("SENSOR_FAILED", "aaaa0004", assessment, 5, "upstream-coverage");
+    const opened = openGate();
+    const files = ["aaaa0001", "aaaa0002", "aaaa0003", "aaaa0004"].map(DETAIL);
+    const said = /The findings are in (.+)\.$/.exec(String(opened.message))?.[1]?.split(", ") ?? [];
+    expect(said.sort()).toEqual(files.sort());
   });
 
   test("with Sensors switched off, the gate says nothing about the checks; the record keeps them", () => {
@@ -208,6 +257,7 @@ describe("t-gate-names-failed-checks: a check that still fails is said with the 
     sensorRow("SENSOR_FAILED", "aaaa0002", rel, 3);
     const opened = openGate();
     expect(String(opened.narration ?? "")).not.toContain("check reports");
+    expect(String(opened.message)).not.toContain("The findings are in");
     expect(opened.change_notices).toBeUndefined();
     // The gate row still records what the checks said: only the person's line is silent.
     const row = readAuditShardEvents(proj).filter((r) => r.event === "STAGE_AWAITING_APPROVAL").at(-1);
@@ -414,6 +464,9 @@ describe("t-gate-names-failed-checks: a team's Unit gate names that Unit's outpu
       `The required-sections check reports 2 findings in functional-spec.md.`,
     );
     expect(narration).not.toContain("5 findings");
+    expect(narration).not.toContain(".aidlc-engine");
+    expect(String(gate.message)).toEndWith(` The findings are in ${DETAIL("aaaa0011")}.`);
+    expect(String(gate.message)).not.toContain(DETAIL("aaaa0012"));
     expect(gate.change_notices).toBeUndefined();
     // The gate shown again is alpha's, and says nothing of beta's checks. (A
     // per-unit beat's narration is the engine's own short line, or silence at

@@ -24,6 +24,7 @@ import { basename, dirname, join } from "node:path";
 import type { AuditShardEvent } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { afterAll, describe, expect, test } from "bun:test";
 import { cleanupTestProject, proposalFollowUp, REPO_ROOT, setupIntegrationProject } from "./fixtures.ts";
+import { COPY_LAUNCH_CONFIG } from "./copy-launch.ts";
 import { PersonTurnLedger } from "./person-turns.ts";
 import { testGuardEnvironment } from "./runner-profile.ts";
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "./test-budget.ts";
@@ -344,9 +345,20 @@ export class ScopeHost {
     rmSync(abs, { force: true });
   }
 
+  /**
+   * The words a tree's command starts with before its script: `bun` with the
+   * copy launch's two options when the tree holds its config file, as the
+   * tree prints its commands.
+   */
+  bunWords(): string[] {
+    return existsSync(join(this.proj, this.dir, "tools", COPY_LAUNCH_CONFIG))
+      ? ["bun", `--config=${this.dir}/tools/${COPY_LAUNCH_CONFIG}`, "--no-env-file"]
+      : ["bun"];
+  }
+
   /** `bun <dir>/tools/aidlc.ts engine <args>`, the skill's dispatcher form, or `aidlc engine <args>` on an installed project. */
   engine(...args: string[]): RunResult {
-    const head = this.launcher === null ? ["bun", `${this.dir}/tools/aidlc.ts`] : ["aidlc"];
+    const head = this.launcher === null ? [...this.bunWords(), `${this.dir}/tools/aidlc.ts`] : ["aidlc"];
     return this.bash([...head, "engine", ...args].map(shellQuote).join(" "));
   }
 
@@ -754,13 +766,16 @@ export class AgentStandIn {
    * project up.
    */
   private named(dev: string, installed = dev): RegExp {
-    const [prefix, rest] = this.host.launcher === null ? [`bun ${this.host.dir}/tools/`, dev] : ["aidlc ", installed];
-    return new RegExp(`\`(${prefix.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")}${rest})\``);
+    const literal = (text: string) => text.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
+    const prefix = this.host.launcher === null
+      ? `bun (?:--config=\\S+ --no-env-file )?${literal(`${this.host.dir}/tools/`)}${dev}`
+      : `${literal("aidlc ")}${installed}`;
+    return new RegExp(`\`(${prefix})\``);
   }
 
   /** One of the agent's own tool calls, as the stage names it: the tool's file on a tree, its dispatcher route on an install. */
   private tool(file: string, route: string, args: string): RunResult {
-    const head = this.host.launcher === null ? `bun ${this.host.dir}/tools/${file}` : `aidlc engine ${route}`;
+    const head = this.host.launcher === null ? `${this.host.bunWords().join(" ")} ${this.host.dir}/tools/${file}` : `aidlc engine ${route}`;
     return this.host.bash(args ? `${head} ${args}` : head);
   }
 

@@ -245,7 +245,7 @@ describe("what still asks on the clone", () => {
     const bob = bobsClone(alice);
     says(bob, "/aidlc --stage code-generation", BOB);
     const named = JSON.stringify(next(bob, ["--stage", "code-generation"]));
-    const jump = /bun \.claude\/tools\/aidlc-jump\.ts (execute[^`"]*)/.exec(named)?.[1];
+    const jump = /bun --config=\.claude\/tools\/aidlc-bunfig\.toml --no-env-file \.claude\/tools\/aidlc-jump\.ts (execute[^`"]*)/.exec(named)?.[1];
     expect(jump, named).toBeDefined();
     const ran = engine(bob, BOB, "aidlc-jump.ts", (jump as string).trim().split(/\s+/));
     expect(ran.code, ran.out).toBe(0);

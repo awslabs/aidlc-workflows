@@ -95,6 +95,7 @@ import {
 } from "../harness/fixtures.ts";
 import { engineTouchMarkerPath } from "../../core/tools/aidlc-lib.ts";
 import { shellWords } from "../harness/code-generation-states.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -463,7 +464,7 @@ describe("t114 in-session config alias", () => {
     proj = createOrchestrationTestProject();
     const out = runNext(proj, ["--config"]).out;
     expect(out).toContain('"kind":"print"');
-    expect(out).toContain("bun .claude/tools/aidlc.ts config <section> --show --json");
+    expect(out).toContain(withCopyLaunchOptions("bun .claude/tools/aidlc.ts config <section> --show --json"));
     expect(out).toContain("explicit value flags");
     expect(out).toContain("Never invent values");
     expect(out).toContain("do NOT run `next`");
@@ -478,15 +479,15 @@ describe("t114 in-session config alias", () => {
     expect(out).toContain('"kind":"print"');
     expect(out).toContain("Configure the providers section conversationally");
     expect(out).toContain(
-      "bun .claude/tools/aidlc.ts config providers --show --json",
+      withCopyLaunchOptions("bun .claude/tools/aidlc.ts config providers --show --json"),
     );
     expect(out).toContain(
-      "bun .claude/tools/aidlc.ts config <section> <explicit value flags> --yes",
+      withCopyLaunchOptions("bun .claude/tools/aidlc.ts config <section> <explicit value flags> --yes"),
     );
     // A named section always asks, even when clean: t297 saw a clean trust
     // section end without a question.
     expect(out).toContain(
-      "ask what the human wants to change in it, offering the choices `bun .claude/tools/aidlc.ts config providers --help` lists and leaving it unchanged, even when it is already clean",
+      `ask what the human wants to change in it, offering the choices \`${withCopyLaunchOptions("bun .claude/tools/aidlc.ts config providers --help")}\` lists and leaving it unchanged, even when it is already clean`,
     );
     expect(out).not.toContain("ask which sections");
   });
@@ -749,7 +750,7 @@ describe("t114 plugin terminal routing", () => {
     seedStateFile(proj, MID_IDEATION);
     const out = runNext(proj, ["plugin", "list", "--json"]).out;
     expect(out).toContain('"kind":"print"');
-    expect(out).toContain("bun .claude/tools/aidlc.ts engine plugin list --json");
+    expect(out).toContain(withCopyLaunchOptions("bun .claude/tools/aidlc.ts engine plugin list --json"));
     expect(out).not.toContain('"kind":"run-stage"');
   });
 
@@ -757,21 +758,21 @@ describe("t114 plugin terminal routing", () => {
     proj = createOrchestrationTestProject();
     const out = runNext(proj, ["plugin", "sync"]).out;
     expect(out).toContain('"kind":"print"');
-    expect(out).toContain("bun .claude/tools/aidlc.ts engine plugin sync");
+    expect(out).toContain(withCopyLaunchOptions("bun .claude/tools/aidlc.ts engine plugin sync"));
   });
 
   test("plugin select preserves the selected names", () => {
     proj = createOrchestrationTestProject();
     const out = runNext(proj, ["plugin", "select", "aidlc,test-pro"]).out;
     expect(out).toContain('"kind":"print"');
-    expect(out).toContain("bun .claude/tools/aidlc.ts engine plugin select aidlc,test-pro");
+    expect(out).toContain(withCopyLaunchOptions("bun .claude/tools/aidlc.ts engine plugin select aidlc,test-pro"));
   });
 
   test("plugin help routes to global help", () => {
     proj = createOrchestrationTestProject();
     const out = runNext(proj, ["plugin", "help"]).out;
     expect(out).toContain('"kind":"print"');
-    expect(out).toContain("bun .claude/tools/aidlc.ts engine plugin help");
+    expect(out).toContain(withCopyLaunchOptions("bun .claude/tools/aidlc.ts engine plugin help"));
     expect(out).not.toContain('"kind":"ask"');
   });
 
@@ -889,7 +890,7 @@ describe("t114 gate axis != execution axis", () => {
 // ===========================================================================
 describe("t114 cutover: no --args swallow", () => {
   test("14a: SKILL.md forwarding loop has no 'next --args' wrapper", () => {
-    // SKILL.md invokes the engine as `next $ARGUMENTS` (argv word-split into the
+    // SKILL.md invokes the engine as `next`, with a flag typed alone (argv word-split into the
     // parser). A `next --args "$ARGUMENTS"` wrapper would silently drop every
     // flag-bearing invocation. Pin half (a): the shipped prose must NOT document
     // a `--args` wrapper.
@@ -1847,6 +1848,37 @@ describe("t114 Branch 9c: replies that are not new work", () => {
     expect(d.message).toContain(`(their words: ${JSON.stringify(OTHER_ANSWER)})`);
   });
 
+  test("words the agent passes on as something else: once the request they became starts work, prose gets no step for the old question, and its own answers still reach its request", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    const ask = routingAsk();
+    const d = directive([OTHER_ANSWER]);
+    expect(d.message).toContain(ROUTING_STEP);
+    const other = / next (--request-file aidlc\/\.aidlc-request-text\/other[^ `]*\.txt)`/.exec(String(d.message))?.[1];
+    expect(other, String(d.message)).toBeDefined();
+    // The agent reads their words as new work: the reading they get, then the routing question for them, answered
+    // with separate work, which is created.
+    const routed = runCommand(requestCommand(directive(other!.split(" ")).message!));
+    expect(routed.ask_type, JSON.stringify(routed).slice(0, 300)).toBe("new-work-routing");
+    const created = runCommand(routed.new_intent_command!);
+    const request = /intent create --scope feature (--request [0-9a-f]{8})/.exec(String(created.message))?.[1];
+    expect(request, String(created.message)).toBeDefined();
+    const made = spawnSync(BUN, [
+      join(AIDLC_SRC, "tools", "aidlc-utility.ts"),
+      "intent-create", "--scope", "feature", ...request!.split(" "), "--label", "documentation update", "--project-dir", proj,
+    ], { cwd: proj, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
+    expect(made.status, `${made.stdout}${made.stderr}`).toBe(0);
+    const later = directive(["also add a CSV export"]);
+    expect(String(later.message ?? JSON.stringify(later))).not.toContain(ROUTING_STEP);
+    // Its own continue and reshape answers still reach the request it kept: with other work selected now, each asks
+    // where that request belongs again, as a late answer does.
+    for (const command of [ask.continue_command!, ask.compose_command!]) {
+      const late = runCommand(command);
+      expect(late.ask_type, JSON.stringify(late).slice(0, 300)).toBe("new-work-routing");
+      expect(late.new_work_description).toBe(NEW_WORK);
+    }
+  });
+
   for (const reply of ["1", "2", "Separate new piece of work"]) {
     test(`an option with no routing question asked (${JSON.stringify(reply)}) is asked about, never acted on`, () => {
       proj = createOrchestrationTestProject();
@@ -2145,6 +2177,7 @@ describe("t114 retired flags are consumed, not description text", () => {
     expect(result.out).toContain("--new-intent --scope <scope>");
     expect(result.out).not.toContain("/aidlc");
     expect(result.out).not.toContain("bun .codex");
+    expect(result.out).not.toContain("bun --config=.codex");
     expect(result.out).not.toContain('"kind":"run-stage"');
   });
 

@@ -47,6 +47,7 @@ import {
   NATIVE_STARTUP_TIMEOUT_MS,
   remainingOperationTimeoutMs,
 } from "../harness/test-budget.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import { afterEach, beforeEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { dirname, join, relative } from "node:path";
@@ -85,7 +86,7 @@ const KIRO_CLI_STATE = join(REPO_ROOT, "dist", "kiro", ".kiro", "tools", "aidlc-
 // tree's own command in the switch to Kiro.
 const KIRO_V3_WAYS_BACK =
   "type /upgrade-agent and choose the workspace agents, then quit Kiro and start `kiro-cli --v3` again in this folder; " +
-  "or, to switch this project to Kiro, quit Kiro, run `bun .kiro/tools/aidlc.ts config --harness kiro` in a terminal in " +
+  `or, to switch this project to Kiro, quit Kiro, run \`${withCopyLaunchOptions("bun .kiro/tools/aidlc.ts config --harness kiro")}\` in a terminal in ` +
   "this folder and, once it has finished, start `kiro-cli --v3`; or quit Kiro and start it again in this folder with: " +
   "kiro-cli --v2 --agent aidlc (Kiro CLI 2.21.4 or later; for an older one, see the AI-DLC Kiro CLI guide)";
 const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
@@ -1726,7 +1727,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       const slug = field(proj, "Current Stage");
       const unsaid = guardedLog(proj, ["answer", "--stage", slug, "--details", "A", "--on-instruction"]);
       expect(unsaid.rc).not.toBe(0);
-      expect(unsaid.out).toContain("Nothing the person said in this piece of work is on record");
+      expect(unsaid.out).toContain("no reply of the person's is on record since this question was asked. Ask them");
       recordHumanTurn(proj);
       const checkpoint = guardedLog(proj, [
         "answer", "--stage", slug, "--checkpoint", "summary-confirmation", "--details", "Looks correct",
@@ -1742,6 +1743,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     // named, the answer records with no claim that the person left it.
     test("blank words with the flag and no message named: the agent's own answer, with no claim", () => {
       const slug = field(proj, "Current Stage");
+      expect(guardedLog(proj, ["decision", "--stage", slug, "--decision", "Q1", "--options", "A,B"]).rc).toBe(0);
       recordHumanTurn(proj);
       const blank = guardedLog(proj, ["answer", "--stage", slug, "--details", "A", "--on-instruction", "  "]);
       expect(blank.rc, blank.out).toBe(0);

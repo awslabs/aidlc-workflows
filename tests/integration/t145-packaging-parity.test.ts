@@ -22,6 +22,7 @@ import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
   remainingOperationTimeoutMs,
 } from "../harness/test-budget.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
@@ -197,7 +198,7 @@ describe("t145 packager contract regressions", () => {
       expect(descriptor.harnessDir).toBe(".foo");
       expect(graph).toContain('"path": ".foo/sensors/');
       expect(graph).not.toContain('"path": ".claude/sensors/');
-      expect(runner).toContain("bun .foo/tools/aidlc.ts engine intent create");
+      expect(runner).toContain(withCopyLaunchOptions("bun .foo/tools/aidlc.ts engine intent create"));
       expect(runner).not.toContain("bun .claude/tools/aidlc.ts");
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -229,15 +230,16 @@ describe("t145 packager contract regressions", () => {
       expect(commands.length).toBeGreaterThan(0);
       expect(
         commands.every((command: string) =>
-          command.startsWith("bun .foo/tools/aidlc.ts engine adapter foo")
+          command.startsWith(withCopyLaunchOptions("bun .foo/tools/aidlc.ts engine adapter foo"))
         ),
       ).toBe(true);
 
       const rules = readFileSync(join(generated, "rules", "default.rules"), "utf-8");
-      expect(rules).toContain('pattern = ["bun", ".foo/tools/aidlc.ts", "engine"]');
+      expect(rules).toContain('pattern = ["bun", "--config=.foo/tools/aidlc-bunfig.toml", "--no-env-file", ".foo/tools/aidlc.ts", "engine"]');
       expect(rules).toContain('    ".foo/tools/aidlc-orchestrate.ts"');
       expect(rules).not.toContain('pattern = ["aidlc"]');
       expect(rules).not.toContain('["bun", ".codex/');
+      expect(rules).not.toContain('"--config=.codex/');
 
       const trustSeed = readFileSync(join(generated, "trust-seed.toml"), "utf-8");
       expect(trustSeed).toContain("<PROJECT_DIR>/.foo/hooks.json:");
@@ -247,7 +249,7 @@ describe("t145 packager contract regressions", () => {
         join(distRoot, ".agents", "skills", "aidlc-init", "SKILL.md"),
         "utf-8",
       );
-      expect(runner).toContain("bun .foo/tools/aidlc.ts engine intent create");
+      expect(runner).toContain(withCopyLaunchOptions("bun .foo/tools/aidlc.ts engine intent create"));
       expect(runner).not.toContain("bun .codex/tools/aidlc.ts");
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -276,7 +278,7 @@ describe("t145 packager contract regressions", () => {
       ).toContain('"path": ".foo/sensors/');
       expect(
         readFileSync(join(generated, "skills", "aidlc-init", "SKILL.md"), "utf-8"),
-      ).toContain("bun .foo/tools/aidlc.ts engine intent create");
+      ).toContain(withCopyLaunchOptions("bun .foo/tools/aidlc.ts engine intent create"));
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

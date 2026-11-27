@@ -8,6 +8,7 @@
 // not applied when it was typed for a new-work question still open, when it is
 // from another sitting, or when a later word took it back.
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { COPY_LAUNCH_CONFIG, withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -91,9 +92,11 @@ function next(args: string[]): Record<string, unknown> {
 }
 
 function runNamed(step: Record<string, unknown>): { status: number; out: string } {
-  const named = /Run `bun \.claude\/tools\/(aidlc[a-z-]*\.ts) ([^`]+)`/.exec(String(step.message));
+  const named = /Run `bun --config=\.claude\/tools\/aidlc-bunfig\.toml --no-env-file \.claude\/tools\/(aidlc[a-z-]*\.ts) ([^`]+)`/
+    .exec(String(step.message));
   expect(named, JSON.stringify(step).slice(0, 300)).not.toBeNull();
-  const r = spawnSync(process.execPath, [join(TOOLS, named![1]), ...named![2].split(" ")], {
+  // The fixture has no install of its own: the tool and the Bun config it names both come from the build under test.
+  const r = spawnSync(process.execPath, [`--config=${join(TOOLS, COPY_LAUNCH_CONFIG)}`, "--no-env-file", join(TOOLS, named![1]), ...named![2].split(" ")], {
     cwd: proj,
     encoding: "utf-8",
     env: { ...chat, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj },
@@ -234,7 +237,7 @@ describe("t-kept-setting-follows-the-pick: the work the chat picks gets what was
     reply(line);
     const step = next(line.replace(/^\/aidlc\s+/, "").split(" "));
     expect(String(step.message), JSON.stringify(step).slice(0, 300)).toContain(`engine config set ${setter}`);
-    expect(String(step.message)).toContain("run `bun .claude/tools/aidlc-orchestrate.ts next` and follow what it returns");
+    expect(String(step.message)).toContain(`run \`${withCopyLaunchOptions("bun .claude/tools/aidlc-orchestrate.ts next")}\` and follow what it returns`);
     const kept = runNamed(step);
     expect(kept.status, kept.out).toBe(0);
     expect(kept.out).toContain("for the work you pick up or start next (set by you)");

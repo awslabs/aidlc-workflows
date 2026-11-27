@@ -4,6 +4,7 @@
 // have never executed, and must surface Claude Code managed policy that makes
 // project hooks impossible to run.
 
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
   NATIVE_STARTUP_TIMEOUT_MS,
@@ -89,7 +90,7 @@ function output(run: ReturnType<typeof runUtility>): string {
 // Kiro tree's hookActivation block makes the doctor read it as that install.
 // The kiro copy tree's own command for the switch to Kiro, which its shipped
 // recovery line names.
-const KIRO_SWITCH = "bun .kiro/tools/aidlc.ts config --harness kiro";
+const KIRO_SWITCH = withCopyLaunchOptions("bun .kiro/tools/aidlc.ts config --harness kiro");
 
 function asShippedKiro(project: string, harness: "kiro" | "kiro-ide"): Record<string, string> {
   const kiro = JSON.parse(readFileSync(

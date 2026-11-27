@@ -6,6 +6,10 @@ This chapter is the detailed routing reference. If you are choosing what kind
 of workflow to run, start with [Workflow Profiles](workflow-profiles.md), where
 the same scopes are explained in user-facing terms.
 
+To generate the `/aidlc` command without assembling the flags by hand, use the
+[Interactive Composer](05-1-interactive-composer.md): pick a scope, adjust its
+settings and stages, and copy the command.
+
 ---
 
 ## The 11 Core Scopes
@@ -564,6 +568,7 @@ Ideation or Operation.
 
 ## Next Steps
 
+- [Interactive Composer](05-1-interactive-composer.md) — generate the `/aidlc` command for any scope, settings and stages
 - [Phases and Stages](04-phases-and-stages.md) — what each stage does
 - [Agents](06-agents.md) — which agents participate in which scopes
 - [Skills and Runner Commands](17-skills.md) — the one-word `/aidlc-<scope>` runners for bugfix, express, feature, mvp, and security-patch

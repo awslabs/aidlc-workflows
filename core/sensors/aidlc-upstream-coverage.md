@@ -15,6 +15,7 @@ input_schema:
 output_schema:
   pass: boolean
   unreferenced_artifacts: string[]
+  message: string
 timeout_seconds: 300
 ---
 
@@ -45,4 +46,6 @@ Pure derivation from frontmatter - no per-stage config needed.
 
 Emits `SENSOR_FAILED` and writes detail listing required or cited artifacts
 declared in `consumes:` that appear in none of the stage's deliverables in any
-accepted form.
+accepted form. The `unreferenced` slugs stay as they are (other tools read
+them); a failing result also carries one `message` sentence saying how to cover
+an artifact.

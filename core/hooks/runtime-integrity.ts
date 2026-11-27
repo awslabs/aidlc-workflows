@@ -848,6 +848,7 @@ function protectedShell(command: string, cwd: string, depth = 0, expansionsOnly 
   let visible = "";
   // Open `${` parameter expansions: their braces are part of a word, not a group.
   let parameter = 0;
+  const heredocBodies: Array<[number, number]> = [];
   for (let index = 0; index < command.length; index++) {
     const ch = command[index];
     if (ch === "\\" && quote !== "'") {
@@ -894,6 +895,7 @@ function protectedShell(command: string, cwd: string, depth = 0, expansionsOnly 
         protectedShell(header, cwd, depth + 1) ||
         !heredoc.quoted && protectedShell(heredoc.body, cwd, depth + 1, true)) return true;
       const after = command.indexOf("\n", heredoc.bodyEnd);
+      heredocBodies.push([heredoc.newline, after < 0 ? command.length : after]);
       visible = `${header}\n`;
       index = after < 0 ? command.length : after;
       continue;
@@ -915,7 +917,10 @@ function protectedShell(command: string, cwd: string, depth = 0, expansionsOnly 
   if (expansionsOnly) return false;
   if (HARNESS_CONTROL_ASSIGNMENTS.some((pattern) => pattern.test(visible)) ||
     shellWriteTargets(visible, cwd).some((path) => protectedWriteTarget(path, cwd))) return true;
-  if (unresolvedAuditTrailWrite(visible, command, cwd)) {
+  // A heredoc body is data; its text is not read as the command as written.
+  let withoutBodies = command;
+  for (const [from, to] of [...heredocBodies].reverse()) withoutBodies = withoutBodies.slice(0, from) + withoutBodies.slice(to);
+  if (unresolvedAuditTrailWrite(visible, withoutBodies, cwd)) {
     auditTrailMatched = true;
     return true;
   }
@@ -1079,7 +1084,8 @@ function unresolvedAuditTrailWrite(visible: string, command: string, cwd: string
   // The walk's `visible` text has rewritten what it evaluated (a substitution
   // as its literal output or a placeholder, a heredoc as its header, unquoted
   // parentheses and braces as separators), so words, assignments and directory
-  // changes are also read from the command as written.
+  // changes are also read from the command as written, minus its heredoc
+  // bodies (`command` is the caller's `withoutBodies`).
   const words: string[] = [];
   shellWriteTargets(visible, cwd, words);
   shellWriteTargets(command, cwd, words);
@@ -1255,7 +1261,8 @@ function installedRelativeProtected(path: string, root: string, harnessName = ba
   const rel = relative(root, path).replaceAll("\\", "/");
   if (!pathWithin(path, root)) return false;
   if (rel === "" || rel === "hooks" || rel.startsWith("hooks/") || rel === "tools") return true;
-  if (/^tools\/aidlc(?:-[a-z0-9-]+)?(?:\.ts|\.exe)?$/.test(rel)) return true;
+  // The copy launch's config file (aidlc-runtime-paths.ts BUN_LAUNCH_CONFIG): a preload written into it would run in every launch.
+  if (/^tools\/aidlc(?:-[a-z0-9-]+)?(?:\.ts|\.exe)?$/.test(rel) || rel === "tools/aidlc-bunfig.toml") return true;
   if (/^bin\/aidlc(?:\.exe)?$/.test(rel) || rel === "bin") return true;
   if (rel === "hooks.json") return true;
   if (harnessName === ".claude" && rel === "settings.json") return true;

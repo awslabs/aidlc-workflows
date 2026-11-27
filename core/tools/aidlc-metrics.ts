@@ -25,7 +25,7 @@ import {
   resolveWorkflowSelection,
   stateFilePath,
 } from "./aidlc-lib.ts";
-import { compiledExecutable } from "./aidlc-runtime-paths.ts";
+import { bunLaunchFlags, compiledExecutable } from "./aidlc-runtime-paths.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
 
 // ---------------------------------------------------------------------------
@@ -402,7 +402,7 @@ function metricWorkerCommand(): string[] {
   const executable = compiledExecutable();
   return executable
     ? [executable, METRIC_WORKER_ARG]
-    : [process.execPath, fileURLToPath(import.meta.url), METRIC_WORKER_ARG];
+    : [process.execPath, ...bunLaunchFlags(), fileURLToPath(import.meta.url), METRIC_WORKER_ARG];
 }
 
 function postMetric(endpoint: string, body: string): void {

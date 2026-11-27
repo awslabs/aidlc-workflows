@@ -37,14 +37,24 @@ import { removeOrphanProducesKinds } from "./aidlc-plugin-produces-kinds.ts";
 import { policyPathWithin } from "./aidlc-install-paths.ts";
 import { type PluginCommandSkip, projectPluginCommands } from "./aidlc-plugin-commands.ts";
 import { markdownBlocks } from "./aidlc-markdown.ts";
-import { PLUGIN_RULES_OPENING } from "./aidlc-plugin-rules.ts";
+import {
+  type OwnershipFile,
+  type OwnershipRecord,
+  parseOwnership,
+  PLUGIN_OWNERSHIP_FILE,
+  PLUGIN_RULES_OPENING,
+  SAFE_PLUGIN_KEY,
+} from "./aidlc-plugin-rules.ts";
+import { recordedDigestMatches } from "./aidlc-review-manifest.ts";
 import { refreshActiveMemory } from "./aidlc-includes.ts";
 import { resolveInvokingSessionId } from "./aidlc-record-core.ts";
 import {
+  bunLaunchFlags,
   aidlcInvocation,
   compiledExecutable,
   discoverProjectHarnesses,
   entrySkillInvocation,
+  isAidlcProjectFolder,
   LinkedFolderError,
   pinNamedHarness,
   quoteCommandArgument,
@@ -75,7 +85,6 @@ import {
   type PluginDependency,
 } from "./aidlc-plugin-validate.ts";
 
-const SAFE_PLUGIN_KEY = /^[a-z][a-z0-9-]*$/;
 const STRICT_SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/;
 const COMPOSE_DIRS = [
   "agents",
@@ -161,17 +170,6 @@ export type PluginStatus = {
   action: "current" | "sync" | "attention";
   message: string;
   paths?: string[];
-};
-
-type OwnershipFile = {
-  path: string;
-  sha256: string;
-};
-
-type OwnershipRecord = {
-  schemaVersion: 1;
-  name: string;
-  files: OwnershipFile[];
 };
 
 // A plugin sync could not compose on its base, and the line that says why,
@@ -804,34 +802,6 @@ function parseStamp(path: string): CompositionStamp | null {
   return null;
 }
 
-function parseOwnership(path: string): OwnershipRecord | null {
-  try {
-    const value = readJson(path) as Partial<OwnershipRecord>;
-    if (
-      value.schemaVersion !== 1 ||
-      typeof value.name !== "string" ||
-      !SAFE_PLUGIN_KEY.test(value.name) ||
-      !Array.isArray(value.files)
-    ) return null;
-    const files: OwnershipFile[] = [];
-    for (const file of value.files) {
-      if (
-        !file ||
-        typeof file !== "object" ||
-        typeof (file as OwnershipFile).path !== "string" ||
-        isAbsolute((file as OwnershipFile).path) ||
-        (file as OwnershipFile).path.split(/[\\/]/).includes("..") ||
-        typeof (file as OwnershipFile).sha256 !== "string" ||
-        !/^sha256:[0-9a-f]{64}$/.test((file as OwnershipFile).sha256)
-      ) return null;
-      files.push(file as OwnershipFile);
-    }
-    return { schemaVersion: 1, name: value.name, files };
-  } catch {
-    return null;
-  }
-}
-
 function projectEvidence(projectDir: string, harnessDir: string): ProjectEvidence {
   const dataDir = harnessDataDir(projectDir, harnessDir);
   const stamps = new Map<string, CompositionStamp>();
@@ -853,7 +823,7 @@ function projectEvidence(projectDir: string, harnessDir: string): ProjectEvidenc
       else legacy.add(match[1]);
       continue;
     }
-    match = entry.match(/^plugin-owned-([a-z][a-z0-9-]*)\.json$/);
+    match = entry.match(PLUGIN_OWNERSHIP_FILE);
     if (match) {
       const record = parseOwnership(join(dataDir, entry));
       if (record && record.name === match[1]) ownership.set(match[1], record);
@@ -1116,17 +1086,6 @@ function sha256File(path: string): string {
   return `sha256:${createHash("sha256").update(committedTextBytes(readFileSync(path))).digest("hex")}`;
 }
 
-// Does a recorded digest still name this file? A record written before the
-// committed-text rule holds the raw-bytes digest of a CRLF file (a plugin root
-// that is itself a CRLF clone); identical bytes are no change either, so that
-// record proves the file too. The next record is written over the committed
-// text.
-function recordedDigestMatches(path: string, recorded: string): boolean {
-  const bytes = readFileSync(path);
-  const digest = (data: Buffer): string => `sha256:${createHash("sha256").update(data).digest("hex")}`;
-  return digest(committedTextBytes(bytes)) === recorded || digest(bytes) === recorded;
-}
-
 function pluginPrimitiveTargets(
   plugin: InstalledPlugin,
   projectDir: string,
@@ -1381,7 +1340,7 @@ async function runComposer(
       }
     }
   } else {
-    const result = spawnSync(process.execPath, [composePath], {
+    const result = spawnSync(process.execPath, [...bunLaunchFlags(), composePath], {
       cwd: stagedProject,
       encoding: "utf-8",
       env,
@@ -2446,7 +2405,7 @@ function runStagedTool(
       : args[0] === "scopes"
       ? ["engine", "gen", "runner-scopes", ...args.slice(1)]
       : ["engine", "gen", ...args]
-    : [join(stagedProject, harnessDir, "tools", `aidlc-${tool}.ts`), ...args];
+    : [...bunLaunchFlags(), join(stagedProject, harnessDir, "tools", `aidlc-${tool}.ts`), ...args];
   const result = spawnSync(command, commandArgs, {
     cwd: stagedProject,
     encoding: "utf-8",
@@ -2484,7 +2443,7 @@ function refreshGeneratedTable(
   const command = executable ?? process.execPath;
   const args = executable
     ? ["engine", "gen", verb]
-    : [join(stagedProject, harnessDir, "tools", "aidlc-utility.ts"), verb];
+    : [...bunLaunchFlags(), join(stagedProject, harnessDir, "tools", "aidlc-utility.ts"), verb];
   const result = spawnSync(command, args, {
     cwd: stagedProject,
     encoding: "utf-8",
@@ -3267,6 +3226,10 @@ export async function main(argv: string[]): Promise<void> {
       if (flags["plugin-root"]) process.env.AIDLC_PLUGIN_ROOT = resolve(flags["plugin-root"]);
       // A plugin hook names its harness too.
       if (flags["harness-dir"]) pinNamedHarness(projectDir, flags["harness-dir"]);
+      if (!isAidlcProjectFolder(projectDir)) {
+        if (flags.json === "true") process.stdout.write(jsonEnvelope(0, "not an AI-DLC project; nothing to sync", null));
+        return;
+      }
       const result = await syncPlugins(projectDir, argv);
       sayRulesPlacement(projectDir, result.rules);
       const message = result.nothingToSync ? "no installed plugins; nothing to sync" : `plugin sync complete: ${result.synced.length} plugin(s)` +

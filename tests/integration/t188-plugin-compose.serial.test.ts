@@ -54,6 +54,7 @@ import {
   pluginRootIn,
 } from "../harness/plugin-kit.ts";
 import { writeWindowsBunLauncher } from "../harness/windows-native-executable.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "../../core/tools/aidlc-runtime-budget.ts";
 import { readPluginTargets } from "../../core/tools/aidlc-plugin-emit.ts";
 import { typedHarnessName } from "../../core/tools/aidlc-runtime-paths.ts";
@@ -73,7 +74,7 @@ const CODEX_DIST = join(REPO_ROOT, "dist", "codex", ".codex");
 const CURSOR_DIST = join(REPO_ROOT, "dist", "cursor");
 const CURSOR_INSTALLER_SOURCE = join(REPO_ROOT, "harness", "cursor", "install.ts");
 const STAGE_TABLE_BEGIN =
-  "<!-- BEGIN: compiled stage graph via `bun .claude/tools/aidlc.ts engine gen stage-table` - do NOT hand-edit -->";
+  `<!-- BEGIN: compiled stage graph via \`${withCopyLaunchOptions("bun .claude/tools/aidlc.ts engine gen stage-table")}\` - do NOT hand-edit -->`;
 const STAGE_TABLE_END = "<!-- END: compiled stage graph -->";
 
 function fileInventory(root: string, relative = ""): string[] {
@@ -1281,7 +1282,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
   test("composed plugin stages project {{INVOKE}} for the copy channel", () => {
     const body = stageBody(project, "construction", "test-pro-integration");
     expect(body).not.toContain("{{INVOKE}}");
-    expect(body).toContain("bun .claude/tools/aidlc.ts engine orchestrate report");
+    expect(body).toContain(withCopyLaunchOptions("bun .claude/tools/aidlc.ts engine orchestrate report"));
   });
 
   test("composed plugin stages project {{INVOKE}} for the native channel without bun", () => {
@@ -4802,11 +4803,17 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       else expect(fm, variant.label).not.toContain("      effect: deny");
     }
 
-    // An agent that declares all three keys gets nothing added, and a later
+    // An agent that declares all four keys gets nothing added, and a later
     // compose leaves its copy as it is.
     const plugin = "syn-keys-all";
     const agent = `${plugin}-agent`;
-    const own = ['tools: ["read"]', "includeMcpJson: false", ...cases[1].own];
+    const own = [
+      'tools: ["read"]',
+      "includeMcpJson: false",
+      "resources:",
+      '  - "file://.kiro/knowledge/aidlc-shared/rules-reading.md"',
+      ...cases[1].own,
+    ];
     const { proj } = composeSynthetic(plugin, { [`agents/${agent}.md`]: pluginAgent(plugin, agent, own) }, "kiro-ide");
     const installed = join(proj, ".kiro", "agents", `${agent}.md`);
     expect(kiroFrontmatter(readFileSync(installed, "utf-8"))).toBe(

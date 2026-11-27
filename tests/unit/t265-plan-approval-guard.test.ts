@@ -34,6 +34,7 @@ import {
 import { hostname, tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { renderGuardOperation } from "../../core/tools/aidlc-guard-operation.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import {
   evaluatePlanApprovalDispatch,
   blockReason,
@@ -561,6 +562,8 @@ function scratchProject(): string {
     // aidlc-lib.ts reads a plugin command leading a line with this.
     "aidlc-plugin-commands.ts",
     "aidlc-color.ts",
+    // The copy launch's config file its commands name.
+    "aidlc-bunfig.toml",
   ]) {
     cpSync(join(AIDLC_SRC, "tools", t), join(dir, ".claude", "tools", t));
   }
@@ -1466,7 +1469,7 @@ describe("t265b hook lifecycle", () => {
         expect(write.code, write.stderr).toBe(policy === "strict" ? 2 : 0);
         if (policy === "strict") {
           expect(write.stderr).toContain(
-            "Run `bun .claude/tools/aidlc-orchestrate.ts next` exactly as written, as a command of its own",
+            "Run `bun --config=.claude/tools/aidlc-bunfig.toml --no-env-file .claude/tools/aidlc-orchestrate.ts next` exactly as written, as a command of its own",
           );
         } else {
           expect(write.stdout).toBe("");
@@ -1813,6 +1816,8 @@ describe("t265b hook lifecycle", () => {
         for (const spelled of [
           `aidlc engine ${route}`,
           `bun .claude/tools/aidlc-${noun}.ts ${rest.join(" ")}`,
+          // As a copy install prints it: with the two Bun options that keep the project's bunfig.toml and .env out.
+          withCopyLaunchOptions(`bun .claude/tools/aidlc-${noun}.ts ${rest.join(" ")}`),
         ]) {
           const result = runHook(proj, BASH(spelled));
           expect(result.code, `${spelled}\n${result.stderr}`).toBe(code);
@@ -1829,6 +1834,10 @@ describe("t265b hook lifecycle", () => {
         ["aidlc engine now", 0],
         ["bun .claude/tools/aidlc.ts engine now", 0],
         ["bun .claude/tools/aidlc-utility.ts now", 0],
+        [withCopyLaunchOptions("bun .claude/tools/aidlc.ts engine now"), 0],
+        [withCopyLaunchOptions("bun .claude/tools/aidlc.ts doctor"), 0],
+        // A config file of the command's own choosing can preload code: not the engine as installed.
+        ["bun --config=other.toml --no-env-file .claude/tools/aidlc-bolt.ts set-autonomy --mode gated", 2],
         // The doctor's export writes its report bundle inside the project, in a
         // folder no plan names: a stuck person can always send one.
         ["aidlc doctor --export --output out", 0],
@@ -2842,12 +2851,12 @@ describe("t265b hook lifecycle", () => {
       ]) {
         const result = runHook(proj, { ...BASH(refused), cwd: proj });
         expect(result.code, refused).toBe(2);
-        const step = `bun .claude/tools/aidlc-orchestrate.ts ${named}`;
+        const step = `bun --config=.claude/tools/aidlc-bunfig.toml --no-env-file .claude/tools/aidlc-orchestrate.ts ${named}`;
         expect(result.stderr, refused).toContain(`Run \`${step}\` exactly as written, as a command of its own`);
         expect(runHook(proj, { ...BASH(step), cwd: proj }).code, step).toBe(0);
       }
       const bare = runHook(proj, { ...BASH("cd other && bun .claude/tools/aidlc.ts engine orchestrate next"), cwd: proj });
-      expect(bare.stderr).toContain("Run `bun .claude/tools/aidlc-orchestrate.ts next` exactly as written");
+      expect(bare.stderr).toContain("Run `bun --config=.claude/tools/aidlc-bunfig.toml --no-env-file .claude/tools/aidlc-orchestrate.ts next` exactly as written");
       if (process.platform === "win32") {
         const gitBash = `/${proj[0].toLowerCase()}${proj.slice(2).replaceAll("\\", "/")}`;
         for (const command of [
@@ -3448,6 +3457,131 @@ describe("t265b hook lifecycle", () => {
     }
   });
 
+  // A read command that starts another program (the program its command line
+  // names through an option or a variable, or one of the machine's
+  // decompressors), or that writes a file through an option, is judged as a
+  // command the guard cannot read, the way `sort -o` is: it waits while the
+  // plan waits and runs once the plan is approved.
+  test("a read command that starts another program or writes through an option waits for the plan", () => {
+    const proj = scratchProject();
+    try {
+      seedState(proj);
+      seedActiveDirective(proj, "code-generation");
+      seedUnit(proj, null, { plan: true, answer: null });
+      const waits = [
+        "rg --pre ./tool TODO src",
+        "rg --pre=./tool TODO src",
+        "rg --pre-glob '*.ts' TODO src",
+        "rg --hostname-bin ./tool TODO src",
+        "rg --hostname-bin=./tool TODO src",
+        "rg -z TODO src",
+        "rg -nz TODO src",
+        "rg --search-zip TODO src",
+        "sort --compress-program=./tool input.txt",
+        "sort --compress-program ./tool input.txt",
+        // sort and file take a long option cut to a prefix that names only it.
+        "sort --co=./tool input.txt",
+        "file -z src/inline.ts",
+        "file -bZ src/inline.ts",
+        "file --uncompress src/inline.ts",
+        "file --uncompress-noreport src/inline.ts",
+        // git grep handed a pager, and a read subcommand of git handed a
+        // program through configuration on the command line.
+        "git grep -O./tool TODO",
+        "git grep -nO./tool TODO",
+        "git grep --open-files-in-pager=./tool TODO",
+        "git grep --op=./tool TODO",
+        "git -c diff.external=./tool diff",
+        "git -c diff.notes.textconv=./tool show HEAD",
+        "git -c filter.notes.clean=./tool diff",
+        "git -c core.hooksPath=./hooks status",
+        "git -c include.path=./gitconfig status",
+        "git -C . -c core.fsmonitor=./tool status",
+        "git -c core.quotePath=false -c core.fsmonitor=./tool status",
+        "git --config-env=diff.external=TOOL diff",
+        "git --config-env diff.external=TOOL diff",
+        "git --config-env=core.fsmonitor=MONITOR status",
+        // The same program handed through a variable on the command line.
+        "RIPGREP_CONFIG_PATH=./rgrc rg TODO src",
+        "env RIPGREP_CONFIG_PATH=./rgrc rg TODO src",
+        "GIT_EXTERNAL_DIFF=./tool git diff",
+        "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=diff.external GIT_CONFIG_VALUE_0=./tool git diff",
+        "GIT_CONFIG_GLOBAL=./gitconfig git status",
+        "LESSOPEN='|./tool %s' more src/inline.ts",
+        // A file written through an option, in every spelling the command takes.
+        "sort input.txt --o=src/sorted.txt",
+        "sort input.txt --outp src/sorted.txt",
+        "sort -osrc/sorted.txt input.txt",
+        "sort -uo src/sorted.txt input.txt",
+        "file -C -m magic",
+        "file --compile -m magic",
+        // After an option's own value the next word is an option again.
+        "rg --regexp TODO --pre ./tool src",
+        "rg --regexp=TODO --pre ./tool src",
+        // However the command is reached.
+        "env rg --pre ./tool TODO src",
+        "/usr/bin/sort --compress-program=./tool input.txt",
+        "cat input.txt | sort --compress-program=./tool",
+        "cat input.txt | RIPGREP_CONFIG_PATH=./rgrc rg TODO",
+      ];
+      for (const command of waits) {
+        const held = runHook(proj, BASH(command));
+        expect(held.code, command).toBe(2);
+        expect(held.stderr, command).toContain("could not be read");
+      }
+      // The same letters and words as an option's value, after `--`, or in
+      // another option are a read.
+      for (const command of [
+        "rg TODO src",
+        "rg -tzsh TODO src",
+        "rg -ez src",
+        "rg -e --pre src",
+        "rg --regexp --pre src",
+        "rg --regexp -z src",
+        "rg --glob --pre-glob TODO src",
+        "rg -- --pre src",
+        "rg --pretty TODO src",
+        "rg TODO src | sort",
+        "sort --check input.txt",
+        "sort -t, -k2 input.txt",
+        "file -b src/inline.ts",
+        "file -e compress src/inline.ts",
+        "file -c src/inline.ts",
+        "file -m magic src/inline.ts",
+        "sort -to input.txt",
+        "git grep -e -O TODO",
+        "git grep --only-matching TODO",
+        "git grep -C 3 TODO",
+        "git log -c -1",
+        "git -C . status",
+        "git diff -Oorder.txt",
+        // A setting that names no program is a read.
+        "git -c core.quotePath=false status --short",
+        "git -c core.fsmonitor=false status --short",
+        "git -c color.ui=never log -1",
+        "git --config-env=http.proxy=PROXY status --short",
+        // What the person's own git configuration names is theirs, a pager
+        // never starts without a terminal, and neither does a pager command.
+        "git diff --ext-diff",
+        "GIT_PAGER=cat git log -1",
+        "more '+!./tool' src/inline.ts",
+        "LC_ALL=C sort input.txt",
+        "GIT_CONFIG_NOSYSTEM=1 git status",
+        // Not one of git's read subcommands: a program run, as before.
+        "git -c user.name=x commit -m y",
+      ]) {
+        expect(runHook(proj, BASH(command)).code, command).toBe(0);
+      }
+
+      seedUnit(proj, null, { plan: true, answer: "A. Approve Plan" });
+      for (const command of waits) {
+        expect(runHook(proj, BASH(command)).code, command).toBe(0);
+      }
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
   // Kiro IDE's execute_pwsh arrives as Bash marked as PowerShell. The probes an
   // agent writes there before approval are reads and stay available; every
   // form that can write, or that the guard cannot read, is still refused.
@@ -3830,7 +3964,7 @@ describe("t265b hook lifecycle", () => {
       // itself, on Windows too).
       const sentence =
         "An apply_patch with its patch in the command itself (`apply_patch <<'PATCH'`, the patch, then `PATCH` on its own line) is read as the writes it names.";
-      const today = "This shell command could not be read, so AI-DLC cannot tell whether it writes files. Code generation cannot run it for the zero-Unit stage-level implementation because the plan, unit-test instructions, and current Testing Contract do not have a current matching approval. Reason: code-generation-plan.md is missing or empty. A read written out, naming each file (for example `cat src/app.ts`), runs while the plan waits. Writes inside the selected code-generation record directory remain available for planning. When the plan is ready, run `bun .claude/tools/aidlc-orchestrate.ts next` exactly as written, as a command of its own (no `cd` before it, no pipe or second command after it): the engine asks the person to approve it before any code is written.";
+      const today = "This shell command could not be read, so AI-DLC cannot tell whether it writes files. Code generation cannot run it for the zero-Unit stage-level implementation because the plan, unit-test instructions, and current Testing Contract do not have a current matching approval. Reason: code-generation-plan.md is missing or empty. A read written out, naming each file (for example `cat src/app.ts`), runs while the plan waits. Writes inside the selected code-generation record directory remain available for planning. When the plan is ready, run `bun --config=.claude/tools/aidlc-bunfig.toml --no-env-file .claude/tools/aidlc-orchestrate.ts next` exactly as written, as a command of its own (no `cd` before it, no pipe or second command after it): the engine asks the person to approve it before any code is written.";
       // Every other line the guard cannot read keeps today's words, byte for byte.
       const unread = runHook(proj, BASH(`sh <<'EOF'\nprintf x > ${plan}\nEOF`)).stderr.trim();
       if (process.platform !== "win32") expect(unread).toBe(today);
@@ -4103,7 +4237,7 @@ describe("t265b hook lifecycle", () => {
       writeFileSync(join(proj, ".claude", "tools", "aidlc-orchestrate.ts"), "// installed tool fixture\n");
       const statePath = join(proj, RECORD_REL, "aidlc-state.md");
       const p = shellQuoted(proj);
-      const named = "bun .claude/tools/aidlc-orchestrate.ts next";
+      const named = "bun --config=.claude/tools/aidlc-bunfig.toml --no-env-file .claude/tools/aidlc-orchestrate.ts next";
       // VS Code hands a hook `c:\...` where an agent writes `C:\...`.
       const lowerDrive = (path: string) => path.replace(/^[A-Z](?=:)/, (drive) => drive.toLowerCase());
       const upperDrive = (path: string) => path.replace(/^[a-z](?=:)/, (drive) => drive.toUpperCase());
@@ -5343,7 +5477,7 @@ describe("t265c registrations", () => {
     expect(emission).toBeGreaterThan(validation);
   });
 
-  test("code-generation stage requires the explicit dispatch unit marker", () => {
+  test("code-generation stage leaves the developer's brief to the step's plan note", () => {
     const stage = readFileSync(
       join(
         REPO_ROOT,
@@ -5357,8 +5491,13 @@ describe("t265c registrations", () => {
       ),
       "utf-8",
     );
-    expect(stage).toContain("AIDLC-UNIT: <directive.unit>");
-    expect(stage).toContain("AIDLC-TESTING-CONTRACT: <contract_sha256>");
+    // The note names the exact brief command where the conductor passes it,
+    // and says the developer is handed its plan where a tool does that.
+    expect(stage).toContain("the step's plan note says how the developer gets the\nplan and its test instructions");
+    // A step that carries no plan note (a legacy Kiro IDE window's) still names the brief command.
+    expect(stage).toContain("for a step with no plan note, start the message with the\n" +
+      "output of `bun --config=.claude/tools/aidlc-bunfig.toml --no-env-file .claude/tools/aidlc-testing-posture.ts brief --unit <directive.unit>`");
+    expect(stage).not.toContain("verbatim and unedited");
   });
 
   test("all native projections emit the Plan Approval prerequisite commands", () => {

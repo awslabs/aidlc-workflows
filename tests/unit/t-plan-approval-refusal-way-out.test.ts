@@ -60,6 +60,7 @@ import {
   seededStateFile,
 } from "../harness/fixtures.ts";
 import { namedCommands, respell, SESSION as SHAPE_SESSION, SHAPES } from "../harness/code-generation-states.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import {
   AS_ITS_OWN_COMMAND,
   codeGenerationRulesArrivingReason,
@@ -86,10 +87,10 @@ const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 const GUARD = join(AIDLC_SRC, "hooks", "aidlc-plan-approval-guard.ts");
 const RELEASE_GUARD = join(REPO_ROOT, "dist-release", "claude", ".claude", "hooks", "aidlc-plan-approval-guard.ts");
 const SESSION = "01995000-7a11-7000-8000-0000000000a1";
-const SOURCE_NEXT = "bun .claude/tools/aidlc-orchestrate.ts next";
+const SOURCE_NEXT = withCopyLaunchOptions("bun .claude/tools/aidlc-orchestrate.ts next");
 const ON_ITS_OWN = "exactly as written, as a command of its own (no `cd` before it, no pipe or second command after it)";
 const ALREADY_APPROVED = "is already approved: do not ask the person to approve it again yourself";
-const SOURCE_BRIEF = "bun .claude/tools/aidlc-testing-posture.ts brief --stage-level";
+const SOURCE_BRIEF = withCopyLaunchOptions("bun .claude/tools/aidlc-testing-posture.ts brief --stage-level");
 
 interface Emitted {
   kind: string;
@@ -175,13 +176,13 @@ function stageDir(proj: string, unit: string | null): string {
   return join(seededRecordDir(proj), "construction", ...(unit ? [unit] : []), "code-generation");
 }
 
-function writePlan(proj: string, unit: string | null = null): void {
+function writePlan(proj: string, unit: string | null = null, contract = resolveTestingPosture(proj)): void {
   mkdirSync(stageDir(proj, unit), { recursive: true });
   writeFileSync(
     join(stageDir(proj, unit), "code-generation-plan.md"),
     "# Code Generation Plan\n\n## Summary\n\n- Builds: slugify for titles\n- Touches: src/slugify.ts\n" +
       "- Tests: 3 unit tests\n\n## Steps\n\n- [ ] Step 1: write slugify\n\n" +
-      renderTestingContract(resolveTestingPosture(proj)),
+      renderTestingContract(contract),
     "utf-8",
   );
   writeFileSync(
@@ -308,7 +309,7 @@ function namedBrief(words: string): string {
 // Runs a command a refusal named, the way the conductor would, from the
 // project's own copy of the tools.
 function runInstalled(proj: string, command: string): string {
-  expect(command).toMatch(/^bun \.claude\/tools\/[\w.-]+\.ts( [\w-]+)+$/);
+  expect(command).toMatch(/^bun (?:--config=\.claude\/tools\/aidlc-bunfig\.toml --no-env-file )?\.claude\/tools\/[\w.-]+\.ts( [\w-]+)+$/);
   const [, ...args] = command.split(" ");
   const result = spawnSync(BUN, args, {
     cwd: proj,
@@ -404,7 +405,7 @@ describe("a stale build step after approval: the refusal names the way back", ()
     expect(next(proj).kind).toBe("run-stage");
     inherit();
     const refused = said(twoTargetHandoff(proj));
-    expect(namedBrief(refused)).toBe("bun .claude/tools/aidlc-testing-posture.ts brief --unit unit-2");
+    expect(namedBrief(refused)).toBe(withCopyLaunchOptions("bun .claude/tools/aidlc-testing-posture.ts brief --unit unit-2"));
   });
 
   test.each([false, true])("plan approval off (plan edited after it was built: %p): no approval is needed, nobody approved", (edited) => {
@@ -594,7 +595,7 @@ describe("while the rules arrive in parts", () => {
       continue_token: "abcdEFGH", state_sha256: "0".repeat(64),
     } as Parameters<typeof codeGenerationRulesArrivingReason>[0]);
     expect(reason).toContain(`Run each command named here ${AS_ITS_OWN_COMMAND}.`);
-    expect(reason).toContain("`bun .claude/tools/aidlc-orchestrate.ts continue abcdEFGH`");
+    expect(reason).toContain(`\`${withCopyLaunchOptions("bun .claude/tools/aidlc-orchestrate.ts continue abcdEFGH")}\``);
   });
 });
 
@@ -618,8 +619,9 @@ describe("an isolated Code Generation run, the workflow at another stage: the re
   // The named command, run as printed (its rule parts followed as the agent follows them).
   function follow(proj: string, command: string): Emitted {
     const words = command.split(" ");
-    expect(words.slice(0, 3)).toEqual(["bun", ".claude/tools/aidlc-orchestrate.ts", "next"]);
-    return next(proj, words.slice(3));
+    const head = SOURCE_NEXT.split(" ");
+    expect(words.slice(0, head.length)).toEqual(head);
+    return next(proj, words.slice(head.length));
   }
 
   test.each(["strict", "relaxed", "off"] as const)("no plan yet, Guard Policy %s: a write and the handoff name it, and it brings back the plan step", (policy) => {
@@ -732,7 +734,7 @@ describe("a lowered fence never refuses because its audit row could not be writt
     if (mode === "relaxed") {
       expect(write.stdout).toContain(
         "Not recorded in the audit trail, which was busy or could not be written; " +
-          "`bun .claude/tools/aidlc.ts doctor` lists it",
+          `\`${withCopyLaunchOptions("bun .claude/tools/aidlc.ts doctor")}\` lists it`,
       );
     } else {
       // Off says nothing; the doctor still lists the row it could not write.
@@ -785,6 +787,8 @@ describe("no refusal names a step the install cannot run", () => {
 const markerFile = (proj: string) => join(seededRecordDir(proj), ".aidlc-engine", "active-directive.json");
 const markerOf = (proj: string) => JSON.parse(readFileSync(markerFile(proj), "utf-8")) as Record<string, unknown>;
 const asideRows = (proj: string) => readAuditShardEvents(proj).filter((row) => row.event === "GUARD_STOOD_ASIDE");
+
+const memoryDir = (proj: string) => join(proj, "aidlc", "spaces", "default", "memory");
 
 function underHeading(proj: string, file: string, heading: string, line: string): void {
   const path = join(proj, "aidlc", "spaces", "default", "memory", file);
@@ -1015,8 +1019,70 @@ describe("the plan's Testing Contract changed after the person approved it", () 
     const strict = approvedBuildThenPostureEdit("strict").proj;
     expect(said(writeSource(strict))).toContain("the approved Testing Contract is stale");
     expect(contractRows(strict)).toHaveLength(0);
-    // The engine writes the moved contract into the plan and asks again.
+    // The person's memory is theirs: putting a file back is not refused.
+    const memory = join(memoryDir(strict), "project.md");
+    expect(shell(strict, `git checkout -- ${memory}`).code).toBe(0);
+    expect(shell(strict, `git restore ${memory}`).code).toBe(0);
+    // The engine writes the moved contract into the plan and asks again, and
+    // leaves their edit as it is; their approval builds.
+    const edited = readFileSync(memory, "utf-8");
     expect(next(strict).ask_type).toBe("plan-approval");
+    expect(readFileSync(memory, "utf-8")).toBe(edited);
+    reply(strict, "approve");
+    expect(next(strict).plan_approval?.status).toBe("approved");
+    expect(writeSource(strict).code).toBe(0);
+  });
+
+  // A blank line, trailing spaces or a comment line in a Testing Posture
+  // section changes nothing the agent is handed or a person sees.
+  const FORMATTING: Array<[string, (text: string) => string]> = [
+    ["a blank line", (text) => text.replace("- Methodology: tdd\n", "- Methodology: tdd\n\n\n")],
+    ["trailing spaces", (text) => text.replace("- Methodology: tdd\n", "- Methodology: tdd   \n")],
+    ["a comment line", (text) => text.replace("## Testing Posture\n", "## Testing Posture\n<!-- reviewed with the team -->\n")],
+  ];
+  for (const [name, edit] of FORMATTING) {
+    test(`strict: ${name} in the posture after the approval, and the build goes on with nothing asked`, () => {
+      const proj = project("strict");
+      underHeading(proj, "project.md", "## Testing Posture", "- Methodology: tdd");
+      writePlan(proj);
+      expect(next(proj)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
+      reply(proj, "approve");
+      expect(next(proj).kind).toBe("run-stage");
+      const path = join(memoryDir(proj), "project.md");
+      writeFileSync(path, edit(readFileSync(path, "utf-8")), "utf-8");
+      const write = guardOut(proj, "Write", { file_path: join(proj, "src", "slugify.ts"), content: "x\n" });
+      expect(write.code, write.stderr).toBe(0);
+      expect(write.stdout).toBe("");
+      expect(guard(proj, "Task", { subagent_type: "aidlc-developer-agent", prompt: runInstalled(proj, SOURCE_BRIEF) }).code)
+        .toBe(0);
+      expect(next(proj).plan_approval).toEqual({ status: "approved" });
+      expect(contractRows(proj)).toHaveLength(0);
+      expect(readAuditShardEvents(proj).filter((row) => row.event === "PLAN_APPROVAL_BLOCKED")).toHaveLength(0);
+    });
+  }
+
+  // The update: a plan approved before it carries the contract read the
+  // earlier way (the raw section text). It still holds for that text, with
+  // nothing rewritten, and only for that text.
+  test("strict: a plan approved before the update builds after it, and a blank line then brings it back", () => {
+    const proj = project("strict");
+    underHeading(proj, "project.md", "## Testing Posture", "- Methodology: tdd");
+    writePlan(proj, null, resolveTestingPosture(proj, "raw"));
+    const planPath = join(stageDir(proj, null), "code-generation-plan.md");
+    expect(next(proj)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
+    reply(proj, "approve");
+    expect(next(proj).plan_approval).toEqual({ status: "approved" });
+    const approvedPlan = readFileSync(planPath, "utf-8");
+    expect(approvedPlan).toContain(resolveTestingPosture(proj, "raw").contract_sha256);
+    expect(writeSource(proj).code).toBe(0);
+    const brief = runInstalled(proj, SOURCE_BRIEF);
+    expect(brief).toContain(`AIDLC-TESTING-CONTRACT: ${resolveTestingPosture(proj, "raw").contract_sha256}`);
+    expect(guard(proj, "Task", { subagent_type: "aidlc-developer-agent", prompt: brief }).code).toBe(0);
+    expect(readFileSync(planPath, "utf-8")).toBe(approvedPlan);
+    const path = join(memoryDir(proj), "project.md");
+    writeFileSync(path, readFileSync(path, "utf-8").replace("- Methodology: tdd\n", "- Methodology: tdd\n\n\n"), "utf-8");
+    expect(said(writeSource(proj))).toContain("the approved Testing Contract is stale");
+    expect(next(proj).ask_type).toBe("plan-approval");
   });
 });
 

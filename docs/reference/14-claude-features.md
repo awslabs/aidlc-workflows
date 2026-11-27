@@ -214,9 +214,10 @@ The audit trail is committed as **per-clone shards** (`audit/<host>-<clone>.md`)
   "permissions": {
     "allow": [
       "Edit(/**)",
-      "Bash(bun .claude/tools/aidlc.ts engine *)",
-      "Bash(bun .claude/tools/aidlc.ts doctor)", "...",
-      "Bash(bun .claude/tools/aidlc-log.ts)", "Bash(bun .claude/tools/aidlc-log.ts *)", "...",
+      "Bash(bun --config=.claude/tools/aidlc-bunfig.toml --no-env-file .claude/tools/aidlc.ts engine *)",
+      "Bash(bun --config=.claude/tools/aidlc-bunfig.toml --no-env-file .claude/tools/aidlc.ts doctor)", "...",
+      "Bash(bun --config=.claude/tools/aidlc-bunfig.toml --no-env-file .claude/tools/aidlc-log.ts)",
+      "Bash(bun --config=.claude/tools/aidlc-bunfig.toml --no-env-file .claude/tools/aidlc-log.ts *)", "...",
       "Task", "WebSearch"
     ]
   }
@@ -383,7 +384,7 @@ When a user runs `/aidlc feature`:
 2a. SessionStart hook fires      (settings.json -- if session resume)
 3.  memory/ rules load            (every conversation)
 4.  SKILL.md activates           (skill invocation -- the conductor)
-5.  Conductor calls the engine   (`aidlc-orchestrate next $ARGUMENTS`)
+5.  Conductor calls the engine   (`aidlc-orchestrate next --entry`; the engine reads the typed line, `feature`, from its own record)
 6.  Engine reads state + graph   (decides the move, emits a typed directive)
 7.  Conductor acts on directive  (run-stage: load agent .md + knowledge, run the body)
 8.  Stage executes               (stage work)

@@ -96,9 +96,10 @@ aidlc/spaces/<space>/knowledge/   # empty at bootstrap; create the subdirs you n
 
 Team knowledge files are curated reference material. DocumentKB is the companion
 catalog for documents the team already owns: vision documents, PRDs,
-requirements briefs, policies, contracts, PDFs, Word and Excel files, Markdown,
-CSV, and plain text. AI-DLC reads Word and Excel files itself (a workbook's every
-sheet, as a table), and a PDF with `pdftotext` where it is installed, or with
+requirements briefs, policies, contracts, PDFs, Word and Excel files, HTML pages,
+Markdown, CSV, and plain text. AI-DLC reads Word and Excel files and HTML pages
+itself (a workbook's every sheet, as a table; a page's text, without its markup),
+and a PDF with `pdftotext` where it is installed, or with
 its own reader where it is not (see Reading PDFs below). See
 [Starting from an existing document](02-your-first-workflow.md#starting-from-an-existing-document)
 for ways to use one as workflow input.
@@ -172,7 +173,10 @@ A file in `documents/` that is not in the knowledge base yet, or is in it with
 no text it can read (a type it has no reader for, such as an old `.xls` or a slide
 deck, or a scanned page), is named by AI-DLC in one line when work starts
 or goes on, with what to do for each kind: add it with `sync`, or save a text
-copy (`.md`, `.txt` or `.csv`) beside it with the same name, then `sync`. Each
+copy (`.md`, `.txt` or `.csv`) beside it with the same name, then `sync`. Text
+is read as UTF-8 only: a `.txt` or `.csv` in another encoding (Excel's plain
+"CSV", an "ANSI" or "Unicode" Notepad file) is named as not UTF-8, and is read
+once you save it again as UTF-8 (from Excel, "CSV UTF-8") and `sync`. Each
 file is named once in a piece of work, and the work goes on: carrying on
 without it is your call. `aidlc doctor` lists the same files each time you run
 it, as a warning.

@@ -40,6 +40,7 @@ import {
 } from "../harness/code-generation-states.ts";
 import { invalidateActiveDirectiveContext, stateDigest, writeActiveDirectiveMarker } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { resolveTestingPosture } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 
 // The stage's checks run once before its review or gate, and again at the gate
 // (completionChecksStep, t-checks-before-review); this file's fixture documents
@@ -53,7 +54,9 @@ afterEach(() => {
   while (created.length > 0) cleanupTestProject(created.pop());
 });
 
-const WAITS = "The code plan is not approved yet: run `bun .claude/tools/aidlc-orchestrate.ts next` and follow the step it prints.";
+// The step's `next`, as the copy tree this file's projects hold prints it.
+const NEXT_STEP = withCopyLaunchOptions("bun .claude/tools/aidlc-orchestrate.ts next");
+const WAITS = `The code plan is not approved yet: run \`${NEXT_STEP}\` and follow the step it prints.`;
 const REVIEWER = "aidlc-architecture-reviewer-agent";
 
 function report(proj: string, result: string, extra = "", env: NodeJS.ProcessEnv = {}): { status: number; step: Step } {
@@ -265,7 +268,9 @@ describe("at the open gate the person's plan stands", () => {
 
 // A feature project at Code Generation for one Unit, after Units Generation
 // ran, built through `next`.
-function perUnit(policy: "relaxed" | "strict" = "relaxed"): string {
+// `earlier`: the plan's Testing Contract read the earlier way, as a plan
+// approved before the update carries it.
+function perUnit(policy: "relaxed" | "strict" = "relaxed", earlier = false): string {
   const proj = createCodeGenerationProject(policy);
   created.push(proj);
   const stateFile = seededStateFile(proj);
@@ -276,7 +281,7 @@ function perUnit(policy: "relaxed" | "strict" = "relaxed"): string {
   seedBoltDagBatches(proj, [["alpha"]]);
   const step = next(proj);
   expect(step.unit, JSON.stringify(step)).toBe("alpha");
-  writePlan(proj, "", "alpha");
+  writePlan(proj, "", "alpha", earlier ? resolveTestingPosture(proj, "raw") : undefined);
   const dir = stageDir(proj, "alpha");
   writeFileSync(join(dir, "code-summary.md"), "# Code Summary\n\nslugify\n", "utf-8");
   writeFileSync(join(dir, "traceability.json"), "{}\n", "utf-8");
@@ -378,6 +383,26 @@ describe("a testing practice kept at the gate is for the next build", () => {
     expect(readFileSync(planFile(proj), "utf-8")).toBe(plan);
   });
 
+  // A plan approved before the update carries its contract read the earlier
+  // way; the review recorded after the update keeps that contract as the one
+  // the build was finished under, so the practice is for the next build here too.
+  test("strict: a plan approved before the update, reviewed after it, then a practice kept: the gate opens", () => {
+    const proj = inProgress("strict");
+    writePlan(proj, "", null, resolveTestingPosture(proj, "raw"));
+    expect(next(proj).ask_type).toBe("plan-approval");
+    approvePlan(proj);
+    expect(next(proj).plan_approval?.status).toBe("approved");
+    const plan = readFileSync(planFile(proj), "utf-8");
+    expect(plan).toContain(resolveTestingPosture(proj, "raw").contract_sha256);
+    built(proj);
+    keepTestingPractice(proj);
+    const opened = lastStep(runNamed(proj, OPEN_GATE).stdout);
+    expect(opened.kind, JSON.stringify(opened)).toBe("print");
+    expect(opened.message, JSON.stringify(opened)).not.toBe(WAITS);
+    expect(stageLine(proj)).toContain("[?] code-generation");
+    expect(readFileSync(planFile(proj), "utf-8")).toBe(plan);
+  });
+
   // The chat compacts between the learnings step and the gate, so `next` comes
   // first: it hands over the finish of the reviewed build, not the build again,
   // and a write the agent tries meanwhile is refused toward that finish.
@@ -405,7 +430,7 @@ describe("a testing practice kept at the gate is for the next build", () => {
     // A developer handoff is refused as it is on main, naming `next` too.
     const handoff = dispatchOn(proj, brief.stdout);
     expect(handoff).toStartWith("exit 2;");
-    expect(handoff).toContain("bun .claude/tools/aidlc-orchestrate.ts next");
+    expect(handoff).toContain(NEXT_STEP);
     expect(lastStep(runNamed(proj, OPEN_GATE).stdout).message).not.toBe(WAITS);
     expect(stageLine(proj)).toContain("[?] code-generation");
   });
@@ -425,7 +450,7 @@ describe("a testing practice kept at the gate is for the next build", () => {
     const review = answer(proj, "Review the plan");
     expect(review.status, `${review.stdout}${review.stderr}`).toBe(0);
     expect(lastStep(runNamed(proj, OPEN_GATE).stdout).message, "the gate waits for the plan they asked to see")
-      .toBe("The person asked to see the code plan again: run `bun .claude/tools/aidlc-orchestrate.ts next` and follow the step it prints.");
+      .toBe(`The person asked to see the code plan again: run \`${NEXT_STEP}\` and follow the step it prints.`);
     expect(stageLine(proj)).toContain("[-] code-generation");
     const step = next(proj);
     expect(step.kind, JSON.stringify(step)).toBe("ask");
@@ -508,14 +533,18 @@ describe("a testing practice kept at the gate is for the next build", () => {
   });
 
   // A Unit approved, started and reviewed, then a practice kept.
-  const keptAfterUnitReview = (): string => {
-    const proj = perUnit("strict");
+  const keptAfterUnitReview = (earlier = false): string => {
+    const proj = perUnit("strict", earlier);
     expect(next(proj).ask_type).toBe("plan-approval");
     reply(proj, "approve");
     expect(answer(proj, "Approve Plan", ["--session", SESSION]).status).toBe(0);
     expect(next(proj).plan_approval?.status).toBe("approved");
     expect(runNamed(proj, "bun .claude/tools/aidlc.ts engine state unit start --stage code-generation --unit alpha").status).toBe(0);
     reviewed(proj, 1, { unit: "alpha" });
+    if (earlier) {
+      expect(readFileSync(join(stageDir(proj, "alpha"), "code-generation-plan.md"), "utf-8"))
+        .toContain(resolveTestingPosture(proj, "raw").contract_sha256);
+    }
     keepTestingPractice(proj);
     return proj;
   };
@@ -531,6 +560,13 @@ describe("a testing practice kept at the gate is for the next build", () => {
     expect(completed.stdout).toContain("UNIT_COMPLETED");
   });
 
+  test("strict, a Unit approved before the update and reviewed after it: kept then, the Unit completes", () => {
+    const proj = keptAfterUnitReview(true);
+    const completed = runNamed(proj, "bun .claude/tools/aidlc.ts engine state unit complete --stage code-generation --unit alpha");
+    expect(completed.status, completed.stdout + completed.stderr).toBe(0);
+    expect(completed.stdout).toContain("UNIT_COMPLETED");
+  });
+
   test("strict, a Unit: a Review the plan after the kept practice holds its completion and says so", () => {
     const proj = keptAfterUnitReview();
     reply(proj, "review the plan first");
@@ -540,7 +576,7 @@ describe("a testing practice kept at the gate is for the next build", () => {
     expect(refused.status, refused.stdout + refused.stderr).not.toBe(0);
     expect((JSON.parse(refused.stderr || "{}") as { error?: string }).error).toBe(
       'Refusing to complete unit "alpha" for "code-generation": The person asked to see the code plan again: ' +
-        "run `bun .claude/tools/aidlc-orchestrate.ts next` and follow the step it prints.");
+        `run \`${NEXT_STEP}\` and follow the step it prints.`);
     expect(auditEvents(proj).some((row) => row.event === "UNIT_COMPLETED"), "nothing moved").toBe(false);
     const step = next(proj);
     expect(step.ask_type, JSON.stringify(step)).toBe("plan-approval");
@@ -804,7 +840,7 @@ describe("one owner: an isolated Code Generation run completes only once its pla
   const SINGLE = ["--stage", "code-generation", "--single"];
   const SINGLE_REPORT = "bun .claude/tools/aidlc.ts engine orchestrate report --single --stage code-generation --result completed";
   const singleWaits = (scope: string) => "The code plan is not approved yet: run " +
-    `\`bun .claude/tools/aidlc-orchestrate.ts next --stage code-generation --single --scope ${scope}\` and follow the step it prints.`;
+    `\`${NEXT_STEP} --stage code-generation --single --scope ${scope}\` and follow the step it prints.`;
   const SINGLE_WAITS = singleWaits("poc");
   const completions = (proj: string) => auditEvents(proj).filter((row) => row.event === "STAGE_COMPLETED").length;
   const ISOLATED: Array<{ name: string; waits: boolean; build: () => string }> = [

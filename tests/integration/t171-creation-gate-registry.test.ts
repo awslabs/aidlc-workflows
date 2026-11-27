@@ -161,10 +161,11 @@ function runEmittedCommand(command: string, p = proj, extraEnv: Record<string, s
   return { status: r.exitCode, stdout, out: `${stdout}${r.stderr.toString()}` };
 }
 
-// The argv an emitted command hands its program: the leading `bun <tool>` is
-// swapped for printf, so the shell's own word splitting is what gets checked.
+// The argv an emitted command hands its program: the leading `bun <tool>`,
+// with the copy launch's two Bun options when it has them, is swapped for
+// printf, so the shell's own word splitting is what gets checked.
 function emittedArgv(command: string): string[] {
-  const probe = command.replace(/^bun \S+ /, "printf '%s\\n' ");
+  const probe = command.replace(/^bun (?:--config=\S+ --no-env-file )?\S+ /, "printf '%s\\n' ");
   expect(probe, command).not.toBe(command);
   return runEmittedCommand(probe).stdout.split("\n").slice(0, -1);
 }

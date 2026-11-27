@@ -122,8 +122,8 @@ function printedReopen(checkout: string, stage = "functional-design"): string {
   const message = String(JSON.parse(next.stdout).message ?? "");
   const command = new RegExp(`\`([^\`]* reopen --target ${stage} [^\`]*)\``).exec(message)?.[1];
   expect(command, message).toBeDefined();
-  // As an installed engine runs it (the fixture prints the source tool's spelling).
-  return command!.replace(/^bun \S*aidlc-jump\.ts /, "aidlc engine jump ");
+  // As an installed engine runs it (the fixture prints the copy tree's spelling, Bun's two options included).
+  return command!.replace(/^bun (?:--config=\S*aidlc-bunfig\.toml --no-env-file )?\S*aidlc-jump\.ts /, "aidlc engine jump ");
 }
 
 describe("t-team-unit-guard-restart: a Unit's picked restart runs from its checkout", () => {

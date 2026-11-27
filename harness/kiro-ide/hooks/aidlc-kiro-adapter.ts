@@ -184,11 +184,12 @@ import {
   questionsFilePlanApprovalAnswer,
   resolveCodeGenerationAuthority,
   resolveTestingPosture,
+  testingContractCurrent,
   withPlanApprovalTags,
 } from "../tools/aidlc-testing-posture.ts";
 import { normalizeRetiredGuardPolicyField } from "../tools/aidlc-guard-switch.ts";
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
-import { aidlcEngineCommand, aidlcInvocation } from "../tools/aidlc-runtime-paths.ts";
+import { aidlcEngineCommand, aidlcInvocation, bunLaunchFlags, bunLaunchOptionWords, withoutBunLaunchOptions } from "../tools/aidlc-runtime-paths.ts";
 import { aidlcEntryWords } from "../tools/aidlc-reply-reader.ts";
 import { kiroChatRecordPaths, kiroDefaultAgentName } from "../tools/aidlc-kiro-chat-record.ts";
 import { terminalDispatcherArgv } from "../tools/aidlc.ts";
@@ -618,7 +619,7 @@ function processLegacyPlanApprovalWrite(
     // The engine's own writer replaces the whole section. A plan it cannot
     // write the block into is left as it is; the blank Plan Approval write
     // that follows tries again before it stops on the contract.
-    const written = parseTestingContract(plan)?.contract_sha256 !== contract.contract_sha256
+    const written = !testingContractCurrent(projectDir, parseTestingContract(plan), contract)
       ? planWithTestingContract(plan, contract)
       : null;
     if (written !== null) writeFileSync(planPath, written, "utf-8");
@@ -673,8 +674,8 @@ function processLegacyPlanApprovalWrite(
     }
     const plan = readFileSync(planPath, "utf-8");
     const instructions = readFileSync(instructionsPath, "utf-8");
-    const contract = resolveTestingPosture(projectDir);
-    if (parseTestingContract(plan)?.contract_sha256 !== contract.contract_sha256) {
+    const contract = parseTestingContract(plan);
+    if (contract === null || !testingContractCurrent(projectDir, contract)) {
       throw new LegacyPlanApprovalMediationError(
         "legacy Plan Approval mediation requires the current Testing Contract in code-generation-plan.md",
       );
@@ -1363,7 +1364,9 @@ function posixReading(tool: string, command: string): string | null {
 // plain `aidlc version` or `aidlc doctor` printed to a file is the person's
 // business and passes.
 function isEngineCommand(segment: string): boolean {
-  const words = segment.trim().replace(/^[&.]\s+/, "").split(/\s+/).map((word) => word.replace(/^["']|["']$/g, ""));
+  const all = segment.trim().replace(/^[&.]\s+/, "").split(/\s+/).map((word) => word.replace(/^["']|["']$/g, ""));
+  // A copy launch's two Bun options read as the launch without them.
+  const words = [all[0] ?? "", ...all.slice(1 + bunLaunchOptionWords(all, 1))];
   const [program = "", first = "", second = ""] = words;
   if (/(?:^|[\\/])aidlc(?:\.cmd|\.exe)?$/i.test(program)) return first.toLowerCase() === "engine";
   if (!/(?:^|[\\/])bun(?:\.exe)?$/i.test(program)) return false;
@@ -1533,6 +1536,7 @@ function copyChannelCommandArgs(words: PowerShellWord[]): PowerShellWord[] | nul
   const program = words[start];
   if (program === undefined || program.opaque || !/(?:^|[\\/])bun(?:\.exe)?$/i.test(program.value)) return null;
   let at = start + 1;
+  if (words.slice(at, at + 2).every((word) => !word.opaque)) at += bunLaunchOptionWords(words.map((word) => word.value), at);
   if (words[at] !== undefined && !words[at].opaque && words[at].value === "run") at++;
   const script = words[at];
   if (
@@ -2038,7 +2042,8 @@ function promptTerminalInvocation(prompt: string): TerminalInvocation {
 }
 
 function toolTerminalInvocation(command: string): TerminalInvocation | null {
-  const match = command.trim().match(
+  // A copy launch's two Bun options read as the launch without them.
+  const match = withoutBunLaunchOptions(command).trim().match(
     /^(?:env\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|[^\s"']*)\s+)*(?:(?:"([^"]+)"|'([^']+)'|(\S+))\s+)?["']?\.kiro[\\/]tools[\\/]aidlc-orchestrate\.ts["']?\s+next(?:\s+([\s\S]*))?$/i,
   );
   if (match === null) return null;
@@ -2128,7 +2133,7 @@ function runTerminalCommand(command: TerminalCommand): TerminalResult | null {
     const result = Bun.spawnSync(
       executable
         ? [executable, ...terminalDispatcherArgv(command)]
-        : [process.execPath, ...sourceArgs],
+        : [process.execPath, ...bunLaunchFlags(), ...sourceArgs],
       {
         cwd: projectDir,
         stdout: "pipe",
@@ -2288,7 +2293,7 @@ function notePromptCapability(sessionId: string): void {
 function noteDefaultAgent(sessionId: string): void {
   const noted = join(terminalSessionDir(sessionId), "default-agent-noted");
   if (aidlcEntryWords(ide.prompt ?? "") === null || existsSync(noted)) return;
-  const name = kiroDefaultAgentName(ide.sessionId?.trim(), `${aidlcInvocation()} engine orchestrate next`);
+  const name = kiroDefaultAgentName(ide.sessionId?.trim(), `${aidlcInvocation()} engine orchestrate next --entry`);
   if (name === "") return;
   try {
     writeFileSync(noted, "", { flag: "wx" });
@@ -2359,7 +2364,7 @@ function nextLoweringGuardFlags(args: string[]): GuardLowering {
 function loweringGuardInvocation(
   rawCommand: string,
 ): GuardLowering {
-  const match = rawCommand.trim().match(
+  const match = withoutBunLaunchOptions(rawCommand).trim().match(
     /^(?:env\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|[^\s"']*)\s+)*(?:(?:"([^"]+)"|'([^']+)'|(\S+))\s+)?["']?(\.kiro[\\/]tools[\\/]aidlc(?:-utility)?\.ts)["']?(?:\s+([\s\S]*))?$/i,
   );
   if (match === null) return null;
@@ -2451,57 +2456,15 @@ function writeTerminalLatch(
 // the rest answer `/aidlc <words>` as a plain coding request. This member runs
 // on every typed line before the agent's first word and Kiro adds its stdout
 // to the agent's context, so when the line is AI-DLC's and no utility ran it
-// here, the agent hears the one first step: the engine's `next`, which reads
-// the recorded line (takePersonsOwnLine) and owns what follows. The entry word,
-// the words and the flags are the engine's own parse (nextArgsAreOnlyWords):
-// a line with a flag or verb stays the agent's, as today, and so does any
-// other line (`/aidlc-<runner>`, plain words). The engine reads the recorded
-// line only while no work is selected (a bare `next` with work under way is
-// the work's own continuation), so words typed while this chat's workflow
-// has a record are left to the agent as today: the aidlc agent's skill
-// passes them to `next` itself. A bare `/aidlc` is the resume gesture on
-// any path. A plan's name typed alone (`/aidlc bugfix`) is a line the bare
-// `next` does not read, so the step names the plan (nextArgsNameOnlyAPlan):
-// `next <plan>` asks what the work is for. On the aidlc agent the line
-// repeats what its skill already says.
-async function firstStepLine(prompt: string, pd: string, sessionId: string): Promise<string> {
-  const text = prompt.trim();
-  let step = "next";
-  const words = aidlcEntryWords(text);
-  if (words === null) return "";
-  if (words !== "") {
-    if (workflowRecordSelected(pd, sessionId)) return "";
-    try {
-      const { nextArgsAreOnlyWords, nextArgsNameOnlyAPlan } = await import("../tools/aidlc-orchestrate.ts");
-      const args = splitKiroCommandArgs(words);
-      if (!nextArgsAreOnlyWords(args)) {
-        const plan = nextArgsNameOnlyAPlan(args);
-        if (plan === null) return "";
-        step = `next ${plan}`;
-      }
-    } catch {
-      return "";
-    }
-  }
-  const run = `Run \`${aidlcInvocation()} engine orchestrate ${step}\` now and do only what it prints.`;
+// here, the agent hears the one first step: the skill's `next --entry`, which
+// carries none of the person's words and reads their recorded line itself
+// (entryLine), with or without work in hand. Any other line (`/aidlc-<runner>`,
+// plain words) stays the agent's. On the aidlc agent the line repeats what its
+// skill already says.
+function firstStepLine(prompt: string): string {
+  if (aidlcEntryWords(prompt.trim()) === null) return "";
+  const run = `Run \`${aidlcInvocation()} engine orchestrate next --entry\` now and do only what it prints.`;
   return `AI-DLC: this message is an AI-DLC request and AI-DLC has it on record. ${run}`;
-}
-
-// Whether the workflow this chat selects already has its record (the state
-// file the engine's bare `next` would read), judged the way the gate floor
-// judges it (enterHookWorkflow). Unreadable state counts as selected: the
-// line is then withheld rather than said where it may be wrong.
-function workflowRecordSelected(pd: string, sessionId: string): boolean {
-  try {
-    const workflow = enterHookWorkflow(pd, sessionId);
-    try {
-      return existsSync(stateFilePath(pd));
-    } finally {
-      workflow.restore();
-    }
-  } catch {
-    return true;
-  }
 }
 
 function terminalContext(result: TerminalResult): string {
@@ -2749,7 +2712,7 @@ if (target === "verb-intercept") {
   const command = classifyTerminalCommand(invocation.args, projectDir, ide.sessionId?.trim() || undefined);
   if (command === null) {
     noteDefaultAgent(sessionId);
-    const step = await firstStepLine(ide.prompt ?? "", projectDir, ide.sessionId?.trim() || sessionId);
+    const step = firstStepLine(ide.prompt ?? "");
     if (step !== "") process.stdout.write(`${step}\n`);
     return 0;
   }
@@ -4087,11 +4050,11 @@ function runCore(
     : authorityToken
       ? [
           process.execPath,
-          join(HOOKS_DIR, "..", "tools", "aidlc.ts"),
+          ...bunLaunchFlags(), join(HOOKS_DIR, "..", "tools", "aidlc.ts"),
           "--internal-aidlc-record-human-turn",
           join(HOOKS_DIR, hookFile),
         ]
-      : [process.execPath, join(HOOKS_DIR, hookFile)];
+      : [process.execPath, ...bunLaunchFlags(), join(HOOKS_DIR, hookFile)];
   // The core hook runs from the same payload, so hand it this adapter's project
   // rather than let it derive one from its own path.
   const env = {

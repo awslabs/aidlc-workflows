@@ -22,6 +22,7 @@
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import { cleanupTestProject, seededStateFile } from "../harness/fixtures.ts";
 import { refusalSignature } from "../harness/scope-run.ts";
 import {
@@ -275,6 +276,32 @@ describe("a build step the chat compaction set aside, before any next", () => {
   });
 });
 
+// The Testing Contract moved under an approved build, before any `next`: every
+// refusal names a way past the guard admits, on every shape. The build waits
+// for the person's approval of the plan again, so a door gets no retry.
+describe("the Testing Contract moved after the approval, before any next", () => {
+  test("strict: each refusal names a way past that is admitted", async () => {
+    const state = STATES.find((builder) => builder.id === "S13")!.build();
+    created.push(state.proj);
+    const problems: string[] = [];
+    const doors: ToolCall[] = [
+      { tool: "Bash", command: "bun .claude/tools/aidlc-testing-posture.ts brief --stage-level" },
+      { tool: "Task", agent: DEVELOPER, prompt: developerBrief(state.proj) },
+      { tool: "Write", path: join(state.proj, "src", "slugify.ts") },
+      { tool: "Bash", command: "echo built > src/slugify.ts" },
+    ];
+    for (const shape of SHAPES) {
+      shape.install(state.proj);
+      for (const door of doors) {
+        const verdict = await shape.call(state.proj, state.session, door);
+        if (verdict.code === 0) continue;
+        await wayPastIsAdmitted(state, shape, door, verdict, problems, false);
+      }
+    }
+    expect(problems).toEqual([]);
+  });
+});
+
 // The person's lookup while the plan is written ran into a refusal on Kiro IDE;
 // on every harness and in every state an MCP call they ask for is theirs to make,
 // and the host's own card asks them.
@@ -403,7 +430,7 @@ describe("the guard judges only the build: records and engine commands pass, the
     expect(admitted.code, admitted.said).toBe(0);
     const ran = runNamed(proj, again);
     expect((JSON.parse(ran.stdout || "{}") as Step).message).toBe(
-      "The code plan is not approved yet: run `bun .claude/tools/aidlc-orchestrate.ts next` and follow the step it prints.",
+      `The code plan is not approved yet: run \`${withCopyLaunchOptions("bun .claude/tools/aidlc-orchestrate.ts next")}\` and follow the step it prints.`,
     );
     expect(readFileSync(seededStateFile(proj), "utf-8")).toMatch(/^- \[\?\] code-generation /m);
     const write = await claude.call(proj, SESSION, { tool: "Write", path: join(proj, "src", "slugify.ts") });
@@ -951,8 +978,9 @@ describe("a jump the person asked for on a step gone out of date names the step 
       copilotStep(proj, "report --result resumed --choice jump --target requirements-analysis");
       const refused = copilotRuns(proj, JUMP).refused;
       expect(refused, "the jump ran with the step out of date").not.toBeNull();
-      expect(engineCommands(refused as string)).toEqual(["bun .aidlc/tools/aidlc-orchestrate.ts next --stage requirements-analysis"]);
-      expect(copilotRuns(proj, "bun .aidlc/tools/aidlc-orchestrate.ts next --stage requirements-analysis").refused).toBeNull();
+      const follow = withCopyLaunchOptions("bun .aidlc/tools/aidlc-orchestrate.ts next --stage requirements-analysis");
+      expect(engineCommands(refused as string)).toEqual([follow]);
+      expect(copilotRuns(proj, follow).refused).toBeNull();
       const ran = copilotRuns(proj, JUMP);
       expect(ran.refused).toBeNull();
       expect(copilotStep(proj, "next").stage).toBe("requirements-analysis");
@@ -966,7 +994,7 @@ describe("a jump the person asked for on a step gone out of date names the step 
     copilotStep(proj, "next");
     const refused = copilotRuns(proj, JUMP).refused;
     expect(refused).not.toBeNull();
-    expect(engineCommands(refused as string)).toEqual(["bun .aidlc/tools/aidlc-orchestrate.ts next"]);
+    expect(engineCommands(refused as string)).toEqual([withCopyLaunchOptions("bun .aidlc/tools/aidlc-orchestrate.ts next")]);
   });
 
   test("Claude Code, the build step set aside by a compaction under strict: the refusal names next, and one follow admits the jump", async () => {
@@ -976,8 +1004,9 @@ describe("a jump the person asked for on a step gone out of date names the step 
     const jump = respell(JUMP, ".claude");
     const refused = await claude.call(state.proj, state.session, { tool: "Bash", command: jump });
     expect(refused.code).toBe(2);
-    expect(engineCommands(refused.said)).toEqual(["bun .claude/tools/aidlc-orchestrate.ts next"]);
-    expect(runNamed(state.proj, "bun .claude/tools/aidlc-orchestrate.ts next").status).toBe(0);
+    const follow = withCopyLaunchOptions("bun .claude/tools/aidlc-orchestrate.ts next");
+    expect(engineCommands(refused.said)).toEqual([follow]);
+    expect(runNamed(state.proj, follow).status).toBe(0);
     const admitted = await claude.call(state.proj, state.session, { tool: "Bash", command: jump });
     expect(admitted.code, admitted.said).toBe(0);
   });

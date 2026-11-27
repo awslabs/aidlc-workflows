@@ -48,6 +48,7 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import { AIDLC_SRC } from "../harness/fixtures.ts";
 
 const SKILL = join(AIDLC_SRC, "skills", "aidlc", "SKILL.md");
@@ -153,12 +154,12 @@ describe("t06 SKILL.md frontmatter (migrated from t06-skill-frontmatter.sh, plan
   test("settings.json registers the validate-state hook on PreCompact [.sh 7 + 8]", () => {
     const preCompactCmds = commandsForEvent("PreCompact");
     expect(preCompactCmds.length).toBeGreaterThan(0);
-    expect(preCompactCmds).toContain('bun "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts" engine hook validate-state');
+    expect(preCompactCmds).toContain(withCopyLaunchOptions('bun "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts" engine hook validate-state'));
   });
 
   test("settings.json registers the log-subagent hook on SubagentStop [.sh 9]", () => {
     // log-subagent is the SubagentStop hook, the event that owns it.
     const subagentCmds = commandsForEvent("SubagentStop");
-    expect(subagentCmds).toContain('bun "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts" engine hook log-subagent');
+    expect(subagentCmds).toContain(withCopyLaunchOptions('bun "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts" engine hook log-subagent'));
   });
 });

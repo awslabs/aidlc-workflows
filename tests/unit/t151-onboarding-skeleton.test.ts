@@ -5,6 +5,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import {
   declaredSlots,
@@ -132,11 +133,11 @@ describe("t151 neutral and native onboarding", () => {
         for (const section of NEUTRAL_SECTIONS) expect(root, harness.name).toContain(section);
         for (const section of HARNESS_SECTIONS) expect(setup, harness.name).toContain(section);
         expect(setup, harness.name).toContain(
-          `${native ? "aidlc" : `bun ${harness.manifest.harnessDir}/tools/aidlc.ts`} engine runtime summary --json`,
+          `${native ? "aidlc" : withCopyLaunchOptions(`bun ${harness.manifest.harnessDir}/tools/aidlc.ts`)} engine runtime summary --json`,
         );
         expect(setup, harness.name).not.toContain(`${fills.invoke} engine`);
         expect(setup, harness.name).toContain(
-          `${native ? "aidlc" : `bun ${harness.manifest.harnessDir}/tools/aidlc.ts`} engine knowledge <verb>`,
+          `${native ? "aidlc" : withCopyLaunchOptions(`bun ${harness.manifest.harnessDir}/tools/aidlc.ts`)} engine knowledge <verb>`,
         );
         expect(setup, harness.name).toContain(`\`${fills.invoke} --stage <slug> --single\``);
         if (harness.manifest.onboarding?.harnessDst) {
@@ -156,7 +157,7 @@ describe("t151 neutral and native onboarding", () => {
     for (const native of [false, true]) {
       const path = kiro?.harnessOnboardingDist ?? "";
       const setup = readFileSync(native ? releasePath(path) : path, "utf-8");
-      const invoke = native ? "aidlc" : "bun .kiro/tools/aidlc.ts";
+      const invoke = native ? "aidlc" : withCopyLaunchOptions("bun .kiro/tools/aidlc.ts");
       const bullet = setup.split("\n").find((line) => line.includes("workspace tree is harness-neutral")) ?? "";
       expect(bullet).not.toContain("packaging");
       expect(bullet).toContain(`\`${invoke} config --harness <name>\` (\`claude\`, \`kiro\`)`);

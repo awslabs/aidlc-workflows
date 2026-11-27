@@ -44,6 +44,7 @@ import {
 import { platform, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { cleanupTestProject, REPO_ROOT } from "../harness/fixtures.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import adapterPlugin from "../../dist/opencode/.opencode/plugin/aidlc-opencode-adapter.ts";
 
 const createAdapter = adapterPlugin.server;
@@ -110,7 +111,12 @@ describe("t240 dist/opencode packaging parity + shell shape", () => {
         const src = join(CLAUDE_SRC, sub, rel);
         let opencode = readFileSync(file, "utf-8");
         const claude = readFileSync(src, "utf-8");
+        // The launch token names the harness folder twice in its copy
+        // spelling: the config file's and the script's.
         opencode = opencode.replaceAll(
+          withCopyLaunchOptions("bun .aidlc/tools/"),
+          withCopyLaunchOptions("bun .claude/tools/"),
+        ).replaceAll(
           "bun .aidlc/tools/",
           "bun .claude/tools/",
         );
@@ -233,7 +239,8 @@ describe("t240 dist/opencode packaging parity + shell shape", () => {
   test("7: shipped opencode prose names no other harness's engine dir", () => {
     const r = spawnSync(
       "grep",
-      ["-rn", "bun .claude/tools/", OPENCODE_ROOT],
+      // A copy launch names the harness folder in its config path too.
+      ["-rn", "-e", "bun .claude/tools/", "-e", "--config=.claude/tools/", OPENCODE_ROOT],
       { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
     );
     // grep exits 1 on no matches — exactly what we want.
@@ -252,7 +259,7 @@ describe("t240 dist/opencode packaging parity + shell shape", () => {
     expect(cfg.skills?.paths).toContain(".aidlc/skills");
     // The method glob reads the engine's git-ignored copy of the active space's memory.
     expect(cfg.instructions).toContain("aidlc/active-memory/**/*.md");
-    expect(cfg.permission?.bash?.["bun .aidlc/tools/*"]).toBe("allow");
+    expect(cfg.permission?.bash?.[withCopyLaunchOptions("bun .aidlc/tools/*")]).toBe("allow");
     expect(cfg.permission?.edit?.[".aidlc/tools/**"]).toBe("ask");
     expect(cfg.permission?.edit?.[".aidlc/hooks/**"]).toBe("ask");
     // AI-DLC ships no "*" rule: the person's own opencode settings decide their
@@ -291,7 +298,7 @@ describe("t240 dist/opencode packaging parity + shell shape", () => {
     ]) {
       expect(decide(command), command).toBeUndefined();
     }
-    expect(decide("bun .aidlc/tools/aidlc.ts engine orchestrate next")).toBe("allow");
+    expect(decide(withCopyLaunchOptions("bun .aidlc/tools/aidlc.ts engine orchestrate next"))).toBe("allow");
   });
 
   test("10b: doctor says once, as a warning, when the person's global opencode config holds a short-form permission rule", () => {
@@ -360,14 +367,20 @@ describe("t240 dist/opencode packaging parity + shell shape", () => {
     ).rejects.toThrow(/AIDLC runtime records and hooks belong to the harness/);
   }, ADAPTER_ENTRYPOINT_TIMEOUT_MS);
 
-  // The adapter imports one leaf tool (how a Windows .cmd starts) from the
-  // engine tree beside .opencode/, in the copy and the native tree alike;
-  // opencode loads it at every start, so it imports only node built-ins.
+  // The adapter imports its leaf modules (how a Windows .cmd starts, the shell
+  // reader, the plugin sync's record and fingerprint reading) from the engine
+  // tree beside .opencode/, in the copy and the native tree alike; opencode
+  // loads them at every start, so each imports only node built-ins.
   test("9c: the adapter's core imports resolve in both opencode trees to leaves with node imports only", () => {
     for (const tree of [OPENCODE_ROOT, join(REPO_ROOT, "dist-release", "opencode")]) {
       const plugin = join(tree, ".opencode", "plugin", "aidlc-opencode-adapter.ts");
       const relativeImports = [...readFileSync(plugin, "utf-8").matchAll(/^import [^;]*? from "(\.[^"]+)";$/gm)].map((m) => m[1]);
-      expect(relativeImports, tree).toEqual(["../../.aidlc/tools/aidlc-executable-path.ts", "../../.aidlc/hooks/review-freeze-command.ts"]);
+      expect(relativeImports, tree).toEqual([
+        "../../.aidlc/tools/aidlc-executable-path.ts",
+        "../../.aidlc/hooks/review-freeze-command.ts",
+        "../../.aidlc/tools/aidlc-plugin-rules.ts",
+        "../../.aidlc/tools/aidlc-review-manifest.ts",
+      ]);
       for (const relativeImport of relativeImports) {
         const leaf = join(dirname(plugin), relativeImport);
         expect(existsSync(leaf), leaf).toBe(true);
@@ -415,7 +428,7 @@ describe("t240 dist/opencode packaging parity + shell shape", () => {
   // skill into itself through the engine's own read-only verb.
   test("11: the /aidlc command prints the installed skill into itself, whole", () => {
     const command = readFileSync(join(SHELL, "command", "aidlc.md"), "utf-8");
-    expect(command).toContain("!`bun .aidlc/tools/aidlc.ts engine skill-text --harness-dir .aidlc`");
+    expect(command).toContain(`!\`${withCopyLaunchOptions("bun .aidlc/tools/aidlc.ts engine skill-text --harness-dir .aidlc")}\``);
     expect(command).toContain("$ARGUMENTS");
     expect(command).not.toContain("Invoke the `aidlc` skill");
     // The native channel spells the same line with the installed launcher.

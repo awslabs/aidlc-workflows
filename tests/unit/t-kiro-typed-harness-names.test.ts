@@ -20,12 +20,13 @@
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { harnessArgsAsIds, harnessIdFromTyped, harnessNameFor, typedHarnessHosts, typedHarnessName } from "../../core/tools/aidlc-runtime-paths.ts";
 import { escapeRegex } from "../../core/tools/aidlc-markdown.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -163,6 +164,24 @@ function printedWords(printed: string): string[] {
 const stamp = (dir: string): string =>
   JSON.parse(readFileSync(join(dir, ".kiro", "tools", "data", "aidlc-stamp.json"), "utf-8")).distribution;
 
+// The files under .kiro that the project's ownership record does not list.
+function unowned(dir: string): string[] {
+  const owned = new Set(Object.keys(JSON.parse(readFileSync(join(dir, ".kiro", "tools", "data", "aidlc-manifest.json"), "utf-8")).files));
+  return (readdirSync(join(dir, ".kiro"), { recursive: true }) as string[])
+    .map((path) => `.kiro/${path.split(/[\\/]/).join("/")}`)
+    .filter((path) => statSync(join(dir, path)).isFile() && !owned.has(path)).sort();
+}
+
+// Every file of the project outside .git, by path and bytes.
+function contents(dir: string): string {
+  const hash = createHash("sha256");
+  const paths = (readdirSync(dir, { recursive: true }) as string[]).filter((path) => path.split(/[\\/]/)[0] !== ".git").sort();
+  for (const path of paths) {
+    if (statSync(join(dir, path)).isFile()) hash.update(`${path}\0`).update(readFileSync(join(dir, path)));
+  }
+  return hash.digest("hex");
+}
+
 describe("Kiro harness names a person types", () => {
   test("the typed names map to the ids installed projects keep, both ways", () => {
     expect(harnessIdFromTyped("kiro")).toBe("kiro-ide");
@@ -219,6 +238,66 @@ describe("Kiro harness names a person types", () => {
     expect(stamp(dir)).toBe("kiro-ide");
   });
 
+  // The release files keep Kiro in runtime/kiro-ide/ and Kiro CLI (V2) in
+  // runtime/kiro/, so a Kiro project can come to hold runtime/kiro/'s files
+  // under its Kiro record, which neither row can refresh from.
+  test("on a Kiro project holding Kiro CLI (V2)'s files, --harness kiro does not ask to switch and names Kiro's folder, whose copy steps then set it up", () => {
+    const dir = project();
+    expect(config(dir, ["--harness", "kiro", "--yes"]).status).toBe(0);
+    const kiroOwnsNot = unowned(dir);
+    cpSync(join(RELEASE, "kiro"), dir, { recursive: true });
+    expect(stamp(dir)).toBe("kiro");
+    const before = contents(dir);
+    // The refresh the guide gives a copied project names no harness.
+    const runs: Array<[string, Run, string]> = [
+      ["terminal", config(dir, ["--harness", "kiro"], { env: { AIDLC_TEST_CONFIG_TTY: "1", AIDLC_TEST_CONFIG_INPUT: "y\n" } }), "switch .kiro to"],
+      ["no terminal", config(dir, ["--harness", "kiro"]), "switch .kiro to"],
+      ["--yes", config(dir, ["--harness", "kiro", "--yes"]), "switch .kiro to"],
+      ["dry run", config(dir, ["--harness", "kiro", "--dry-run"]), "switch .kiro to"],
+      ["no --harness", config(dir, ["--yes"]), "refresh .kiro as"],
+    ];
+    for (const [label, result, run] of runs) {
+      expect(result.status, `${label}: ${result.out}`).toBe(4);
+      expect(result.out, label).not.toContain("[y/N]");
+      expect(result.out, label).toContain(
+        `cannot ${run} Kiro: it holds Kiro CLI (V2)'s files, which the release files keep in runtime/kiro/, while its ownership record ` +
+          "(.kiro/tools/data/aidlc-manifest.json) is Kiro's; nothing changed",
+      );
+      expect(result.out, label).toContain(
+        "run the whole copy block of \"Versioned manual-copy alternative\" in Running AI-DLC on Kiro (https://awslabs.github.io/aidlc-workflows/guide/harnesses/kiro/), " +
+          "not only its setup command: it removes Kiro CLI (V2)'s agent files, copies runtime/kiro-ide/ from the release files over the project, and runs config",
+      );
+      expect(result.out, label).not.toContain("kiro-v2");
+      expect(result.out, label).not.toContain("runtime/claude/");
+    }
+    const json = JSON.parse(config(dir, ["--harness", "kiro", "--yes", "--json"]).stdout) as { remediation?: string };
+    expect(json.remediation).toContain("copies runtime/kiro-ide/ from the release files");
+    expect(contents(dir)).toBe(before);
+
+    // The steps the line names, as that guide's manual-copy block takes them.
+    const guide = readFileSync(join(REPO_ROOT, "docs", "guide", "harnesses", "kiro.md"), "utf-8");
+    expect(guide).toContain("\n### Versioned manual-copy alternative\n");
+    expect(guide).toContain(
+      "rm -f \\\n  your-project/.kiro/agents/aidlc.json \\\n  your-project/.kiro/agents/aidlc-*-agent.json \\\n  your-project/.kiro/hooks/aidlc-*.kiro.hook",
+    );
+    expect(guide).toContain('cp -R "$RUNTIME_ROOT/kiro-ide/.kiro/." your-project/.kiro/');
+    for (const [folder, name] of [["agents", /^aidlc(?:-.*-agent)?\.json$/], ["hooks", /^aidlc-.*\.kiro\.hook$/]] as const) {
+      for (const entry of readdirSync(join(dir, ".kiro", folder))) {
+        if (name.test(entry)) rmSync(join(dir, ".kiro", folder, entry));
+      }
+    }
+    cpSync(join(RELEASE, "kiro-ide"), dir, { recursive: true });
+    const setUp = config(dir, ["--harness", "kiro", "--yes"]);
+    expect(setUp.status, setUp.out).toBe(0);
+    expect(stamp(dir)).toBe("kiro-ide");
+    // What Kiro's record does not own is what a Kiro install has anyway, and
+    // Kiro CLI (V2)'s MCP list, whose servers it ships turned off.
+    expect(unowned(dir)).toEqual([...kiroOwnsNot, ".kiro/settings/mcp.json"].sort());
+    const servers = Object.values(JSON.parse(readFileSync(join(dir, ".kiro", "settings", "mcp.json"), "utf-8")).mcpServers);
+    expect(servers.length).toBeGreaterThan(0);
+    expect(servers.every((server) => (server as { disabled?: boolean }).disabled === true)).toBe(true);
+  });
+
   // A `kiro-cli --v3` chat on a Kiro CLI (V2) project reads this tree's
   // onboarding: it is what tells the agent that v3 is Kiro, and how to switch.
   test("a Kiro CLI (V2) project's onboarding says Kiro CLI on v3 is Kiro, and on a release install the switch it names switches, keeping the team's records under aidlc/", () => {
@@ -265,7 +344,7 @@ describe("Kiro harness names a person types", () => {
   // the refresh an install has, in the names a person types, never with the
   // framework repository's own build step.
   test("a Kiro CLI (V2) project's onboarding names the refresh each harness tree takes, in the names config reads", () => {
-    for (const invoke of ["aidlc", "bun .kiro/tools/aidlc.ts"]) {
+    for (const invoke of ["aidlc", withCopyLaunchOptions("bun .kiro/tools/aidlc.ts")]) {
       const { onboarding } = v2Project(invoke, invoke === "aidlc" ? RELEASE : join(REPO_ROOT, "dist", "kiro"));
       const bullet = onboarding.split("\n").find((line) => line.includes("workspace tree is harness-neutral")) ?? "";
       expect(bullet).not.toContain("packaging");
@@ -340,7 +419,7 @@ describe("Kiro harness names a person types", () => {
   // names the same command with --download, which the onboarding says to run
   // at once under the person's request.
   test("on a copy install the switch the onboarding names stops, names the download, and leaves Kiro CLI (V2)", () => {
-    const { dir, onboarding, command } = v2Project("bun .kiro/tools/aidlc.ts", join(REPO_ROOT, "dist", "kiro"));
+    const { dir, onboarding, command } = v2Project(withCopyLaunchOptions("bun .kiro/tools/aidlc.ts"), join(REPO_ROOT, "dist", "kiro"));
     expect(onboarding).toContain(
       "If the switch then stops saying that switching `.kiro` needs the release files (a copy install, which holds only its own tree), " +
         "the `fix:` command it names adds `--download` to the same switch: run it at once.",
@@ -349,7 +428,9 @@ describe("Kiro harness names a person types", () => {
     expect(switched.status, switched.out).not.toBe(0);
     // The stop the onboarding's run-at-once rule names, in the tool's words.
     expect(switched.out).toMatch(/switching \.kiro from kiro-v2 to kiro needs the \S+ release files/);
-    expect(switched.out).toMatch(/^fix: bun \.kiro\/tools\/aidlc\.ts config --harness kiro --yes --download\r?$/m);
+    expect(switched.out).toMatch(
+      new RegExp(`^fix: ${escapeRegex(withCopyLaunchOptions("bun .kiro/tools/aidlc.ts config --harness kiro --yes --download"))}\\r?$`, "m"),
+    );
     expect(stamp(dir)).toBe("kiro");
   });
 

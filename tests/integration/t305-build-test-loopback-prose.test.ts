@@ -31,6 +31,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { keepOwnHarnessBindings } from "../../scripts/harness-bindings.ts";
+import { COPY_LAUNCH_CONFIG, withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import { AIDLC_SRC, REPO_ROOT } from "../harness/fixtures.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
 
@@ -148,14 +149,17 @@ describe("t305 build-and-test.md — Step 9 failure-escalation ladder", () => {
 describe("t305 construction protocol module — Build-and-Test failure loop-back subsection", () => {
   test("authored Construction module is byte-aligned across every dist", () => {
     // The copy channel expands the authored `{{INVOKE}}` seam to
-    // `bun <harnessDir>/tools/aidlc.ts`; fold both projections back before the
-    // byte comparison so real prose drift still fails. Each tree ships only its
+    // `bun <the two launch options> <harnessDir>/tools/aidlc.ts`; fold both
+    // projections back before the byte comparison so real prose drift still fails. Each tree ships only its
     // own tool's binding subsection, so it is compared with that cut. Only the
     // folder is folded: `.aidlc` is also the start of `aidlc/.aidlc-request-text/`.
     const normalize = (body: string, harnessDir: string) =>
       body
         .replaceAll(`${harnessDir}/`, "{{HARNESS_DIR}}/")
-        .replaceAll("bun {{HARNESS_DIR}}/tools/aidlc.ts", "{{INVOKE}}");
+        .replaceAll(
+          `bun --config={{HARNESS_DIR}}/tools/${COPY_LAUNCH_CONFIG} --no-env-file {{HARNESS_DIR}}/tools/aidlc.ts`,
+          "{{INVOKE}}",
+        );
     const authoredFor = (harness: string) =>
       keepOwnHarnessBindings(AUTHORED_CONSTRUCTION_PROTOCOL, harness, "stage-protocol-construction.md");
     expect(normalize(CONSTRUCTION_PROTOCOL, ".claude")).toBe(authoredFor("claude"));
@@ -362,7 +366,7 @@ describe("t305 construction protocol module — Build-and-Test failure loop-back
     // The audit call is spelled out in full (positional slug +
     // --artifacts), never abbreviated to a form that errors if run literally.
     expect(tail).toContain(
-      'bun .claude/tools/aidlc.ts engine state reuse-artifact <slug>\n--decision <keep|modify> --artifacts "<comma-separated list of existing\nartifacts found>"',
+      `${withCopyLaunchOptions("bun .claude/tools/aidlc.ts")} engine state reuse-artifact <slug>\n--decision <keep|modify> --artifacts "<comma-separated list of existing\nartifacts found>"`,
     );
   });
 
@@ -385,7 +389,7 @@ describe("t305 construction protocol module — Build-and-Test failure loop-back
     expect(gated).toContain("**Keep** for all other units");
     expect(gated).toContain("**Modify** for build-and-test itself");
     expect(gated).toContain(
-      "bun .claude/tools/aidlc.ts engine state reuse-artifact <slug> --decision <keep|modify>",
+      withCopyLaunchOptions("bun .claude/tools/aidlc.ts engine state reuse-artifact <slug> --decision <keep|modify>"),
     );
     expect(gated).toContain(
       '--artifacts "<comma-separated list of existing artifacts found>"',

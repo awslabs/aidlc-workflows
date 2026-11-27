@@ -36,12 +36,20 @@ const state = (proj: string): string => readFileSync(stateFilePath(proj), "utf-8
 /** The one line the step tells the agent to say. */
 const line = (message: string): string => /tell the person in one line: "([^"]*)"/.exec(message)?.[1] ?? "";
 
-/** A command a step names (`bun .claude/tools/<tool>.ts ...`), run from the shipped tree on this project. */
+/**
+ * A command a step names (`bun [--config=.claude/tools/aidlc-bunfig.toml --no-env-file] .claude/tools/<tool>.ts ...`),
+ * run from the shipped tree on this project, its launch config named there as the script is.
+ */
 async function runNamed(proj: string, command: string): Promise<Exec> {
   const parts = (command.match(/'[^']*'|"[^"]*"|\S+/g) ?? []).map((part) => part.replace(/^['"]|['"]$/g, ""));
   if (parts[0] === "bun") parts.shift();
+  const options: string[] = [];
+  if (/^--config=.*aidlc-bunfig\.toml$/.test(parts[0] ?? "") && parts[1] === "--no-env-file") {
+    options.push(`--config=${join(AIDLC_SRC, "tools", parts[0].replace(/^.*tools\//, ""))}`, parts[1]);
+    parts.splice(0, 2);
+  }
   const tool = join(AIDLC_SRC, "tools", (parts.shift() ?? "").replace(/^.*tools\//, ""));
-  return exec([process.execPath, tool, ...parts, "--project-dir", proj],
+  return exec([process.execPath, ...options, tool, ...parts, "--project-dir", proj],
     { cwd: proj, env: env(proj, { env: NO_OUTPUT_CHECKS }) });
 }
 /** The commands a step names that match `pattern`, in order. */

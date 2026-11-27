@@ -30,6 +30,7 @@ import {
   unitProgressRow,
   nextPastPushOffer,
 } from "../harness/team-unit-merge.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 
 // The pinned merge cases are split across four files
 // (t326-team-unit-merge*.test.ts) so the integration tier runs them in
@@ -160,6 +161,15 @@ describe("t326 pinned team Unit merge", () => {
     },
   );
 
+  // A Unit plan approved before the update carries its Testing Contract read
+  // the earlier way; while the posture text is the same it still pins.
+  test("a Unit plan approved before the update pins, gates and lands", () => {
+    const { seed, remote } = makeSeed();
+    prepareCandidate(remote, "alpha", "earlier-team", { earlierContract: true });
+    expect(gateAndLand(seed, "alpha").pinnedOid).toHaveLength(40);
+    expect(readAllAuditShards(seed).match(/\*\*Event\*\*: UNIT_MERGED/g) ?? []).toHaveLength(1);
+  });
+
   test("moved refs require re-pin", () => {
     const { seed, remote } = makeSeed();
     const first = prepareCandidate(remote, "alpha", "move-team");
@@ -178,7 +188,7 @@ describe("t326 pinned team Unit merge", () => {
       seed,
     );
     expect(movedGate.status).not.toBe(0);
-    expect(movedGate.out).toContain("run bun .claude/tools/aidlc.ts unit pin alpha again");
+    expect(movedGate.out).toContain(`run ${withCopyLaunchOptions("bun .claude/tools/aidlc.ts unit pin alpha")} again`);
     const repin = runMergeTool(UNIT, ["pin", "alpha"], seed);
     expect(repin.status, repin.out).toBe(0);
     expect(

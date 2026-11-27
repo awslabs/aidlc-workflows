@@ -1,6 +1,7 @@
 // covers: subcommand:aidlc-unit:publish, subcommand:aidlc-unit:pin, subcommand:aidlc-unit:gate, subcommand:aidlc-unit:land, audit:UNIT_MERGED, function:UNIT_MERGE_DIR, function:unitMergeTransactionPath, function:readUnitMergeTransaction, function:writeUnitMergeTransaction, function:unitMergedReceipts
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -606,14 +607,14 @@ describe("t326 pinned team Unit merge", () => {
     const approvedRepin = runMergeTool(UNIT, ["pin", "alpha"], seed);
     expect(approvedRepin.status).not.toBe(0);
     expect(approvedRepin.out).toContain(
-      "recover it with bun .claude/tools/aidlc.ts unit land alpha",
+      `recover it with ${withCopyLaunchOptions("bun .claude/tools/aidlc.ts unit land alpha")}`,
     );
     const landed = runMergeTool(UNIT, ["land", "alpha", "--step", "git"], seed);
     expect(landed.status, landed.out).toBe(0);
     const mergeOid = JSON.parse(landed.stdout).git_commit_oid;
     const repin = runMergeTool(UNIT, ["pin", "alpha"], seed);
     expect(repin.status).not.toBe(0);
-    expect(repin.out).toContain("recover it with bun .claude/tools/aidlc.ts unit land alpha");
+    expect(repin.out).toContain(`recover it with ${withCopyLaunchOptions("bun .claude/tools/aidlc.ts unit land alpha")}`);
     const lost = JSON.parse(readFileSync(journalPath, "utf-8"));
     lost.status = "approved";
     delete lost.git_commit_oid;

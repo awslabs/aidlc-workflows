@@ -282,11 +282,16 @@ class Work {
     return result;
   }
 
-  // An engine command as a step prints it: `bun .claude/tools/<tool>.ts ...`.
+  // An engine command as a step prints it: `bun --config=.claude/tools/aidlc-bunfig.toml --no-env-file
+  // .claude/tools/<tool>.ts ...`. The launch's two Bun options go on as printed, the config named in this
+  // project as the script is.
   printed(command: string): Run {
-    const [bun, tool, ...args] = shellWords(command.trim());
+    const [bun, ...words] = shellWords(command.trim());
     expect(bun, command).toBe("bun");
-    const argv = [BUN, join(this.dir, tool), ...args];
+    const config = /^--config=(.*aidlc-bunfig\.toml)$/.exec(words[0] ?? "");
+    const options = config && words[1] === "--no-env-file" ? [`--config=${join(this.dir, config[1])}`, words[1]] : [];
+    const [tool, ...args] = words.slice(options.length);
+    const argv = [BUN, ...options, join(this.dir, tool), ...args];
     if (!args.includes("--project-dir")) argv.push("--project-dir", this.dir);
     const result = this.run(argv);
     this.outputs.push(`${command}\n${result.stdout}\n${result.stderr}`);

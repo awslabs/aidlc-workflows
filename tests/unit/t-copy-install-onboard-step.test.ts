@@ -21,6 +21,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { copyChannelOmits, projectionFiles, walkFiles } from "../../core/tools/aidlc-distribution.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
   NATIVE_STARTUP_TIMEOUT_MS,
@@ -139,7 +140,7 @@ describe("knowledge onboard on a copy install", () => {
       const original = readFileSync(join(proj, "orig", "requirements.md"), "utf-8");
       expect(readFileSync(join(proj, DOCUMENTS, "requirements.md"), "utf-8")).toBe(original);
       expect(indexedPaths(proj)).toEqual(["documents/requirements.md"]);
-      expect(step).toBe(`bun ${TOOLS_DIR[harness]}/tools/aidlc.ts engine knowledge onboard orig/requirements.md`);
+      expect(step).toBe(withCopyLaunchOptions(`bun ${TOOLS_DIR[harness]}/tools/aidlc.ts engine knowledge onboard orig/requirements.md`));
     });
   }
 
@@ -169,7 +170,7 @@ describe("knowledge onboard on a copy install", () => {
     test(`${harness}: the engine's step names the dispatcher`, () => {
       const proj = project(harness);
       expect(knowledgeStep(proj, harness, ["onboard", "orig/requirements.md"], cleanEnv()))
-        .toBe("bun .kiro/tools/aidlc.ts engine knowledge onboard orig/requirements.md");
+        .toBe(withCopyLaunchOptions("bun .kiro/tools/aidlc.ts engine knowledge onboard orig/requirements.md"));
     });
 
     test(`${harness}: the prompt hook copies a file outside documents/ in and adds it`, () => {

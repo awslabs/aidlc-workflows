@@ -9,6 +9,7 @@
 
 import { projectDirFlag, settleClaudeTurnsFirst } from "./aidlc-claude-turn-pending.ts";
 import { gitCommonDirOf, gitSubmoduleNames } from "./aidlc-git.ts";
+import { markdownBlocks, withoutCommentBlocks } from "./aidlc-markdown.ts";
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
@@ -63,6 +64,7 @@ import {
   clearPlanApprovalReceipt,
   isolatedCodeGenerationTestStrategy,
   codeGenerationIsTheStep,
+  normalizeStageName,
   readActiveDirectiveMarker,
   readApplicableTeamUnitScopeStamp,
   singleStageAttemptIsOpen,
@@ -182,6 +184,9 @@ import {
   PLAN_APPROVAL_ASKED_BY_ENGINE,
   planApprovalAskIsOpen,
   TESTING_POSTURE_SUBCOMMANDS,
+  hooksNeverRanHere,
+  CEREMONY_ENV,
+  resolveProjectFlag,
   readWorkspaceSourceSnapshot,
   recordedSourceListingUnderCurrentBoundary,
 } from "./aidlc-lib.ts";
@@ -189,7 +194,11 @@ import { swarmSourceChanged, swarmSourceUnchangedInStage, withoutGitIgnored } fr
 import { CHECK_GLOSS } from "./aidlc-guard-fences.ts";
 import { withoutLearnedDate } from "./aidlc-learned-date.ts";
 import { noReplySince, personTurnStands, proveMessage, requestMessageStep } from "./aidlc-message-store.ts";
-import { aidlcToolInvocation, entrySkillInvocation, quoteCommandArgument, swarmUnitTestCommand, syncFolderClause } from "./aidlc-runtime-paths.ts";
+import { aidlcHookRegistrations, readJsonFile } from "./aidlc-distribution.ts";
+import {
+  aidlcToolInvocation, entrySkillInvocation, quoteCommandArgument, runtimeHarnessDir, runtimeHarnessName, swarmUnitTestCommand,
+  syncFolderClause,
+} from "./aidlc-runtime-paths.ts";
 import {
   APPROVAL_GATE_CHOICES, exactOptionPick, isNonAnswer, isOneOfChoices, pickerOffersChoices, protectedQuestionPick,
 } from "./aidlc-reply-reader.ts";
@@ -949,6 +958,45 @@ function visiblePostureText(section: string): string {
   return markdownWithoutHtmlComments(section).trim();
 }
 
+// What an approved plan's contract binds of a Testing Posture section: the
+// text as the agent is handed it (the stage's rules drop comment blocks the
+// same way, readRuleBundle), its spacing aside: no blank line at either end or
+// after another, and no trailing whitespace outside code and HTML blocks,
+// whose bytes stay as written. A comment inside a line is handed to the agent,
+// so it is bound; `shown` cuts it, for the notes a person reads.
+function postureAsHanded(section: string): { handed: string; shown: string } {
+  const text = withoutCommentBlocks(section.replace(/\r\n?/g, "\n"));
+  const blocks = markdownBlocks(text).lines;
+  const handed: string[] = [];
+  const shown: string[] = [];
+  text.split("\n").forEach((line, index) => {
+    const block = blocks[index];
+    if (block.kind === "blank") {
+      if (handed.length > 0 && handed.at(-1) !== "") {
+        handed.push("");
+        shown.push("");
+      }
+      return;
+    }
+    const asWritten = block.kind === "codeFenced" || block.kind === "codeIndented" || block.kind === "htmlFlow";
+    let visible = "";
+    let cursor = 0;
+    for (const span of block.invisible) {
+      if (span.kind !== "htmlComment") continue;
+      visible += line.slice(cursor, span.start);
+      cursor = span.end;
+    }
+    visible += line.slice(cursor);
+    handed.push(asWritten ? line : line.trimEnd());
+    shown.push(asWritten ? visible : visible.trimEnd());
+  });
+  while (handed.at(-1) === "") {
+    handed.pop();
+    shown.pop();
+  }
+  return { handed: handed.join("\n"), shown: shown.join("\n") };
+}
+
 function classifiablePostureText(section: string): string {
   const lines = markdownWithoutHtmlComments(section).split("\n");
   const structuralLines = structuralMarkdownLines(section);
@@ -972,9 +1020,9 @@ function classifiablePostureText(section: string): string {
 }
 
 // Find the real Testing Posture section while ignoring headings hidden inside
-// HTML comments or fenced examples. Return the original raw lines so comments
-// and fences remain part of input_sha256 even though classification uses the
-// visible projection above.
+// HTML comments or fenced examples. Return the original raw lines: the earlier
+// contract reading hashes them as they are, and postureAsHanded reads its own
+// form from them.
 function extractTestingPostureSection(content: string): string {
   const rawLines = content.replace(/^\uFEFF/, "").replace(/\r\n/g, "\n").split("\n");
   const visibleLines = structuralMarkdownLines(content);
@@ -1218,6 +1266,12 @@ export function buildPlanProfile(
   };
 }
 
+/**
+ * The Testing Contract for these sections. `read` "raw" is the reading a plan
+ * approved on v2.11.4 or a preview since carries (the raw section text hashed,
+ * the notes cut by visiblePostureText), kept byte for byte so that approval is
+ * checked the way it was given (testingContractCurrent).
+ */
 export function resolveTestingPostureFromSections(
   sections: TestingPostureSections,
   options: {
@@ -1225,6 +1279,7 @@ export function resolveTestingPostureFromSections(
     testStrategy: TestStrategy;
     projectType: ProjectType;
   },
+  read: "as-handed" | "raw" = "as-handed",
 ): TestingPostureContract {
   const classified = {
     org: classifyPosture(sections.org ?? ""),
@@ -1259,17 +1314,21 @@ export function resolveTestingPostureFromSections(
                 components: ["test-after" as const],
               },
             };
-  const applicableNotes = (["org", "team", "project"] as const)
-    .map((layer) => ({
-      layer,
-      text: visiblePostureText(sections[layer] ?? ""),
-    }))
+  const layers = (["org", "team", "project"] as const).map((layer) => {
+    const section = sections[layer] ?? "";
+    if (read === "raw") return { layer, bound: section, shown: visiblePostureText(section) };
+    const { handed, shown } = postureAsHanded(section);
+    return { layer, bound: handed, shown };
+  });
+  const applicableNotes = layers
+    .map(({ layer, shown }) => ({ layer, text: shown }))
     .filter((entry) => entry.text.length > 0);
+  const bound = Object.fromEntries(layers.map(({ layer, bound }) => [layer, bound]));
   const input = {
     sections: {
-      org: sections.org ?? "",
-      team: sections.team ?? "",
-      project: sections.project ?? "",
+      org: bound.org,
+      team: bound.team,
+      project: bound.project,
     },
     scope: options.scope,
     test_strategy: options.testStrategy,
@@ -1309,6 +1368,7 @@ export function setTestingPostureRoute(isolatedTestStrategy: string | null): voi
 
 export function resolveTestingPosture(
   projectDir: string,
+  read: "as-handed" | "raw" = "as-handed",
 ): TestingPostureContract {
   const space = resolveWorkflowSelection(projectDir).space;
   const memoryDir = join(projectDir, "aidlc", "spaces", space, "memory");
@@ -1335,7 +1395,7 @@ export function resolveTestingPosture(
         getField(state, "Test Strategy") ?? "standard",
     ),
     projectType: normalizeProjectType(getField(state, "Project Type") ?? "greenfield"),
-  });
+  }, read);
 }
 
 export function renderTestingContract(contract: TestingPostureContract): string {
@@ -1505,6 +1565,22 @@ export function testingContractDefectMessage(
 function testingContractDefectReason(plan: string): string | null {
   const read = readTestingContract(plan);
   return "defect" in read ? testingContractDefectMessage(read.defect) : null;
+}
+
+/**
+ * Whether a plan's Testing Contract is the one in force: the one owner of that
+ * rule, every reader calls it. A plan approved before the contract was read as
+ * handed carries the raw reading's hash; it is in force while that reading of
+ * the memory is the same now, byte for byte, and only then.
+ */
+export function testingContractCurrent(
+  projectDir: string,
+  embedded: TestingPostureContract | null,
+  current: TestingPostureContract = resolveTestingPosture(projectDir),
+): boolean {
+  if (embedded === null) return false;
+  if (embedded.contract_sha256 === current.contract_sha256) return true;
+  return embedded.contract_sha256 === resolveTestingPosture(projectDir, "raw").contract_sha256;
 }
 
 /** Hash validity alone does not make a contract executable. */
@@ -1833,10 +1909,13 @@ function swarmUnitTestsLine(projectDir: string, unit: string | null): string {
     "`\"converged\":true` when they pass.\n";
 }
 
-export function workerBrief(
+// The brief as the worker is handed it, assembled with no record written: a
+// hook hands it over at the worker's start, where the conductor's `brief`
+// run, which keeps the lowered fence's records, may not have happened.
+export function assembleWorkerBrief(
   projectDir: string,
   target: CodeGenerationTarget,
-): WorkerBrief {
+): WorkerBrief & { continuation: CodeGenerationContinuation | null; skipped: boolean; resume: CodeGenerationResume | null } {
   refuseWhileRulesArrive(projectDir);
   // Under Guard Policy off a build step set aside since it was issued is still
   // the step: its target and the approval for it decide, as when it was current.
@@ -1894,16 +1973,168 @@ export function workerBrief(
     `${projectedPlan}\n` +
     `\n${continuation ? instructionHeadings[1] : instructionHeadings[0]}\n\n` +
     projectInstructionsContent(instructions);
-  if (continuation) recordContinuedStaleContract(projectDir, continuation);
   return {
     unit: approval.unit,
     contractHash,
     brief,
     appendixStripped: planReviewAppendix(plan.replace(/^\uFEFF/, "")).length > 0,
+    continuation,
+    skipped: approval.skipped === true,
+    resume,
+  };
+}
+
+export function workerBrief(
+  projectDir: string,
+  target: CodeGenerationTarget,
+): WorkerBrief {
+  const { continuation, skipped: _skipped, resume: _resume, ...assembled } = assembleWorkerBrief(projectDir, target);
+  if (continuation) recordContinuedStaleContract(projectDir, continuation);
+  return {
+    ...assembled,
     ...(continuation ? {
       changeNotices: recordCodeGenerationContinuation(projectDir, continuation, "brief"),
     } : {}),
   };
+}
+
+// --- The brief handed over by a tool as the developer starts ---------------------
+//
+// Where a hook can put text into the developer's first turn, the conductor
+// leaves the plan out of its message (the step's plan note says so):
+//   - Claude Code (SubagentStart context): the two record files to read, with
+//     what the brief carries beside the plan: the files rule, and for a build
+//     picked up after an interruption its progress. Claude Code shows such a
+//     context inline only up to about 10,000 characters and saves a longer one
+//     to a file it shows the first 2,000 of; a Sonnet developer did not read
+//     that file in a measure, and read the two record files it was pointed at.
+//   - Copilot and opencode (the input rewrite): the whole brief.
+// Codex, Kiro CLI, Kiro IDE and Cursor stay with the conductor's
+// paste: on Codex the plan-approval guard runs beside the rewrite, never after
+// it, so it could not tell the brief was handed. A parallel batch stays with the paste on
+// every tool: a starting developer cannot be paired with its Unit on Claude
+// Code. The step note, the guard and the delivery hook all read these.
+
+export const BRIEF_REWRITE_HARNESSES: ReadonlySet<string> = new Set(["copilot", "opencode"]);
+
+/**
+ * Whether the developer's start hands it the brief on this install by the
+ * start context: Claude Code with the SubagentStart entry that runs the
+ * stage-rules hook registered in its own settings. Claude Code runs a
+ * project's hooks under one switch, so a registered entry runs whenever the
+ * plan-approval guard does. Where this is false the guard asks the message
+ * itself to carry the brief.
+ */
+export function briefHandedAtStart(projectDir: string): boolean {
+  try {
+    if (runtimeHarnessName(projectDir) !== "claude") return false;
+    const settings = readJsonFile(join(projectDir, runtimeHarnessDir(projectDir), "settings.json")) as { hooks?: unknown };
+    const registered = aidlcHookRegistrations(settings.hooks, new Set(["deliver-stage-rules"]), projectDir);
+    return Array.isArray(registered.SubagentStart) && registered.SubagentStart.length > 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether a tool hands this install's developer its brief, by the start
+ * context or by the input rewrite. Not where the work's hooks never ran (a
+ * host that runs none, with the presence check switched off): no tool runs to
+ * hand it over, so the conductor passes it. Not by the rewrite with the
+ * plan-approval check switched off: only that check refuses a start a tool
+ * left without the brief (a project's opencode adapter from before an update
+ * drops the rewrite), so the conductor passes it (the rewrite adds nothing to
+ * a message that already carries it).
+ */
+export function briefHandedByTool(projectDir: string): boolean {
+  if (hooksNeverRanHere(projectDir)) return false;
+  return briefHandedAtStart(projectDir) || (BRIEF_REWRITE_HARNESSES.has(runtimeHarnessName(projectDir)) &&
+    resolveProjectFlag(CEREMONY_ENV.plan_approval, process.env, projectDir) !== "1");
+}
+
+/** The sentence the rewrite's copy of the brief opens with. */
+export function briefOpening(current: boolean): string {
+  return current
+    ? "This is the plan and its test instructions this build follows; build from this, not from a summary of it."
+    : "This is the plan and its test instructions as the person approved them; build from this, not from a summary of it.";
+}
+
+/** What the developer is told when the tool could not hand it the plan. */
+export const BRIEF_NOT_HANDED =
+  "AI-DLC could not hand you this build's plan and its test instructions. Write no code: end your turn and say so, " +
+  "so the conductor runs its next step and starts you again.";
+
+/** The one Code Generation target the step on record builds, when it builds exactly one; else null. */
+export function handedBriefTarget(projectDir: string, prompt: string | null = null): CodeGenerationTarget | null {
+  try {
+    // With no work selected, an isolated run's: the empty state its step binds.
+    const state = runStateContent(projectDir);
+    if (state === null) return null;
+    const marker = readActiveDirectiveMarker(projectDir, state);
+    const issued = (marker?.version === 2 && marker.stage === CODE_GENERATION_STAGE
+      ? codeGenerationIssuance(marker) : null) ?? setAsideBuildUnderOff(projectDir, marker);
+    if (issued?.kind !== "run-stage") return null;
+    const target: CodeGenerationTarget = { unit: issued.unit?.trim() || null };
+    if (prompt !== null) {
+      // A message that names a target names this one, or the tool hands nothing.
+      const units = promptUnitMarkers(prompt);
+      const stages = promptStageMarkers(prompt);
+      if (units.length + stages.length > 1) return null;
+      if (units.length === 1 && units[0] !== target.unit) return null;
+      if (stages.length === 1 && (stages[0] !== CODE_GENERATION_STAGE || target.unit !== null)) return null;
+    }
+    return target;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * What a Claude Code developer is handed as it starts, after the rules lead.
+ * `head` sits in the 2,000 characters Claude Code shows inline when it saves a
+ * long start context to a file (a Sonnet developer read only what was shown),
+ * all but the tail of the files rule: the two record files to read, a line for
+ * a review section an earlier protocol left at the plan's end, then the files
+ * rule the brief carries. `progress` (an interrupted build's progress, any
+ * length) goes after it, outside that part; the plan file's own ticks say what
+ * is done. Null when the brief itself could not be made: the files no longer
+ * hold what the approval covers.
+ */
+export function briefPointer(projectDir: string, target: CodeGenerationTarget): { head: string; progress: string } | null {
+  try {
+    const assembled = assembleWorkerBrief(projectDir, target);
+    const folder = toPosix(relative(projectDir, codeGenerationRecordDir(projectDir, target.unit)));
+    return {
+      head: "Read your plan `code-generation-plan.md` and its test instructions `unit-test-instructions.md`, in " +
+        `\`${folder}/\`, whole with your file-read tool before you write any file, and build from them, not from a ` +
+        "summary of them. Tick each step's box in the plan file as you finish the step: that is the only change you " +
+        "make to that file.\n" +
+        (assembled.appendixStripped
+          ? "The plan file's closing `## Review` section is an earlier review's notes: build none of it.\n"
+          : "") +
+        `\n${FILE_TOOLS_RULE}\n`,
+      progress: assembled.resume ? progressSection(assembled.resume, false) : "",
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The brief as the rewrite hands it over (`text`: its opening sentence, then
+ * the brief) and the brief alone, to tell a message that already carries it;
+ * null when it cannot be made.
+ */
+export function handedBrief(projectDir: string, target: CodeGenerationTarget): { text: string; brief: string } | null {
+  try {
+    const assembled = assembleWorkerBrief(projectDir, target);
+    return {
+      text: `${briefOpening(assembled.continuation !== null || assembled.skipped)}\n\n${assembled.brief}`,
+      brief: assembled.brief,
+    };
+  } catch {
+    return null;
+  }
 }
 
 // --- An approved plan that changed before the build ---------------------------------
@@ -2510,16 +2741,21 @@ function stepRanges(numbers: number[]): string {
 
 // Before the approved plan, so the worker reads where it stands first. The
 // approved plan below it is unchanged.
-function progressSection(resume: CodeGenerationResume): string {
+// `besideApprovedCopy`: the section heads a brief that carries the approved
+// plan, ticks reset, so it says why that copy shows none ticked; the start
+// context that points at the plan file carries no such copy.
+function progressSection(resume: CodeGenerationResume, besideApprovedCopy = true): string {
   const total = resume.steps.length;
   const lines = ["", "## Progress before the interruption", ""];
-  const unticked = "the approved plan below shows none ticked, because ticks are not part of the approval";
+  const unticked = besideApprovedCopy
+    ? " (the approved plan below shows none ticked, because ticks are not part of the approval)"
+    : "";
   // The build wrote code and marked nothing: no step is claimed done, so there
   // is no file to check for one and no step to continue at that the engine can
   // name. The worker reads the plan against the project and marks what it did.
   if (resume.from === "unmarked") {
     lines.push(
-      `This plan's build already wrote code, and the plan file ticks none of its ${total} steps (${unticked}). ` +
+      `This plan's build already wrote code, and the plan file ticks none of its ${total} steps${unticked}. ` +
         "Check each step against the files in the project, tick the box of each one that is done, " +
         "and carry on from the first that is not.",
       "",
@@ -2536,10 +2772,10 @@ function progressSection(resume: CodeGenerationResume): string {
       "Check each of those steps and tick the box of each one that is done.",
     );
   } else if (resume.next === null) {
-    lines.push(`This plan's build stopped part way. All ${total} steps are ticked in the plan file (${unticked}).`, "");
+    lines.push(`This plan's build stopped part way. All ${total} steps are ticked in the plan file${unticked}.`, "");
   } else {
     lines.push(
-      `This plan's build stopped part way. The plan file ticks ${resume.ticked.length} of its ${total} steps (${unticked}):`,
+      `This plan's build stopped part way. The plan file ticks ${resume.ticked.length} of its ${total} steps${unticked}:`,
       "",
       ...resume.ticked.map((step) => `${step}. ${resume.steps[step - 1].text}`),
       "",
@@ -2870,6 +3106,34 @@ export function promptTestingContractMarkers(text: string): string[] {
     if (marker) hashes.add(marker[1]);
   }
   return Array.from(hashes);
+}
+
+const UNIT_MARKER_RE = /^[ \t]*AIDLC-UNIT[ \t]*:[ \t]*(.*?)[ \t]*$/;
+const STAGE_MARKER_RE = /^[ \t]*AIDLC-STAGE[ \t]*:[ \t]*(.*?)[ \t]*$/;
+
+/**
+ * Return the distinct, non-empty target markers in encounter order. Repeated
+ * copies of the same marker are harmless (some harnesses carry both task and
+ * prompt-template text); different values are ambiguous and block.
+ */
+export function promptUnitMarkers(text: string): string[] {
+  const units = new Set<string>();
+  for (const line of text.split(/\r?\n/)) {
+    const marker = line.match(UNIT_MARKER_RE);
+    const unit = marker?.[1].trim() ?? "";
+    if (unit.length > 0) units.add(unit);
+  }
+  return Array.from(units);
+}
+
+export function promptStageMarkers(text: string): string[] {
+  const stages = new Set<string>();
+  for (const line of text.split(/\r?\n/)) {
+    const marker = line.match(STAGE_MARKER_RE);
+    const stage = marker?.[1].trim() ?? "";
+    if (stage.length > 0) stages.add(normalizeStageName(stage));
+  }
+  return Array.from(stages);
 }
 
 function normalizeCodeGenerationTarget(target: CodeGenerationTarget): CodeGenerationTarget {
@@ -3357,12 +3621,19 @@ export const REVIEW_TESTING_CONTRACT_FIELD = "Testing Contract";
 
 /**
  * The Testing Contract in force for a Code Generation review being recorded:
- * the boundary that says the build it reviews was finished under it. Null when
- * the posture cannot be read, so the row carries no boundary.
+ * the boundary that says the build it reviews was finished under it. The
+ * plan's own contract while it is in force, so a plan approved before the
+ * update names the contract reviewedUnderContract compares; null when the
+ * posture cannot be read, so the row carries no boundary.
  */
-export function reviewedTestingContract(projectDir: string): string | null {
+export function reviewedTestingContract(projectDir: string, unit: string | null = null): string | null {
   try {
-    return resolveTestingPosture(projectDir).contract_sha256;
+    const current = resolveTestingPosture(projectDir);
+    const planPath = join(codeGenerationRecordDir(projectDir, unit), "code-generation-plan.md");
+    const embedded = existsSync(planPath) ? parseTestingContract(readFileSync(planPath, "utf-8")) : null;
+    return embedded !== null && testingContractCurrent(projectDir, embedded, current)
+      ? embedded.contract_sha256
+      : current.contract_sha256;
   } catch {
     return null;
   }
@@ -3498,12 +3769,8 @@ function codeGenerationApprovalArtifacts(
   const approvedAnswer = recordedFingerprint !== null && !skipNoLongerStands(projectDir, authority, receipt) &&
     (receipt?.choice === "Approve Plan" || planApprovedOnRecord(projectDir, authority.targetId, recordedFingerprint));
   const embedded = planExists ? parseTestingContract(plan) : null;
-  const current = planExists ? resolveTestingPosture(contractProjectDir) : null;
   const contractHash = embedded?.contract_sha256 ?? null;
-  const contractValid =
-    embedded !== null &&
-    current !== null &&
-    embedded.contract_sha256 === current.contract_sha256;
+  const contractValid = planExists && testingContractCurrent(contractProjectDir, embedded);
   // A delegated approval (validateWorktreeDelegation) reads the parent's
   // contract while the review rows here are the worker checkout's, so the
   // exception is not read for it; handleReview records none in a swarm worker.
@@ -6489,11 +6756,7 @@ export function main(argv: string[]): void {
         // Regenerating changes nothing approved: the same plan in the same
         // attempt prints the fingerprint its approval already binds.
         const embedded = parseTestingContract(plan);
-        const current = resolveTestingPosture(projectDir);
-        if (
-          !embedded ||
-          embedded.contract_sha256 !== current.contract_sha256
-        ) {
+        if (embedded === null || !testingContractCurrent(projectDir, embedded)) {
           throw new Error(
             approval.reason ||
               "plan Testing Contract does not match the current effective posture",
@@ -6511,7 +6774,7 @@ export function main(argv: string[]): void {
         const fingerprint = approvalFingerprint(
           plan,
           instructions,
-          current.contract_sha256,
+          embedded.contract_sha256,
           authority,
         );
         console.log(`[Approval Fingerprint]: ${fingerprint}`);

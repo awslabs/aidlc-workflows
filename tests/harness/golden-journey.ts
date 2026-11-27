@@ -22,9 +22,11 @@
 // run) drives with driveTyped, its own turns checking the same.
 //
 // The person keeps stock settings: Claude Code's default permission mode and
-// the project's shipped settings. Every prompt is answered yes; a prompt for
-// AI-DLC's own command or record, or a write outside the project, is a
-// problem (stock-permissions.ts), and the other prompts are listed.
+// the project's shipped settings. Every prompt is answered yes; a file tool's
+// prompt inside AI-DLC's folders, a write outside the project, or a prompt for
+// a command that runs one of AI-DLC's own tools is a problem
+// (stock-permissions.ts). A shell command that only names AI-DLC's folders is
+// listed and counted under its own heading, and the other prompts are listed.
 
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -43,7 +45,7 @@ import { parseDirectiveOutput } from "./directive-output.ts";
 import { declaredScope, expectedStages, sourceStages } from "./scope-run.ts";
 import type { AgentWords } from "./leg-evidence.ts";
 import { judgeFolder, judgeOpenQuestion } from "./live-corpus.ts";
-import { claudePromptProblems } from "./stock-permissions.ts";
+import { claudePromptProblems, folderCommandsBlock } from "./stock-permissions.ts";
 import {
   type AnswerSpec,
   type AskUserQuestionItem,
@@ -301,6 +303,7 @@ export class GoldenPerson {
     const prompts = claudePromptProblems(drive.permissionRequests ?? [], this.j.proj);
     problems.push(...prompts.problems);
     if (prompts.listed.length) console.log(`Prompts the person decided on stock settings:\n  ${prompts.listed.join("\n  ")}`);
+    console.log(folderCommandsBlock(prompts.folderCommands));
     return {
       toolResults: drive.toolResults, start: this.start, person: this.said, problems, planAsked: this.planAsked,
       ownWordsUsed: this.ownWordsUsed, prompts: prompts.listed, files: this.files,

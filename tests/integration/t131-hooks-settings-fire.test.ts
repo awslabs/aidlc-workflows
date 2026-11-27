@@ -99,6 +99,7 @@ import {
 import { hostname } from "node:os";
 import { join } from "node:path";
 import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import {
   AIDLC_SRC,
   cleanupTestProject,
@@ -115,7 +116,7 @@ const SETTINGS = join(AIDLC_SRC, "settings.json");
 const SKILL = join(AIDLC_SRC, "skills", "aidlc", "SKILL.md");
 const SRC_TOOLS = join(AIDLC_SRC, "tools");
 const SRC_HOOKS = join(AIDLC_SRC, "hooks");
-const HOOK_INVOKE = 'bun "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts" engine hook';
+const HOOK_INVOKE = withCopyLaunchOptions('bun "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts" engine hook');
 
 // P9 per-intent layout: the audit-logger + runtime-compile spine resolves state
 // via stateFilePath() and the audit trail via auditFilePath()/readAllAuditShards()

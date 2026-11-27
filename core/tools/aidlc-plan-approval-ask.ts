@@ -22,6 +22,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import { appendAuditEntryUnlocked } from "./aidlc-audit.ts";
+import { remoteBranchCopies } from "./aidlc-brought-files.ts";
 import { personGitNameField } from "./aidlc-git-name.ts";
 import {
   activeIntentUuid,
@@ -65,6 +66,7 @@ import {
   sessionsDir,
   renderChangedPaths,
   sourceChangedOutsideAidlc,
+  sourceListingChangedKeys,
   stalePlanApprovalReceiptsForTarget,
   stateFilePath,
   steeringPayloadAuthenticAt,
@@ -112,6 +114,7 @@ import {
   replaceTestingContractSection,
   resolveCodeGenerationAuthority,
   resolveTestingPosture,
+  testingContractCurrent,
   codeGenerationFinishedUnderPlanContract,
   stepNextCommand,
   testingContractDefectMessage,
@@ -522,7 +525,7 @@ export function codeGenerationPlanReadiness(
     try {
       const current = resolveTestingPosture(projectDir);
       const written = usableTestingContract(current) &&
-          ("defect" in read || read.contract.contract_sha256 !== current.contract_sha256)
+          ("defect" in read || !testingContractCurrent(projectDir, read.contract, current))
         ? planWithTestingContract(plan, current, theirEdit)
         : null;
       if (written !== null) {
@@ -537,8 +540,7 @@ export function codeGenerationPlanReadiness(
   if ("defect" in read) {
     return { ready: false, note: testingContractDefectMessage(read.defect, "run next") };
   }
-  const current = resolveTestingPosture(projectDir);
-  if (read.contract.contract_sha256 !== current.contract_sha256) {
+  if (!testingContractCurrent(projectDir, read.contract)) {
     return {
       ready: false,
       note: "The plan's Testing Contract is out of date: memory, scope, test strategy, project type, or the " +
@@ -618,7 +620,9 @@ function targetView(projectDir: string, unit: string | null, under: readonly str
  * that start counts from what it held when it joined, as the stage's own
  * baseline counts it (withRepoBaselineAdditions). The files the plans approved since
  * that start name are their own build, not something that ran ahead, and
- * AI-DLC's own files (an update the person took) are nobody's. Nothing
+ * AI-DLC's own files (an update the person took) are nobody's, nor is a file
+ * exactly as the remote branch of its own repository holds it (a teammate's
+ * commit pulled, a checkout as cloned: remoteBranchCopies). Nothing
  * is said when the start is not on record or cannot be read, or nothing changed.
  */
 function changedBeforeApprovalLine(projectDir: string): string | null {
@@ -663,7 +667,15 @@ function changedBeforeApprovalLine(projectDir: string): string | null {
     const theirBuild = (path: string): boolean =>
       named.some((entry) =>
         path === entry || path.startsWith(`${entry}/`) || (!entry.includes("/") && path.split("/").at(-1) === entry));
-    const changed = sourceChangedOutsideAidlc(projectDir, joined.listing, current.listing).filter((path) => !theirBuild(path));
+    // A file the remote branch of its own repository holds as it is now reads as the start had it.
+    const now = new Map(current.listing);
+    for (const [key, copy] of remoteBranchCopies(projectDir, joined.listing, current.listing, sourceListingChangedKeys(joined.listing, current.listing))) {
+      if (!copy.held) continue;
+      const was = joined.listing.get(key);
+      if (was === undefined) now.delete(key);
+      else now.set(key, was);
+    }
+    const changed = sourceChangedOutsideAidlc(projectDir, joined.listing, now).filter((path) => !theirBuild(path));
     if (changed.length === 0) return null;
     return changed.length === 1
       ? `Already changed before you approved: ${renderChangedPaths(changed)}.`
@@ -2012,7 +2024,7 @@ function approveTarget(
   const posture = resolveTestingPosture(projectDir);
   let contractHash = read.contract.contract_sha256;
   let rendered: string | null = null;
-  if (contractHash !== posture.contract_sha256) {
+  if (!testingContractCurrent(projectDir, read.contract, posture)) {
     const refreshed = usableTestingContract(posture) ? replaceTestingContractSection(plan, posture, theirEdit) : null;
     if (refreshed === null) {
       return repair(`the Testing Contract in ${view.plan_path} is out of date and needs to be rendered again.`);

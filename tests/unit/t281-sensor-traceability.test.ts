@@ -7,18 +7,21 @@ import {
 } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   artifactFilename,
   parseStageFrontmatter,
   producesArtifactFile,
+  writeRecordedSourceCheckouts,
 } from "../../core/tools/aidlc-lib.ts";
 import {
   cleanupTestProject,
   createTestProject,
   seededRecordDir,
   seededStateFile,
+  seedWorkspaceShell,
 } from "../harness/fixtures.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -367,6 +370,77 @@ describe("t281 upstream and target verification", () => {
     out = run(proj, "units-generation", file);
     expect(out.result.pass).toBe(false);
     expect(out.result.gaps).toContain("US1.2");
+  });
+
+  // A story the team keeps out of every Unit (handled in a later phase) is
+  // recorded as Deferred with its reason, and `none` on its story-map row.
+  function seedKeptOutStory(proj: string, row: { status?: string; target?: string } | null): string {
+    seedUserStories(proj);
+    seedUnits(proj);
+    write(proj, "inception/user-stories/stories.md", [
+      "# Stories",
+      "",
+      "## US1.1 Login",
+      "- AC1.1.1 accepts valid credentials",
+      "",
+      "## US1.2 Recovery",
+      "- AC1.2.1 sends a reset link",
+      "",
+      "## US1.3 Audit export",
+      "- AC1.3.1 exports the audit trail",
+    ].join("\n"));
+    write(proj, "inception/units-generation/unit-of-work-story-map.md", [
+      "# Story Map",
+      "",
+      "| Story | Unit ID | Directory |",
+      "|---|---|---|",
+      "| US1.1 | U1 | u1-auth |",
+      "| US1.2 | U2 | u2-profile |",
+      "| US1.3 | none | none |",
+    ].join("\n"));
+    return trace(proj, "inception/units-generation/traceability.json", {
+      stage: "units-generation",
+      upstream_ids: row === null ? ["US1.1", "US1.2"] : ["US1.1", "US1.2", "US1.3"],
+      coverage: [
+        { id: "US1.1", status: "OK", target: "U1" },
+        { id: "US1.2", status: "OK", target: "u2-profile" },
+        ...(row === null ? [] : [{ id: "US1.3", ...row }]),
+      ],
+    });
+  }
+
+  test("units-generation: a Deferred story with a reason, in no Unit, is settled", () => {
+    const proj = project();
+    const file = seedKeptOutStory(proj, { status: "Deferred", target: "handled in the Operation phase" });
+    const out = run(proj, "units-generation", file);
+    expect(out.result.gaps).toEqual([]);
+    expect(out.result.invalid_targets).toEqual([]);
+    expect(out.result.reason).toBeUndefined();
+    expect(out.result.pass).toBe(true);
+  });
+
+  test("units-generation: a Deferred story with no reason is still reported", () => {
+    const proj = project();
+    const file = seedKeptOutStory(proj, { status: "Deferred", target: "" });
+    const out = run(proj, "units-generation", file);
+    expect(out.result.pass).toBe(false);
+    expect(out.result.invalid_entries).toContain("coverage:US1.3: status Deferred requires a non-empty target");
+  });
+
+  test("units-generation: a story in no Unit with no row, a GAP row, or an N/A row is still a gap", () => {
+    const proj = project();
+    let out = run(proj, "units-generation", seedKeptOutStory(proj, null));
+    expect(out.result.pass).toBe(false);
+    expect(out.result.gaps).toContain("US1.3");
+
+    out = run(proj, "units-generation", seedKeptOutStory(proj, { status: "GAP" }));
+    expect(out.result.pass).toBe(false);
+    expect(out.result.gaps).toContain("US1.3");
+
+    // N/A at this stage is where a hand-off to another Unit lands: it settles nothing.
+    out = run(proj, "units-generation", seedKeptOutStory(proj, { status: "N/A", target: "built by U2 later" }));
+    expect(out.result.pass).toBe(false);
+    expect(out.result.gaps).toContain("US1.3");
   });
 
   // Units Generation writes Markdown, and an agent often sets IDs and
@@ -1722,6 +1796,167 @@ describe("t281 Build and Test: every requirement and criterion is built", () => 
     expect(row(out, "FR1.1")?.covered).toBe(true);
   });
 
+  // A story the team keeps out of every Unit at Units Generation: `none` on its
+  // story-map row and a `Deferred` row with its reason, the shape that stage
+  // settles. FR3.1 is traced to it by User Stories. `laterU2` is a row for its
+  // criterion in u2-profile's Code Generation table, when a Unit lists it after all.
+  function seedKeptOutStory(proj: string, keptOut: { status: string; target: string }, laterU2?: { status: string; target?: string }): string {
+    seedStoryPath(proj, { status: "OK", target: "src/profile/reset.ts" });
+    writeRequirements(proj, `${GROUPED}\n### FR3: Audit\n**FR3.1** Export the audit trail\n`);
+    write(proj, "inception/user-stories/stories.md", [
+      "# Stories",
+      "",
+      "## US1.1 Login",
+      "- AC1.1.1 accepts valid credentials",
+      "- AC1.1.2 rejects invalid credentials",
+      "",
+      "## US1.2 Recovery",
+      "- AC1.2.1 sends a reset link",
+      "",
+      "## US1.3 Audit export",
+      "- AC1.3.1 exports the audit trail",
+    ].join("\n"));
+    trace(proj, "inception/user-stories/traceability.json", {
+      stage: "user-stories",
+      upstream_ids: ["FR1.1", "FR1.2", "FR2.1", "FR3.1", "NFR1"],
+      coverage: [
+        { id: "FR1.1", status: "OK", target: "US1.1" },
+        { id: "FR1.2", status: "OK", target: "US1.1" },
+        { id: "FR2.1", status: "OK", target: "US1.2" },
+        { id: "FR3.1", status: "OK", target: "US1.3" },
+        { id: "NFR1", status: "Deferred", target: "nfr-requirements" },
+      ],
+    });
+    write(proj, "inception/units-generation/unit-of-work-story-map.md", [
+      "# Story Map",
+      "",
+      "| Story | Unit ID | Directory |",
+      "|---|---|---|",
+      "| US1.1 | U1 | u1-auth |",
+      "| US1.2 | U2 | u2-profile |",
+      "| US1.3 | none | none |",
+    ].join("\n"));
+    if (laterU2) {
+      trace(proj, "construction/u2-profile/code-generation/traceability.json", {
+        stage: "code-generation",
+        unit: "u2-profile",
+        upstream_ids: ["AC1.2.1", "AC1.3.1", "NFR1.2"],
+        coverage: [
+          { id: "AC1.2.1", status: "OK", target: "src/profile/reset.ts" },
+          { id: "AC1.3.1", ...laterU2 },
+          { id: "NFR1.2", status: "OK", target: "src/profile/reset.ts" },
+        ],
+      });
+    }
+    return trace(proj, "inception/units-generation/traceability.json", {
+      stage: "units-generation",
+      upstream_ids: ["US1.1", "US1.2", "US1.3"],
+      coverage: [
+        { id: "US1.1", status: "OK", target: "U1" },
+        { id: "US1.2", status: "OK", target: "U2" },
+        { id: "US1.3", ...keptOut },
+      ],
+    });
+  }
+
+  test("with stories, a story kept out of every Unit at Units Generation is not uncovered at Build and Test", () => {
+    const proj = project();
+    const units = seedKeptOutStory(proj, { status: "Deferred", target: "handled in the Operation phase" });
+    const planned = run(proj, "units-generation", units);
+    expect(planned.result.pass, planned.result.reason).toBe(true);
+
+    const out = runFinal(proj);
+    expect(out.uncovered).toEqual([]);
+    expect(out.pass, out.reason).toBe(true);
+    expect(row(out, "AC1.3.1")).toEqual({
+      id: "AC1.3.1",
+      covered: true,
+      not_applicable: ["units-generation: handled in the Operation phase"],
+    });
+    expect(row(out, "FR3.1")).toEqual({ id: "FR3.1", covered: true, through: ["AC1.3.1"] });
+  });
+
+  test("with stories, a Unit that lists the kept-out story's criterion later still decides it", () => {
+    let proj = project();
+    seedKeptOutStory(proj, { status: "Deferred", target: "handled in the Operation phase" }, { status: "OK", target: "src/profile/reset.ts" });
+    let out = runFinal(proj);
+    expect(out.pass, out.reason).toBe(true);
+    expect(row(out, "AC1.3.1")).toEqual({ id: "AC1.3.1", covered: true, built_in: ["u2-profile: src/profile/reset.ts"] });
+
+    proj = project();
+    seedKeptOutStory(proj, { status: "Deferred", target: "handled in the Operation phase" }, { status: "GAP" });
+    out = runFinal(proj);
+    expect(out.pass).toBe(false);
+    expect(out.uncovered).toEqual(["FR3.1", "AC1.3.1"]);
+    expect(row(out, "AC1.3.1")).toEqual({ id: "AC1.3.1", covered: false });
+  });
+
+  test("with stories, a kept-out story whose Deferred row has no reason settles nothing at Build and Test", () => {
+    const proj = project();
+    seedKeptOutStory(proj, { status: "Deferred", target: "" });
+    const out = runFinal(proj);
+    expect(out.pass).toBe(false);
+    expect(out.uncovered).toEqual(["FR3.1", "AC1.3.1"]);
+    expect(row(out, "AC1.3.1")).toEqual({ id: "AC1.3.1", covered: false });
+  });
+
+  test("with stories, an N/A row at Units Generation settles nothing at Build and Test", () => {
+    const proj = project();
+    seedKeptOutStory(proj, { status: "N/A", target: "built by U2 later" });
+    const out = runFinal(proj);
+    expect(out.pass).toBe(false);
+    expect(out.uncovered).toEqual(["FR3.1", "AC1.3.1"]);
+  });
+
+  // Without stories the story map is keyed by requirement; only an FR no Unit's
+  // row names is kept out, so an NFR row's own `Deferred` there settles nothing.
+  test("without stories, a requirement kept out of every Unit is not uncovered at Build and Test", () => {
+    const proj = project();
+    writeRequirements(proj, [
+      "# Requirements",
+      "",
+      "## Functional",
+      "- FR1 Login",
+      "- FR2 Recovery",
+      "- FR3 Audit export",
+      "",
+      "## Non-functional",
+      "- NFR1 Security",
+    ].join("\n"));
+    seedUnits(proj);
+    write(proj, "inception/units-generation/unit-of-work-story-map.md", [
+      "# Story Map",
+      "",
+      "| Requirement | Unit ID | Directory |",
+      "|---|---|---|",
+      "| FR1 | U1 | u1-auth |",
+      "| FR2 | U2 | u2-profile |",
+      "| FR3 | none | none |",
+    ].join("\n"));
+    trace(proj, "inception/units-generation/traceability.json", {
+      stage: "units-generation",
+      upstream_ids: ["FR1", "FR2", "FR3", "NFR1"],
+      coverage: [
+        { id: "FR1", status: "OK", target: "U1" },
+        { id: "FR2", status: "OK", target: "U2" },
+        { id: "FR3", status: "Deferred", target: "handled in the Operation phase" },
+        { id: "NFR1", status: "Deferred", target: "nfr-requirements" },
+      ],
+    });
+    source(proj, "src/auth.ts");
+    for (const [unit, id] of [["u1-auth", "FR1"], ["u2-profile", "FR2"]]) {
+      trace(proj, `construction/${unit}/code-generation/traceability.json`, {
+        stage: "code-generation",
+        unit,
+        upstream_ids: [id],
+        coverage: [{ id, status: "OK", target: "src/auth.ts" }],
+      });
+    }
+    const out = runFinal(proj);
+    expect(row(out, "FR3")).toEqual({ id: "FR3", covered: true, not_applicable: ["units-generation: handled in the Operation phase"] });
+    expect(out.uncovered).toEqual(["NFR1"]);
+  });
+
   test("without stories (security-patch shape), FR leaves are built by their own rows and NFR1 through NFR1.1", () => {
     const proj = project();
     writeRequirements(proj, GROUPED);
@@ -2289,5 +2524,116 @@ describe("t281 the table the tool starts (--write-upstream)", () => {
     });
     expect(spawned.status).toBe(1);
     expect(spawned.stderr).toContain("--stage is required");
+  });
+});
+
+// A repository beside the project that the work records for its review
+// (`intent add-checkout ../shop-web`): a Code Generation target there is
+// followed to its file by its path from the project or by the listing name the
+// source listing gives it (`shop-web@checkout/<path>`). A target outside the
+// project and every recorded checkout, and every target in a clone with no such
+// record, keeps its finding.
+describe("t281 a checkout recorded for the work's review", () => {
+  // The shop project with its web repository beside it, recorded through the
+  // record's one writer, in the shape `intent add-checkout ../shop-web` writes.
+  function shop(recorded = true): { proj: string; web: string } {
+    const base = realpathSync(mkdtempSync(join(process.env.TMPDIR || tmpdir(), "t281-shop-")));
+    projects.push(base);
+    const proj = join(base, "shop");
+    mkdirSync(proj);
+    seedWorkspaceShell(proj);
+    mkdirSync(join(seededStateFile(proj), ".."), { recursive: true });
+    writeFileSync(seededStateFile(proj), "# State\n");
+    const web = join(base, "shop-web");
+    mkdirSync(join(web, "test"), { recursive: true });
+    writeFileSync(join(web, "app.js"), "export const app = 1;\n");
+    writeFileSync(join(web, "test", "app.test.js"), "// app\n");
+    // Beside both folders: a listing name that climbs out of its checkout must not reach it.
+    writeFileSync(join(base, "app.js"), "export const outside = 1;\n");
+    if (recorded) writeRecordedSourceCheckouts(proj, [{ label: "shop-web", path: "../shop-web", real: web }]);
+    return { proj, web };
+  }
+
+  function unitTable(proj: string, targets: string[]): string {
+    seedUserStories(proj);
+    seedUnits(proj);
+    const ids = targets.map((_, n) => `AC1.1.${n + 1}`);
+    return trace(proj, "construction/u1-auth/code-generation/traceability.json", {
+      upstream_ids: ids,
+      coverage: targets.map((target, n) => ({ id: ids[n], status: "OK", target })),
+    });
+  }
+
+  test("a file there is found by its path from the project and by its listing name", () => {
+    const { proj } = shop();
+    const out = run(proj, "code-generation", unitTable(proj, [
+      "../shop-web/app.js",
+      "shop-web@checkout/app.js",
+      "../shop-web/test/app.test.js",
+      "shop-web@checkout/test/app.test.js",
+    ]));
+    expect(out.result.invalid_targets).toEqual([]);
+  });
+
+  test("a missing file there is said not to exist, by either spelling", () => {
+    const { proj } = shop();
+    const out = run(proj, "code-generation", unitTable(proj, ["../shop-web/missing.js", "shop-web@checkout/missing.js"]));
+    expect(out.result.invalid_targets).toEqual([
+      "AC1.1.1: target file does not exist: ../shop-web/missing.js",
+      "AC1.1.2: target file does not exist: shop-web@checkout/missing.js",
+    ]);
+  });
+
+  test("a target that is no recorded checkout's file keeps its finding", () => {
+    const { proj, web } = shop();
+    const out = run(proj, "code-generation", unitTable(proj, [
+      "../elsewhere/app.js",
+      join(web, "app.js"),
+      "shop-api@checkout/app.js",
+      "shop-web@checkout/../app.js",
+      "shop-web@checkout//etc/app.js",
+    ]));
+    expect(out.result.invalid_targets).toEqual([
+      "AC1.1.1: target escapes the project directory",
+      "AC1.1.2: target must be a workspace-relative file path",
+      "AC1.1.3: target file does not exist: shop-api@checkout/app.js",
+      "AC1.1.4: target file does not exist: shop-web@checkout/../app.js",
+      "AC1.1.5: target file does not exist: shop-web@checkout//etc/app.js",
+    ]);
+  });
+
+  test("with no record, as in a teammate's clone, both spellings read as before", () => {
+    const { proj } = shop(false);
+    const out = run(proj, "code-generation", unitTable(proj, ["../shop-web/app.js", "shop-web@checkout/app.js"]));
+    expect(out.result.invalid_targets).toEqual([
+      "AC1.1.1: target escapes the project directory",
+      "AC1.1.2: target file does not exist: shop-web@checkout/app.js",
+    ]);
+  });
+
+  test("at Build and Test a requirement built there is built", () => {
+    const { proj } = shop();
+    writeRequirements(proj, "# Requirements\n\n## Functional\n- FR1 Wishlist\n- FR2 Wishlist count\n");
+    trace(proj, "construction/code-generation/traceability.json", {
+      stage: "code-generation",
+      upstream_ids: ["FR1", "FR2"],
+      coverage: [
+        { id: "FR1", status: "OK", target: "../shop-web/app.js" },
+        { id: "FR2", status: "OK", target: "shop-web@checkout/app.js" },
+      ],
+    });
+    const spawned = spawnSync("bun", [SCRIPT, "--stage", "build-and-test"], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      encoding: "utf-8",
+      cwd: proj,
+      env: { ...process.env, AIDLC_PROJECT_DIR: proj },
+    });
+    expect(spawned.status, spawned.stderr).toBe(0);
+    const out = JSON.parse(spawned.stdout) as { pass: boolean; reason?: string; coverage: Array<Record<string, unknown>> };
+    expect(out.reason).toBeUndefined();
+    expect(out.coverage).toEqual([
+      { id: "FR1", covered: true, built_in: ["code-generation: ../shop-web/app.js"] },
+      { id: "FR2", covered: true, built_in: ["code-generation: shop-web@checkout/app.js"] },
+    ]);
   });
 });

@@ -1169,33 +1169,75 @@ describe("t241 OpenCode adapter dispatch rules", () => {
     seedStateFile(root, "state-mid-inception.md");
     const { client } = fakeClient();
     const adapter = await createTestAdapter(client, root);
-    const output = {
-      args: {
-        subagent_type: "aidlc-product-agent",
-        prompt:
-          "Run .aidlc/aidlc-common/stages/inception/user-stories.md.",
-        run_in_background: true,
-      },
+    const handed: Record<string, unknown> = {
+      subagent_type: "aidlc-product-agent",
+      prompt:
+        "Run .aidlc/aidlc-common/stages/inception/user-stories.md.",
+      run_in_background: true,
     };
+    const output = { args: handed };
 
     await adapter["tool.execute.before"](
       { tool: "task", sessionID: "main", callID: "rules" },
       output,
     );
 
-    const prompt = String(output.args.prompt ?? "");
+    // opencode runs the tool with the object it handed the plugin, so the
+    // rules must be on that object, not on a new one in output.args.
+    expect(output.args).toBe(handed);
+    const prompt = String(handed.prompt ?? "");
     expect(prompt).toContain("first-class");
     expect(prompt).toContain("Given/When/Then");
     expect(prompt).toContain("AIDLC_DISPATCH_RULES_BEGIN");
+    expect(handed).toMatchObject({ subagent_type: "aidlc-product-agent", run_in_background: true });
     expect(inspectSubagentInflight(root).freshCount).toBe(1);
 
     await adapter["tool.execute.after"]({
       tool: "task",
       sessionID: "main",
       callID: "rules",
-      args: output.args,
+      args: handed,
     });
     expect(existsSync(subagentInflightMarkerPath(root))).toBe(false);
+  });
+
+  test("the plan-approval guard reads the developer's start as the rewrite left it", async () => {
+    const root = freshProject();
+    const capture = join(root, "guard-input.jsonl");
+    writeHook(
+      root,
+      "aidlc-deliver-stage-rules.ts",
+      [
+        "export async function run(input: string): Promise<number> {",
+        "  const args = JSON.parse(input).tool_input;",
+        '  process.stdout.write(JSON.stringify({ hookSpecificOutput: { updatedInput: { ...args, prompt: "BRIEF\\n\\n" + args.prompt } } }) + "\\n");',
+        "  return 0;",
+        "}",
+      ].join("\n"),
+    );
+    writeHook(
+      root,
+      "aidlc-plan-approval-guard.ts",
+      [
+        'import { appendFileSync } from "node:fs";',
+        "export async function run(input: string): Promise<number> {",
+        `  appendFileSync(${JSON.stringify(capture)}, input + "\\n");`,
+        "  return 0;",
+        "}",
+      ].join("\n"),
+    );
+    for (const hook of ["aidlc-review-freeze.ts", "aidlc-reviewer-scope.ts", "aidlc-state-transition-guard.ts"]) {
+      writeHook(root, hook, "export async function run(): Promise<number> { return 0; }\n");
+    }
+    const { client } = fakeClient();
+    const adapter = await createTestAdapter(client, root);
+    const handed: Record<string, unknown> = { subagent_type: "aidlc-developer-agent", prompt: "Build it." };
+
+    await adapter["tool.execute.before"]({ tool: "task", sessionID: "main", callID: "dev" }, { args: handed });
+
+    expect(handed.prompt).toBe("BRIEF\n\nBuild it.");
+    const read = JSON.parse(readFileSync(capture, "utf-8").trim()) as { tool_input?: { prompt?: unknown } };
+    expect(read.tool_input?.prompt).toBe("BRIEF\n\nBuild it.");
   });
 });
 

@@ -816,11 +816,11 @@ export interface Call {
 
 /** A command the engine named on Claude Code's tree (a fixture built there), as this host's tree names it. */
 function onTree(host: ScopeHost, command: string): string {
-  return host.dir === ".claude" ? command : command.replace(/(^|\s)\.claude\/tools\//g, `$1${host.dir}/tools/`);
+  return host.dir === ".claude" ? command : command.replace(/(^|\s|--config=)\.claude\/tools\//g, `$1${host.dir}/tools/`);
 }
 
 function engineLine(host: ScopeHost, ...args: string[]): string {
-  const head = host.launcher === null ? ["bun", `${host.dir}/tools/aidlc.ts`] : ["aidlc"];
+  const head = host.launcher === null ? [...host.bunWords(), `${host.dir}/tools/aidlc.ts`] : ["aidlc"];
   return [...head, "engine", ...args].map(shellQuote).join(" ");
 }
 const bashOp = (line: string): Op => ({ kind: "bash", line });

@@ -395,10 +395,10 @@ registrations produces a warning. Your own additional hooks do not trigger
 drift warnings. A status line your team set in that file is kept. AI-DLC's own
 status line is not shipped there: each person turns it on for themselves with
 `/aidlc --statusline on`.
-For a manual copy,
-replace the complete harness root from the same versioned
-`runtime/<harness>/` archive (a copy never replaces your `.gitignore` or
-`AGENTS.md`); do not patch one hook command in isolation. The manual archive is Bun-shaped and
+For a manual copy, the copy-channel command above is the repair, not a second
+copy of the `runtime/<harness>/` archive over the project, which replaces the
+setup answers and plugin choices it recorded; do not patch one hook command in
+isolation. The manual archive is Bun-shaped and
 does not require the native `aidlc` executable.
 
 ### Hooks disabled globally (`disableAllHooks`)
@@ -658,7 +658,11 @@ with no further review; remove the line to put the path back. A path the
 project's `.gitignore` already ignores is never counted, and neither is a file
 another open piece of work in this folder lists in its own Units' source
 manifests (a second chat building its own work here), or anything under a folder
-it lists: that is the other work's change, and its own checks cover it.
+it lists: that is the other work's change, and its own checks cover it. Nor is a
+file exactly as the remote branch your branch tracks holds it once you have
+pulled it (a teammate's commit, or a change already pushed there, the build's
+own included): it is nobody's change in this work. A change only on your
+machine is still counted.
 Archiving a piece of work you will not finish (`/aidlc intent archive <name>`)
 ends its claims. Under Guard Policy relaxed or off the change is kept and said
 once instead.

@@ -6,7 +6,7 @@
 // covers: function:constructionPolicyChangeAuthority, function:constructionPolicyChangeAllowed
 // covers: function:hasPendingDecision
 // covers: function:guardRecoveryAskFromRefusalText, function:unitOpenCheckpoints, subcommand:aidlc-state:unit, subcommand:aidlc-log:review, hook:aidlc-session-start
-// covers: function:unitStepOwedOnlyReceipt, function:unitStepChangeReopen
+// covers: function:unitStepOwesOnlyRecords, function:unitStepChangeReopen
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
   NATIVE_STARTUP_TIMEOUT_MS,
@@ -35,6 +35,7 @@ import {
 import {
   copilotAdapter, copilotRuns, copilotStep, namedCommands, SHAPES, type Step,
 } from "../harness/code-generation-states.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { readMessage } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
 import { guardOperationInvocation } from "../../dist/claude/.claude/tools/aidlc-guard-operation.ts";
@@ -2826,10 +2827,13 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
   // --stage` prints for one Unit, run as that print's own command; a `next
   // --stage` that names the Unit lets only that Unit's reopen through.
   const COPILOT = SHAPES.find((shape) => shape.name === "copilot")!;
+  // The Copilot tree's own `next`, with the copy launch's two Bun options.
+  const COPILOT_ORCHESTRATE = withCopyLaunchOptions("bun .aidlc/tools/aidlc-orchestrate.ts");
   function copilotNext(p: string, args: string): Step {
     let step = copilotStep(p, args);
     for (let i = 0; i < 4 && step.kind === "load-steering"; i++) {
-      step = copilotStep(p, String(step.next).replace(/^bun \.aidlc\/tools\/aidlc-orchestrate\.ts /, ""));
+      const named = String(step.next);
+      step = copilotStep(p, named.startsWith(`${COPILOT_ORCHESTRATE} `) ? named.slice(COPILOT_ORCHESTRATE.length + 1) : named);
     }
     return step;
   }
@@ -2840,7 +2844,7 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     expect(said.code, said.stderr).toBe(0);
   }
   const printedReopen = (step: Step) =>
-    /Run `(bun \.aidlc\/tools\/aidlc-jump\.ts reopen [^`]+)`/.exec(String(step.message ?? ""))?.[1];
+    /Run `(bun (?:--config=\S+ --no-env-file )?\.aidlc\/tools\/aidlc-jump\.ts reopen [^`]+)`/.exec(String(step.message ?? ""))?.[1];
 
   for (const policy of ["strict", "off"]) {
     test(`Copilot, Guard Policy ${policy}: the person's redo of a built Unit runs the reopen next --stage prints`, () => {
@@ -2871,7 +2875,7 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     expect(reopen, JSON.stringify(printed)).toContain("--units alpha");
     const other = copilotRuns(p, reopen!.replace("--units alpha", "--units beta")).refused;
     expect(other, "another Unit's reopen ran on a claim for alpha").not.toBeNull();
-    expect(namedCommands(other!)).toContain("bun .aidlc/tools/aidlc-orchestrate.ts next --stage code-generation --unit beta");
+    expect(namedCommands(other!)).toContain(`${COPILOT_ORCHESTRATE} next --stage code-generation --unit beta`);
     expect(copilotRuns(p, reopen!).refused).toBeNull();
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -2933,7 +2937,7 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     expect(one).toContain("--units beta --scope classic");
     const refused = copilotRuns(p, one!.replace("--units beta", "--units alpha,beta")).refused;
     expect(refused, "a reopen of every Unit ran on a claim that printed one").not.toBeNull();
-    expect(namedCommands(refused!)).toContain("bun .aidlc/tools/aidlc-orchestrate.ts next --stage code-generation --every-unit");
+    expect(namedCommands(refused!)).toContain(`${COPILOT_ORCHESTRATE} next --stage code-generation --every-unit`);
     const every = printedReopen(copilotNext(p, "next --stage code-generation --every-unit"));
     expect(every).toContain("--units alpha,beta");
     expect(copilotRuns(p, every!).refused).toBeNull();
@@ -2946,7 +2950,7 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
   // built Unit's step is redone as their redo. Only the reopen the print named
   // runs that way.
   const redoReopen = (step: Step) =>
-    /`(bun \.aidlc\/tools\/aidlc-jump\.ts reopen [^`]+)`/.exec(String(step.message ?? ""))?.[1];
+    /`(bun (?:--config=\S+ --no-env-file )?\.aidlc\/tools\/aidlc-jump\.ts reopen [^`]+)`/.exec(String(step.message ?? ""))?.[1];
   function betaBuildingUnder(policy: string): string {
     const p = betaBuilding();
     writeFileSync(seededStateFile(p), readFileSync(seededStateFile(p), "utf-8")
@@ -3773,7 +3777,7 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     buildReviewed(p, "alpha", alphaAt(p, 2));
     policyHuman(p, "Redo Code Generation for alpha, please.");
     const printed = tool(p, "orchestrate", ["next", "--stage", "code-generation"], chat(p));
-    const reopen = /Run `bun \S+aidlc-jump\.ts (reopen [^`]+)`/.exec(printed.stdout)?.[1];
+    const reopen = /Run `bun (?:--config=\S+ --no-env-file )?\S+aidlc-jump\.ts (reopen [^`]+)`/.exec(printed.stdout)?.[1];
     expect(reopen, printed.out).toBeDefined();
     const reopened = tool(p, "jump", reopen!.split(" "), chat(p));
     expect(reopened.status, reopened.out).toBe(0);
@@ -3803,7 +3807,7 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     const stillSpent = tool(p, "log", codeReview("alpha", 2));
     expect(stillSpent.status).not.toBe(0);
     expect(stillSpent.out).toContain(SPENT);
-    const offered = /`bun \S+aidlc-jump\.ts (reopen --target code-generation --units alpha)`/.exec(stillSpent.out)?.[1];
+    const offered = /`bun (?:--config=\S+ --no-env-file )?\S+aidlc-jump\.ts (reopen --target code-generation --units alpha)`/.exec(stillSpent.out)?.[1];
     expect(offered, stillSpent.out).toBeDefined();
     const reopened = tool(p, "jump", offered!.split(" "));
     expect(reopened.status, reopened.out).toBe(0);
@@ -3830,7 +3834,7 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
   function reopenCodeGeneration(p: string, unit: string, version: number) {
     policyHuman(p, `Redo Code Generation for ${unit}, please.`);
     const printed = tool(p, "orchestrate", ["next", "--stage", "code-generation", "--unit", unit], chat(p));
-    const reopen = /Run `bun \S+aidlc-jump\.ts (reopen [^`]+)`/.exec(printed.stdout)?.[1];
+    const reopen = /Run `bun (?:--config=\S+ --no-env-file )?\S+aidlc-jump\.ts (reopen [^`]+)`/.exec(printed.stdout)?.[1];
     expect(reopen, printed.out).toBeDefined();
     const reopened = tool(p, "jump", reopen!.split(" "), chat(p));
     expect(reopened.status, reopened.out).toBe(0);
@@ -3883,7 +3887,7 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     const again = tool(p, "log", codeReview("alpha", 2));
     expect(again.status).not.toBe(0);
     expect(again.out).toContain(SPENT);
-    const offered = /`bun \S+aidlc-jump\.ts (reopen --target code-generation --units alpha)`/.exec(again.out)?.[1];
+    const offered = /`bun (?:--config=\S+ --no-env-file )?\S+aidlc-jump\.ts (reopen --target code-generation --units alpha)`/.exec(again.out)?.[1];
     expect(offered, again.out).toBeDefined();
     const reopened = tool(p, "jump", offered!.split(" "));
     expect(reopened.status, reopened.out).toBe(0);
@@ -4017,7 +4021,7 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
 
-  function betaCodeWrittenAndReviewed(): string {
+  function betaCodeWrittenAndReviewed(review: "ready" | "asked" | "none" = "ready"): string {
     const p = fixture({ scope: "classic" });
     writeFileSync(seededStateFile(p), readFileSync(seededStateFile(p), "utf-8")
       .replace("- **Review Override**: none", "- **Review Override**: adversarial"));
@@ -4047,8 +4051,13 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
       stage: "code-generation", unit: "beta", version: 1,
       writes: [1, 2, 3, 4].map((n) => ({ path: `src/part${n}.ts` })),
     }));
-    const reviewed = reviewThroughLog(p, codeReview("beta", 1));
-    expect(reviewed.status, reviewed.out).toBe(0);
+    if (review === "asked") {
+      const asked = tool(p, "log", codeReview("beta", 1));
+      expect(asked.status, asked.out).toBe(0);
+    } else if (review === "ready") {
+      const reviewed = reviewThroughLog(p, codeReview("beta", 1));
+      expect(reviewed.status, reviewed.out).toBe(0);
+    }
     return p;
   }
 
@@ -4132,6 +4141,145 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     expect(next(p)).toMatchObject({
       kind: "run-stage", stage: "code-generation", unit: "beta", plan_approval: { status: "revise" },
     });
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // beta paused at its Code Generation: with a file still to write (two of its
+  // steps built), or with every file written and its review READY, asked and
+  // waiting, or never asked; `aside` pauses it set aside for alpha, which is
+  // done, so the walk's step is still beta's pause.
+  function betaPaused(written: "ready" | "asked" | "none" | false, aside = false): string {
+    const p = written === false ? betaBuilding() : betaCodeWrittenAndReviewed(written);
+    if (written === false) startedBuild(p);
+    const paused = tool(p, "state", [
+      "unit", "pause", "--stage", "code-generation", "--unit", "beta", "--reason", "waiting for an answer",
+      "--next-action", "Revise the plan.", ...(aside ? ["--set-aside-for", "alpha"] : []),
+    ]);
+    expect(paused.status, paused.out).toBe(0);
+    expect(next(p)).toMatchObject({ kind: "ask", ask_type: "unit-paused", unit: "beta" });
+    // The person answers the paused question with their change.
+    policyHuman(p, "Change beta's plan: cover the retry path.", "t342-plan");
+    return p;
+  }
+
+  // The person's change for beta, in the form the agent picked: the change
+  // form of `next --stage`, or their rejection of beta.
+  type ChangeStep = { kind: string; message?: string; stage?: string; unit?: string };
+  function changeFor(p: string, form: "change" | "rejection"): ChangeStep {
+    if (form === "change") return printedStep(p, ["--stage", "code-generation", "--unit", "beta", "--change"]) as ChangeStep;
+    return JSON.parse(tool(p, "orchestrate", [
+      "report", "--stage", "code-generation", "--result", "rejected", "--unit", "beta", "--user-input", "Request Changes",
+    ]).out.trim()) as ChangeStep;
+  }
+
+  // The printed command, as the agent runs it, passes both guards its tool call meets.
+  function guardsLetThrough(p: string, command: string) {
+    for (const hook of ["hooks/aidlc-plan-approval-guard.ts", "hooks/aidlc-state-transition-guard.ts"]) {
+      const out = hookCall(p, [join(AIDLC_SRC, hook)], {
+        hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command },
+      });
+      expect(out, `${hook}: ${out}`).not.toContain('"deny"');
+    }
+  }
+
+  const rejections = (p: string) => readAuditShardEvents(p).filter((row) => row.event === "GATE_REJECTED");
+
+  for (const form of ["change", "rejection"] as const) {
+    for (const review of ["none", "asked"] as const) {
+      test(`${form}: the Unit live with every file written and its review ${review === "asked" ? "asked, no verdict" : "never asked"} is reopened for the change`, () => {
+        const p = betaCodeWrittenAndReviewed(review);
+        const args = ["--stage", "code-generation", "--unit", "beta"];
+        const pending = printedStep(p, args);
+        expect(pending.kind).toBe("print");
+        expect(pending.message).toContain(review === "none" ? "review was never asked for" : "verdict");
+        const words = "Change beta's Code Generation plan to cover R-11, then show me the plan before building.";
+        const id = policyHuman(p, words, "t342-plan");
+        const step = form === "change"
+          ? printedStep(p, [...args, "--change"])
+          : JSON.parse(tool(p, "orchestrate", ["report", ...args, "--result", "rejected", "--user-input", "Request Changes", "--reason", words]).stdout);
+        expect(rejections(p)).toEqual([]);
+        expect(step.message).toContain("reopen --target code-generation --stages code-generation --units beta --scope classic --via change");
+        expect(step.kind).toBe("print");
+        expect(step.message).toContain('"Making your change in Code Generation for unit beta. alpha keeps its finished work.');
+        const reopen = /aidlc-jump\.ts (reopen [^`]+)`/.exec(step.message)?.[1];
+        expect(reopen).toBeDefined();
+        guardsLetThrough(p, `aidlc engine jump ${reopen}`);
+        const ran = tool(p, "jump", reopen!.split(" "), { ...process.env, AIDLC_SESSION_OVERRIDE: "t342-plan" });
+        expect(ran.status, ran.out).toBe(0);
+        const rows = rejections(p);
+        expect(rows).toHaveLength(1);
+        for (const [field, value] of [["Unit", "beta"], ["Reopen", "change"], ["Feedback", words], ["Message Id", id]]) {
+          expect(auditBlockField(rows[0].block, field)).toBe(value);
+        }
+        expect(unitCompletedReceipts(p, "code-generation").has("alpha")).toBe(true);
+        expect(approved(p, "alpha")).toBe(true);
+        expect(next(p)).toMatchObject({ kind: "run-stage", stage: "code-generation", unit: "beta", plan_approval: { status: "revise", feedback: words } });
+      }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+    }
+  }
+
+  for (const form of ["change", "rejection"] as const) {
+    for (const review of ["ready", "asked", "none"] as const) {
+      test(`${form}: the Unit paused with every file written and its review ${review === "ready" ? "READY" : review === "asked" ? "asked, no verdict" : "never asked"} is reopened for the change`, () => {
+        const p = betaPaused(review);
+        const step = changeFor(p, form);
+        expect(step.kind, JSON.stringify(step)).toBe("print");
+        const message = step.message ?? "";
+        expect(message).not.toContain("has not reached");
+        expect(message).toContain('"Making your change in Code Generation for unit beta. alpha keeps its finished work.');
+        const reopen = /aidlc-jump\.ts (reopen --target code-generation --stages code-generation --units beta --scope classic --via change)`/
+          .exec(message)?.[1];
+        expect(reopen, message).toBeDefined();
+        guardsLetThrough(p, `aidlc engine jump ${reopen}`);
+        runPrintedCommands(p, message);
+        expect(rejections(p)).toHaveLength(1);
+        expect(auditBlockField(rejections(p)[0].block, "Unit")).toBe("beta");
+        expect(auditBlockField(rejections(p)[0].block, "Reopen")).toBe("change");
+        expect(approved(p, "alpha")).toBe(true);
+        expect(next(p)).toMatchObject({
+          kind: "run-stage", stage: "code-generation", unit: "beta", plan_approval: { status: "revise" },
+        });
+      }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+    }
+
+    for (const aside of [false, true]) {
+      test(`${form}: the Unit paused with a file still to write${aside ? ", set aside for a Unit now done," : ""} is picked up for the change, with no rejection recorded`, () => {
+        const p = betaPaused(false, aside);
+        const step = changeFor(p, form);
+        expect(step.kind, JSON.stringify(step)).toBe("print");
+        const message = step.message ?? "";
+        expect(message).not.toContain("has not reached");
+        expect(message).not.toContain("reopen");
+        expect(message).toContain('to pick unit "beta" up where it stopped, then tell the person in one line: ' +
+          '"Picked unit beta up at Code Generation."');
+        const resume = /`[^`]*aidlc-state\.ts (unit resume --stage code-generation --unit beta)`/.exec(message)?.[1];
+        expect(resume, message).toBeDefined();
+        guardsLetThrough(p, `aidlc engine state ${resume}`);
+        runPrintedCommands(p, message);
+        // Their change is the agent's to make on the step, as on the live
+        // path: the build comes back on its approved plan, which is rewritten
+        // because the person asked, and the plan question names the change.
+        const build = next(p) as ReturnType<typeof next> & { plan_note?: string };
+        expect(build).toMatchObject({ kind: "run-stage", stage: "code-generation", unit: "beta", plan_approval: { status: "approved" } });
+        expect(build.plan_note).toContain("never rewrite an approved plan unless the person asks");
+        const planFile = join(codeGenerationRecordDir(p, "beta"), "code-generation-plan.md");
+        writeFileSync(planFile, readFileSync(planFile, "utf-8").replace("## Steps\n\n", "## Steps\n\n- [ ] Step 0: cover the retry path in `src/retry.ts`\n"));
+        const asked = next(p) as ReturnType<typeof next> & { plan_approval?: { note?: string } };
+        expect(asked).toMatchObject({ kind: "ask", ask_type: "plan-approval", unit: "beta" });
+        expect(asked.plan_approval?.note).toContain("was added. I can also build the plan you approved instead.");
+        expect(rejections(p)).toEqual([]);
+      }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+    }
+  }
+
+  test("a change for the Unit live with files still to write or not started carries on as before; no change asked keeps the pause", () => {
+    const live = betaBuilding();
+    startedBuild(live);
+    expect(changeFor(live, "change")).toMatchObject({ kind: "run-stage", stage: "code-generation", unit: "beta" });
+    const fresh = betaBuilding();
+    expect(changeFor(fresh, "change")).toMatchObject({ kind: "run-stage", stage: "code-generation", unit: "beta" });
+    const paused = betaPaused(false);
+    expect(printedStep(paused, ["--stage", "code-generation", "--unit", "beta"]).kind).toBe("ask");
+    for (const p of [live, fresh, paused]) expect(rejections(p)).toEqual([]);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 

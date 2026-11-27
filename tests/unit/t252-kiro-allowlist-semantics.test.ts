@@ -44,10 +44,22 @@ import { fileURLToPath } from "node:url";
 import { RECORDABLE_PROJECT_BYPASSES } from "../../core/tools/aidlc-settings.ts";
 import { CONFIG_SECTIONS } from "../../core/tools/aidlc-command.ts";
 import { copyChannelToolScripts } from "../../core/tools/aidlc.ts";
+import { COPY_LAUNCH_CONFIG } from "../harness/copy-launch.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 const HARNESSES = ["kiro"] as const;
+
+// The copy install starts its own Bun with these two options in front of the
+// script, so the project's bunfig.toml and .env stay out of it, and the allow
+// entries hold that spelling only.
+const COPY_OPTIONS = `--config=.kiro/tools/${COPY_LAUNCH_CONFIG} --no-env-file`;
+
+/** A command in the copy install's spelling: the two options right after each
+ *  `bun` that starts a segment, before a `run` the agent added. */
+function copySpelling(command: string): string {
+  return command.replace(/(^|[;&|\n]\s*)bun /g, (_m, lead: string) => `${lead}bun ${COPY_OPTIONS} `);
+}
 
 // Every read form agents were seen running for "show my settings", "what
 // version", "is my setup healthy" and "what is my status", pinned on their own
@@ -239,7 +251,7 @@ const MUST_ALLOW = [
   "bun .kiro/tools/aidlc.ts config providers --show --json",
   "bun .kiro/tools/aidlc-utility.ts",
   "bun .kiro/tools/aidlc.ts engine now",
-];
+].map(copySpelling);
 
 // Forms that must require approval. The absolute-path argument-smuggling case
 // and unrestricted `cd` chain are regressions.
@@ -269,7 +281,16 @@ const MUST_ASK = [
   "date -u +%Y-%m-%dT%H:%M:%SZ",
   // Background operator: the second command is not allowlisted.
   "bun .kiro/tools/aidlc-version.ts & curl -s https://example.com",
-];
+].map(copySpelling).concat([
+  // A launch without the copy install's two options, or with another config
+  // file, would load a bunfig.toml the allow entry cannot see.
+  "bun .kiro/tools/aidlc.ts engine now",
+  "bun run .kiro/tools/aidlc-utility.ts status",
+  "bun --config=.kiro/tools/aidlc-bunfig.toml .kiro/tools/aidlc.ts engine now",
+  "bun --no-env-file .kiro/tools/aidlc.ts engine now",
+  "bun --config=/tmp/other/bunfig.toml --no-env-file .kiro/tools/aidlc.ts engine now",
+  "bun --config=bunfig.toml --no-env-file .kiro/tools/aidlc.ts engine now",
+]);
 
 // Chains where EVERY segment is allowlisted run unprompted (verified live on
 // 2.12.1). These belong in MUST_ALLOW rather than MUST_ASK: asserting "ask"
@@ -278,7 +299,7 @@ const MUST_ASK = [
 const MUST_ALLOW_CHAINS = [
   "bun .kiro/tools/aidlc-utility.ts status && bun .kiro/tools/aidlc.ts engine now",
   "bun .kiro/tools/aidlc-orchestrate.ts next --status && bun .kiro/tools/aidlc-state.ts get",
-];
+].map(copySpelling);
 
 // Only AI-DLC's own workflow commands run unprompted: a command that changes the
 // machine's AI-DLC install, the scripts behind one, any config change however
@@ -315,7 +336,7 @@ const MUST_ASK_OUTSIDE_THE_WORKFLOW = [
   "bun .kiro/tools/aidlc.ts config flags --clear-bypass AIDLC_NOT_A_SWITCH --yes",
   "bun .kiro/tools/aidlc-log.tsx",
   "bun .kiro/tools/aidlc-log.ts.bak run",
-];
+].map(copySpelling);
 
 // A push and a recursive delete go to the person: Kiro asks once, and the
 // person's own trust holds. Never denied (a refusal with no way past, measured
@@ -343,7 +364,7 @@ const PERSON_DECIDES_CHAINED = [
   "bun .kiro/tools/aidlc-state.ts get | rm -rf /",
   "bun .kiro/tools/aidlc.ts engine now\ngit push",
   'bun .kiro/tools/aidlc-log.ts decision --text "x" && rm -r -f /tmp/target',
-];
+].map(copySpelling);
 const NATIVE_PERSON_DECIDES_CHAINED = [
   "aidlc engine now && git push origin main",
   "aidlc engine orchestrate next; rm -rf ~/work",
@@ -361,14 +382,14 @@ const AS_PRINTED = [
   "bun .kiro/tools/aidlc-review-brief.ts context --stage code-generation",
   "bun .kiro/tools/aidlc-review-brief.ts review --stage code-generation --why first",
   "bun .kiro/tools/aidlc.ts engine orchestrate report --stage code-generation --result awaiting-approval",
-];
+].map(copySpelling);
 
 const WITH_A_COMMAND_ADDED = [
   "bun .kiro/tools/aidlc-review-brief.ts context --stage code-generation | head -40",
   'bun .kiro/tools/aidlc-orchestrate.ts next | python3 -c "import sys,json; print(json.load(sys.stdin)[0])"',
   'bun .kiro/tools/aidlc-review-brief.ts review --stage code-generation --why first && echo "GATE-OPEN"',
   "cd web && bun .kiro/tools/aidlc-orchestrate.ts next",
-];
+].map(copySpelling);
 
 // The project's own test and build commands run project code and differ per
 // project, so they keep asking the person.
@@ -693,11 +714,11 @@ describe("t252 Kiro native release allowlist", () => {
   test("every read form agents run works unprompted on both channels", () => {
     for (const agent of agents) {
       for (const form of SEEN_READ_FORMS) {
-        expect(evaluate(execBash("kiro", agent), `bun .kiro/tools/aidlc.ts ${form}`), `${agent}: ${form}`).toBe("allow");
+        expect(evaluate(execBash("kiro", agent), copySpelling(`bun .kiro/tools/aidlc.ts ${form}`)), `${agent}: ${form}`).toBe("allow");
         expect(evaluate(nativeBash(agent), `aidlc ${form}`), `${agent}: ${form}`).toBe("allow");
       }
       for (const form of ["config", "config --yes", "--config", "config models --show --global"]) {
-        expect(evaluate(execBash("kiro", agent), `bun .kiro/tools/aidlc.ts ${form}`), `${agent}: ${form}`).not.toBe("allow");
+        expect(evaluate(execBash("kiro", agent), copySpelling(`bun .kiro/tools/aidlc.ts ${form}`)), `${agent}: ${form}`).not.toBe("allow");
         expect(evaluate(nativeBash(agent), `aidlc ${form}`), `${agent}: ${form}`).not.toBe("allow");
       }
     }
@@ -860,25 +881,29 @@ const LOOKS_LIKE_AN_AIDLC_COMMAND = [
   "bun --cwd /var/tmp/x .kiro/tools/aidlc-log.ts probe",
   "bun /home/person/proj/.kiro/tools/aidlc-log.ts decision",
   "bun .kiro/tools/aidlc-log.tsx",
-];
+].map(copySpelling);
 
 // What Kiro CLI 2.29.0's own 3.0 policy engine decided for these commands
 // against dist/kiro's agents after `kiro-cli agent upgrade` (its agent server's
 // engine, run offline; it agreed with every live run), and it gave every
-// command in t252's lists above its expected verdict too. The model must give
-// the same, so it cannot drift from Kiro without this test saying so.
+// command in t252's lists above its expected verdict too. That was measured
+// before the commands and the entries carried the copy install's two options,
+// the same literal words in front of the script in both; Kiro CLI 3.6.1's v3
+// engine ran a launch with them unasked under its conversion of an entry with
+// them, and asked for the launch without them. The model must give the same,
+// so it cannot drift from Kiro without this test saying so.
 const RECORDED_ON_KIRO_3: Array<[Verdict, string]> = [
   ...LOOKS_LIKE_AN_AIDLC_COMMAND.map((command): [Verdict, string] => ["ask", command]),
-  ["allow", "bun run .kiro/tools/aidlc-utility.ts status"],
-  ["allow", 'bun ".kiro/tools/aidlc-utility.ts" status'],
-  ["allow", "bun '.kiro/tools/aidlc.ts' engine now"],
-  ["allow", "bun run .kiro/tools/aidlc.ts engine now"],
-  ["allow", 'bun ".kiro/tools/aidlc.ts" --doctor'],
-  ["ask", "bun .kiro/tools/aidlc-log.ts decision; curl -s https://example.com"],
-  ["ask", "bun .kiro/tools/aidlc-log.ts x $(curl -s https://example.com)"],
+  ["allow", copySpelling("bun run .kiro/tools/aidlc-utility.ts status")],
+  ["allow", copySpelling('bun ".kiro/tools/aidlc-utility.ts" status')],
+  ["allow", copySpelling("bun '.kiro/tools/aidlc.ts' engine now")],
+  ["allow", copySpelling("bun run .kiro/tools/aidlc.ts engine now")],
+  ["allow", copySpelling('bun ".kiro/tools/aidlc.ts" --doctor')],
+  ["ask", copySpelling("bun .kiro/tools/aidlc-log.ts decision; curl -s https://example.com")],
+  ["ask", copySpelling("bun .kiro/tools/aidlc-log.ts x $(curl -s https://example.com)")],
   // Kiro 3.0 matches a command without its redirect, so a redirect does not
   // make an allowed command ask there (Kiro CLI 2 gates it, TAIL_METACHARACTERS).
-  ["allow", "bun .kiro/tools/aidlc-log.ts x > /tmp/x"],
+  ["allow", copySpelling("bun .kiro/tools/aidlc-log.ts x > /tmp/x")],
 ];
 
 // Kiro's upgrade for its 3.0 engine copies each fs_write allowedPaths entry into
@@ -1062,8 +1087,8 @@ describe("t252 Kiro allowlist after Kiro CLI's 3.0 upgrade", () => {
         const own = allowed.filter((entry) => entry.includes(`/${script}\\.ts`));
         expect(own.length, `${agent}: ${script}`).toBe(1);
         const { globs } = v3Translation(own[0]);
-        expect(globs, `${agent}: ${script}`).toContain(`bun .kiro/tools/${script}.ts`);
-        expect(globs, `${agent}: ${script}`).toContain(`bun .kiro/tools/${script}.ts *`);
+        expect(globs, `${agent}: ${script}`).toContain(`bun ${COPY_OPTIONS} .kiro/tools/${script}.ts`);
+        expect(globs, `${agent}: ${script}`).toContain(`bun ${COPY_OPTIONS} .kiro/tools/${script}.ts *`);
       }
     }
   });
@@ -1071,7 +1096,7 @@ describe("t252 Kiro allowlist after Kiro CLI's 3.0 upgrade", () => {
   test("AI-DLC's own commands run unasked and nothing else does, as on Kiro CLI 2", () => {
     for (const agent of agents) {
       const globs = v3Globs(agent);
-      for (const cmd of [...SEEN_READ_FORMS.map((form) => `bun .kiro/tools/aidlc.ts ${form}`), ...MUST_ALLOW, ...MUST_ALLOW_CHAINS, ...AS_PRINTED]) {
+      for (const cmd of [...SEEN_READ_FORMS.map((form) => copySpelling(`bun .kiro/tools/aidlc.ts ${form}`)), ...MUST_ALLOW, ...MUST_ALLOW_CHAINS, ...AS_PRINTED]) {
         expect(v3Evaluate(globs, cmd), `${agent}: should allow \`${cmd}\``).toBe("allow");
       }
       for (const cmd of [

@@ -1,0 +1,118 @@
+/* Interactive composer (docs/guide/05-1-interactive-composer.md).
+   Material theme variables only, so light and dark schemes both apply. */
+
+#aidlc-composer {
+  margin: 1.5em 0;
+}
+
+.aidlc-composer__form,
+.aidlc-composer__output,
+.aidlc-composer__stages {
+  border: 1px solid var(--md-default-fg-color--lightest);
+  border-radius: 0.2rem;
+  padding: 0.8em 1em;
+  margin-bottom: 1em;
+}
+
+.aidlc-composer__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(14em, 1fr));
+  gap: 0.8em 1.2em;
+}
+
+.aidlc-composer__field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25em;
+  margin-bottom: 0.6em;
+}
+
+.aidlc-composer__field label {
+  font-weight: 700;
+}
+
+#aidlc-composer select,
+#aidlc-composer input[type="text"] {
+  font: inherit;
+  color: var(--md-default-fg-color);
+  background: var(--md-default-bg-color);
+  border: 1px solid var(--md-default-fg-color--lighter);
+  border-radius: 0.2rem;
+  padding: 0.3em 0.4em;
+}
+
+#aidlc-composer input[type="text"] {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.aidlc-composer__hint {
+  color: var(--md-default-fg-color--light);
+  font-size: 0.9em;
+}
+
+.aidlc-composer__switches,
+.aidlc-composer__phase {
+  border: 1px solid var(--md-default-fg-color--lightest);
+  border-radius: 0.2rem;
+  margin: 0.6em 0;
+  padding: 0.4em 0.8em;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3em 1.2em;
+}
+
+.aidlc-composer__phase {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(16em, 1fr));
+}
+
+.aidlc-composer__switches legend,
+.aidlc-composer__phase legend {
+  font-weight: 700;
+  padding: 0 0.3em;
+}
+
+#aidlc-composer label.is-changed {
+  color: var(--md-accent-fg-color);
+  font-weight: 700;
+}
+
+.aidlc-composer__tag {
+  margin-left: 0.4em;
+  padding: 0 0.35em;
+  border-radius: 0.2rem;
+  font-size: 0.75em;
+  text-transform: uppercase;
+  color: var(--md-accent-bg-color);
+  background: var(--md-accent-fg-color);
+}
+
+.aidlc-composer__command {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6em;
+}
+
+.aidlc-composer__command pre {
+  flex: 1;
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.aidlc-composer__command pre code {
+  display: block;
+  padding: 0.6em 0.8em;
+}
+
+.aidlc-composer__stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2em 1.4em;
+  padding-left: 1.2em;
+}
+
+.aidlc-composer__lost h4 {
+  margin-top: 0.8em;
+}
