@@ -34,6 +34,15 @@ interface Result {
 	questions_file: string;
 	findings_count: number;
 	reason?: string;
+	message?: string;
+}
+
+function fixHints(findings: readonly string[]): string | undefined {
+	const hints: string[] = [];
+	if (findings.some((finding) => finding.includes("assumption/open question lacks [assumption]"))) {
+		hints.push("Prefix each assumption or open question with [assumption].");
+	}
+	return hints.length === 0 ? undefined : hints.join(" ");
 }
 
 interface ClaimBlock {
@@ -1106,12 +1115,14 @@ export function main(argv: string[]): void {
 		);
 	}
 
+	const hint = fixHints(findings);
 	const result: Result = {
 		pass: findings.length === 0,
 		findings,
 		scanned_files: scanPaths,
 		questions_file: questionsPath,
 		findings_count: findings.length,
+		...(hint === undefined ? {} : { message: hint }),
 	};
 	writeSensorResult(result);
 }

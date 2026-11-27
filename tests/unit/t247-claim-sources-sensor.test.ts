@@ -39,6 +39,7 @@ interface SensorResult {
   questions_file: string;
   findings_count: number;
   reason?: string;
+  message?: string;
 }
 
 afterAll(() => {
@@ -423,6 +424,20 @@ describe("t247 claim-sources sensor", () => {
     expect(result.findings.join("\n")).toContain(
       "missing ## Assumptions & Open Questions",
     );
+  });
+
+  test("the untagged-assumption finding carries the fix the issue asks for", () => {
+    const dir = makeStageDir();
+    replaceInFile(
+      dir,
+      "intent-statement.md",
+      "## Assumptions & Open Questions\n\nNone.\n",
+      "## Assumptions & Open Questions\n\n- The team works offline sometimes.\n",
+    );
+    const result = run(dir);
+    expect(result.pass).toBe(false);
+    expect(result.findings.join("\n")).toContain("assumption/open question lacks [assumption]");
+    expect(result.message).toBe("Prefix each assumption or open question with [assumption].");
   });
 
   test("retained assumptions fail until the human accepts them", () => {
