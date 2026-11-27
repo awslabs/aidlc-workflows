@@ -2002,9 +2002,10 @@ const PERSON_DECIDES_CHANGES =
   "for this piece of work) or undo them themselves; then run the merge again.";
 
 // A landing finished after it stopped staged (a clash, a refused commit) does
-// not compare the checkout again, so the change of the person's it kept is the
-// row its first run wrote from the fingerprint this link opens at, since this
-// Unit last converged.
+// not compare the checkout again, so what it kept is the row its first run
+// wrote from `recorded` (the fingerprint this link opens at, or
+// STAGE_START_UNAVAILABLE), since this Unit last converged. `opened` is that
+// row's Current: the checkout the first run opened from.
 function keptByStagedLanding(
   pd: string,
   record: BoundConvergedSourceRecord,
@@ -2044,7 +2045,8 @@ function assertAggregateSourceBeforeMerge(
 ): {
   state: WorkspaceSourceState;
   openingFingerprint: string;
-  // The person's own change this landing keeps, said once it has landed.
+  // What this landing says once it has landed: the person's own change it
+  // keeps, or that the record of where the stage started could not be read.
   kept?: string;
 } | null {
   if (!record || record.kind === "bypass") return null;
@@ -2053,9 +2055,11 @@ function assertAggregateSourceBeforeMerge(
   // the build are kept: the merge starts from the checkout as it is, and the
   // change is recorded once so the merge chain stays readable. Under strict so
   // are the files the person asked to change (swarm allow-change), recorded
-  // with the message they asked in; that step already told them. The line is
-  // not said here: the merge can still stop, and a run that stopped already
-  // wrote the row the run that lands finds.
+  // with the message they asked in; that step already told them. A first
+  // landing that cannot read the record of where the stage started starts from
+  // the checkout as it is too, with its own line. The line is not said here:
+  // the merge can still stop, and a run that stopped already wrote the row the
+  // run that lands finds.
   const keepChange = (
     recorded: string,
     changed: string[] | null,

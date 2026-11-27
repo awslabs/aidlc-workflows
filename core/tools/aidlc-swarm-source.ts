@@ -199,6 +199,10 @@ export function swarmSourceChangedSince(
   return swarmSourceChanged(projectDir, before, current.listing);
 }
 
+// The Recorded value of the CHANGE_ACCEPTED row written when the work carries on
+// without the record of what the stage started from.
+export const STAGE_START_UNAVAILABLE = "(stage start unavailable)";
+
 // The record of what a stage started from, when it cannot be read on this
 // machine: a copy that is not here (a fresh clone, a teammate's machine) is
 // AI-DLC's own lost bookkeeping, so the work carries on under every Guard
@@ -208,8 +212,6 @@ export function swarmSourceChangedSince(
 // neither: completion skips its check, and a converged Unit is modern
 // evidence). The line the person reads when it carries on; null when strict
 // holds it.
-export const STAGE_START_UNAVAILABLE = "(stage start unavailable)";
-
 export function stageStartUncheckedLine(
   state: "legacy" | "unbindable" | "invalid" | "missing",
   stageName: string,
