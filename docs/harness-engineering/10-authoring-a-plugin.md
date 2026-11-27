@@ -920,8 +920,9 @@ skipped result, so a green test run can mean the live check did not run.
   stable release it was built after, so `2.11.5-preview.…` reads as 2.11.4)
   and holds your plugin outside it the same way a base outside its range is
   held, with one line naming the requirement (`needs AI-DLC >=2.11.4`); once
-  the project moves into the range, `aidlc plugin list` and doctor say so and
-  the next sync composes it. Offline `aidlc plugin validate` and `build`
+  the project moves into the range, `aidlc engine plugin list` and doctor say
+  so and the next sync checks the plugin again (your other dependencies must
+  hold too). Offline `aidlc plugin validate` and `build`
   accept any core range npm can read — they cannot know the target project —
   so declare only what you tested against. Write release versions there: a
   range naming a preview version is read but validate warns, since only a

@@ -1054,7 +1054,9 @@ function heldStatus(
   root: string | null,
 ): PluginStatus {
   // The project moved to an AI-DLC version in the ranges since the hold (an
-  // update between syncs): the record's line would name the old version.
+  // update between syncs): the record's line would name the old version. The
+  // line promises a re-check, not a compose: the record does not know the
+  // plugin's other dependencies (a base outside its range can hold it again).
   const ranges = held.engineRanges ?? [];
   const met = ranges.length > 0 &&
     ranges.every((range) => Bun.semver.satisfies(engineReleaseId(evidence.engineVersion), range));
@@ -1065,7 +1067,7 @@ function heldStatus(
     state: "dependency-unmet",
     action: "attention",
     message: met
-      ? `${held.name} needs AI-DLC ${ranges.join(" and ")}, which this project now runs (AI-DLC ${evidence.engineVersion}); it composes ${
+      ? `${held.name} needs AI-DLC ${ranges.join(" and ")}, which this project now runs (AI-DLC ${evidence.engineVersion}); it is checked again ${
         nextCompose(evidence.harnessName, held.name, root)
       }.`
       : held.reason,
@@ -2850,7 +2852,7 @@ function ownedStageSlugs(ownership: OwnershipRecord | undefined): ReadonlySet<st
 // plugin, and a base builds on core alone. So the order is the bases, then the
 // plugins built on them, alphabetical within each, as sync always ran. One
 // whose base is turned off for this project is paused, and nothing is said. A
-// plugin that needs AI-DLC in a range this engine is outside, or whose base is
+// plugin that needs AI-DLC in a range the project's version is outside, or whose base is
 // missing, held, outside its range, built on another plugin or without a stage
 // the plugin's scopes include, or whose manifest cannot say, is held with its
 // line and never resolved.

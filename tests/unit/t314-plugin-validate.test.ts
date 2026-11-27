@@ -330,7 +330,7 @@ describe("t314 standalone plugin validator", () => {
     // counting as the stable it was built after: a range naming a preview
     // version is read, and warned, since only a release can meet it; a
     // base's range may name one freely.
-    for (const range of ["2.6.0-preview.20260101.1", ">=2.6.0-preview.1 <3", "1.0.0 - 2.6.0-rc.1"]) {
+    for (const range of ["2.6.0-preview.20260101.1", ">=2.6.0-preview.1 <3", "1.0.0 - 2.6.0-rc.1", ">=2.11.5--rc.1"]) {
       const root = fixture();
       const manifestPath = join(root, ".aidlc-plugin", "plugin.json");
       const manifest = JSON.parse(readFileSync(manifestPath, "utf-8")) as Record<string, unknown>;

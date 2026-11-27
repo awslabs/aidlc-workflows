@@ -580,6 +580,11 @@ describe("t354 a core range is an engine requirement", () => {
     expect(first.stdout).not.toContain("zeta 0.2.0 is installed");
     expect(statusOf(target, "zeta")?.state).toBe("current");
     setEngineVersion(target, "2.6.0");
+    // Before the next sync, the line promises a re-check, never a compose:
+    // the base range still holds alpha.
+    expect(statusOf(target, "alpha")?.message).toBe(
+      "alpha needs AI-DLC >=2.6.0, which this project now runs (AI-DLC 2.6.0); it is checked again at the next session start.",
+    );
     const second = sync(target);
     expect(second.status, second.stdout + second.stderr).toBe(0);
     expect(second.stdout).toContain(
@@ -688,7 +693,7 @@ describe("t354 a core range is an engine requirement", () => {
     setEngineVersion(target, "2.5.0");
     expect(sync(target).stdout).toContain("alpha is not composed");
     setEngineVersion(target, "2.6.0");
-    const line = "alpha needs AI-DLC >=2.6.0, which this project now runs (AI-DLC 2.6.0); it composes at the next session start.";
+    const line = "alpha needs AI-DLC >=2.6.0, which this project now runs (AI-DLC 2.6.0); it is checked again at the next session start.";
     expect(statusOf(target, "alpha")).toEqual(expect.objectContaining({ state: "dependency-unmet", message: line }));
     expect(doctorChecks(target).find((check) => check.label.startsWith("Plugins:"))).toEqual(
       expect.objectContaining({ fix: line }),
@@ -709,7 +714,7 @@ describe("t354 a core range is an engine requirement", () => {
     expect(ran.stdout).toContain("alpha is not composed: it needs AI-DLC <2.5.0, and this project runs AI-DLC 2.5.0.");
     setEngineVersion(target, "2.4.0");
     expect(statusOf(target, "alpha")?.message).toBe(
-      "alpha needs AI-DLC >=2.0.0 and <2.5.0, which this project now runs (AI-DLC 2.4.0); it composes at the next session start.",
+      "alpha needs AI-DLC >=2.0.0 and <2.5.0, which this project now runs (AI-DLC 2.4.0); it is checked again at the next session start.",
     );
     setEngineVersion(target, "1.9.0");
     expect(statusOf(target, "alpha")?.message).toContain("this project runs AI-DLC 2.5.0");

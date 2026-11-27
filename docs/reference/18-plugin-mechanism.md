@@ -745,9 +745,10 @@ Independent authors who never coordinate are kept safe by:
   reads as 2.11.4, its id being the next patch). The project outside any
   declared core range holds the plugin the same way a base outside its range
   does (`needs AI-DLC >=2.11.4, and this project runs AI-DLC 2.11.3`); a held
-  record keeps the plugin's core ranges, so once the project moves into it, list and doctor
-  say the plugin composes at the next sync instead of repeating the old
-  version. Offline validate and build accept any core range npm can read,
+  record keeps the plugin's core ranges, so once the project moves into them,
+  list and doctor say the requirement is now met and the next sync checks the
+  plugin again (its other dependencies must hold too), instead of repeating
+  the old version. Offline validate and build accept any core range npm can read,
   since they cannot know the target project, and warn on one that names a
   preview version, which only a release version can meet. An engine from
   before this check reads only the `core` name and ignores the range. The build copies
@@ -759,7 +760,8 @@ Independent authors who never coordinate are kept safe by:
   reads the one installed version (on a host with no plugin list, the version
   composed in the project), and there is no solver and no lock file. A plugin
   whose base is turned off for the project is paused first (section 5). A
-  plugin that needs AI-DLC in a range this engine is outside, or whose base
+  plugin that needs AI-DLC in a range the project's AI-DLC version is
+  outside, or whose base
   is not installed (or not in the project yet), is disabled in the host, is
   itself held and not composed in the project, is
   outside the range, builds on another plugin or lacks a stage the plugin's

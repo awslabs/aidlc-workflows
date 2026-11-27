@@ -919,7 +919,7 @@ function validateManifest(
     // A core range is met by release versions, a preview build counting as the
     // stable release it was built after; a range that names a preview version
     // compares that way too, so one that only a preview could meet never is.
-    for (const range of read.coreRanges.filter((each) => /[\dxX*]-[0-9A-Za-z]/.test(each))) {
+    for (const range of read.coreRanges.filter((each) => /[\dxX*]-/.test(each))) {
       addWarning(
         findings,
         displayFile,
