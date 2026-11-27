@@ -36,7 +36,7 @@ two folders are unrelated.
 - `trees`: each AI-DLC tree in the project.
   - `row`: `kiro-ide` = "Kiro" (Kiro IDE, and Kiro CLI on its v3 engine; the Kiro transcript's `tool` says which:
     `kiro (v3: Kiro CLI)`, `kiro (v3: Kiro IDE)`), `kiro` = "Kiro CLI (V2)", `claude`, `codex`, `copilot`, `cursor`,
-    `opencode`.
+    `opencode`, `antigravity`.
   - `stampVersion`, `buildVersion`: a build made from AI-DLC's `main` stamps the plain release number; a `-preview.`
     build id is a nightly preview.
   - `channel`: `native` (the AI-DLC installer, command `aidlc`) or `copy` (files copied into the project, run by Bun).

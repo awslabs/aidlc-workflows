@@ -168,6 +168,7 @@ const MODEL_HARNESSES = [
   "codex",
   "copilot",
   "cursor",
+  "antigravity",
   "kiro",
   "kiro-ide",
   "opencode",
@@ -827,7 +828,7 @@ export const AIDLC_SETTINGS_SCHEMA = {
                 type: "object",
                 additionalProperties: false,
                 properties: Object.fromEntries(
-                  ["claude", "codex", "copilot", "cursor", "kiro", "kiro-ide", "opencode"]
+                  ["claude", "codex", "copilot", "cursor", "antigravity", "kiro", "kiro-ide", "opencode"]
                     .map((name) => [name, { type: "string", minLength: 1 }]),
                 ),
               },

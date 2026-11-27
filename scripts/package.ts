@@ -433,7 +433,7 @@ function transform(
     // (aidlc-includes.ts ACTIVE_MEMORY_DIR), the same path on every install.
     const posixPath = srcPath.split(sep).join("/");
     if (
-      (harness === "cursor" || harness === "opencode" || harness === "copilot") &&
+      (harness === "cursor" || harness === "opencode" || harness === "copilot" || harness === "antigravity") &&
       posixPath.includes("/agents/") &&
       posixPath.endsWith("-agent.md")
     ) {
@@ -1559,6 +1559,7 @@ function rewriteNativeInvocations(
     "codex-adapter": true,
     "cursor-adapter": true,
     "copilot-adapter": true,
+    "antigravity-adapter": true,
   };
   const projectPrefix = String.raw`(?:"?(?:\$\{?CLAUDE_PROJECT_DIR\}?/)?`;
   const suffix = `"?)`;
@@ -1567,7 +1568,7 @@ function rewriteNativeInvocations(
     "gi",
   );
   const hookPattern = new RegExp(
-    String.raw`\bbun\s+${projectPrefix}${harnessDir}/hooks/aidlc-([a-z0-9-]+)\.ts${suffix}`,
+    String.raw`\bbun\s+${projectPrefix}(?:${harnessDir}/)?hooks/aidlc-([a-z0-9-]+)\.ts${suffix}`,
     "gi",
   );
   const bareToolPattern = new RegExp(
@@ -1756,7 +1757,7 @@ function rewriteNativeInvocations(
         leftovers.push(`${relative(outRoot, file)}: unexpanded ${token}`);
       }
     }
-    if (new RegExp(String.raw`\bbun\s+[^\n]*${harnessDir}/(?:tools|hooks)/aidlc`).test(value)) {
+    if (new RegExp(String.raw`\bbun\s+[^\n]*${harnessDir}/(?:tools|hooks)/aidlc|\bbun\s+hooks/aidlc-`).test(value)) {
       leftovers.push(`${relative(outRoot, file)}: bun invocation survived native projection`);
     }
     if (bareToolCheck.test(value)) {

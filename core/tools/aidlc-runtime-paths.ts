@@ -81,7 +81,7 @@ const DOTENV_ASSIGNMENT = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/gm;
 // from, the loader's preload and library path, the file a bash script reads
 // before it runs, and the editor git falls back to.
 const DOTENV_GUARDED =
-  /^(?:AIDLC_|AWS_AIDLC_|CLAUDE_|KIRO_|CODEX_|CURSOR_|COPILOT_|PLUGIN_ROOT$|XDG_|GIT_|SSH_ASKPASS|BUN_|NPM_CONFIG_|LD_|DYLD_|NODE_(?:OPTIONS|PATH)$|(?:BASH_ENV|EDITOR|VISUAL)$)/i;
+  /^(?:AIDLC_|AWS_AIDLC_|CLAUDE_|KIRO_|CODEX_|CURSOR_|ANTIGRAVITY_|COPILOT_|PLUGIN_ROOT$|XDG_|GIT_|SSH_ASKPASS|BUN_|NPM_CONFIG_|LD_|DYLD_|NODE_(?:OPTIONS|PATH)$|(?:BASH_ENV|EDITOR|VISUAL)$)/i;
 // Declarations only the host makes: kept even when a file names them.
 const DOTENV_HOST_ONLY = /^AIDLC_(?:UNATTENDED$|INTERNAL_)/i;
 
@@ -239,7 +239,7 @@ export interface ProjectHarness {
   frameworkVersion?: string;
 }
 
-const HARNESS_PRECEDENCE = [".claude", ".kiro", ".codex", ".cursor", ".aidlc"] as const;
+const HARNESS_PRECEDENCE = [".claude", ".kiro", ".codex", ".cursor", ".agent", ".aidlc"] as const;
 
 function markerRecord(path: string): Record<string, unknown> {
   let value: unknown;
@@ -933,6 +933,7 @@ export function runtimeHarnessName(
   if (harnessDir === ".codex") return "codex";
   if (harnessDir === ".kiro") return "kiro";
   if (harnessDir === ".cursor") return "cursor";
+  if (harnessDir === ".agent") return "antigravity";
   return "claude";
 }
 
@@ -1091,6 +1092,7 @@ export interface DirectiveLimit {
 // project-editable, so its own productName never reaches the model: the id
 // only selects one of these fixed names.
 const HOST_LABELS: Readonly<Record<string, string>> = {
+  antigravity: "Antigravity",
   claude: "Claude Code",
   codex: "Codex CLI",
   copilot: "GitHub Copilot",
@@ -1177,7 +1179,7 @@ export function linkOnTheWay(projectDir: string, target: string): string | null 
 // as far as it is made of these, so no name a repository chose reaches the
 // reader: a link deeper down is named by the AI-DLC folder that holds it.
 const AIDLC_FOLDER_NAMES = new Set([
-  ".aidlc", ".agents", ".claude", ".codex", ".cursor", ".github", ".kiro", ".opencode",
+  ".agent", ".aidlc", ".agents", ".claude", ".codex", ".cursor", ".github", ".kiro", ".opencode",
   "agents", "aidlc", "aidlc-common", "command", "data", "hooks", "knowledge", "plugin",
   "rules", "scopes", "sensors", "settings", "skills", "spaces", "stages", "steering", "tools",
 ]);

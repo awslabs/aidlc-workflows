@@ -21,6 +21,7 @@ const KNOWN_HARNESS_DIRS = [
   ".kiro",
   ".codex",
   ".cursor",
+  ".agent",
   ".aidlc",
 ] as const;
 
