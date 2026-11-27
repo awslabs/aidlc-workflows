@@ -2,6 +2,8 @@
 
 Scopes control **which stages execute**. Depth controls **how much detail** each stage produces. Test strategy controls **how many tests** are generated. Together, they adapt the lifecycle to your task — from a comprehensive enterprise feature to a quick bugfix.
 
+<a class="md-button md-button--primary" href="https://awslabs.github.io/aidlc-workflows/guide/assets/scope-explorer.html">Open the scope explorer</a>
+
 This chapter is the detailed routing reference. If you are choosing what kind
 of workflow to run, start with [Workflow Profiles](workflow-profiles.md), where
 the same scopes are explained in user-facing terms.
