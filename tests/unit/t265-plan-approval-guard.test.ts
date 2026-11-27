@@ -2236,7 +2236,7 @@ describe("t265b hook lifecycle", () => {
       }
       expect(code("aidlc engine config set guard.review-freeze off; touch src/x.ts")).toBe(2);
       // A setting such as depth is not a check: once the person has spoken it
-      // passes as a move they asked for (t-plan-approval-ask), alone.
+      // passes as a move they asked for (t-plan-approval-ask-surroundings), alone.
       expect(code("aidlc engine config set depth Minimal")).toBe(0);
       expect(code("aidlc engine config set collaborators off")).toBe(0);
       expect(code("aidlc engine config set depth Minimal; touch src/x.ts")).toBe(2);
