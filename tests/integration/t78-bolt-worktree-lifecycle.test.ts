@@ -605,6 +605,34 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
     });
   });
 
+  test("create accepts a base whose Git index listing exceeds one MiB", () => {
+    const proj = setupLifecycleProject();
+    gitInitMain(proj);
+    const fileCount = 8_192;
+    const fileName = (i: number): string => `file-${i}-${"x".repeat(96)}.txt`;
+    const content = "tracked content";
+    const blob = spawnSync("git", ["hash-object", "-w", "--stdin"], {
+      cwd: proj, input: content, encoding: "utf-8",
+    });
+    expect(blob.status, blob.stderr).toBe(0);
+    const entries = Array.from({ length: fileCount }, (_, i) =>
+      `100644 ${blob.stdout.trim()}\t${fileName(i)}\0`).join("");
+    const indexed = spawnSync("git", ["update-index", "-z", "--index-info"], {
+      cwd: proj, input: entries, encoding: "utf-8",
+    });
+    expect(indexed.status, indexed.stderr).toBe(0);
+    const committed = git(proj, "commit", "-q", "-m", "track a large source tree");
+    expect(committed.status, committed.stderr).toBe(0);
+    const listing = Bun.spawnSync(["git", "ls-files", "-s", "-z"], { cwd: proj, stdout: "pipe" });
+    expect(listing.exitCode).toBe(0);
+    expect(listing.stdout.length).toBeGreaterThan(1024 * 1024);
+
+    const slug = "wide-index";
+    const created = runWorktree(proj, "create", "--slug", slug, "--base", "main");
+    expect(created.status, created.out).toBe(0);
+    expect(readFileSync(join(worktreeDir(proj, slug), fileName(fileCount - 1)), "utf-8")).toBe(content);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
   // ===========================================================================
   // Lifecycle 5b: a tracked path that fits the main checkout but passes
   // Windows MAX_PATH inside the Bolt checkout. Git for Windows handles such a
