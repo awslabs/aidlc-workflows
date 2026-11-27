@@ -689,7 +689,12 @@ Policy a Unit's manifest that changed after its review, and files the Unit
 changed outside its manifest, keep the review: finalize records each once as
 `CHANGE_ACCEPTED` and returns its line in the Unit's `change_notices`. Swarm
 prepare likewise keeps parent source that moved after Plan Approval (generation
-start records it and says it), as the single-agent build does. On any Guard
+start records it and says it), as the single-agent build does. A move after the
+review only in files Git ignores and HEAD does not track, unless registered in
+`.aidlc-source-paths.json` (a test run's output), read against the listing the
+review's request kept, is no change under any Guard Policy: finalize says and
+records nothing and binds the reviewed fingerprint, and when finalize found
+nothing else the landing reads the same rule. On any Guard
 Policy prepare leaves AI-DLC's own files out (an AI-DLC update the person took),
 and the files Git ignores and does not track in the checkout that holds them,
 with what such an ignored link leads to (`aidlc-swarm-source.ts`, the one rule
@@ -701,7 +706,10 @@ compares it, or when no listing is on record to tell (a rejection an earlier
 release wrote).
 
 Swarm footprint verification and immutable Source Commit creation apply the
-same boundary. Clean-filter raw-byte replacement is restricted to exact
+same boundary. A file Git ignores that neither the Unit's HEAD nor the commit it
+started from tracks, unless registered in `.aidlc-source-paths.json`, rides no
+Source Commit and is no write the Unit has to claim. Clean-filter raw-byte
+replacement is restricted to exact
 filesystem-included regular paths, so excluded generated or framework files
 cannot re-enter after shaping. In a Bolt worktree the Source Commit keeps the
 base commit's `aidlc.settings.json` and `aidlc.settings.local.json`, so a

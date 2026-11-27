@@ -22691,12 +22691,12 @@ function sourceSnapshotPathBatches(
   return batches;
 }
 
-// Shape a caller-owned temporary index to the same source boundary used by the
-// fingerprint. The caller seeds and overlays the index first; this helper then
-// restores framework/dependency/cache/generated paths to HEAD and force-adds
-// ignored source candidates plus every explicitly registered path (including
-// binary source). Swarm uses the same helper before writing its immutable
-// Source Commit.
+// Shape a caller-owned temporary index to the fingerprint's source boundary,
+// less the files Git ignores and HEAD does not track. The caller seeds and
+// overlays the index first; this helper then restores framework/dependency/
+// cache/generated paths to HEAD and force-adds the walk's other source candidates
+// plus every explicitly registered path (including binary source). Swarm uses
+// the same helper before writing its immutable Source Commit.
 export interface SourceSnapshotIndexShape {
   externalSymlinkPaths: string[];
   includedRegularPaths: Set<string>;
@@ -22837,10 +22837,9 @@ export function shapeSourceSnapshotIndex(
     if (restored.status !== 0) return null;
   }
 
-  // Files the walk leaves out by name keep HEAD's version here too, so the
-  // snapshot holds exactly what the fingerprint binds. Regular files only: a
-  // symlink with such a name, or its deletion, still counts; a registered path
-  // is re-added below.
+  // Files the walk leaves out by name keep HEAD's version here too, as the
+  // fingerprint leaves them out. Regular files only: a symlink with such a
+  // name, or its deletion, still counts; a registered path is re-added below.
   const byName = sourceSnapshotNameExcludedPathspecs(repoDir, env, sourceIdentity.registeredSnapshotPaths);
   if (byName === null) return null;
   const byNameBatches = sourceSnapshotPathBatches(repoDir, byName);
@@ -22854,7 +22853,9 @@ export function shapeSourceSnapshotIndex(
     if (restored.status !== 0) return null;
   }
 
-  const forcePaths = new Set(sourceIdentity.snapshotPaths);
+  // No force-add past an ignore line: a path Git ignores, HEAD does not track and no registry names stays out (an embedded checkout goes on to bind's check).
+  const ignored = unclaimableIgnoredSourceKeys(repoDir, sourceIdentity.snapshotPaths.filter((path) => !sourceIdentity.embeddedGitPaths.includes(path)).map((path) => `\0${path}`), false);
+  const forcePaths = new Set(sourceIdentity.snapshotPaths.filter((path) => !ignored.has(`\0${path}`)));
   for (const path of sourceIdentity.registeredSnapshotPaths) {
     if (existsSync(join(repoDir, path))) {
       forcePaths.add(path);
@@ -22868,8 +22869,7 @@ export function shapeSourceSnapshotIndex(
     if (tracked.status !== 0) return null;
     if (tracked.stdout.length > 0) forcePaths.add(path);
   }
-  const sortedForcePaths = [...forcePaths].sort();
-  const forceBatches = sourceSnapshotPathBatches(repoDir, sortedForcePaths);
+  const forceBatches = sourceSnapshotPathBatches(repoDir, [...forcePaths].sort());
   if (forceBatches === null) return null;
   for (const batch of forceBatches) {
     const restored = spawnSync(

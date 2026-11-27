@@ -8,7 +8,8 @@
 // no commit holds them and no Unit's checkout gets them.
 // The rule applies when listings are compared, never to the walk, so no
 // fingerprint, receipt or recorded listing changes. A build in the project
-// itself keeps its own compare: there an ignored file can be source.
+// itself keeps its own compare, `reviewedSourceMoved`, which finalize and the
+// landing also read for a review: there an ignored file can be source.
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
@@ -17,6 +18,7 @@ import {
   type AuditShardEvent,
   type WorkspaceSourceListing,
   type WorkspaceSourceState,
+  aidlcOwnedSourceKey,
   currentSwarmSourceMergeChain,
   currentSwarmSourceOpeningFingerprint,
   isLinkTargetListingKey,
@@ -26,10 +28,12 @@ import {
   recordedSourceListingUnderCurrentBoundary,
   repoDir,
   sourceChangedOutsideAidlc,
+  sourceKeysChangedOutsideAidlcSince,
   sourceListingChangedKeys,
   sourcePathIsRegistered,
   splitSourcePathKey,
   withRepoBaselineAdditions,
+  writeBaselineSourceSnapshot,
 } from "./aidlc-lib.ts";
 
 // Deeper than this, a submodule's paths are asked of nobody and stay source.
@@ -221,4 +225,32 @@ export function swarmSourceUnchangedInStage(
   } catch {
     return false;
   }
+}
+
+/**
+ * Whether source moved since `reviewed` (the listing a review's request kept)
+ * in more than files Git ignores and HEAD does not track, such as a test run's
+ * output: the gate's own rule (sourceKeysChangedOutsideAidlcSince), with
+ * AI-DLC's own files still counted. A listing that is missing or cannot be kept
+ * counts as moved. `listing` names the kept copy, which a verdict records.
+ */
+export function reviewedSourceMoved(
+  dir: string,
+  stage: string,
+  reviewed: WorkspaceSourceListing | null,
+  current: WorkspaceSourceState,
+  intent?: string,
+  space?: string,
+): { moved: boolean; listing?: string } {
+  if (reviewed === null) return { moved: true };
+  let listing: string;
+  try {
+    listing = writeBaselineSourceSnapshot(dir, stage, reviewed, intent, space);
+  } catch {
+    return { moved: true };
+  }
+  const counted = sourceKeysChangedOutsideAidlcSince(dir, stage, listing, current, [], null);
+  const owned = aidlcOwnedSourceKey(dir);
+  const moved = counted === null || counted.size > 0 || [...sourceListingChangedKeys(reviewed, current.listing)].some(owned);
+  return { moved, listing };
 }

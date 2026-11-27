@@ -79,11 +79,11 @@ import {
   workspaceSourceFailureSuffix,
   recordedSourceListingUnderCurrentBoundary,
   sameWorkspaceSource,
-  workspaceSourceFingerprint,
   workspaceSourceExclusionPathspecs,
   workspaceSourcePathIsExcluded,
   unmergedRootSettingsNotices,
   workspaceSourceState,
+  readWorkspaceSourceSnapshot,
   worktreePath,
   writeBaselineSourceSnapshot,
   worktreesDir,
@@ -97,7 +97,7 @@ import {
 import { afterApprovedSkeleton, autonomyGrantedOnRecord } from "./aidlc-construction-checkpoints.ts";
 import { quoted } from "./aidlc-brought-files.ts";
 import { mainCheckoutChangeStep } from "./aidlc-message-store.ts";
-import { swarmSourceChanged, swarmSourceChangedSince } from "./aidlc-swarm-source.ts";
+import { reviewedSourceMoved, swarmSourceChanged, swarmSourceChangedSince } from "./aidlc-swarm-source.ts";
 import { aidlcDispatcherInvocation } from "./aidlc-runtime-paths.ts";
 import { captureCodeGenerationDiscardApproval } from "./aidlc-testing-posture.ts";
 
@@ -1977,8 +1977,11 @@ function assertConvergedSourceUnchanged(
   record: ConvergedSourceRecord | null,
 ): string | null {
   if (!record || record.kind === "bypass") return null;
-  const current = workspaceSourceFingerprint(wtPath);
-  if (current === null || !sameWorkspaceSource(record.fingerprint, current)) {
+  const current = workspaceSourceState(wtPath);
+  // What finalize took as no change (files Git ignores and HEAD does not track
+  // since the review this row binds) is none here either.
+  if (current === null || (!sameWorkspaceSource(record.fingerprint, current.fingerprint) &&
+    reviewedSourceMoved(wtPath, record.stage, readWorkspaceSourceSnapshot(wtPath, record.stage, record.fingerprint), current).moved)) {
     errorWithSlug(
       slug,
       `refusing to merge: the worktree source no longer matches the state this unit ` +

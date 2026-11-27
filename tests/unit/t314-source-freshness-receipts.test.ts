@@ -3979,7 +3979,8 @@ describe("t314 swarm finalize source-fingerprint check (#646 review P1#3)", () =
   // Mirrors t134's makeSwarmFixture, but seeded with Current Stage:
   // code-generation (a workspace_requires stage) instead of functional-design,
   // so aidlc-log.ts review actually stamps a Source Fingerprint to check.
-  function makeFixture(): string {
+  // `ignored` adds the project's own ignore lines, committed before the stage starts.
+  function makeFixture(ignored: readonly string[] = []): string {
     const proj = setupWorktreeFixture();
     fixtures.push(proj);
     if (process.platform === "win32") {
@@ -4008,6 +4009,7 @@ describe("t314 swarm finalize source-fingerprint check (#646 review P1#3)", () =
         "aidlc/spaces/*/intents/*/runtime-graph.json",
         "aidlc/spaces/*/intents/*/.aidlc-*",
         "aidlc/spaces/*/intents/*/audit/",
+        ...ignored,
         "",
       ].join("\n"),
     );
@@ -4220,6 +4222,325 @@ describe("t314 swarm finalize source-fingerprint check (#646 review P1#3)", () =
     expect(tree.stdout).toContain("reviewed.ts");
     expect(tree.stdout).not.toContain(".DS_Store");
     expect(tree.stdout).not.toContain(".coverage");
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  // A shop whose test command writes a report folder per run and rewrites its
+  // coverage, both kept out of Git by its committed .gitignore.
+  function shopWithIgnoredTestOutput(policy: string, ignored: readonly string[] = []) {
+    const proj = makeFixture([".ci-runs/", ".coverage/", ...ignored]);
+    if (policy !== "strict") {
+      const statePath = seededStateFile(proj);
+      writeFileSync(statePath, readFileSync(statePath, "utf-8")
+        .replace(/^- \*\*Change Control\*\*: .*$/m, `- **Guard Policy**: ${policy} (set by you)`));
+    }
+    return proj;
+  }
+
+  function prepareShop(proj: string): string {
+    ensureDagUnit(proj, "shop");
+    runSwarm(proj, ["prepare", "--batch", "1", "--units", "shop", "--base", "main"]);
+    return wtPath(proj, "shop");
+  }
+
+  function testRun(wt: string, n: number): void {
+    mkdirSync(join(wt, ".ci-runs", `run-${n}`), { recursive: true });
+    writeFileSync(join(wt, ".ci-runs", `run-${n}`, "result.xml"), `<testsuite tests="1" run="${n}"/>\n`);
+    mkdirSync(join(wt, ".coverage"), { recursive: true });
+    writeFileSync(join(wt, ".coverage", "lcov.info"), `TN:${n}\n`);
+  }
+
+  function finalizeShop(proj: string, file: string) {
+    const finalized = runSwarm(proj, [
+      "finalize", "--batch", "1", "--units", "shop", "--claimed", "shop",
+      "--check-cmd", `"${process.execPath}" -e "require('fs').accessSync('${file}')"`,
+    ]);
+    const row = (JSON.parse(finalized.out) as { units: Array<{ unit: string; detail?: string; change_notices?: string[] }> })
+      .units.find((unit) => unit.unit === "shop");
+    return { finalized, row };
+  }
+
+  function shopSourceCommit(proj: string): string {
+    const commit = /\*\*Event\*\*: SWARM_UNIT_CONVERGED[\s\S]*?\*\*Unit name\*\*: shop[\s\S]*?\*\*Source Commit\*\*: ([0-9a-f]{40})/
+      .exec(readAllAuditShards(proj))?.[1];
+    expect(commit).toBeDefined();
+    return commit ?? "";
+  }
+
+  function filesIn(proj: string, commit: string): string[] {
+    const tree = spawnSync("git", ["-C", proj, "ls-tree", "-r", "--name-only", commit], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8",
+    });
+    expect(tree.status).toBe(0);
+    return tree.stdout.split("\n").filter(Boolean);
+  }
+
+  const testOutput = (files: string[]) => files.filter((file) => file.startsWith(".ci-runs/") || file.startsWith(".coverage/"));
+
+  for (const policy of ["relaxed", "off"]) {
+    test(`with Guard Policy ${policy}, test output the project's .gitignore keeps out rides no Source Commit and never lands`, () => {
+      const proj = shopWithIgnoredTestOutput(policy);
+      const wt = prepareShop(proj);
+      writeFileSync(join(wt, "cart.ts"), "export const cart = [];\n");
+      // The reviewer runs the tests, and finalize's check runs them again.
+      recordReview(wt, "code-generation", REVIEWER, "shop", "READY", [{ path: "cart.ts" }], true, () => testRun(wt, 1));
+      testRun(wt, 2);
+      const { finalized, row } = finalizeShop(proj, "cart.ts");
+      expect(finalized.rc, finalized.diagnostic).toBe(0);
+      const files = filesIn(proj, shopSourceCommit(proj));
+      expect(files).toContain("cart.ts");
+      expect(testOutput(files)).toEqual([]);
+
+      const merged = spawnSync(BUN, [WORKTREE_TOOL, "merge", "--slug", "shop", "--target", "main", "--strategy", "squash", "--project-dir", proj], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: proj, encoding: "utf-8",
+      });
+      expect(merged.status, `${merged.stdout}${merged.stderr}`).toBe(0);
+      const tracked = spawnSync("git", ["-C", proj, "ls-files", "--", "cart.ts", ".ci-runs", ".coverage"], { encoding: "utf-8" });
+      expect(tracked.stdout.split("\n").filter(Boolean)).toEqual(["cart.ts"]);
+      // A move only in files Git ignores is no change to the reviewed code: nothing is said or recorded as kept.
+      expect(row?.change_notices ?? []).toEqual([]);
+      expect(readAllAuditShards(proj)).not.toContain("Kept the change.");
+    }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+  }
+
+  function landShop(proj: string) {
+    return spawnSync(BUN, [WORKTREE_TOOL, "merge", "--slug", "shop", "--target", "main", "--strategy", "squash", "--project-dir", proj], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: proj, encoding: "utf-8",
+    });
+  }
+
+  const MISMATCH = "the reviewed source no longer matches its worktree's fingerprint";
+
+  test("under strict, test output a run writes after the review no longer sends the Unit back", () => {
+    const proj = shopWithIgnoredTestOutput("strict");
+    const wt = prepareShop(proj);
+    writeFileSync(join(wt, "cart.ts"), "export const cart = [];\n");
+    testRun(wt, 1);
+    recordReview(wt, "code-generation", REVIEWER, "shop", "READY", [{ path: "cart.ts" }]);
+    testRun(wt, 2);
+    const { finalized, row } = finalizeShop(proj, "cart.ts");
+    expect(finalized.rc, row?.detail ?? finalized.diagnostic).toBe(0);
+    expect(row?.change_notices ?? []).toEqual([]);
+    expect(testOutput(filesIn(proj, shopSourceCommit(proj)))).toEqual([]);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("under strict, test output written while the reviewer works and again after still lands the Unit", () => {
+    const proj = shopWithIgnoredTestOutput("strict");
+    const wt = prepareShop(proj);
+    writeFileSync(join(wt, "cart.ts"), "export const cart = [];\n");
+    recordReview(wt, "code-generation", REVIEWER, "shop", "READY", [{ path: "cart.ts" }], true, () => testRun(wt, 1));
+    testRun(wt, 2);
+    const { finalized, row } = finalizeShop(proj, "cart.ts");
+    expect(finalized.rc, row?.detail ?? finalized.diagnostic).toBe(0);
+    expect(row?.change_notices ?? []).toEqual([]);
+    expect(landShop(proj).status).toBe(0);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("beside test output, a tracked file edited after the review still sends a strict Unit back and is kept under relaxed", () => {
+    for (const policy of ["strict", "relaxed"]) {
+      const proj = shopWithIgnoredTestOutput(policy);
+      const wt = prepareShop(proj);
+      writeFileSync(join(wt, "cart.ts"), "export const cart = [];\n");
+      testRun(wt, 1);
+      recordReview(wt, "code-generation", REVIEWER, "shop", "READY", [{ path: "cart.ts" }]);
+      testRun(wt, 2);
+      writeFileSync(join(wt, "README.md"), "# The shop, edited after the review\n");
+      const { finalized, row } = finalizeShop(proj, "cart.ts");
+      if (policy === "strict") {
+        expect(finalized.rc).toBe(2);
+        expect(row?.detail).toContain(MISMATCH);
+        continue;
+      }
+      expect(finalized.rc, finalized.diagnostic).toBe(0);
+      expect(row?.change_notices).toEqual([
+        "The shop Unit's code changed after it was reviewed. Kept the change.",
+        "The shop Unit also changed README.md outside its planned files. Kept them.",
+      ]);
+    }
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("under strict, an ignored file the project registers as source, claimed and edited after the review, still sends the Unit back", () => {
+    const proj = shopWithIgnoredTestOutput("strict", ["gen/"]);
+    writeFileSync(join(proj, ".aidlc-source-paths.json"), `${JSON.stringify({ version: 1, paths: ["gen/client.ts"] })}\n`);
+    git(proj, ["add", "-A"]);
+    git(proj, ["commit", "-qm", "the shop registers its generated client as source"]);
+    const wt = prepareShop(proj);
+    writeFileSync(join(wt, "cart.ts"), "export const cart = [];\n");
+    mkdirSync(join(wt, "gen"), { recursive: true });
+    writeFileSync(join(wt, "gen", "client.ts"), "export const client = 1;\n");
+    testRun(wt, 1);
+    recordReview(wt, "code-generation", REVIEWER, "shop", "READY", [{ path: "cart.ts" }, { path: "gen/client.ts" }]);
+    testRun(wt, 2);
+    writeFileSync(join(wt, "gen", "client.ts"), "export const client = 2;\n");
+    const { finalized, row } = finalizeShop(proj, "cart.ts");
+    expect(finalized.rc).toBe(2);
+    expect(row?.detail).toContain(MISMATCH);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("when the listing the review's request kept is not on this machine, a move is told as before", () => {
+    for (const policy of ["strict", "relaxed"]) {
+      const proj = shopWithIgnoredTestOutput(policy);
+      const wt = prepareShop(proj);
+      writeFileSync(join(wt, "cart.ts"), "export const cart = [];\n");
+      testRun(wt, 1);
+      recordReview(wt, "code-generation", REVIEWER, "shop", "READY", [{ path: "cart.ts" }]);
+      testRun(wt, 2);
+      // The request kept its listing as workspace-<fingerprint>.tsv in the Unit's record; it goes missing.
+      const kept = (readdirSync(seededRecordDir(wt), { recursive: true }) as string[])
+        .filter((path) => /(^|[\\/])workspace-[0-9a-f]{12}\.tsv$/.test(path));
+      expect(kept.length).toBeGreaterThan(0);
+      for (const path of kept) renameSync(join(seededRecordDir(wt), path), join(seededRecordDir(wt), `${path}.gone`));
+      const { finalized, row } = finalizeShop(proj, "cart.ts");
+      if (policy === "strict") {
+        expect(finalized.rc).toBe(2);
+        expect(row?.detail).toContain(MISMATCH);
+        continue;
+      }
+      expect(finalized.rc, finalized.diagnostic).toBe(0);
+      expect(row?.change_notices).toEqual(["The shop Unit's code changed after it was reviewed. Kept the change."]);
+    }
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("when the listing the review's request kept is gone, test output written before the landing still stops it", () => {
+    for (const policy of ["strict", "relaxed"]) {
+      const proj = shopWithIgnoredTestOutput(policy);
+      const wt = prepareShop(proj);
+      writeFileSync(join(wt, "cart.ts"), "export const cart = [];\n");
+      testRun(wt, 1);
+      recordReview(wt, "code-generation", REVIEWER, "shop", "READY", [{ path: "cart.ts" }]);
+      const { finalized, row } = finalizeShop(proj, "cart.ts");
+      expect(finalized.rc, row?.detail ?? finalized.diagnostic).toBe(0);
+      const kept = (readdirSync(seededRecordDir(wt), { recursive: true }) as string[])
+        .filter((path) => /(^|[\\/])workspace-[0-9a-f]{12}\.tsv$/.test(path));
+      expect(kept.length).toBeGreaterThan(0);
+      for (const path of kept) renameSync(join(seededRecordDir(wt), path), join(seededRecordDir(wt), `${path}.gone`));
+      testRun(wt, 2);
+      const merged = landShop(proj);
+      expect(merged.status, policy).not.toBe(0);
+      expect(`${merged.stdout}${merged.stderr}`).toContain("refusing to merge: the worktree source no longer matches the state this unit converged with");
+    }
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("test output a run writes between finalize and the landing does not stop the landing", () => {
+    for (const policy of ["strict", "relaxed"]) {
+      const proj = shopWithIgnoredTestOutput(policy);
+      const wt = prepareShop(proj);
+      writeFileSync(join(wt, "cart.ts"), "export const cart = [];\n");
+      testRun(wt, 1);
+      recordReview(wt, "code-generation", REVIEWER, "shop", "READY", [{ path: "cart.ts" }]);
+      const { finalized, row } = finalizeShop(proj, "cart.ts");
+      expect(finalized.rc, row?.detail ?? finalized.diagnostic).toBe(0);
+      testRun(wt, 2);
+      const merged = landShop(proj);
+      expect(merged.status, `${policy}: ${merged.stdout}${merged.stderr}`).toBe(0);
+    }
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("under strict, test output the project's .gitignore keeps out is no write outside the Unit's planned files", () => {
+    const proj = shopWithIgnoredTestOutput("strict");
+    const wt = prepareShop(proj);
+    writeFileSync(join(wt, "cart.ts"), "export const cart = [];\n");
+    testRun(wt, 1);
+    recordReview(wt, "code-generation", REVIEWER, "shop", "READY", [{ path: "cart.ts" }]);
+    const { finalized, row } = finalizeShop(proj, "cart.ts");
+    expect(finalized.rc, row?.detail ?? finalized.diagnostic).toBe(0);
+    expect(row?.change_notices ?? []).toEqual([]);
+    expect(testOutput(filesIn(proj, shopSourceCommit(proj)))).toEqual([]);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("beside ignored test output, a file Git does not ignore and an ignored file registered as source still land, named once", () => {
+    const proj = shopWithIgnoredTestOutput("relaxed", ["gen/"]);
+    writeFileSync(join(proj, ".aidlc-source-paths.json"), `${JSON.stringify({ version: 1, paths: ["gen/client.ts"] })}\n`);
+    git(proj, ["add", "-A"]);
+    git(proj, ["commit", "-qm", "the shop registers its generated client as source"]);
+    const wt = prepareShop(proj);
+    writeFileSync(join(wt, "cart.ts"), "export const cart = [];\n");
+    recordReview(wt, "code-generation", REVIEWER, "shop", "READY", [{ path: "cart.ts" }]);
+    testRun(wt, 1);
+    mkdirSync(join(wt, "gen"), { recursive: true });
+    writeFileSync(join(wt, "gen", "client.ts"), "export const client = 1;\n");
+    writeFileSync(join(wt, "notes.xml"), "<notes/>\n");
+    const { finalized, row } = finalizeShop(proj, "cart.ts");
+    expect(finalized.rc, finalized.diagnostic).toBe(0);
+    expect(row?.change_notices).toContain(
+      "The shop Unit also changed gen/client.ts, notes.xml outside its planned files. Kept them.",
+    );
+    const files = filesIn(proj, shopSourceCommit(proj));
+    expect(files).toEqual(expect.arrayContaining(["cart.ts", "gen/client.ts", "notes.xml"]));
+    expect(testOutput(files)).toEqual([]);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("an ignored file the project tracks rides the Source Commit with the Unit's edit, and its deletion is still named", () => {
+    for (const edit of ["edited", "deleted"]) {
+      const proj = shopWithIgnoredTestOutput("relaxed", ["gen/"]);
+      mkdirSync(join(proj, "gen"), { recursive: true });
+      writeFileSync(join(proj, "gen", "client.ts"), "export const client = 0;\n");
+      git(proj, ["add", "-f", "gen/client.ts"]);
+      git(proj, ["commit", "-qm", "the shop tracks one generated file"]);
+      const wt = prepareShop(proj);
+      writeFileSync(join(wt, "cart.ts"), "export const cart = [];\n");
+      if (edit === "edited") {
+        writeFileSync(join(wt, "gen", "client.ts"), "export const client = 1;\n");
+      } else {
+        // The worker drops the file and commits that in its own checkout.
+        git(wt, ["rm", "-q", "gen/client.ts"]);
+        git(wt, ["commit", "-qm", "drop the generated client"]);
+      }
+      recordReview(wt, "code-generation", REVIEWER, "shop", "READY", [{ path: "cart.ts" }]);
+      testRun(wt, 1);
+      const { finalized, row } = finalizeShop(proj, "cart.ts");
+      expect(finalized.rc, finalized.diagnostic).toBe(0);
+      expect(row?.change_notices, edit).toContain("The shop Unit also changed gen/client.ts outside its planned files. Kept them.");
+      const commit = shopSourceCommit(proj);
+      if (edit === "edited") {
+        const shown = spawnSync("git", ["-C", proj, "show", `${commit}:gen/client.ts`], { encoding: "utf-8" });
+        expect(shown.stdout).toBe("export const client = 1;\n");
+      } else {
+        expect(filesIn(proj, commit)).not.toContain("gen/client.ts");
+      }
+    }
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("a Git checkout the worker committed under an ignore line rides the Source Commit and is named", () => {
+    const proj = shopWithIgnoredTestOutput("relaxed", ["vendor/"]);
+    const wt = prepareShop(proj);
+    const lib = join(wt, "vendor", "lib");
+    mkdirSync(lib, { recursive: true });
+    git(lib, ["init", "-q"]);
+    git(lib, ["config", "user.email", "t@test"]);
+    git(lib, ["config", "user.name", "t"]);
+    writeFileSync(join(lib, "index.ts"), "export const lib = 1;\n");
+    git(lib, ["add", "-A"]);
+    git(lib, ["commit", "-qm", "lib"]);
+    git(wt, ["add", "-f", "vendor/lib"]);
+    git(wt, ["commit", "-qm", "vendor the lib"]);
+    writeFileSync(join(wt, "cart.ts"), "export const cart = [];\n");
+    recordReview(wt, "code-generation", REVIEWER, "shop", "READY", [{ path: "cart.ts" }]);
+    const { finalized, row } = finalizeShop(proj, "cart.ts");
+    expect(finalized.rc, row?.detail ?? finalized.diagnostic).toBe(0);
+    expect(filesIn(proj, shopSourceCommit(proj))).toContain("vendor/lib");
+    // The checkout is named by its own path; the files inside it are its own repository's.
+    expect(row?.change_notices).toContain("The shop Unit also changed vendor/lib outside its planned files. Kept them.");
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("a Git checkout inside the Unit's checkout, under an ignore line, still stops finalize with its own step", () => {
+    const proj = shopWithIgnoredTestOutput("relaxed", ["vendor/"]);
+    const wt = prepareShop(proj);
+    const lib = join(wt, "vendor", "lib");
+    mkdirSync(lib, { recursive: true });
+    git(lib, ["init", "-q"]);
+    git(lib, ["config", "user.email", "t@test"]);
+    git(lib, ["config", "user.name", "t"]);
+    writeFileSync(join(lib, "index.ts"), "export const lib = 1;\n");
+    git(lib, ["add", "-A"]);
+    git(lib, ["commit", "-qm", "lib"]);
+    writeFileSync(join(wt, "cart.ts"), "export const cart = [];\n");
+    recordReview(wt, "code-generation", REVIEWER, "shop", "READY", [{ path: "cart.ts" }]);
+    const { finalized, row } = finalizeShop(proj, "cart.ts");
+    expect(finalized.rc).toBe(2);
+    expect(row?.detail).toBe(
+      "cannot bind embedded Git checkout vendor/lib: it is not a tracked submodule. Use git submodule add so the parent " +
+        "records a gitlink and .gitmodules recovery metadata, or flatten/remove the embedded checkout before re-running review.",
+    );
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("a setting recorded in the worktree after review neither blocks the claim nor enters the Source Commit", () => {
