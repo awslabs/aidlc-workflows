@@ -12508,9 +12508,10 @@ function handleSpaceCreate(projectDir: string, positional: string[], _flags: Rec
   }
   // A space is a folder that travels by git, and Windows keeps these names for
   // devices: git there cannot add a file under such a folder, and cannot check
-  // out one committed on macOS or Linux. Refused on every platform, since the
-  // teammate who cannot clone may be on another one.
-  if (/^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])$/.test(name)) {
+  // out one committed on macOS or Linux. Refused on Windows, where git cannot
+  // add the folder; elsewhere it is made and its created line says the risk.
+  const deviceName = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])$/.test(name);
+  if (deviceName && process.platform === "win32") {
     die(
       `"${name}" is a device name on Windows, where git cannot add or check out a folder with that name. Pick another name, such as "${name}-team".`
     );
@@ -12565,8 +12566,11 @@ function handleSpaceCreate(projectDir: string, positional: string[], _flags: Rec
   const knowledgeFloor = join(knowledgeDir(projectDir, name), ".gitkeep");
   if (!existsSync(knowledgeFloor)) writeFileSync(knowledgeFloor, "", "utf-8");
 
+  const created = deviceName
+    ? `Space created: ${name}. A teammate on Windows cannot check out a folder with this name; to pick another, delete aidlc/spaces/${name} and create it again.`
+    : `Space created: ${name}`;
   process.stdout.write(
-    `Space created: ${name}\n  memory/org.md (copied from default), team.md, project.md, phases/, templates/, codekb/, knowledge/\nSwitch to it with ${entrySkillInvocation()} space ${name}.\n`
+    `${created}\n  memory/org.md (copied from default), team.md, project.md, phases/, templates/, codekb/, knowledge/\nSwitch to it with ${entrySkillInvocation()} space ${name}.\n`
   );
 }
 

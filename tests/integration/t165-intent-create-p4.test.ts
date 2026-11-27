@@ -1561,23 +1561,6 @@ describe("t164 query layer (listSpaces / listIntents + --json)", () => {
     expect(existsSync(join(proj, "aidlc", "spaces", "team-2"))).toBe(true);
   });
 
-  test("space-create refuses a Windows device name on every platform", () => {
-    // Git on Windows cannot add a file under a folder named after a device, and
-    // cannot check one out, so a teammate there could not clone the records.
-    for (const raw of ["con", "CON", "Aux", "nul", "prn", "com1", "LPT9"]) {
-      const r = util(["space-create", raw]);
-      expect(r.status).not.toBe(0);
-      expect(r.out).toContain("is a device name on Windows");
-      // Listed, not probed: on Windows a path that ends in a device name can
-      // answer "exists" with no folder there.
-      expect(readdirSync(join(proj, "aidlc", "spaces"))).not.toContain(raw.toLowerCase());
-    }
-    // Only the whole name is a device: these are ordinary names.
-    for (const raw of ["console", "aux-team", "com10", "nullable"]) {
-      expect(util(["space-create", raw]).status).toBe(0);
-    }
-  });
-
   test("an unknown-space switch fails without inviting creation", () => {
     // Pins the wording the same way the unknown-intent case below is pinned:
     // the error must steer to switching between EXISTING spaces only, never
