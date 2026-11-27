@@ -16089,8 +16089,7 @@ export type SourceBaselineResult =
   | { state: "legacy" }
   | { state: "unbindable" }
   | { state: "invalid" }
-  // The audit names a well-formed baseline and no copy of it is on this machine.
-  | { state: "missing" }
+  | { state: "missing"; fingerprint: string | null }
   | { state: "ready"; listing: WorkspaceSourceListing };
 
 export interface FreshReviewReceipts {
@@ -27599,7 +27598,7 @@ function readStageBaseline(
   const listing = readBaselineSourceSnapshot(projectDir, stageSlug, field, intent, space);
   if (listing !== null) return { state: "ready", listing };
   return baselineSourceSnapshotMissing(projectDir, stageSlug, field, intent, space)
-    ? { state: "missing" }
+    ? { state: "missing", fingerprint: validSourceSnapshotFingerprint(field) }
     : { state: "invalid" };
 }
 
@@ -27681,6 +27680,7 @@ function withRepoBaselineAdditions(
       return !left.has(top) && !read.has(top);
     };
     const added = readStageBaseline(projectDir, stageSlug, auditBlockField(row.block, REPO_BASELINE_ADDITION_FIELD) ?? "", intent, space);
+    if (added.state === "missing") return { state: "missing", fingerprint: null };
     if (added.state !== "ready") return added;
     const cloned = auditBlockField(row.block, "Cloned From") !== null;
     const byRepo = new Map<string, WorkspaceSourceListing>();
@@ -35686,10 +35686,17 @@ export function currentSwarmSourceOpeningFingerprint(
     space,
     auditRows,
   );
+  if (baseline.state === "missing" && baseline.fingerprint !== null) {
+    return {
+      state: "ready",
+      fingerprint: baseline.fingerprint,
+      source: "stage-baseline",
+    };
+  }
   if (baseline.state !== "ready") {
     return {
       state: "invalid",
-      reason: "current source baseline is unavailable for the opening aggregate link",
+      reason: openingBaselineRefusal(baseline, slug),
     };
   }
   return {
@@ -35698,6 +35705,23 @@ export function currentSwarmSourceOpeningFingerprint(
     source: "stage-baseline",
     listing: baseline.listing,
   };
+}
+
+function openingBaselineRefusal(
+  baseline: SourceBaselineResult,
+  stageSlug: string,
+): string {
+  const why = baseline.state === "legacy"
+    ? "this stage attempt recorded no source baseline at its start"
+    : baseline.state === "unbindable"
+      ? "the source baseline taken at this stage's start could not be bound to a listing"
+      : baseline.state === "missing"
+        ? "the source baseline taken at this stage's start is not on this machine, and a repository that joined the work since cannot be added to a listing that is gone"
+        : "the copy of this stage's start baseline on this machine does not match the fingerprint the audit recorded";
+  return `${why}, so the main checkout cannot be shown to hold only reviewed source. ` +
+    `Run this same merge with \`--accept-source-baseline\` to start this stage attempt's source links ` +
+    `from the main checkout as it is now, which the landing records, or restart the stage with ` +
+    `\`${entrySkillInvocation()} --stage ${stageSlug}\` so its start records a fresh baseline.`;
 }
 
 /**
@@ -35897,10 +35921,14 @@ export function currentSwarmSourceMergeChain(
     allRows.filter((row) =>
       row.event !== "INTENT_REPOS_CHANGED" || openingRow === null || !attemptEventDefinitelyBefore(openingRow, row)),
   );
-  if (opening.state === "invalid") {
+  const acceptedOpening = openingRow !== null &&
+    auditBlockField(openingRow.block, "Opening Source") === "accepted";
+  if (opening.state === "invalid" && !acceptedOpening) {
     return opening;
   }
   if (
+    opening.state === "ready" &&
+    !acceptedOpening &&
     openingPrevious !== opening.fingerprint &&
     !(openingPrevious !== null && openingRow !== null && keptChange(opening.fingerprint, openingPrevious, openingRow))
   ) {
