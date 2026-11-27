@@ -4295,10 +4295,144 @@ describe("t314 swarm finalize source-fingerprint check (#646 review P1#3)", () =
       expect(merged.status, `${merged.stdout}${merged.stderr}`).toBe(0);
       const tracked = spawnSync("git", ["-C", proj, "ls-files", "--", "cart.ts", ".ci-runs", ".coverage"], { encoding: "utf-8" });
       expect(tracked.stdout.split("\n").filter(Boolean)).toEqual(["cart.ts"]);
-      // The fingerprint still binds the output, so its move is said as any move is; no file of it is named as kept.
-      expect(row?.change_notices).toEqual(["The shop Unit's code changed after it was reviewed. Kept the change."]);
+      // A move only in files Git ignores is no change to the reviewed code: nothing is said or recorded as kept.
+      expect(row?.change_notices ?? []).toEqual([]);
+      expect(readAllAuditShards(proj)).not.toContain("Kept the change.");
     }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
   }
+
+  function landShop(proj: string) {
+    return spawnSync(BUN, [WORKTREE_TOOL, "merge", "--slug", "shop", "--target", "main", "--strategy", "squash", "--project-dir", proj], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: proj, encoding: "utf-8",
+    });
+  }
+
+  const MISMATCH = "the reviewed source no longer matches its worktree's fingerprint";
+
+  test("under strict, test output a run writes after the review no longer sends the Unit back", () => {
+    const proj = shopWithIgnoredTestOutput("strict");
+    const wt = prepareShop(proj);
+    writeFileSync(join(wt, "cart.ts"), "export const cart = [];\n");
+    testRun(wt, 1);
+    recordReview(wt, "code-generation", REVIEWER, "shop", "READY", [{ path: "cart.ts" }]);
+    testRun(wt, 2);
+    const { finalized, row } = finalizeShop(proj, "cart.ts");
+    expect(finalized.rc, row?.detail ?? finalized.diagnostic).toBe(0);
+    expect(row?.change_notices ?? []).toEqual([]);
+    expect(testOutput(filesIn(proj, shopSourceCommit(proj)))).toEqual([]);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("under strict, test output written while the reviewer works and again after still lands the Unit", () => {
+    const proj = shopWithIgnoredTestOutput("strict");
+    const wt = prepareShop(proj);
+    writeFileSync(join(wt, "cart.ts"), "export const cart = [];\n");
+    recordReview(wt, "code-generation", REVIEWER, "shop", "READY", [{ path: "cart.ts" }], true, () => testRun(wt, 1));
+    testRun(wt, 2);
+    const { finalized, row } = finalizeShop(proj, "cart.ts");
+    expect(finalized.rc, row?.detail ?? finalized.diagnostic).toBe(0);
+    expect(row?.change_notices ?? []).toEqual([]);
+    expect(landShop(proj).status).toBe(0);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("beside test output, a tracked file edited after the review still sends a strict Unit back and is kept under relaxed", () => {
+    for (const policy of ["strict", "relaxed"]) {
+      const proj = shopWithIgnoredTestOutput(policy);
+      const wt = prepareShop(proj);
+      writeFileSync(join(wt, "cart.ts"), "export const cart = [];\n");
+      testRun(wt, 1);
+      recordReview(wt, "code-generation", REVIEWER, "shop", "READY", [{ path: "cart.ts" }]);
+      testRun(wt, 2);
+      writeFileSync(join(wt, "README.md"), "# The shop, edited after the review\n");
+      const { finalized, row } = finalizeShop(proj, "cart.ts");
+      if (policy === "strict") {
+        expect(finalized.rc).toBe(2);
+        expect(row?.detail).toContain(MISMATCH);
+        continue;
+      }
+      expect(finalized.rc, finalized.diagnostic).toBe(0);
+      expect(row?.change_notices).toEqual([
+        "The shop Unit's code changed after it was reviewed. Kept the change.",
+        "The shop Unit also changed README.md outside its planned files. Kept them.",
+      ]);
+    }
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("under strict, an ignored file the project registers as source, claimed and edited after the review, still sends the Unit back", () => {
+    const proj = shopWithIgnoredTestOutput("strict", ["gen/"]);
+    writeFileSync(join(proj, ".aidlc-source-paths.json"), `${JSON.stringify({ version: 1, paths: ["gen/client.ts"] })}\n`);
+    git(proj, ["add", "-A"]);
+    git(proj, ["commit", "-qm", "the shop registers its generated client as source"]);
+    const wt = prepareShop(proj);
+    writeFileSync(join(wt, "cart.ts"), "export const cart = [];\n");
+    mkdirSync(join(wt, "gen"), { recursive: true });
+    writeFileSync(join(wt, "gen", "client.ts"), "export const client = 1;\n");
+    testRun(wt, 1);
+    recordReview(wt, "code-generation", REVIEWER, "shop", "READY", [{ path: "cart.ts" }, { path: "gen/client.ts" }]);
+    testRun(wt, 2);
+    writeFileSync(join(wt, "gen", "client.ts"), "export const client = 2;\n");
+    const { finalized, row } = finalizeShop(proj, "cart.ts");
+    expect(finalized.rc).toBe(2);
+    expect(row?.detail).toContain(MISMATCH);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("when the listing the review's request kept is not on this machine, a move is told as before", () => {
+    for (const policy of ["strict", "relaxed"]) {
+      const proj = shopWithIgnoredTestOutput(policy);
+      const wt = prepareShop(proj);
+      writeFileSync(join(wt, "cart.ts"), "export const cart = [];\n");
+      testRun(wt, 1);
+      recordReview(wt, "code-generation", REVIEWER, "shop", "READY", [{ path: "cart.ts" }]);
+      testRun(wt, 2);
+      // The request kept its listing as workspace-<fingerprint>.tsv in the Unit's record; it goes missing.
+      const kept = (readdirSync(seededRecordDir(wt), { recursive: true }) as string[])
+        .filter((path) => /(^|[\\/])workspace-[0-9a-f]{12}\.tsv$/.test(path));
+      expect(kept.length).toBeGreaterThan(0);
+      for (const path of kept) renameSync(join(seededRecordDir(wt), path), join(seededRecordDir(wt), `${path}.gone`));
+      const { finalized, row } = finalizeShop(proj, "cart.ts");
+      if (policy === "strict") {
+        expect(finalized.rc).toBe(2);
+        expect(row?.detail).toContain(MISMATCH);
+        continue;
+      }
+      expect(finalized.rc, finalized.diagnostic).toBe(0);
+      expect(row?.change_notices).toEqual(["The shop Unit's code changed after it was reviewed. Kept the change."]);
+    }
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("when the listing the review's request kept is gone, test output written before the landing still stops it", () => {
+    for (const policy of ["strict", "relaxed"]) {
+      const proj = shopWithIgnoredTestOutput(policy);
+      const wt = prepareShop(proj);
+      writeFileSync(join(wt, "cart.ts"), "export const cart = [];\n");
+      testRun(wt, 1);
+      recordReview(wt, "code-generation", REVIEWER, "shop", "READY", [{ path: "cart.ts" }]);
+      const { finalized, row } = finalizeShop(proj, "cart.ts");
+      expect(finalized.rc, row?.detail ?? finalized.diagnostic).toBe(0);
+      const kept = (readdirSync(seededRecordDir(wt), { recursive: true }) as string[])
+        .filter((path) => /(^|[\\/])workspace-[0-9a-f]{12}\.tsv$/.test(path));
+      expect(kept.length).toBeGreaterThan(0);
+      for (const path of kept) renameSync(join(seededRecordDir(wt), path), join(seededRecordDir(wt), `${path}.gone`));
+      testRun(wt, 2);
+      const merged = landShop(proj);
+      expect(merged.status, policy).not.toBe(0);
+      expect(`${merged.stdout}${merged.stderr}`).toContain("refusing to merge: the worktree source no longer matches the state this unit converged with");
+    }
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("test output a run writes between finalize and the landing does not stop the landing", () => {
+    for (const policy of ["strict", "relaxed"]) {
+      const proj = shopWithIgnoredTestOutput(policy);
+      const wt = prepareShop(proj);
+      writeFileSync(join(wt, "cart.ts"), "export const cart = [];\n");
+      testRun(wt, 1);
+      recordReview(wt, "code-generation", REVIEWER, "shop", "READY", [{ path: "cart.ts" }]);
+      const { finalized, row } = finalizeShop(proj, "cart.ts");
+      expect(finalized.rc, row?.detail ?? finalized.diagnostic).toBe(0);
+      testRun(wt, 2);
+      const merged = landShop(proj);
+      expect(merged.status, `${policy}: ${merged.stdout}${merged.stderr}`).toBe(0);
+    }
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("under strict, test output the project's .gitignore keeps out is no write outside the Unit's planned files", () => {
     const proj = shopWithIgnoredTestOutput("strict");

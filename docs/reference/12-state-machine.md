@@ -689,7 +689,12 @@ Policy a Unit's manifest that changed after its review, and files the Unit
 changed outside its manifest, keep the review: finalize records each once as
 `CHANGE_ACCEPTED` and returns its line in the Unit's `change_notices`. Swarm
 prepare likewise keeps parent source that moved after Plan Approval (generation
-start records it and says it), as the single-agent build does. On any Guard
+start records it and says it), as the single-agent build does. A move after the
+review only in files Git ignores and HEAD does not track, unless registered in
+`.aidlc-source-paths.json` (a test run's output), read against the listing the
+review's request kept, is no change under any Guard Policy: finalize says and
+records nothing and binds the reviewed fingerprint, and when finalize found
+nothing else the landing reads the same rule. On any Guard
 Policy prepare leaves AI-DLC's own files out (an AI-DLC update the person took),
 and the files Git ignores and does not track in the checkout that holds them,
 with what such an ignored link leads to (`aidlc-swarm-source.ts`, the one rule

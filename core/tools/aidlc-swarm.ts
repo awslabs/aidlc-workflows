@@ -92,6 +92,7 @@
 //   - aidlc-bolt fail              -> close a failed unit's Bolt lifecycle
 //     (BOLT_FAILED paired with the BOLT_STARTED that `start --worktree` emitted).
 
+import { reviewedSourceMoved } from "./aidlc-swarm-source.ts";
 import { projectDirFlag, settleClaudeTurnsFirst } from "./aidlc-claude-turn-pending.ts";
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS, LONG_SUBPROCESS_TIMEOUT_MS, EXTENDED_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { spawnSync, type SpawnSyncReturns } from "node:child_process";
@@ -180,6 +181,8 @@ import {
   worktreeRuntimeGraphPath,
   workspaceSourceEmbeddedGitPaths,
   workspaceSourceFingerprint as worktreeSourceFingerprint,
+  workspaceSourceState,
+  readWorkspaceSourceSnapshot,
   workspaceSourceListing,
   workspaceSourceSnapshotPaths,
   worktreeStateFilePath,
@@ -248,6 +251,8 @@ interface ReceiptCheck {
   error: string | null;
   artifactFingerprint?: string;
   sourceFingerprint?: string;
+  /** The worktree's fingerprint finalize checked, when it binds the reviewed one past ignored files. */
+  checkedSourceFingerprint?: string;
   unitSourceFingerprint?: string;
   /** Changes kept under a relaxed or off Guard Policy, recorded once at finalize. */
   accepted?: AcceptedChange[];
@@ -733,13 +738,19 @@ function reviewerReceiptError(
         `re-run the reviewer in the worktree and record a fresh verdict before finalizing`,
     };
   }
-  const currentSourceFp = worktreeSourceFingerprint(wt);
+  const currentSource = workspaceSourceState(wt);
+  const currentSourceFp = currentSource?.fingerprint ?? null;
   const sourceChanged = recordedSourceFp !== UNBINDABLE_FINGERPRINT && currentSourceFp !== null &&
     !sameWorkspaceSource(recordedSourceFp, currentSourceFp);
+  // Under every policy, a move only in files Git ignores and HEAD does not
+  // track since the listing the review's request kept is no change: the review
+  // stands as it was, and nothing is said.
+  const ignoredOnly = sourceChanged && currentSource !== null &&
+    !reviewedSourceMoved(wt, stage, readWorkspaceSourceSnapshot(wt, stage, recordedSourceFp), currentSource).moved;
   if (
     recordedSourceFp === UNBINDABLE_FINGERPRINT ||
     currentSourceFp === null ||
-    (sourceChanged && !acceptsChanges)
+    (sourceChanged && !acceptsChanges && !ignoredOnly)
   ) {
     return {
       error:
@@ -751,7 +762,7 @@ function reviewerReceiptError(
   }
   // The kept code is what finalize binds and lands.
   let sourceFingerprint = recordedSourceFp;
-  if (sourceChanged) {
+  if (sourceChanged && !ignoredOnly) {
     accepted.push({
       checkpoint: "review-receipt", stage, unit, changed: null,
       recorded: recordedSourceFp, current: currentSourceFp,
@@ -908,6 +919,7 @@ function reviewerReceiptError(
     error: null,
     artifactFingerprint,
     sourceFingerprint,
+    ...(ignoredOnly ? { checkedSourceFingerprint: currentSourceFp } : {}),
     unitSourceFingerprint,
     ...(accepted.length > 0 ? { accepted } : {}),
     ...(manifestKept ? { manifestKept } : {}),
@@ -1957,13 +1969,16 @@ function initializedSubmoduleSourceError(
 // from the commit the Bolt shares with `landingBranch`, which prepare
 // recorded, so records a Bolt commit carried stay behind; without it, from
 // HEAD. Recompute the fingerprint after the object is written to close a
-// concurrent-edit window; the validated value is the one carried to the
-// convergence row.
+// concurrent-edit window: it must equal the one finalize checked. The
+// convergence row carries `fingerprint`, the reviewed one when finalize found
+// only files Git ignores moved.
 function bindReviewedSource(
   identity: BoltIdentity,
   fingerprint: string,
   recoveryBudget: NewGitlinkRecoveryBudget,
   landingBranch: string | null,
+  // The fingerprint finalize checked, when the binding is the reviewed one.
+  checked = fingerprint,
 ): { binding?: SourceBinding; error?: string } {
   const wt = identity.dir;
   const idx = join(tmpdir(), `aidlc-swarm-source-${process.pid}-${randomUUID().slice(0, 8)}`);
@@ -2114,7 +2129,7 @@ function bindReviewedSource(
     const commit = git(["commit-tree", tree.stdout.trim(), "-p", head.stdout.trim(), "-m", `Reviewed source for Bolt ${identity.slug}`]);
     if (commit.status !== 0 || !commit.stdout.trim()) return { error: "cannot create the immutable reviewed-source commit" };
     const after = worktreeSourceFingerprint(wt);
-    if (after === null || !sameWorkspaceSource(fingerprint, after)) {
+    if (after === null || !sameWorkspaceSource(checked, after)) {
       return { error: "source-fingerprint mismatch while binding the reviewed source; re-run the reviewer" };
     }
     const commitSha = commit.stdout.trim();
@@ -3544,6 +3559,7 @@ function handleFinalize(rest: string[]): void {
                 receipt.sourceFingerprint,
                 recoveryBudget,
                 preparedLandingBranch(readAuditShardEvents(projectDir), batch, unit),
+                receipt.checkedSourceFingerprint,
               )
             : {};
           if (captured.error || !captured.snapshot) {
