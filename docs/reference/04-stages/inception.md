@@ -348,7 +348,7 @@ save also works in a space made by `space create`, whose `team.md` and
 4. **Human Interview** -- Present structured questions after all three spokes
    return. Brownfield asks evidence gaps and policy judgments; greenfield asks
    all five practice areas with org defaults as suggestions. Re-runs pre-fill
-   prior affirmed statements. Log every question and exact answer.
+   prior affirmed statements.
 5. **Lead Integration** -- Dispatch the pipeline-deploy lead again with the
    draft, all three contribution paths, and the interview answers. The lead
    alone integrates the final artifacts and emits `PRACTICES_DISCOVERED`.
