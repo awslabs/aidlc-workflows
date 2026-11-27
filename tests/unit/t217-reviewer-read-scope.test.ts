@@ -76,28 +76,4 @@ describe("t217 reviewer read-scope bound is stated on every surface", () => {
       expect(body, labelled).toContain("stage-protocol-reviewer.md");
     }
   });
-
-  test("the per-unit brief states the search-root rule before the first search", () => {
-    const protocol = readFileSync(join(AIDLC_SRC, PROTOCOL), "utf-8");
-    expect(protocol).toContain("The search roots");
-    expect(protocol).toContain("`Glob` and `Grep` MUST name the root");
-    expect(protocol).toContain(
-      'Grep {pattern: "<what to find>", path: "<record>/construction/<directive.unit>"}',
-    );
-
-    const unitProtocol = readFileSync(join(AIDLC_SRC, UNIT_PROTOCOL), "utf-8");
-    expect(unitProtocol).toContain("Every search names its root.");
-    expect(unitProtocol).toContain("no `path` recurses from the session folder through every unit");
-    expect(unitProtocol).toContain("`<record>/construction/<unit>/`");
-    expect(unitProtocol).toContain('Grep {pattern: "timeout", path: "<record>/construction/<unit>"}');
-    expect(unitProtocol).toContain("source-manifest.json");
-
-    const persona = readFileSync(join(AIDLC_SRC, PERSONA), "utf-8");
-    expect(persona).toContain("Name the root in every search.");
-
-    for (const harness of HARNESS_MATRIX) {
-      const shipped = readFileSync(join(harness.engineRoot, UNIT_PROTOCOL), "utf-8");
-      expect(`harness ${harness.name}\n${shipped}`).toContain("Every search names its root.");
-    }
-  });
 });

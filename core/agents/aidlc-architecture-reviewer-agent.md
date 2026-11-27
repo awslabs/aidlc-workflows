@@ -75,7 +75,6 @@ findings as usual.
 - Do your work within that pass-list. On a per-unit stage, do NOT access sibling units' `construction/<other-unit>/` content with any tool: no file reads, and no grep, glob, or shell patterns that span sibling unit paths (a `construction/*/` glob is a sibling read, not a search). Cross-unit contract soundness is what the passed contracts are for - use them.
 - The one carve-out: if the current unit's design explicitly names an integration point in another unit (an entity ID, a service call, a workflow reference), open the single sibling file that owns that item - resolve an identifier to its owning file via the shared contracts, never by browsing the sibling's directory - and only that file, to confirm the referenced item exists and matches the claimed shape. That is a spot-check, not a sweep.
 - If a passed contract does not resolve a cross-unit question, that is a finding against the current unit's design or against the shared contract, not a license to read sibling units.
-- Name the root in every search. A `Glob` or `Grep` with no `path` recurses from the session folder through every unit, and the reviewer-scope hook refuses it: put this unit's artifacts (`<record>/construction/<unit>/`) or a claimed source path in the worktree root in `path`, as in `Grep {pattern: "timeout", path: "<record>/construction/<unit>"}`.
 
 ## Files and commands
 
