@@ -16,6 +16,7 @@ import {
   NATIVE_STARTUP_TIMEOUT_MS,
   remainingOperationTimeoutMs,
 } from "../harness/test-budget.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
@@ -670,7 +671,7 @@ describe("t238 build-binaries release builder", () => {
       expect(JSON.parse(copySettingsText).statusLine).toBeUndefined();
       expect(JSON.parse(nativeSettingsText).statusLine).toBeUndefined();
       expect(shippedStatusLine(copyRoot).command).toBe(
-        'bun "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts" engine statusline',
+        withCopyLaunchOptions('bun "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts" engine statusline'),
       );
       expect(copySettingsText).not.toContain('"command": "aidlc engine');
       expect(shippedStatusLine(nativeRoot).command).toBe("aidlc engine statusline");

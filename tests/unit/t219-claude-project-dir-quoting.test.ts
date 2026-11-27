@@ -10,24 +10,31 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 
+// The authored settings name the dispatcher alone; the packager adds the copy
+// launch's two Bun options, whose config path is anchored at the project root
+// the same way, so each generated command names CLAUDE_PROJECT_DIR twice.
 const SUBJECTS = [
   {
     label: "authored Claude harness settings",
     path: join(REPO_ROOT, "harness", "claude", "settings.json"),
     commandPrefix: 'bun "$CLAUDE_PROJECT_DIR/{{HARNESS_DIR}}/tools/aidlc.ts"',
     foldUsageCommand: 'bun "$CLAUDE_PROJECT_DIR/{{HARNESS_DIR}}/tools/aidlc.ts" engine hook fold-usage',
+    projectDirPerCommand: 1,
+    permissionGlob: "Bash(bun .claude/tools/aidlc.ts engine *)",
   },
   {
     label: "generated Claude dist settings",
     path: join(REPO_ROOT, "dist", "claude", ".claude", "settings.json"),
-    commandPrefix: 'bun "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts"',
-    foldUsageCommand: 'bun "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts" engine hook fold-usage',
+    commandPrefix: withCopyLaunchOptions('bun "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts"'),
+    foldUsageCommand: withCopyLaunchOptions('bun "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts" engine hook fold-usage'),
+    projectDirPerCommand: 2,
+    permissionGlob: `Bash(${withCopyLaunchOptions("bun .claude/tools/aidlc.ts engine *")})`,
   },
 ] as const;
 
 const PROJECT_DIR_RE = /\$CLAUDE_PROJECT_DIR/g;
-const EXPECTED_PERMISSION_GLOB = "Bash(bun .claude/tools/aidlc.ts engine *)";
 
 interface Settings {
   permissions?: { allow?: unknown };
@@ -101,12 +108,12 @@ describe("t219 Claude settings use quoted project-root dispatcher commands", () 
 
       expect(commands.length).toBeGreaterThan(0);
       expect(projectDirReferenceCount(commands)).toBe(
-        commands.length,
+        commands.length * subject.projectDirPerCommand,
       );
       expect(
         commands.every((command) => command.startsWith(subject.commandPrefix)),
       ).toBe(true);
-      expect(permissionEntries(settings)).toContain(EXPECTED_PERMISSION_GLOB);
+      expect(permissionEntries(settings)).toContain(subject.permissionGlob);
       expect(projectDirReferenceCount(permissionEntries(settings))).toBe(0);
     });
 

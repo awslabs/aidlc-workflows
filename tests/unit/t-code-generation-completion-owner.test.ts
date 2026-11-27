@@ -40,6 +40,7 @@ import {
 } from "../harness/code-generation-states.ts";
 import { invalidateActiveDirectiveContext, stateDigest, writeActiveDirectiveMarker } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { resolveTestingPosture } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 
 // The stage's checks run once before its review or gate, and again at the gate
 // (completionChecksStep, t-checks-before-review); this file's fixture documents
@@ -53,7 +54,9 @@ afterEach(() => {
   while (created.length > 0) cleanupTestProject(created.pop());
 });
 
-const WAITS = "The code plan is not approved yet: run `bun .claude/tools/aidlc-orchestrate.ts next` and follow the step it prints.";
+// The step's `next`, as the copy tree this file's projects hold prints it.
+const NEXT_STEP = withCopyLaunchOptions("bun .claude/tools/aidlc-orchestrate.ts next");
+const WAITS = `The code plan is not approved yet: run \`${NEXT_STEP}\` and follow the step it prints.`;
 const REVIEWER = "aidlc-architecture-reviewer-agent";
 
 function report(proj: string, result: string, extra = "", env: NodeJS.ProcessEnv = {}): { status: number; step: Step } {
@@ -427,7 +430,7 @@ describe("a testing practice kept at the gate is for the next build", () => {
     // A developer handoff is refused as it is on main, naming `next` too.
     const handoff = dispatchOn(proj, brief.stdout);
     expect(handoff).toStartWith("exit 2;");
-    expect(handoff).toContain("bun .claude/tools/aidlc-orchestrate.ts next");
+    expect(handoff).toContain(NEXT_STEP);
     expect(lastStep(runNamed(proj, OPEN_GATE).stdout).message).not.toBe(WAITS);
     expect(stageLine(proj)).toContain("[?] code-generation");
   });
@@ -447,7 +450,7 @@ describe("a testing practice kept at the gate is for the next build", () => {
     const review = answer(proj, "Review the plan");
     expect(review.status, `${review.stdout}${review.stderr}`).toBe(0);
     expect(lastStep(runNamed(proj, OPEN_GATE).stdout).message, "the gate waits for the plan they asked to see")
-      .toBe("The person asked to see the code plan again: run `bun .claude/tools/aidlc-orchestrate.ts next` and follow the step it prints.");
+      .toBe(`The person asked to see the code plan again: run \`${NEXT_STEP}\` and follow the step it prints.`);
     expect(stageLine(proj)).toContain("[-] code-generation");
     const step = next(proj);
     expect(step.kind, JSON.stringify(step)).toBe("ask");
@@ -573,7 +576,7 @@ describe("a testing practice kept at the gate is for the next build", () => {
     expect(refused.status, refused.stdout + refused.stderr).not.toBe(0);
     expect((JSON.parse(refused.stderr || "{}") as { error?: string }).error).toBe(
       'Refusing to complete unit "alpha" for "code-generation": The person asked to see the code plan again: ' +
-        "run `bun .claude/tools/aidlc-orchestrate.ts next` and follow the step it prints.");
+        `run \`${NEXT_STEP}\` and follow the step it prints.`);
     expect(auditEvents(proj).some((row) => row.event === "UNIT_COMPLETED"), "nothing moved").toBe(false);
     const step = next(proj);
     expect(step.ask_type, JSON.stringify(step)).toBe("plan-approval");
@@ -837,7 +840,7 @@ describe("one owner: an isolated Code Generation run completes only once its pla
   const SINGLE = ["--stage", "code-generation", "--single"];
   const SINGLE_REPORT = "bun .claude/tools/aidlc.ts engine orchestrate report --single --stage code-generation --result completed";
   const singleWaits = (scope: string) => "The code plan is not approved yet: run " +
-    `\`bun .claude/tools/aidlc-orchestrate.ts next --stage code-generation --single --scope ${scope}\` and follow the step it prints.`;
+    `\`${NEXT_STEP} --stage code-generation --single --scope ${scope}\` and follow the step it prints.`;
   const SINGLE_WAITS = singleWaits("poc");
   const completions = (proj: string) => auditEvents(proj).filter((row) => row.event === "STAGE_COMPLETED").length;
   const ISOLATED: Array<{ name: string; waits: boolean; build: () => string }> = [

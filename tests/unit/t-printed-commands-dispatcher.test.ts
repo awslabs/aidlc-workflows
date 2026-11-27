@@ -21,12 +21,13 @@ import {
 } from "../../dist/claude/.claude/tools/aidlc.ts";
 import { cleanupTestProject, createOrchestrationTestProject, REPO_ROOT, runOrchestrateNext } from "../harness/fixtures.ts";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const TOOLS = join(REPO_ROOT, "dist", "claude", ".claude", "tools");
-const INVOKE = "bun .claude/tools/aidlc.ts";
+const INVOKE = withCopyLaunchOptions("bun .claude/tools/aidlc.ts");
 const temporary: string[] = [];
 afterAll(() => {
   for (const path of temporary) rmSync(path, { recursive: true, force: true });

@@ -14,6 +14,7 @@ import { join } from "node:path";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { AIDLC_SRC, cleanupTestProject, createOrchestrationTestProject, runOrchestrateNext } from "../harness/fixtures.ts";
 import { gitBashPath, gitBashSkipReason } from "../harness/git-bash.ts";
+import { COPY_LAUNCH_CONFIG } from "../harness/copy-launch.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 const created: string[] = [];
@@ -22,6 +23,7 @@ afterEach(() => {
 });
 
 const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
+const CONFIG = join(AIDLC_SRC, "tools", COPY_LAUNCH_CONFIG);
 const WORDS = ["Don't", "merge,", "it's", "unsafe!", 'Show', '$0.00', '"now"'];
 
 function next(proj: string, args: string[]): { kind?: string; message?: string } {
@@ -45,8 +47,12 @@ describe("the person's words in a printed next step travel in a file", () => {
     for (const word of WORDS) expect(step![1]).not.toContain(word);
     const file = join(proj, ...step![2].split("/"));
     expect(readFileSync(file, "utf-8")).toBe(typed.join(" "));
+    // The script and the copy launch's config file both come from the shipped tree, which this project lacks.
+    const launch = (options: string | undefined): string =>
+      `'${process.execPath}' ${options ? `'--config=${CONFIG}' --no-env-file ` : ""}'${ORCH}'`;
     const run = spawnSync(process.platform === "win32" ? gitBashPath() : "bash", [
-      "-c", step![1].replace(/^bun \S+aidlc-orchestrate\.ts/, `'${process.execPath}' '${ORCH}'`) + ` --project-dir '${proj}'`,
+      "-c", step![1].replace(/^bun (--config=\S+ --no-env-file )?\S+aidlc-orchestrate\.ts/, (_, options) => launch(options)) +
+        ` --project-dir '${proj}'`,
     ], { cwd: proj, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
     expect(run.status, `${run.stdout}${run.stderr}`).toBe(0);
     // `next` read the file and took its words, so the file is spent.

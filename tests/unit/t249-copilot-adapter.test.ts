@@ -103,6 +103,7 @@ import {
 } from "../harness/fixtures.ts";
 import { writeActiveDirectiveMarker } from "../../core/tools/aidlc-lib.ts";
 import { saveRestartRequest } from "../../core/tools/aidlc-question-store.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
   NATIVE_STARTUP_TIMEOUT_MS,
@@ -5147,7 +5148,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       expect(routed.status, routed.stderr).toBe(0);
       const message = String((JSON.parse(routed.stdout.trim()) as { message?: unknown }).message);
       const command = message.match(/^Run `([^`]+)`/)?.[1] ?? "";
-      expect(command, flag).toStartWith("bun .aidlc/tools/aidlc.ts ");
+      expect(command, flag).toStartWith(withCopyLaunchOptions("bun .aidlc/tools/aidlc.ts "));
       return command;
     });
     const dispatcherForms = forms.filter((form): form is "source" | "compiled" => form !== "direct");

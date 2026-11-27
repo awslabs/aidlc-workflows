@@ -12,7 +12,7 @@
 
 import { existsSync, realpathSync } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
-import { compiledExecutable, packagedDistributionRoot } from "./aidlc-runtime-paths.ts";
+import { bunLaunchFlags, compiledExecutable, packagedDistributionRoot } from "./aidlc-runtime-paths.ts";
 
 export const PLUGIN_SCRIPT_PRELOAD = "aidlc-plugin-script-preload.ts";
 
@@ -75,7 +75,7 @@ export function pluginScriptLaunch(options: {
     ok: true,
     script: realScript,
     command: executable ?? process.execPath,
-    args: [...(preload ? ["--preload", preload] : []), realScript],
+    args: [...bunLaunchFlags(), ...(preload ? ["--preload", preload] : []), realScript],
     env: {
       ...(options.env ?? process.env),
       ...(executable ? { BUN_BE_BUN: "1" } : {}),

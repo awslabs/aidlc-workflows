@@ -59,6 +59,22 @@ const answers = (proj: string) => readAuditShardEvents(proj).filter((row) => row
 const latestTurnId = (proj: string) =>
   auditBlockField(readAuditShardEvents(proj).filter((row) => row.event === "HUMAN_TURN").at(-1)!.block, "Message Id");
 
+/**
+ * A printed `bun <options> <tool> <args>` run in the shipped tree: the step
+ * names its tool, and the copy launch's config, in the project's own tree
+ * (`.claude/tools/...`), and this project runs the shipped one.
+ */
+function inShippedTree(argv: string[], proj: string): string[] {
+  const shipped = dirname(AIDLC_SRC);
+  let at = 1;
+  const options: string[] = [];
+  for (; argv[at]?.startsWith("--"); at++) {
+    const config = /^--config=(.+)$/.exec(argv[at]);
+    options.push(config ? `--config=${join(shipped, config[1])}` : argv[at]);
+  }
+  return [process.execPath, ...options, join(shipped, argv[at]), ...argv.slice(at + 1), "--project-dir", proj];
+}
+
 /** The step's own `log answer` command, its placeholder filled as a reader fills it: the choice it read, or the reply. */
 async function followStep(proj: string, message: string, read: string, reply: string, opts = {}): Promise<Exec> {
   const command = /`([^`]*aidlc-log\.ts answer --stage [^`]*)`/.exec(message)?.[1];
@@ -66,9 +82,7 @@ async function followStep(proj: string, message: string, read: string, reply: st
   const filled = (command as string).replace("'<their choice>'", `'${read}'`).replace("'<their exact reply>'", `'${reply}'`);
   const argv = (filled.match(/'[^']*'|\S+/g) ?? []).map((part) => part.replace(/^'|'$/g, ""));
   expect(argv[0]).toBe("bun");
-  // The step names the tool in the project's own tree (`.claude/tools/...`); this project runs the shipped one.
-  const tool = join(dirname(AIDLC_SRC), argv[1]);
-  return exec([process.execPath, tool, ...argv.slice(2), "--project-dir", proj], { cwd: proj, env: env(proj, opts) });
+  return exec(inShippedTree(argv, proj), { cwd: proj, env: env(proj, opts) });
 }
 
 /** The agent's edit of the reviewed document, through the shipped review-freeze hook: its exit code. */
@@ -242,8 +256,7 @@ async function runReport(proj: string, message: string): Promise<Exec> {
   const command = /`([^`]*aidlc-orchestrate\.ts report [^`]*)`/.exec(message)?.[1];
   expect(command, message).toBeDefined();
   const argv = ((command as string).match(/"[^"]*"|'[^']*'|\S+/g) ?? []).map((part) => part.replace(/^["']|["']$/g, ""));
-  return exec([process.execPath, join(dirname(AIDLC_SRC), argv[1]), ...argv.slice(2), "--project-dir", proj],
-    { cwd: proj, env: env(proj) });
+  return exec(inShippedTree(argv, proj), { cwd: proj, env: env(proj) });
 }
 
 describe("t-options-answer-reading: after Override blocking sensors, next opens the person's gate", () => {

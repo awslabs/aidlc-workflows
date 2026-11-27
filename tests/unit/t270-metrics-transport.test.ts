@@ -243,7 +243,7 @@ describe("metrics Bun transport", () => {
       expect(source).not.toContain('spawn("curl"');
       expect(source).not.toContain('from "node:child_process"');
       expect(source).toContain(
-        "[process.execPath, fileURLToPath(import.meta.url), METRIC_WORKER_ARG]",
+        "[process.execPath, ...bunLaunchFlags(), fileURLToPath(import.meta.url), METRIC_WORKER_ARG]",
       );
       expect(source).toContain("const executable = compiledExecutable()");
       expect(source).toContain("const child = Bun.spawn(metricWorkerCommand()");

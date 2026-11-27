@@ -35,6 +35,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import { AIDLC_SRC } from "../harness/fixtures.ts";
 import { parseStageFrontmatter } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
@@ -126,11 +127,11 @@ describe("t154 codekb promotion — RE outputs land at aidlc/spaces/<active-spac
     expect(decisionsStart).toBeGreaterThan(-1);
     expect(aggregateStart).toBeGreaterThan(decisionsStart);
     expect(body.slice(decisionsStart, aggregateStart)).not.toContain(
-      "bun .claude/tools/aidlc.ts engine orchestrate report",
+      withCopyLaunchOptions("bun .claude/tools/aidlc.ts engine orchestrate report"),
     );
     const aggregate = body.slice(aggregateStart, step2Start);
     expect(
-      aggregate.match(/bun \.claude\/tools\/aidlc\.ts engine orchestrate report/g),
+      aggregate.match(/bun --config=\.claude\/tools\/aidlc-bunfig\.toml --no-env-file \.claude\/tools\/aidlc\.ts engine orchestrate report/g),
     ).toHaveLength(1);
     expect(aggregate).toMatch(/report the stage as\s+skipped exactly once/);
     expect(aggregate).toContain("directive.single === true");

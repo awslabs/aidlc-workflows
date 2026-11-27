@@ -335,7 +335,7 @@ import {
   REVIEW_TESTING_CONTRACT_FIELD,
   reviewedTestingContract,
 } from "./aidlc-testing-posture.js";
-import { aidlcDispatcherInvocation, aidlcEngineCommand, aidlcToolInvocation, compiledExecutable, entrySkillInvocation, quoteCommandArgument, swarmUnitTestCommand } from "./aidlc-runtime-paths.ts";
+import { aidlcDispatcherInvocation, aidlcEngineCommand, aidlcToolInvocation, bunLaunchFlags, compiledExecutable, entrySkillInvocation, quoteCommandArgument, swarmUnitTestCommand } from "./aidlc-runtime-paths.ts";
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { chatTookStepHere } from "./aidlc-record-core.ts";
 import { personGitNameField } from "./aidlc-git-name.ts";
@@ -3634,7 +3634,7 @@ export function readEngineUnitDirective(
       ? [executable, "engine", "orchestrate", ...subargs]
       : [
           process.execPath,
-          fileURLToPath(new URL("./aidlc-orchestrate.ts", import.meta.url)),
+          ...bunLaunchFlags(), fileURLToPath(new URL("./aidlc-orchestrate.ts", import.meta.url)),
           ...subargs,
         ];
     const result = spawnSync(command[0], command.slice(1), {

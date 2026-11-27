@@ -26,6 +26,7 @@ import {
   seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import {
   auditBlockField,
   getField,
@@ -426,7 +427,7 @@ describe("the agent's words stay where the line is not the person's request", ()
 describe("AI-DLC's first command carries none of the person's words", () => {
   const REQUEST = 'Fix the bug where formatPrice(0) returns an empty string instead of "$0.00"';
   const FILE = "aidlc/.aidlc-request-text/request.txt";
-  const RUN = "bun .claude/tools/aidlc-orchestrate.ts next";
+  const RUN = withCopyLaunchOptions("bun .claude/tools/aidlc-orchestrate.ts next");
   const NO_LINE_STEP = "AI-DLC has no copy of what the person typed in this chat. Write the words of their request, " +
     `exactly as they typed them, with your file tool to \`${FILE}\`, then run \`${RUN} --request-file ${FILE}\` and ` +
     "follow what it returns. Only their words go in the file: the plan, command word and flags they typed stay on " +
@@ -622,7 +623,7 @@ describe("AI-DLC's first command carries none of the person's words", () => {
       .replace(/^- \*\*State Version\*\*: .*$/m, "- **State Version**: 7");
     writeFileSync(path, older, "utf-8");
     typed("please look at the price formatting");
-    expect(dispatched(["--entry", "--status"]).message).toStartWith("Run `bun .claude/tools/aidlc.ts engine status`");
+    expect(dispatched(["--entry", "--status"]).message).toStartWith(`Run \`${withCopyLaunchOptions("bun .claude/tools/aidlc.ts engine status")}\``);
     expect(readFileSync(path, "utf-8")).toBe(older);
     expect(readAuditShardEvents(proj).filter((row) => row.event === "STATE_UPGRADED")).toHaveLength(0);
   });
@@ -1316,7 +1317,7 @@ describe("AI-DLC's first command carries none of the person's words", () => {
   // the work in hand may pick the plan for that request or ask for the work to move: the agent gets one step that
   // reads which, with that question's own command for the plan and the switch, and the work keeps its plan until one
   // of them runs. A --scope typed on the person's own line, and one sent with no plan question on top, switch at once.
-  const SWITCH = "Run `bun .claude/tools/aidlc.ts engine scope change --scope express` to change scope";
+  const SWITCH = `Run \`${withCopyLaunchOptions("bun .claude/tools/aidlc.ts engine scope change --scope express")}\` to change scope`;
   const WORK = "Test widget feature for e-commerce platform";
   function readsWhich(ask: PlanQuestion): { kind: string; message: string } {
     return {
@@ -1511,7 +1512,7 @@ describe("AI-DLC's first command carries none of the person's words", () => {
     );
     writeFileSync(path, conflicted, "utf-8");
     typed("/aidlc --status");
-    expect(run(["--entry"]).message).toStartWith("Run `bun .claude/tools/aidlc.ts engine status`");
+    expect(run(["--entry"]).message).toStartWith(`Run \`${withCopyLaunchOptions("bun .claude/tools/aidlc.ts engine status")}\``);
     expect(readFileSync(path, "utf-8")).toBe(conflicted);
   });
 
@@ -1582,9 +1583,9 @@ describe("AI-DLC's first command carries none of the person's words", () => {
     );
     writeFileSync(path, conflicted, "utf-8");
     typed("/aidlc-bugfix --status");
-    expect(run(["--entry", "--scope", "bugfix"]).message).toStartWith("Run `bun .claude/tools/aidlc.ts engine status`");
+    expect(run(["--entry", "--scope", "bugfix"]).message).toStartWith(`Run \`${withCopyLaunchOptions("bun .claude/tools/aidlc.ts engine status")}\``);
     expect(readFileSync(path, "utf-8")).toBe(conflicted);
-    expect(run([]).message).not.toStartWith("Run `bun .claude/tools/aidlc.ts engine status`");
+    expect(run([]).message).not.toStartWith(`Run \`${withCopyLaunchOptions("bun .claude/tools/aidlc.ts engine status")}\``);
   });
 
   // Holds the plan step to one.
@@ -1728,7 +1729,7 @@ describe("On Codex, AI-DLC's first command reads the person's line from its own 
       if (line !== null) for (const proj of [entered, onTheCommand]) typed(proj, line);
       const step = next(entered, ["--entry"]);
       expect(String(JSON.parse(step).message)).toStartWith("AI-DLC has no copy of what the person typed in this chat. Write the words");
-      expect(step).toContain(`bun .codex/tools/aidlc-orchestrate.ts next --request-file ${FILE}`);
+      expect(step).toContain(`${withCopyLaunchOptions("bun .codex/tools/aidlc-orchestrate.ts next")} --request-file ${FILE}`);
       mkdirSync(join(entered, "aidlc", ".aidlc-request-text"), { recursive: true });
       writeFileSync(join(entered, ...FILE.split("/")), REQUEST, "utf-8");
       expect(same(next(entered, ["--request-file", FILE]))).toBe(same(next(onTheCommand, REQUEST.split(" "))));
@@ -1748,7 +1749,7 @@ describe("A Claude Code shortcut's first command carries none of the person's wo
   const [REQUEST, OTHER] = REQUESTS;
   const OTHER_CHAT = "01995000-7a11-7000-8000-0000000000d2";
   const FILE = "aidlc/.aidlc-request-text/request.txt";
-  const RUN = "bun .claude/tools/aidlc-orchestrate.ts next";
+  const RUN = withCopyLaunchOptions("bun .claude/tools/aidlc-orchestrate.ts next");
   const SHORTCUTS: Array<[string, string[]]> = [
     ["/aidlc-bugfix", ["--scope", "bugfix"]],
     ["/aidlc-express", ["--scope", "express"]],

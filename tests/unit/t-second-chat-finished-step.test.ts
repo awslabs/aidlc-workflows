@@ -69,6 +69,13 @@ const STAGE_MAJOR_STATE = [
 type Json = Record<string, unknown>;
 type Run = { code: number; stdout: string; stderr: string };
 
+// A printed launch's words after `bun`, run in `dir`: a copy tree's own Bun options as printed (the folder is
+// where it runs), then the script by its full path here, and its arguments.
+function launch(dir: string, words: string[]): string[] {
+  const at = words.findIndex((word) => !word.startsWith("--"));
+  return [BUN, ...words.slice(0, at), join(dir, words[at]), ...words.slice(at + 1)];
+}
+
 const created: string[] = [];
 afterEach(() => {
   while (created.length > 0) cleanupTestProject(created.pop());
@@ -199,8 +206,8 @@ class Chat {
   next(args: string[] = []): Json {
     let step = this.folder.json(this.tool("orchestrate", ["next", ...args]), `next ${args.join(" ")}`);
     for (let i = 0; step.kind === "load-steering" && i < 40; i++) {
-      const [, tool, ...rest] = String(step.next).trim().split(/\s+/);
-      step = this.folder.json(this.folder.run([BUN, join(this.folder.dir, tool), ...rest], this.id), "rule part");
+      const [, ...words] = String(step.next).trim().split(/\s+/);
+      step = this.folder.json(this.folder.run(launch(this.folder.dir, words), this.id), "rule part");
     }
     return step;
   }
@@ -226,11 +233,11 @@ class Chat {
     this.folder.ok(this.hook("record-human-turn", { hook_event_name: "UserPromptSubmit", prompt }), "the person's message");
   }
 
-  // An engine command as a step prints it: `bun .claude/tools/<tool>.ts ...`.
+  // An engine command as a step prints it: `bun [--config=<file> --no-env-file] .claude/tools/<tool>.ts ...`.
   printed(command: string): Run {
-    const [bun, file, ...args] = command.trim().split(/\s+/).map((word) => word.replace(/^'|'$/g, ""));
+    const [bun, ...words] = command.trim().split(/\s+/).map((word) => word.replace(/^'|'$/g, ""));
     expect(bun, command).toBe("bun");
-    return this.folder.run([BUN, join(this.folder.dir, file), ...args, "--project-dir", this.folder.dir], this.id);
+    return this.folder.run([...launch(this.folder.dir, words), "--project-dir", this.folder.dir], this.id);
   }
 
   // The person types a setting; the agent runs the setter the step names.

@@ -45,6 +45,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, sep } from "node:path";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -91,8 +92,8 @@ describe("t248 dist/copilot packaging parity + shell shape", () => {
         const claudeTwin = join(CLAUDE_SRC, rel);
         expect(existsSync(claudeTwin)).toBe(true);
         const copilot = readFileSync(file, "utf-8").replaceAll(
-          "bun .aidlc/tools/aidlc.ts",
-          "bun .claude/tools/aidlc.ts",
+          withCopyLaunchOptions("bun .aidlc/tools/aidlc.ts"),
+          withCopyLaunchOptions("bun .claude/tools/aidlc.ts"),
         );
         expect(copilot).toBe(readFileSync(claudeTwin, "utf-8"));
         compared++;
@@ -174,7 +175,7 @@ describe("t248 dist/copilot packaging parity + shell shape", () => {
     const orchestrator = readFileSync(join(SHELL, "skills", "aidlc", "SKILL.md"), "utf-8");
     expect(orchestrator).toContain("Copilot harness");
     expect(orchestrator).toContain(
-      "bun .aidlc/tools/aidlc.ts engine orchestrate next",
+      withCopyLaunchOptions("bun .aidlc/tools/aidlc.ts engine orchestrate next"),
     );
     expect(orchestrator).not.toContain("{{HARNESS_DIR}}");
     expect(orchestrator).toContain("numbered prose");

@@ -33,12 +33,18 @@ const box = (proj: string, slug: string): string =>
   new RegExp(`^- \\[(.)\\] ${slug} \u2014 (EXECUTE|SKIP)`, "m").exec(state(proj))?.slice(1).join(" ") ?? "";
 const stageFolder = (proj: string): string => join(dirname(stateFilePath(proj)), "ideation", "intent-capture");
 
-/** A command a step names (`bun .claude/tools/<tool>.ts ...`), run from the shipped tree on this project. */
+/** A command a step names (`bun [--config=<file> --no-env-file] .claude/tools/<tool>.ts ...`), run from the shipped tree on this project. */
 async function runNamed(proj: string, command: string): Promise<Exec> {
   const parts = (command.match(/'[^']*'|"[^"]*"|\S+/g) ?? []).map((part) => part.replace(/^['"]|['"]$/g, ""));
   if (parts[0] === "bun") parts.shift();
+  // A copy tree starts Bun with its own config before the script: that config comes from the same tree as the script.
+  const options: string[] = [];
+  while (parts[0]?.startsWith("--")) {
+    const option = parts.shift() as string;
+    options.push(option.startsWith("--config=") ? `--config=${join(AIDLC_SRC, "tools", option.replace(/^.*tools\//, ""))}` : option);
+  }
   const tool = join(AIDLC_SRC, "tools", (parts.shift() ?? "").replace(/^.*tools\//, ""));
-  const result = await exec([process.execPath, tool, ...parts, "--project-dir", proj], { cwd: proj, env: env(proj) });
+  const result = await exec([process.execPath, ...options, tool, ...parts, "--project-dir", proj], { cwd: proj, env: env(proj) });
   expect(result.status, `${command}\n${result.stdout}${result.stderr}`).toBe(0);
   return result;
 }

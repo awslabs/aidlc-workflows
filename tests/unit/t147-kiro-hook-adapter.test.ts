@@ -78,6 +78,7 @@ import { listMessages } from "../../core/tools/aidlc-message-store.ts";
 import { withoutCommentBlocks } from "../../core/tools/aidlc-markdown.ts";
 import { resolveAction } from "../../core/tools/aidlc.ts";
 import kiroManifest from "../../harness/kiro/manifest.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -2051,20 +2052,23 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
       };
       expect(config.hooks?.preToolUse ?? [], name).toContainEqual({
         matcher: "execute_bash",
-        command:
+        command: withCopyLaunchOptions(
           `bun .kiro/tools/aidlc.ts engine adapter kiro state-transition-guard ${config.name}${kiroManifest.hookCommandSuffix}`,
+        ),
         timeout_ms: EXTENDED_SUBPROCESS_TIMEOUT_MS,
       });
       expect(config.hooks?.preToolUse ?? [], name).toContainEqual({
         matcher: "fs_write",
-        command:
+        command: withCopyLaunchOptions(
           `bun .kiro/tools/aidlc.ts engine adapter kiro plan-approval-guard${kiroManifest.hookCommandSuffix}`,
+        ),
         timeout_ms: EXTENDED_SUBPROCESS_TIMEOUT_MS,
       });
       expect(config.hooks?.preToolUse ?? [], name).toContainEqual({
         matcher: "execute_bash",
-        command:
+        command: withCopyLaunchOptions(
           `bun .kiro/tools/aidlc.ts engine adapter kiro plan-approval-guard${kiroManifest.hookCommandSuffix}`,
+        ),
         timeout_ms: EXTENDED_SUBPROCESS_TIMEOUT_MS,
       });
     }
@@ -2765,7 +2769,9 @@ describe("t147 Kiro CLI reads what the person typed from the expanded skill body
     expect(lines).toHaveLength(1);
     expect(lines[0]).toContain("<aidlc-typed>$ARGUMENTS</aidlc-typed>");
     expect(lines[0]).not.toContain("orchestrate next");
-    expect(SKILL).toContain("running `bun .kiro/tools/aidlc.ts engine orchestrate next --entry`, bare (no shell capture, no pipe)");
+    expect(SKILL).toContain(
+      `running \`${withCopyLaunchOptions("bun .kiro/tools/aidlc.ts engine orchestrate next --entry")}\`, bare (no shell capture, no pipe)`,
+    );
     // An older V2 hook reads a step line that closes "` bare (no shell capture" as the person's words.
     expect(SKILL).not.toContain("` bare (no shell capture");
   });

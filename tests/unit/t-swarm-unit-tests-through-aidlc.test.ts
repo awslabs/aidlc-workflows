@@ -13,6 +13,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { stateDigest, writeActiveDirectiveMarker } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { codeGenerationRecordDir } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import { AIDLC_SRC, seededStateFile } from "../harness/fixtures.ts";
 import { testGuardEnvironment } from "../harness/runner-profile.ts";
 import {
@@ -29,7 +30,7 @@ const APPROVED = "echo visible-test-output && git diff --check";
 
 // The command as the brief and the review request spell it. It names no folder, so no shell has a path to
 // quote: cmd.exe hands a quoted Windows path to the program with its quotes, and splits it at a space.
-const COMMAND = "bun .claude/tools/aidlc.ts engine swarm check alpha --show-output";
+const COMMAND = withCopyLaunchOptions("bun .claude/tools/aidlc.ts engine swarm check alpha --show-output");
 
 function prepared(): string {
   const pd = fixture(["alpha"], APPROVED);
@@ -182,8 +183,8 @@ describe("a parallel batch's Unit runs the approved tests through swarm check", 
       expect(ran.code, `${agent}\n${ran.out}\n${ran.err}`).toBe(0);
     }
     for (const step of [
-      "bun .claude/tools/aidlc.ts engine swarm prepare --batch 1 --units alpha --base main",
-      "bun .claude/tools/aidlc.ts engine swarm finalize --batch 1 --units alpha --claimed alpha",
+      withCopyLaunchOptions("bun .claude/tools/aidlc.ts engine swarm prepare --batch 1 --units alpha --base main"),
+      withCopyLaunchOptions("bun .claude/tools/aidlc.ts engine swarm finalize --batch 1 --units alpha --claimed alpha"),
     ]) {
       const refused = hook(pd, STATE_GUARD, step, DEVELOPER);
       expect(refused.code, step).toBe(2);

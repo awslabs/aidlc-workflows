@@ -96,6 +96,7 @@ import {
 	withAuditLock,
 } from "./aidlc-lib.ts";
 import {
+  bunLaunchFlags,
 	aidlcDispatcherInvocation,
 	compiledExecutable,
 	resolveHarnessPath,
@@ -763,7 +764,7 @@ function handleFire(args: string[]): void {
 			? [executable, "engine", "__sensor-script", ctx.sensor.id, ...ctx.scriptArgs]
 			: executable
 				? [executable, "engine", "__sensor-script-file", ctx.sensor.id, ...ctx.scriptArgs]
-				: [process.execPath, ctx.scriptAbsPath, ...ctx.scriptArgs];
+				: [process.execPath, ...bunLaunchFlags(), ctx.scriptAbsPath, ...ctx.scriptArgs];
 	const result = spawnSync(command[0], command.slice(1), {
 		encoding: "utf-8",
 		maxBuffer: 64 * 1024 * 1024,

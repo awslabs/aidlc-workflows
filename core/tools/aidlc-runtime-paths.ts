@@ -25,10 +25,13 @@ import { fileURLToPath } from "node:url";
 // check of theirs switched off, records pointed at another folder, a tool run
 // from a directory of the repository's choosing. The installed engine is built
 // with that autoload off, so nothing in its environment came from a file and
-// nothing is dropped there. A Bun-run tree cannot carry a build flag, so here
-// every AI-DLC or host-tool name a `.env` file in the working directory assigns
-// is removed again before any read; a child Bun process loads the files again
-// and runs this again on its first import.
+// nothing is dropped there. A Bun-run tree's own launches pass Bun
+// `--no-env-file` (bunLaunchFlags), and then nothing is dropped either. A
+// launch without it (a command typed by hand, an older install's hook) still
+// loads the files, so for it every AI-DLC or host-tool name a `.env` file in the
+// working directory assigns is removed again before any read; a child Bun
+// process started without the flag loads the files again and runs this again on
+// its first import.
 //
 // What is removed here reaches a child only through process.env.
 // node:child_process hands a child process.env as it is now; Bun's own spawn
@@ -131,6 +134,91 @@ dropDotenvNames();
 const MODULE_TOOLS_DIR = dirname(fileURLToPath(import.meta.url));
 const MODULE_HARNESS_ROOT = join(MODULE_TOOLS_DIR, "..");
 const PROJECTED_INVOKE = "{{INVOKE}}";
+
+// Bun reads the bunfig.toml of the folder it runs in, and runs its `preload`
+// before the program it was asked to run, and it loads that folder's `.env`
+// files: in a person's project, the project's own. A copy install's launches
+// start Bun with `--config=` this empty file of its own tools folder in place
+// of the project's, and `--no-env-file`. The `=` form, since Bun reads
+// `--config <path>` as the script; a path that names no file makes Bun refuse
+// to start. The compiled engine is built with both autoloads off.
+export const BUN_LAUNCH_CONFIG = "aidlc-bunfig.toml";
+
+// The two words a Bun child of engine code gets after the executable, its
+// config path absolute (a child may run from any folder). None in the compiled
+// engine; `--no-env-file` alone where the tools folder holds no config file
+// (the source tree, or a person removed it), so a child never meets Bun's
+// refusal.
+export function bunLaunchFlags(toolsDir = MODULE_TOOLS_DIR): string[] {
+  if (isCompiledExecutable()) return [];
+  const config = join(toolsDir, BUN_LAUNCH_CONFIG);
+  return existsSync(config) ? [`--config=${config}`, "--no-env-file"] : ["--no-env-file"];
+}
+
+/** A copy install's launch up to its script, as it writes and prints it: `bun --config=<dir>/tools/<file> --no-env-file`. */
+export function copyLaunchPrefix(harnessDir: string): string {
+  return `bun --config=${harnessDir}/tools/${BUN_LAUNCH_CONFIG} --no-env-file`;
+}
+
+/**
+ * `bun` as a command this tree prints launches a copied tool from the project
+ * folder: with the two options in a copy tree (whose launch the packager wrote
+ * into PROJECTED_INVOKE); plain in the source tree, which has no config file to
+ * name, and in the native tree, whose own launch is `aidlc`.
+ */
+export function bunLaunchFor(harnessDir: string): string {
+  return PROJECTED_INVOKE.startsWith("bun ") ? copyLaunchPrefix(harnessDir) : "bun";
+}
+
+/**
+ * `bun` for a printed command that names a tool of the tools folder at
+ * `toolsDir` by its full path: with the two options, the config's full path
+ * quoted for the shell, when that folder holds the config file (an older
+ * release's does not, and a `--config=` naming no file makes Bun refuse).
+ */
+export function bunLaunchAt(toolsDir: string): string {
+  if (!existsSync(join(toolsDir, BUN_LAUNCH_CONFIG))) return "bun";
+  return `bun ${quoteCommandArgument(`--config=${join(toolsDir, BUN_LAUNCH_CONFIG)}`)} --no-env-file`;
+}
+
+// The config file a copy launch names: `<a harness folder>/tools/aidlc-bunfig.toml`,
+// relative or under any folder. As one word (a process's own arguments, or a
+// command's words once the shell's quotes are read) its folder may hold any
+// character, a space or an apostrophe included; in text an unquoted path ends
+// at the first space or shell character.
+const LAUNCH_CONFIG = String.raw`\.[A-Za-z0-9_.-]+[\\/]tools[\\/]aidlc-bunfig\.toml`;
+const LAUNCH_CONFIG_WORD = new RegExp(String.raw`^--config=(?:[^\r\n]*[\\/])?` + LAUNCH_CONFIG + "$");
+const LAUNCH_OPTIONS_TEXT = new RegExp(
+  String.raw`(\bbun(?:\.exe)?[ \t]+)(?:"--config=(?:[^"\r\n]*[\\/])?` + LAUNCH_CONFIG + String.raw`"|'--config=(?:[^'\r\n]*[\\/])?` +
+    LAUNCH_CONFIG + String.raw`'|--config=(?:[^\s"';&|]*[\\/])?` + LAUNCH_CONFIG + String.raw`)[ \t]+--no-env-file[ \t]+`,
+  "g",
+);
+
+// How many of a copy launch's two options follow the Bun word at `at` in a
+// command's words: 2 for `--config=<a harness folder>/tools/aidlc-bunfig.toml`
+// then `--no-env-file`, else 0. Every reader of a command takes a launch with
+// them as the same launch without them; a config file of another name is not
+// AI-DLC's, so it is not skipped.
+export function bunLaunchOptionWords(words: readonly string[], at: number): number {
+  return LAUNCH_CONFIG_WORD.test(words[at] ?? "") && words[at + 1] === "--no-env-file" ? 2 : 0;
+}
+
+// The variable the dispatcher sets for a Bun child it starts when it was itself
+// started without a copy launch's `--config=` (the child always gets the
+// options, so only the dispatcher knows); doctor reads it. Set or removed for
+// every child, so no value from a `.env` or the shell stands.
+export const LAUNCHED_WITHOUT_CONFIG_ENV = "AIDLC_INTERNAL_LAUNCHED_WITHOUT_CONFIG";
+
+/** Whether this Bun process was started with a copy launch's `--config=`, so no folder's bunfig.toml applies. */
+export function launchedWithConfig(execArgv: readonly string[] = process.execArgv): boolean {
+  return execArgv.some((arg) => LAUNCH_CONFIG_WORD.test(arg));
+}
+
+/** A command's text with each copy launch's two options taken out after its Bun word, for readers that match text. */
+export function withoutBunLaunchOptions(text: string): string {
+  return text.replace(LAUNCH_OPTIONS_TEXT, "$1");
+}
+
 // Release version grammar: stable x.y.z, or a preview id
 // x.y.z-preview.YYYYMMDD.N. Literal of PREVIEW_CHANNEL / VERSION_ID in
 // aidlc-channel.ts, repeated here because hooks ship this module with a closed
@@ -314,7 +402,7 @@ export function aidlcEngineCommand(
 ): string[] {
   return executable
     ? [executable, "engine", route, ...args]
-    : [process.execPath, sourceToolPath ?? resolveHarnessPath(["tools", `aidlc-${route}.ts`]), ...args];
+    : [process.execPath, ...bunLaunchFlags(), sourceToolPath ?? resolveHarnessPath(["tools", `aidlc-${route}.ts`]), ...args];
 }
 
 // Whether the agent's shell is in the host a harness's `{ env }` names: `NAME`
@@ -478,7 +566,8 @@ export function aidlcToolInvocation(
   const path = qualifiedSource
     ? `${runtimeHarnessDir()}/tools/aidlc-${tool}.ts`
     : `aidlc-${tool}.ts`;
-  return `bun ${path}`;
+  // A bare file name runs from the tools folder, which holds no bunfig.toml or .env.
+  return `${qualifiedSource ? bunLaunchFor(runtimeHarnessDir()) : "bun"} ${path}`;
 }
 
 function explicitRuntimeProjectDir(argv: readonly string[] = process.argv.slice(1)): string | null {

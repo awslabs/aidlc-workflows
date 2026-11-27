@@ -81,16 +81,18 @@ trust: Codex asks the person to trust the project's hooks once more after the
 upgrade, and Claude Code picks the new row up at its next start.
 
 **AI-DLC's own command in another spelling (Claude Code).** The copy
-channel's settings allow AI-DLC's tool commands in their relative spelling
-(`Bash(bun .claude/tools/aidlc.ts engine *)`,
-`Bash(bun .claude/tools/aidlc-utility.ts *)` and the rest of the list), and
+channel's settings allow AI-DLC's tool commands in their relative spelling,
+after the copy launch's two Bun options
+(`Bash(bun --config=.claude/tools/aidlc-bunfig.toml --no-env-file .claude/tools/aidlc.ts engine *)`,
+the same for `aidlc-utility.ts *` and the rest of the list), and
 Claude Code matches a Bash rule against the command text as written, so a helper that named
 the project's path in full was asked about a step AI-DLC runs for itself. When
 every check in the group passed and none printed anything, the group answers
 `"allow"` (with no reason text) for two spellings: a command whose relative
 form an exact or `<prefix> *` rule in the project's own `settings.json` allow
 list holds, with this project's `.claude/tools/` folder named by its absolute
-path (a POSIX path, or a Windows drive letter with either slash); and the one
+path (a POSIX path, or a Windows drive letter with either slash) and the
+launch's config file this project's own, by either path; and the one
 compound read of AI-DLC's record helpers were seen to run (`cat` of files in
 the project's `aidlc/` folder, `echo`, and `git -C <project> rev-parse HEAD`,
 joined by `;` or `&&`). Anything else gets no answer and Claude Code asks as
@@ -541,16 +543,21 @@ All seventeen TypeScript hook sources:
 - Resolve `$CLAUDE_PROJECT_DIR` with multiple fallback methods
 - Share locking and utility functions from `lib.ts`
 
-Claude's source-generated `.claude/settings.json` invokes hooks with
-`bun "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts" engine hook <name>`, and the
-status line value in `tools/data/harness.json` uses the same anchored
+Claude's copy-channel `.claude/settings.json` invokes hooks with
+`bun "--config=$CLAUDE_PROJECT_DIR/.claude/tools/aidlc-bunfig.toml" --no-env-file "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts" engine hook <name>`,
+and the status line value in `tools/data/harness.json` uses the same anchored
 dispatcher for `engine statusline`. The quoted entry path
 survives project roots containing spaces and application commands that change
 the working directory. It does not change the hook process's working directory
 or the `cwd` supplied in the JSON payload. Native release settings use
 `aidlc engine hook <name>` and `aidlc engine statusline`, without Bun.
-Either way the hook's environment is the host tool's, never the project's `.env` files: the
-compiled engine is built with Bun's dotenv and bunfig autoload off, and a Bun-run tree
+Either way the hook's environment is the host tool's, never the project's `.env` files, and
+the project's `bunfig.toml` (whose `preload` would run a file of the project's inside the hook)
+is never read: the compiled engine is built with Bun's dotenv and bunfig autoload off. A Bun-run
+tree starts Bun with `--config=<harness folder>/tools/aidlc-bunfig.toml --no-env-file` (an empty
+config file AI-DLC ships in its tools folder) in every launch it writes, prints, registers or
+allows, and every Bun child of engine code it starts gets the same two options. A launch without
+them (an older install's registration, a command typed by hand) still
 evaluates `aidlc-runtime-paths.ts` first (every entry imports it before its own body) to drop the AI-DLC and host-tool names those files
 assigned (`AIDLC_*`, `AWS_AIDLC_*`, the `CLAUDE_*`, `KIRO_*`, `CODEX_*`, `CURSOR_*`,
 `COPILOT_*` and `XDG_*` names, and `PLUGIN_ROOT`, the name a host gives a hook for its plugin's
@@ -2442,12 +2449,14 @@ The `permissions.allow` array in `.claude/settings.json` pre-approves Claude Cod
 | Allow entry | AI-DLC Usage |
 |-------------|-------------|
 | `Edit(/**)` | Creating and changing artifacts and project files anywhere in the project, through `Edit` and `Write` (never the `audit/` shards, which the guards refuse) |
-| `Bash(bun .claude/tools/aidlc.ts engine *)`, one exact entry per read-only dispatcher command (`doctor`, `version`, `--doctor`, `status`, `config <section> --show --json`, `config <section> --help`), and `Bash(bun .claude/tools/aidlc-<tool>.ts)` plus `Bash(bun .claude/tools/aidlc-<tool>.ts *)` per AI-DLC tool script | AI-DLC's own workflow commands (`Bash(aidlc engine *)` in the native release) |
+| `Bash(bun --config=.claude/tools/aidlc-bunfig.toml --no-env-file .claude/tools/aidlc.ts engine *)`, one exact entry per read-only dispatcher command (`doctor`, `version`, `--doctor`, `status`, `config <section> --show --json`, `config <section> --help`), and `Bash(bun .claude/tools/aidlc-<tool>.ts)` plus `Bash(bun .claude/tools/aidlc-<tool>.ts *)` per AI-DLC tool script | AI-DLC's own workflow commands (`Bash(aidlc engine *)` in the native release) |
 | `Task` | Delegating to subagents for Reverse Engineering and Code Generation |
 | `WebSearch` | Market research, design reference lookups, compliance framework research |
 | `Bash(bun .claude/tools/aidlc.ts config flags --clear-bypass <switch> --yes)`, one exact entry per recordable switch | Turning a check back on, which only ever raises a check; turning one off still asks |
 | `Bash(bun .claude/tools/aidlc.ts --status)`, `Bash(bun .claude/tools/aidlc.ts --version)`, `Bash(bun .claude/tools/aidlc.ts config --help)`, `Bash(bun .claude/tools/aidlc.ts config --show)` with and without `--json`, `doctor --verbose` and `--doctor --verbose`, and one `Bash(bun .claude/tools/aidlc.ts config <section> --show)` per section | The status, version, config help, doctor and plain settings-read spellings agents also run |
 | `Bash(aidlc <command>)` for each exact entry above, beside `Bash(aidlc engine *)` (native release) | The same read-only and turn-back-on commands on a native install, run as the installed `aidlc` command |
+
+Every copy-channel `Bash(bun ...)` entry carries the copy launch's two Bun options after `bun`, as in the first `Bash` row; the other rows leave them out to stay short. A launch without them (a command typed by hand, an older install's spelling) is not on the list and asks.
 
 Reading and searching inside the project (`Read`, `Glob`, `Grep`) needs no entry. Writes outside the project, and the project's own build and test commands, ask as Claude Code normally does. So do a `config` change and the commands that change the machine's AI-DLC install (`use`, `update`, `rollback`, `uninstall`, `system`), with the tool scripts behind them (`aidlc-doctor.ts`, `aidlc-init.ts`, `aidlc-lifecycle.ts`, `aidlc-machine-config.ts`): the packager lists the copy channel's entries from the same command and script lists the Cursor copy channel uses, and those are not on them.
 

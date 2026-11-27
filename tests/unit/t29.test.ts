@@ -236,8 +236,8 @@ describe("t29 an isolated --single run leaves the work's place", () => {
   const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
   const RE = "reverse-engineering";
 
-  function tool(script: string, proj: string, args: string[]): { status: number; stdout: string } {
-    const r = spawnSync(BUN, [script, ...args, "--project-dir", proj], {
+  function tool(script: string, proj: string, args: string[], options: string[] = []): { status: number; stdout: string } {
+    const r = spawnSync(BUN, [...options, script, ...args, "--project-dir", proj], {
       timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       encoding: "utf-8",
     });
@@ -311,7 +311,11 @@ describe("t29 an isolated --single run leaves the work's place", () => {
           mkdirSync(dirname(join(p, artifact)), { recursive: true });
           writeFileSync(join(p, artifact), "## Developer Code Scan Results\n\n### Scan Coverage\n\n- src/\n\n## Handoff Summary\n\nDone.\n");
         }
-        expect(tool(LOG, p, command.split(" ").slice(2)).status).toBe(0);
+        // A copy launch names Bun's own config and --no-env-file before the script: the config comes from beside LOG.
+        const words = command.split(" ");
+        const at = words.findIndex((word, i) => i > 0 && !word.startsWith("--"));
+        const options = words.slice(1, at).map((word) => word.startsWith("--config=") ? `--config=${join(dirname(LOG), basename(word))}` : word);
+        expect(tool(LOG, p, words.slice(at + 1), options).status).toBe(0);
       }
       const done = JSON.parse(tool(ORCH, p, ["report", "--single", "--stage", RE, "--result", "completed"]).stdout.trim());
       expect(done.kind).toBe("done");

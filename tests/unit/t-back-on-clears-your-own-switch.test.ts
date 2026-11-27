@@ -16,6 +16,7 @@ import { auditBlockField, readAuditShardEvents } from "../../dist/claude/.claude
 import { listMessages } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
 import { cleanupTestProject, createTestProject, FIXTURES_DIR, REPO_ROOT, runOrchestrateNext, seededStateFile } from "../harness/fixtures.ts";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -112,9 +113,10 @@ function workspace(open = true) {
     said(line);
     const step = runOrchestrateNext(join(proj, ".claude", "tools", "aidlc-orchestrate.ts"), proj,
       line.replace(/^\/aidlc\s+/, "").split(" "), { cwd: proj, env });
-    const named = /Run `bun \.claude\/tools\/(aidlc[a-z-]*\.ts) ([^`]+)`/.exec(String(step.directive?.message));
+    const named = /Run `bun (--config=\.claude\/tools\/aidlc-bunfig\.toml --no-env-file) \.claude\/tools\/(aidlc[a-z-]*\.ts) ([^`]+)`/
+      .exec(String(step.directive?.message));
     expect(named, step.out.slice(0, 400)).not.toBeNull();
-    const r = Bun.spawnSync([process.execPath, join(proj, ".claude", "tools", named![1]), ...named![2].split(" ")], {
+    const r = Bun.spawnSync([process.execPath, ...named![1].split(" "), join(proj, ".claude", "tools", named![2]), ...named![3].split(" ")], {
       cwd: proj, env, timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     });
     expect(r.exitCode, `${r.stdout}${r.stderr}`).toBe(0);
@@ -424,17 +426,17 @@ describe("t-back-on-clears-your-own-switch: the agent's config flags clear does 
     // From a chat, or an IDE's terminal, the no-layer clear leaves the team's
     // file, so the line names the clear that reaches it.
     expect(shown()).toHaveLength(1);
-    expect(shown()[0]).toEndWith(`To turn it back on: bun .claude/tools/aidlc.ts ${back("project")}`);
+    expect(shown()[0]).toEndWith(`To turn it back on: ${withCopyLaunchOptions(`bun .claude/tools/aidlc.ts ${back("project")}`)}`);
     const doctor = w.run(["doctor", "--json"]);
     expect(doctor).toContain(back("project"));
     expect(doctor).not.toContain(back());
     // Their own entry as well: each file that keeps it off, by its place.
     w.off(SWITCH, "local");
     expect(shown()[0]).toEndWith(
-      `To turn it back on: bun .claude/tools/aidlc.ts ${back("local")} and bun .claude/tools/aidlc.ts ${back("project")}`,
+      `To turn it back on: ${withCopyLaunchOptions(`bun .claude/tools/aidlc.ts ${back("local")}`)} and ${withCopyLaunchOptions(`bun .claude/tools/aidlc.ts ${back("project")}`)}`,
     );
     // At their own terminal the no-layer clear clears every file.
-    expect(shown(TERMINAL)[0]).toEndWith(`To turn it back on: bun .claude/tools/aidlc.ts ${back()}`);
+    expect(shown(TERMINAL)[0]).toEndWith(`To turn it back on: ${withCopyLaunchOptions(`bun .claude/tools/aidlc.ts ${back()}`)}`);
   });
 
   test("the next step says what keeps a switch in the team's file on, with no question a yes cannot keep", () => {
@@ -474,7 +476,7 @@ describe("t-back-on-clears-your-own-switch: the agent's config flags clear does 
     const w = teamClone();
     const asked = w.said("turn plan approval off on this machine");
     const out = w.run(["config", "flags", "--bypass", SWITCH, "--global", "--yes", "--message", asked]);
-    expect(out).toContain(`. To undo: bun .claude/tools/aidlc.ts ${back("global")}`);
+    expect(out).toContain(`. To undo: ${withCopyLaunchOptions(`bun .claude/tools/aidlc.ts ${back("global")}`)}`);
     w.said("undo that");
     w.run(["config", "flags", "--clear-bypass", SWITCH, "--global", "--yes"]);
     expect(w.recorded("global")).toEqual([]);

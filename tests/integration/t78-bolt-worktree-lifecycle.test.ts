@@ -90,7 +90,8 @@ import {
 } from "node:fs";
 import { join, relative } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
-import { type EngineInvocation, renderEngineInvocation } from "../../core/tools/aidlc-guard-operation.ts";
+// The hints are printed by the copy tree these projects run, so that tree renders what they should read.
+import { type EngineInvocation, renderEngineInvocation } from "../../dist/claude/.claude/tools/aidlc-guard-operation.ts";
 import { boltName, createIntent, parkedRefPrefix, reviewedSourceRefPrefix, worktreePath } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   fixtureIntentId8,

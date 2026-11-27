@@ -130,7 +130,7 @@ describe("Kiro CLI: a request is recorded with the person's spacing as typed", (
     const confirm = String(d.confirm_command);
     const picked = runOrchestrateNext(ORCHESTRATE, proj, splitKiroCommandArgs(confirm.slice(confirm.indexOf(" next ") + 6)),
       { env: env(proj) });
-    const create = /`bun \S+aidlc\.ts (engine intent create [^`]+)`/.exec(String(picked.directive?.message ?? ""));
+    const create = /`bun (?:--config=\S+ --no-env-file )?\S+aidlc\.ts (engine intent create [^`]+)`/.exec(String(picked.directive?.message ?? ""));
     expect(create, picked.out).not.toBeNull();
     const made = spawnSync(BUN, [DISPATCHER, ...splitKiroCommandArgs(create![1].replace(/"<[^>]+>"/, "slug-spacing"))], {
       cwd: proj, env: env(proj), encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),

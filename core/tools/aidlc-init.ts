@@ -191,7 +191,11 @@ import {
 } from "./aidlc-utility.ts";
 import {
   aidlcInvocation,
+  BUN_LAUNCH_CONFIG,
+  bunLaunchAt,
+  bunLaunchFlags,
   compiledExecutable,
+  copyLaunchPrefix,
   discoverProjectHarnesses,
   isCompiledExecutable,
   projectedDispatcher,
@@ -2924,12 +2928,15 @@ function configInvocationFor(projectDir = process.cwd()): string {
   const harnessDir = ran === null
     ? configTargetHarnessDir ?? runtimeHarnessDir()
     : basename(dirname(dirname(ran)));
-  const own = `bun ${harnessDir}/tools/aidlc.ts`;
+  // A tool spelled from the project folder, or by its full path, with its tree's launch options.
+  const relativeIn = (root: string) =>
+    `${existsSync(join(root, harnessDir, "tools", BUN_LAUNCH_CONFIG)) ? copyLaunchPrefix(harnessDir) : "bun"} ${harnessDir}/tools/aidlc.ts`;
+  const full = (tool: string) => `${bunLaunchAt(dirname(tool))} ${quoteCommandArgument(tool)}`;
   const toolIn = (root: string) => join(root, harnessDir, "tools", "aidlc.ts");
   if (ran === null || sameFile(ran, toolIn(projectDir))) {
-    return ranFromProject(projectDir) ? own : `bun ${quoteCommandArgument(toolIn(projectDir))}`;
+    return ranFromProject(projectDir) ? relativeIn(projectDir) : full(toolIn(projectDir));
   }
-  return sameFile(ran, toolIn(process.cwd())) ? own : `bun ${quoteCommandArgument(ran)}`;
+  return sameFile(ran, toolIn(process.cwd())) ? relativeIn(process.cwd()) : full(ran);
 }
 
 // The copied tool that handed this config run over, if one did.
@@ -6973,7 +6980,7 @@ export function runnerGenerator(
   }
   const tool = join(stagedHarness, "tools", "aidlc-runner-gen.ts");
   if (!existsSync(tool)) return null;
-  return { release, commands: [[process.execPath, tool, "write"], [process.execPath, tool, "scopes"]] };
+  return { release, commands: [[process.execPath, ...bunLaunchFlags(), tool, "write"], [process.execPath, ...bunLaunchFlags(), tool, "scopes"]] };
 }
 
 // What the pinned release's generator said when it could not write the runner
@@ -8837,7 +8844,7 @@ function runConfigChild(
   const commandArgs = isCompiledExecutable()
     ? ["config", ...typedArgs]
     : [fileURLToPath(import.meta.url), "config", ...typedArgs];
-  const result = spawnSync(process.execPath, commandArgs, {
+  const result = spawnSync(process.execPath, [...bunLaunchFlags(), ...commandArgs], {
     cwd,
     env,
     encoding: "utf-8",
@@ -12816,10 +12823,11 @@ function treesLeftBehindLines(
   // and an older tool may not read its files. Its --harness names are that
   // release's.
   const writtenTool = join(projectDir, written.harnessDir, "tools", "aidlc.ts");
+  const writtenTools = dirname(writtenTool);
   const tool = source.copyChannel
-    ? `bun ${
-      quoteCommandArgument(ranFromProject(projectDir) ? `${written.harnessDir}/tools/aidlc.ts` : writtenTool)
-    }`
+    ? ranFromProject(projectDir)
+      ? `${existsSync(join(writtenTools, BUN_LAUNCH_CONFIG)) ? copyLaunchPrefix(written.harnessDir) : "bun"} ${written.harnessDir}/tools/aidlc.ts`
+      : `${bunLaunchAt(writtenTools)} ${quoteCommandArgument(writtenTool)}`
     : configInvocationFor(projectDir);
   const command = (args: string): string => `\`${tool} config ${args}${projectTarget(projectDir)}\``;
   return behind.map((tree) => {
@@ -14107,7 +14115,7 @@ export async function main(
       }
       const args = stripVerb([...input]);
       if (downloadCleanup && !args.includes("--download")) args.push("--download");
-      const handed = spawnSync(process.execPath, [newerTool, "config", ...args], {
+      const handed = spawnSync(process.execPath, [...bunLaunchFlags(), newerTool, "config", ...args], {
         cwd: process.cwd(),
         env: { ...process.env, AIDLC_CONFIG_HANDOFF: ranTool, AIDLC_PROJECT_DIR: projectDir },
         stdio: "inherit",

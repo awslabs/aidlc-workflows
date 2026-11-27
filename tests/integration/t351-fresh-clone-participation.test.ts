@@ -30,6 +30,7 @@ import {
   writeSessionBinding,
   writeSessionIntentUuid,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { COPY_LAUNCH_CONFIG, withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import { AIDLC_SRC, cleanupTestProject, createTestProject, FIXTURES_DIR } from "../harness/fixtures.ts";
 
 const BUN = process.execPath;
@@ -152,7 +153,7 @@ describe("t351 fresh clone with a teammate's lone intent record", () => {
     expect(dispatch.stderr).toContain("has not joined");
     // The way in is named in this tree's spelling: `next` asks the person which work this is.
     expect(dispatch.stderr).toContain(
-      "Run `bun .claude/tools/aidlc-orchestrate.ts next` exactly as written, as a command of its own",
+      `Run \`${withCopyLaunchOptions("bun .claude/tools/aidlc-orchestrate.ts next")}\` exactly as written, as a command of its own`,
     );
     expect(dispatch.stderr).toContain("it asks the person which piece of work this conversation is for");
     // A second start in the same conversation stays unjoined.
@@ -305,9 +306,12 @@ describe("t351 fresh clone with a teammate's lone intent record", () => {
     record = named;
     expect(hook("session-start", { hook_event_name: "SessionStart", source: "startup" }).code).toBe(0);
     expect(readSessionBinding(proj, SESSION)).toMatchObject({ intent: null, source: "unjoined" });
-    // Emitted commands name the harness tree relative to the project; the fixture runs the packaged one.
+    // Emitted commands name the harness tree relative to the project, its launch
+    // config included; the fixture runs the packaged one.
+    const tools = join(AIDLC_SRC, "tools");
+    const launch = `${JSON.stringify(BUN)} ${JSON.stringify(`--config=${join(tools, COPY_LAUNCH_CONFIG)}`)} --no-env-file ${JSON.stringify(tools)}/`;
     const sh = (command: string) => Bun.spawnSync({
-      cmd: ["sh", "-c", command.replace(/^bun \.claude\/tools\//, `${JSON.stringify(BUN)} ${JSON.stringify(join(AIDLC_SRC, "tools"))}/`)],
+      cmd: ["sh", "-c", command.replace(/^bun --config=\.claude\/tools\/aidlc-bunfig\.toml --no-env-file \.claude\/tools\//, launch)],
       cwd: proj,
       stdout: "pipe",
       stderr: "pipe",

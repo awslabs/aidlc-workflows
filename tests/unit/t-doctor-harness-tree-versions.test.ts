@@ -20,8 +20,11 @@ import { quoteCommandArgument } from "../../core/tools/aidlc-runtime-paths.ts";
 import { AIDLC_VERSION } from "../../core/tools/aidlc-version.ts";
 import { harnessTreeVersionsCheck as copiedCheck } from "../../dist/claude/.claude/tools/aidlc-utility.ts";
 import { harnessTreeVersionsCheck as nativeCheck } from "../../dist-release/claude/.claude/tools/aidlc-utility.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+// The copied tree's config command, as the copy tree prints it.
+const COPY_CONFIG = withCopyLaunchOptions("bun .claude/tools/aidlc.ts config");
 const created: string[] = [];
 afterAll(() => {
   for (const path of created) rmSync(path, { recursive: true, force: true });
@@ -164,7 +167,7 @@ describe("doctor compares the harness trees' releases (#1406)", () => {
       "Harness trees on different releases: Claude Code (.claude) 2.10.1, Kiro CLI (.kiro) 2.10.1-preview.20261003.1 - a workflow can behave differently depending on which tool runs it",
     );
     expect(check?.fix).toBe(
-      `get ${copyRuntimeUrl("2.10.1")} and its .sha256 into one folder, then run \`bun .claude/tools/aidlc.ts config --harness kiro-v2 --from <that file>\``,
+      `get ${copyRuntimeUrl("2.10.1")} and its .sha256 into one folder, then run \`${COPY_CONFIG} --harness kiro-v2 --from <that file>\``,
     );
   });
 
@@ -176,11 +179,11 @@ describe("doctor compares the harness trees' releases (#1406)", () => {
     expect(fromProject(dir, () => copiedCheck(dir))?.fix).toBe(
       `get ${
         copyRuntimeUrl("2.10.1")
-      } and its .sha256 into one folder, then run \`bun .claude/tools/aidlc.ts config --harness claude --from <that file>\``,
+      } and its .sha256 into one folder, then run \`${COPY_CONFIG} --harness claude --from <that file>\``,
     );
     rmSync(join(dir, ".claude", "tools", "data", "aidlc-manifest.json"));
     expect(fromProject(dir, () => copiedCheck(dir))?.fix).toContain(
-      "then run `bun .claude/tools/aidlc.ts config --harness claude --download`, then `bun .claude/tools/aidlc.ts config --harness claude --from <that file>`",
+      `then run \`${COPY_CONFIG} --harness claude --download\`, then \`${COPY_CONFIG} --harness claude --from <that file>\``,
     );
   });
 
@@ -194,7 +197,7 @@ describe("doctor compares the harness trees' releases (#1406)", () => {
     expect(native?.fix).toBe("run `aidlc config --harness kiro-v2`");
     tree(dir, "kiro", "2.10.1", false);
     expect(fromProject(dir, () => copiedCheck(dir))?.fix).toBe(
-      "run `bun .claude/tools/aidlc.ts config --harness kiro-v2 --download`",
+      `run \`${COPY_CONFIG} --harness kiro-v2 --download\``,
     );
   });
 
@@ -221,6 +224,6 @@ describe("doctor compares the harness trees' releases (#1406)", () => {
     tree(dir, "kiro", null);
     const check = fromProject(dir, () => copiedCheck(dir));
     expect(check?.label).toContain("Claude Code (.claude) 2.10.1, Kiro CLI (.kiro) with no recorded release");
-    expect(check?.fix).toContain("`bun .claude/tools/aidlc.ts config --harness kiro-v2 --from <that file>`");
+    expect(check?.fix).toContain(`\`${COPY_CONFIG} --harness kiro-v2 --from <that file>\``);
   });
 });

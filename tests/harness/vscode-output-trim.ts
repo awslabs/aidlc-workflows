@@ -62,7 +62,8 @@ export function vscodeVisibleOutput(output: string, commandLine: string): string
 }
 
 export function doctorCommandLines(harnessDir = ".aidlc"): string[] {
-  return ["aidlc", `bun ${harnessDir}/tools/aidlc.ts`].flatMap((invoke) => [
+  // A copy tree's launch carries its two Bun options; an older copy's does not.
+  return ["aidlc", `bun --config=${harnessDir}/tools/aidlc-bunfig.toml --no-env-file ${harnessDir}/tools/aidlc.ts`, `bun ${harnessDir}/tools/aidlc.ts`].flatMap((invoke) => [
     `${invoke} doctor`,
     `${invoke} doctor --verbose`,
   ]);

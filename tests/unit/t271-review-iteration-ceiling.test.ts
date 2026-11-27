@@ -37,6 +37,7 @@ import {
   NATIVE_STARTUP_TIMEOUT_MS,
   remainingOperationTimeoutMs,
 } from "../harness/test-budget.ts";
+import { COPY_LAUNCH_CONFIG, withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
@@ -595,9 +596,14 @@ describe("t271 review iteration ceiling", () => {
       const named = [...(step ?? "").matchAll(/`([^`]+)`/g)].map((m) => m[1]).find((c) => c.includes("aidlc-review-brief.ts"));
       expect(named, step).toBeDefined();
       const words = (named as string).split(" ");
-      expect(words.slice(0, 2)).toEqual(["bun", ".claude/tools/aidlc-review-brief.ts"]);
+      const launch = withCopyLaunchOptions("bun .claude/tools/aidlc-review-brief.ts").split(" ");
+      expect(words.slice(0, launch.length)).toEqual(launch);
       const before = (readAllAuditShards(proj).match(/\*\*Event\*\*: ERROR_LOGGED/g) ?? []).length;
-      const ran = spawnSync(process.execPath, [join(dirname(LOG_TOOL), "aidlc-review-brief.ts"), ...words.slice(2)], {
+      // The tree this file's tools run from holds the config file beside the script, as the project's would.
+      const tools = dirname(LOG_TOOL);
+      const ran = spawnSync(process.execPath, [
+        `--config=${join(tools, COPY_LAUNCH_CONFIG)}`, "--no-env-file", join(tools, "aidlc-review-brief.ts"), ...words.slice(launch.length),
+      ], {
         cwd: proj,
         encoding: "utf-8",
         env: { ...process.env, CLAUDE_PROJECT_DIR: proj },

@@ -80,6 +80,7 @@ import {
   NATIVE_STARTUP_TIMEOUT_MS,
   remainingOperationTimeoutMs,
 } from "../harness/test-budget.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 
 // The stage's checks run once before its review or gate, and again at the gate
 // (completionChecksStep, t-checks-before-review); this file's fixture documents
@@ -409,9 +410,18 @@ function says(proj: string, prompt: string): void {
 // The agent runs a command the engine's step names, as it names it.
 function runNamed(proj: string, command: string): Directive {
   const words = [...command.matchAll(/'([^']*)'|(\S+)/g)].map((m) => m[1] ?? m[2]);
-  expect(words.slice(0, 2)).toEqual(["bun", words[1]]);
-  const tool = join(AIDLC_SRC, "tools", String(words[1]).replace(/^\.claude\/tools\//, ""));
-  const r = spawnSync(BUN, [tool, ...words.slice(2), "--project-dir", proj], {
+  expect(words[0]).toBe("bun");
+  // A copy tree starts Bun with its own config and --no-env-file before the
+  // script: the config comes from the build under test, as the tool does.
+  const options: string[] = [];
+  let at = 1;
+  for (; String(words[at]).startsWith("--"); at++) {
+    options.push(words[at].startsWith("--config=")
+      ? `--config=${join(AIDLC_SRC, "tools", words[at].replace(/^--config=\.claude\/tools\//, ""))}`
+      : words[at]);
+  }
+  const tool = join(AIDLC_SRC, "tools", String(words[at]).replace(/^\.claude\/tools\//, ""));
+  const r = spawnSync(BUN, [...options, tool, ...words.slice(at + 1), "--project-dir", proj], {
     cwd: proj,
     env: chatEnv(proj),
     encoding: "utf-8",
@@ -763,7 +773,9 @@ describe("t-late-design-gates-one-approval: one question for the late stage appr
       const message = String(step.message);
       const named = [...message.matchAll(/`(bun [^`]+)`/g)].map((m) => m[1]).filter((c) => !c.includes("--single"));
       const approve = named.find((c) => c.includes("--result approved"));
-      expect(approve, message).toBe(`bun .claude/tools/aidlc-orchestrate.ts report --stage ${rest[0]} --result approved --user-input Approve`);
+      expect(approve, message).toBe(
+        withCopyLaunchOptions(`bun .claude/tools/aidlc-orchestrate.ts report --stage ${rest[0]} --result approved --user-input Approve`),
+      );
       // The agent read their message as also approving the rest: every named command, in order.
       for (const command of named.filter((c) => !c.includes("--add"))) runNamed(proj, command);
       expect(rows(proj, "GATE_APPROVED").map((r) => r.stage)).toEqual([...rest]);

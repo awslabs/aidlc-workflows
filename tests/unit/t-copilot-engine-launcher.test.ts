@@ -30,11 +30,12 @@ import {
   launcherBody, LAUNCHER_PATH, recordLauncherVoucher,
 } from "../../core/tools/aidlc-launcher-voucher.ts";
 import { sessionsDir } from "../../core/tools/aidlc-record-core.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 
 const POSIX = process.platform !== "win32";
-const COPY = "bun .aidlc/tools/aidlc.ts";
+const COPY = withCopyLaunchOptions("bun .aidlc/tools/aidlc.ts");
 const ENGINE = `${COPY} engine`;
 const CHANNELS = [
   { name: "copy", root: join(REPO_ROOT, "dist", "copilot"), invocation: COPY },
@@ -124,6 +125,9 @@ describe("t-copilot-engine-launcher: AI-DLC's routine commands run without a dia
     for (const [typed, launched, prints] of [
       [`${ENGINE} orchestrate help`, `${LAUNCHER_PATH} orchestrate help`, "Usage: /aidlc"],
       [`${ENGINE} runtime summary`, `${LAUNCHER_PATH} runtime summary`, ""],
+      [withCopyLaunchOptions("bun .aidlc/tools/aidlc-runtime.ts summary"), `${LAUNCHER_PATH} runtime summary`, ""],
+      // The spelling an older copy install printed, still AI-DLC's own.
+      ["bun .aidlc/tools/aidlc.ts engine orchestrate help", `${LAUNCHER_PATH} orchestrate help`, "Usage: /aidlc"],
       ["bun .aidlc/tools/aidlc-runtime.ts summary", `${LAUNCHER_PATH} runtime summary`, ""],
     ]) {
       const out = preToolUse(dir, typed);
@@ -181,8 +185,8 @@ describe("t-copilot-engine-launcher: AI-DLC's routine commands run without a dia
 
   test("3: any other `.aidlc/bin/` call is refused before a dialog, naming the plain command", () => {
     const dir = project();
-    const alone = "AI-DLC's commands run alone, one at a time, so this did not run. Run each as `bun .aidlc/tools/aidlc.ts engine ...`, a command of its own.";
-    const typedFirst = "Only `.aidlc/bin/aidlc-engine`, typed first and from the project folder, runs from `.aidlc/bin/`, so this did not run. Run `bun .aidlc/tools/aidlc.ts engine ...` instead.";
+    const alone = `AI-DLC's commands run alone, one at a time, so this did not run. Run each as \`${ENGINE} ...\`, a command of its own.`;
+    const typedFirst = `Only \`.aidlc/bin/aidlc-engine\`, typed first and from the project folder, runs from \`.aidlc/bin/\`, so this did not run. Run \`${ENGINE} ...\` instead.`;
     const cases: Array<[string, string]> = [
       [`${LAUNCHER_PATH} orchestrate help | sed -n 1,5p`, alone],
       [`${LAUNCHER_PATH} orchestrate help && ${LAUNCHER_PATH} runtime summary`, alone],
@@ -190,19 +194,19 @@ describe("t-copilot-engine-launcher: AI-DLC's routine commands run without a dia
       [`./${LAUNCHER_PATH} orchestrate help`, typedFirst],
       [`${dir}/${LAUNCHER_PATH} orchestrate help`, typedFirst],
       [`sh ${LAUNCHER_PATH} orchestrate help`, typedFirst],
-      [".aidlc/bin/aidlc-utility status", "`.aidlc/bin/aidlc-utility` does not exist, so this did not run. Run `bun .aidlc/tools/aidlc-utility.ts status` instead."],
-      [`${LAUNCHER_PATH} review-brief --stage code-generation`, "`bun .aidlc/tools/aidlc.ts engine review-brief --stage code-generation` is not an AI-DLC command, so this did not run. Run `bun .aidlc/tools/aidlc.ts engine --help` for the list."],
+      [".aidlc/bin/aidlc-utility status", `\`.aidlc/bin/aidlc-utility\` does not exist, so this did not run. Run \`${withCopyLaunchOptions("bun .aidlc/tools/aidlc-utility.ts status")}\` instead.`],
+      [`${LAUNCHER_PATH} review-brief --stage code-generation`, `\`${ENGINE} review-brief --stage code-generation\` is not an AI-DLC command, so this did not run. Run \`${ENGINE} --help\` for the list.`],
     ];
     if (POSIX) for (const [typed, reason] of cases) expect(refusal(preToolUse(dir, typed)), typed).toBe(reason);
     // In a Windows terminal the launcher does not run at all.
     expect(refusal(preToolUse(dir, `${LAUNCHER_PATH} orchestrate help`, { shell: "powershell" }))).toBe(
-      "`.aidlc/bin/aidlc-engine` does not run in this terminal, so this did not run. Run `bun .aidlc/tools/aidlc.ts engine orchestrate help` instead.",
+      `\`.aidlc/bin/aidlc-engine\` does not run in this terminal, so this did not run. Run \`${ENGINE} orchestrate help\` instead.`,
     );
     expect(vouchers(dir)).toEqual([]);
   });
 
   test.skipIf(!POSIX)("4: an edited launcher, one that lost its mode, or a link to it is not used", () => {
-    const notShipped = "`.aidlc/bin/aidlc-engine` is not the file AI-DLC installed, so this did not run. Run `bun .aidlc/tools/aidlc.ts engine orchestrate help` instead.";
+    const notShipped = `\`.aidlc/bin/aidlc-engine\` is not the file AI-DLC installed, so this did not run. Run \`${ENGINE} orchestrate help\` instead.`;
     const spoilers: Array<(file: string) => void> = [
       (file) => writeFileSync(file, `${readFileSync(file, "utf-8")}echo extra\n`),
       (file) => chmodSync(file, 0o644),

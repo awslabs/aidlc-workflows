@@ -8,6 +8,7 @@ import {
   remainingCleanupTimeoutMs,
   remainingOperationTimeoutMs,
 } from "../harness/test-budget.ts";
+import { COPY_LAUNCH_CONFIG, withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import { EXTENDED_SUBPROCESS_TIMEOUT_MS } from "../../core/tools/aidlc-runtime-budget.ts";
 import { afterAll, beforeAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -4546,7 +4547,10 @@ describe("t243 project initialization", () => {
       );
       expect(runners.length, distribution).toBeGreaterThan(0);
       const before = new Map(runners.map((rel) => [rel, readFileSync(join(project, rel), "utf-8")]));
-      const configured = run(INIT, [
+      // The copy's own config, launched as the copy launches it: the source tree's would write its own spelling.
+      const tools = join(project, ".aidlc", "tools");
+      const configured = run(`--config=${join(tools, COPY_LAUNCH_CONFIG)}`, [
+        "--no-env-file", join(tools, "aidlc-init.ts"),
         "config", "--project-dir", project, "--from", runtime, "--harness", typedHarnessName(distribution), "--yes",
       ], project);
       expect(configured.status, `${distribution}: ${configured.stdout}${configured.stderr}`).toBe(0);
@@ -9234,7 +9238,7 @@ describe("t243 projection channel", () => {
         copyFiles.filter((path) => /\.(md|mdc|json|toml|hook|ts)$/.test(path)))).join("\n");
       const releaseText = (await projectionTexts(release,
         walkFiles(release).filter((path) => /\.(md|mdc|json|toml|hook|ts)$/.test(path)))).join("\n");
-      expect(copyText).toContain(`bun ${manifest.harnessDir}/tools/aidlc.ts`);
+      expect(copyText).toContain(withCopyLaunchOptions(`bun ${manifest.harnessDir}/tools/aidlc.ts`));
       expect(releaseText).not.toMatch(
         new RegExp(`\\bbun\\s+[^\\n]*${manifest.harnessDir.replace(".", "\\.")}/(?:tools|hooks)/aidlc`),
       );
@@ -9472,6 +9476,7 @@ describe("t243 projection channel", () => {
           "sha256:b87a3ec2c39cb24074c6fa37f626e9d150d435d18069fbd0c762fdbd70719c5c",
           "sha256:a885fe6b7137ba16e0c24ce168b30ef5c780fe9991fc2d6bdff10cc15ad83c05",
           "sha256:7b09e1c003a983ea0c328b7935b2305f35efb8a0927a0bc9f0f7c21c6b3e13d4",
+          "sha256:70ff9864c0ae854845b4485f7c4830b580a9cf6b395a61aaf5cfc904901709bf",
         ],
       },
     };
