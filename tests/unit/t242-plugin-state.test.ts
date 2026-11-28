@@ -124,6 +124,7 @@ function installed(
     sourceHash,
     base: null,
     baseProblem: null,
+    coreRanges: [],
   };
 }
 
@@ -136,6 +137,8 @@ function evidence(
     legacy: new Set(legacy),
     ownership: new Map(),
     held: new Map(),
+    engineVersion: "2.11.4",
+    harnessName: "claude",
   };
 }
 

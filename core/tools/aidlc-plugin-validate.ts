@@ -426,17 +426,19 @@ function validDependencyRange(range: string): boolean {
 }
 
 // What a plugin builds on: core and at most one base plugin, which builds on
-// core alone. The one owner of that rule: validate reports what this returns,
-// and plugin sync holds a plugin on it.
+// core alone, plus any version ranges on `core`, each an engine compatibility
+// requirement. The one owner of those rules: validate reports what this
+// returns, and plugin sync holds a plugin on it.
 export function readPluginBase(
   entries: unknown,
   self?: string,
-): { base: PluginDependency | null } | { problem: PluginBaseProblem } {
-  if (entries === undefined) return { base: null };
+): { base: PluginDependency | null; coreRanges: string[] } | { problem: PluginBaseProblem } {
+  if (entries === undefined) return { base: null, coreRanges: [] };
   if (!Array.isArray(entries) || entries.some((entry) => typeof entry !== "string" || entry.trim() === "")) {
     return { problem: { kind: "shape" } };
   }
   const bases: PluginDependency[] = [];
+  const coreRanges: string[] = [];
   for (const entry of entries as string[]) {
     const text = entry.trim();
     const at = text.indexOf("@");
@@ -450,9 +452,10 @@ export function readPluginBase(
     }
     if (name === self) return { problem: { kind: "entry", reason: `"${entry}" names this plugin itself` } };
     if (name !== "core") bases.push({ name, range });
+    else if (range !== null) coreRanges.push(range);
   }
   if (bases.length > 1) return { problem: { kind: "bases", names: bases.map((base) => base.name) } };
-  return { base: bases[0] ?? null };
+  return { base: bases[0] ?? null, coreRanges };
 }
 
 export function validatePluginName(
@@ -912,6 +915,19 @@ function validateManifest(
         ? "A plugin builds on core and at most one base plugin; keep one."
         : 'Use entries such as "core" or "other-plugin@^1.2.0".',
     );
+  } else {
+    // A core range is met by release versions, a preview build counting as the
+    // stable release it was built after; a range that names a preview version
+    // compares that way too, so one that only a preview could meet never is.
+    for (const range of read.coreRanges.filter((each) => /[\dxX*]-/.test(each))) {
+      addWarning(
+        findings,
+        displayFile,
+        "manifest-shape",
+        `manifest dependencies: "core@${range}" names a preview version, but a core range is met by release versions (a preview build counts as the stable release it was built after), so a range only a preview could meet holds the plugin everywhere`,
+        'Use release versions in a core range, such as "core@>=2.11.4".',
+      );
+    }
   }
 
   if (!isPlainRecord(manifest.aidlc)) {

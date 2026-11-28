@@ -319,6 +319,31 @@ describe("t314 standalone plugin validator", () => {
     expect(withDependencies(["core", "zeta@^1.2.0"])).toEqual([]);
     expect(withDependencies(["zeta@1.x || >=2.1.0 <3"])).toEqual([]);
     expect(withDependencies(["core", "zeta"])).toEqual([]);
+    // A range on core is an engine requirement sync checks against the
+    // installed AI-DLC; offline validate accepts any range npm can read.
+    expect(withDependencies(["core@>=2.11.4"])).toEqual([]);
+    expect(withDependencies(["core@>=2.11.0 <2.12.0", "zeta@^1.2.0"])).toEqual([]);
+    expect(withDependencies(["core@banana"])).toEqual([
+      'manifest dependencies: "core@banana" has a version range npm cannot read, such as "^1.2.0" or ">=1.2.0 <2.0.0"',
+    ]);
+    // Sync judges a core range against release versions, a preview build
+    // counting as the stable it was built after: a range naming a preview
+    // version is read, and warned, since only a release can meet it; a
+    // base's range may name one freely.
+    for (const range of ["2.6.0-preview.20260101.1", ">=2.6.0-preview.1 <3", "1.0.0 - 2.6.0-rc.1", ">=2.11.5--rc.1"]) {
+      const root = fixture();
+      const manifestPath = join(root, ".aidlc-plugin", "plugin.json");
+      const manifest = JSON.parse(readFileSync(manifestPath, "utf-8")) as Record<string, unknown>;
+      manifest.dependencies = [`core@${range}`];
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf-8");
+      const result = validatePluginRoot(root);
+      expect(result.errors.filter((finding) => finding.message.startsWith("manifest dependencies")), range).toEqual([]);
+      expect(result.warnings.map((finding) => finding.message), range).toContain(
+        `manifest dependencies: "core@${range}" names a preview version, but a core range is met by release versions (a preview build counts as the stable release it was built after), so a range only a preview could meet holds the plugin everywhere`,
+      );
+    }
+    expect(withDependencies(["core@1.0.0 - 2.6.0"])).toEqual([]);
+    expect(withDependencies(["core", "zeta@^1.2.0-beta.1"])).toEqual([]);
     expect(withDependencies(["core", "zeta", "mid@^1.0.0"])).toEqual([
       "manifest dependencies name more than one base plugin (zeta, mid)",
     ]);
