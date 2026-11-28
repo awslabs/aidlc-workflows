@@ -33,6 +33,7 @@ requires_stage:
   - deployment-execution
   - incident-response
   - performance-validation
+  - retrospective
 sensors:
   - required-sections
   - upstream-coverage
