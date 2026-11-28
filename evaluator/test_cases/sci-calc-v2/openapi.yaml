@@ -1,0 +1,1236 @@
+# OpenAPI 3.1 Specification — Scientific Calculator API
+#
+# This is a first-class project input, supplied alongside vision.md and
+# tech-env.md.  The contract-test harness reads this spec, discovers every
+# operation, and runs the embedded x-test-cases against the live server.
+#
+# Security note: This is a test specification for a stateless calculator API
+# running on localhost. No authentication is required for test scenarios.
+# checkov:skip=CKV_OPENAPI_4:Test spec - no security required for localhost
+# checkov:skip=CKV_OPENAPI_5:Test spec - no security required for localhost
+# checkov:skip=CKV_OPENAPI_21:Test spec - array validation not required
+
+openapi: "3.1.0"
+info:
+  title: Scientific Calculator API
+  version: "0.1.0"
+  description: >
+    Stateless HTTP API for scientific math — arithmetic, trigonometry,
+    logarithms, powers, statistics, constants, and unit conversions.
+
+servers:
+  - url: http://127.0.0.1:{port}
+    variables:
+      port:
+        default: "8000"
+
+x-app:
+  module: "sci_calc.app:app"
+  framework: fastapi
+  startup_timeout: 15
+
+# ─────────────────────────── paths ───────────────────────────────────
+
+paths:
+
+  # ── Health ─────────────────────────────────────────────────────────
+  /health:
+    get:
+      operationId: health
+      summary: Health check
+      responses:
+        "200":
+          description: OK
+      x-test-cases:
+        - name: health check
+          expected_status: 200
+          expected_body:
+            status: "ok"
+
+  # ── Arithmetic ─────────────────────────────────────────────────────
+  /api/v1/arithmetic/add:
+    post:
+      operationId: arithmetic_add
+      summary: Add two numbers
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                a: {type: number}
+                b: {type: number}
+              required: [a, b]
+      responses:
+        "200": {description: OK}
+        "422": {description: Invalid input}
+      x-test-cases:
+        - name: "add positive integers"
+          body: {"a": 3, "b": 4}
+          expected_status: 200
+          expected_body: {status: "ok", operation: "add", result: 7}
+        - name: "add negative numbers"
+          body: {"a": -10, "b": -5}
+          expected_status: 200
+          expected_body: {status: "ok", result: -15}
+        - name: "add floats"
+          body: {"a": 1.5, "b": 2.5}
+          expected_status: 200
+          expected_body: {status: "ok", result: 4.0}
+        - name: "add missing field → 422"
+          body: {"a": 1}
+          expected_status: 422
+
+  /api/v1/arithmetic/subtract:
+    post:
+      operationId: arithmetic_subtract
+      summary: Subtract b from a
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                a: {type: number}
+                b: {type: number}
+              required: [a, b]
+      responses:
+        "200": {description: OK}
+      x-test-cases:
+        - name: "subtract"
+          body: {"a": 10, "b": 3}
+          expected_status: 200
+          expected_body: {status: "ok", result: 7}
+
+  /api/v1/arithmetic/multiply:
+    post:
+      operationId: arithmetic_multiply
+      summary: Multiply two numbers
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                a: {type: number}
+                b: {type: number}
+              required: [a, b]
+      responses:
+        "200": {description: OK}
+      x-test-cases:
+        - name: "multiply"
+          body: {"a": 6, "b": 7}
+          expected_status: 200
+          expected_body: {status: "ok", result: 42}
+        - name: "multiply by zero"
+          body: {"a": 999, "b": 0}
+          expected_status: 200
+          expected_body: {status: "ok", result: 0}
+
+  /api/v1/arithmetic/divide:
+    post:
+      operationId: arithmetic_divide
+      summary: Divide a by b
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                a: {type: number}
+                b: {type: number}
+              required: [a, b]
+      responses:
+        "200": {description: OK}
+        "400": {description: Division by zero}
+      x-test-cases:
+        - name: "divide"
+          body: {"a": 10, "b": 4}
+          expected_status: 200
+          expected_body: {status: "ok", result: 2.5}
+        - name: "divide by zero → error"
+          body: {"a": 1, "b": 0}
+          expected_status: 400
+          expected_body: {status: "error", error: {code: "DIVISION_BY_ZERO"}}
+
+  /api/v1/arithmetic/modulo:
+    post:
+      operationId: arithmetic_modulo
+      summary: Modulo a % b
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                a: {type: number}
+                b: {type: number}
+              required: [a, b]
+      responses:
+        "200": {description: OK}
+        "400": {description: Division by zero}
+      x-test-cases:
+        - name: "modulo"
+          body: {"a": 10, "b": 3}
+          expected_status: 200
+          expected_body: {status: "ok", result: 1}
+        - name: "modulo by zero → error"
+          body: {"a": 5, "b": 0}
+          expected_status: 400
+          expected_body: {status: "error", error: {code: "DIVISION_BY_ZERO"}}
+
+  /api/v1/arithmetic/abs:
+    post:
+      operationId: arithmetic_abs
+      summary: Absolute value
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                a: {type: number}
+              required: [a]
+      responses:
+        "200": {description: OK}
+      x-test-cases:
+        - name: "abs negative"
+          body: {"a": -5}
+          expected_status: 200
+          expected_body: {status: "ok", result: 5}
+        - name: "abs positive"
+          body: {"a": 7}
+          expected_status: 200
+          expected_body: {status: "ok", result: 7}
+
+  /api/v1/arithmetic/negate:
+    post:
+      operationId: arithmetic_negate
+      summary: Negate a number
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                a: {type: number}
+              required: [a]
+      responses:
+        "200": {description: OK}
+      x-test-cases:
+        - name: "negate positive"
+          body: {"a": 7}
+          expected_status: 200
+          expected_body: {status: "ok", result: -7}
+        - name: "negate negative"
+          body: {"a": -3}
+          expected_status: 200
+          expected_body: {status: "ok", result: 3}
+
+  # ── Powers & Roots ─────────────────────────────────────────────────
+  /api/v1/powers/power:
+    post:
+      operationId: powers_power
+      summary: Raise base to exponent
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                base: {type: number}
+                exponent: {type: number}
+              required: [base, exponent]
+      responses:
+        "200": {description: OK}
+      x-test-cases:
+        - name: "2^10"
+          body: {"base": 2, "exponent": 10}
+          expected_status: 200
+          expected_body: {status: "ok", result: 1024}
+        - name: "5^0"
+          body: {"base": 5, "exponent": 0}
+          expected_status: 200
+          expected_body: {status: "ok", result: 1}
+
+  /api/v1/powers/sqrt:
+    post:
+      operationId: powers_sqrt
+      summary: Square root
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                a: {type: number}
+              required: [a]
+      responses:
+        "200": {description: OK}
+        "400": {description: Domain error}
+      x-test-cases:
+        - name: "sqrt(16)"
+          body: {"a": 16}
+          expected_status: 200
+          expected_body: {status: "ok", result: 4.0}
+        - name: "sqrt(0)"
+          body: {"a": 0}
+          expected_status: 200
+          expected_body: {status: "ok", result: 0.0}
+        - name: "sqrt(-1) → domain error"
+          body: {"a": -1}
+          expected_status: 400
+          expected_body: {status: "error", error: {code: "DOMAIN_ERROR"}}
+
+  /api/v1/powers/cbrt:
+    post:
+      operationId: powers_cbrt
+      summary: Cube root
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                a: {type: number}
+              required: [a]
+      responses:
+        "200": {description: OK}
+      x-test-cases:
+        - name: "cbrt(27)"
+          body: {"a": 27}
+          expected_status: 200
+          expected_body: {status: "ok", result: 3.0}
+        - name: "cbrt(-8)"
+          body: {"a": -8}
+          expected_status: 200
+          expected_body: {status: "ok", result: -2.0}
+
+  /api/v1/powers/square:
+    post:
+      operationId: powers_square
+      summary: Square a number
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                a: {type: number}
+              required: [a]
+      responses:
+        "200": {description: OK}
+      x-test-cases:
+        - name: "square(5)"
+          body: {"a": 5}
+          expected_status: 200
+          expected_body: {status: "ok", result: 25}
+        - name: "square(-3)"
+          body: {"a": -3}
+          expected_status: 200
+          expected_body: {status: "ok", result: 9}
+
+  /api/v1/powers/nth_root:
+    post:
+      operationId: powers_nth_root
+      summary: Nth root of a
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                a: {type: number}
+                n: {type: integer}
+              required: [a, n]
+      responses:
+        "200": {description: OK}
+        "400": {description: Domain error}
+      x-test-cases:
+        - name: "4th root of 16"
+          body: {"a": 16, "n": 4}
+          expected_status: 200
+          expected_body: {status: "ok", result: 2.0}
+        - name: "nth_root negative even → domain error"
+          body: {"a": -4, "n": 2}
+          expected_status: 400
+          expected_body: {status: "error", error: {code: "DOMAIN_ERROR"}}
+
+  # ── Trigonometry ───────────────────────────────────────────────────
+  /api/v1/trigonometry/sin:
+    post:
+      operationId: trig_sin
+      summary: Sine
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                a: {type: number}
+                angle_unit: {type: string, enum: [radians, degrees], default: radians}
+              required: [a]
+      responses:
+        "200": {description: OK}
+      x-test-cases:
+        - name: "sin(0)"
+          body: {"a": 0}
+          expected_status: 200
+          expected_body: {status: "ok", result: 0.0}
+        - name: "sin(90 deg)"
+          body: {"a": 90, "angle_unit": "degrees"}
+          expected_status: 200
+          expected_body: {status: "ok", result: 1.0}
+
+  /api/v1/trigonometry/cos:
+    post:
+      operationId: trig_cos
+      summary: Cosine
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                a: {type: number}
+                angle_unit: {type: string, enum: [radians, degrees], default: radians}
+              required: [a]
+      responses:
+        "200": {description: OK}
+      x-test-cases:
+        - name: "cos(0)"
+          body: {"a": 0}
+          expected_status: 200
+          expected_body: {status: "ok", result: 1.0}
+
+  /api/v1/trigonometry/tan:
+    post:
+      operationId: trig_tan
+      summary: Tangent
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                a: {type: number}
+                angle_unit: {type: string, enum: [radians, degrees], default: radians}
+              required: [a]
+      responses:
+        "200": {description: OK}
+      x-test-cases:
+        - name: "tan(0)"
+          body: {"a": 0}
+          expected_status: 200
+          expected_body: {status: "ok", result: 0.0}
+
+  /api/v1/trigonometry/asin:
+    post:
+      operationId: trig_asin
+      summary: Arc sine
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                a: {type: number}
+                angle_unit: {type: string, enum: [radians, degrees], default: radians}
+              required: [a]
+      responses:
+        "200": {description: OK}
+        "400": {description: Domain error}
+      x-test-cases:
+        - name: "asin(0)"
+          body: {"a": 0}
+          expected_status: 200
+          expected_body: {status: "ok", result: 0.0}
+        - name: "asin(1)"
+          body: {"a": 1}
+          expected_status: 200
+          expected_body: {status: "ok"}
+        - name: "asin(2) → domain error"
+          body: {"a": 2}
+          expected_status: 400
+          expected_body: {status: "error", error: {code: "DOMAIN_ERROR"}}
+
+  /api/v1/trigonometry/acos:
+    post:
+      operationId: trig_acos
+      summary: Arc cosine
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                a: {type: number}
+                angle_unit: {type: string, enum: [radians, degrees], default: radians}
+              required: [a]
+      responses:
+        "200": {description: OK}
+        "400": {description: Domain error}
+      x-test-cases:
+        - name: "acos(1)"
+          body: {"a": 1}
+          expected_status: 200
+          expected_body: {status: "ok", result: 0.0}
+        - name: "acos(2) → domain error"
+          body: {"a": 2}
+          expected_status: 400
+          expected_body: {status: "error", error: {code: "DOMAIN_ERROR"}}
+
+  /api/v1/trigonometry/atan:
+    post:
+      operationId: trig_atan
+      summary: Arc tangent
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                a: {type: number}
+                angle_unit: {type: string, enum: [radians, degrees], default: radians}
+              required: [a]
+      responses:
+        "200": {description: OK}
+      x-test-cases:
+        - name: "atan(0)"
+          body: {"a": 0}
+          expected_status: 200
+          expected_body: {status: "ok", result: 0.0}
+
+  /api/v1/trigonometry/atan2:
+    post:
+      operationId: trig_atan2
+      summary: Two-argument arc tangent
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                y: {type: number}
+                x: {type: number}
+                angle_unit: {type: string, enum: [radians, degrees], default: radians}
+              required: [y, x]
+      responses:
+        "200": {description: OK}
+      x-test-cases:
+        - name: "atan2(0, 1)"
+          body: {"y": 0, "x": 1}
+          expected_status: 200
+          expected_body: {status: "ok", result: 0.0}
+        - name: "atan2(1, 0)"
+          body: {"y": 1, "x": 0}
+          expected_status: 200
+          expected_body: {status: "ok"}
+
+  /api/v1/trigonometry/sinh:
+    post:
+      operationId: trig_sinh
+      summary: Hyperbolic sine
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                a: {type: number}
+              required: [a]
+      responses:
+        "200": {description: OK}
+      x-test-cases:
+        - name: "sinh(0)"
+          body: {"a": 0}
+          expected_status: 200
+          expected_body: {status: "ok", result: 0.0}
+
+  /api/v1/trigonometry/cosh:
+    post:
+      operationId: trig_cosh
+      summary: Hyperbolic cosine
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                a: {type: number}
+              required: [a]
+      responses:
+        "200": {description: OK}
+      x-test-cases:
+        - name: "cosh(0)"
+          body: {"a": 0}
+          expected_status: 200
+          expected_body: {status: "ok", result: 1.0}
+
+  /api/v1/trigonometry/tanh:
+    post:
+      operationId: trig_tanh
+      summary: Hyperbolic tangent
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                a: {type: number}
+              required: [a]
+      responses:
+        "200": {description: OK}
+      x-test-cases:
+        - name: "tanh(0)"
+          body: {"a": 0}
+          expected_status: 200
+          expected_body: {status: "ok", result: 0.0}
+
+  /api/v1/trigonometry/asinh:
+    post:
+      operationId: trig_asinh
+      summary: Inverse hyperbolic sine
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                a: {type: number}
+              required: [a]
+      responses:
+        "200": {description: OK}
+      x-test-cases:
+        - name: "asinh(0)"
+          body: {"a": 0}
+          expected_status: 200
+          expected_body: {status: "ok", result: 0.0}
+
+  /api/v1/trigonometry/acosh:
+    post:
+      operationId: trig_acosh
+      summary: Inverse hyperbolic cosine
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                a: {type: number}
+              required: [a]
+      responses:
+        "200": {description: OK}
+        "400": {description: Domain error}
+      x-test-cases:
+        - name: "acosh(1)"
+          body: {"a": 1}
+          expected_status: 200
+          expected_body: {status: "ok", result: 0.0}
+        - name: "acosh(0.5) → domain error"
+          body: {"a": 0.5}
+          expected_status: 400
+          expected_body: {status: "error", error: {code: "DOMAIN_ERROR"}}
+
+  /api/v1/trigonometry/atanh:
+    post:
+      operationId: trig_atanh
+      summary: Inverse hyperbolic tangent
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                a: {type: number}
+              required: [a]
+      responses:
+        "200": {description: OK}
+        "400": {description: Domain error}
+      x-test-cases:
+        - name: "atanh(0)"
+          body: {"a": 0}
+          expected_status: 200
+          expected_body: {status: "ok", result: 0.0}
+        - name: "atanh(1) → domain error"
+          body: {"a": 1}
+          expected_status: 400
+          expected_body: {status: "error", error: {code: "DOMAIN_ERROR"}}
+
+  # ── Logarithmic ───────────────────────────────────────────────────
+  /api/v1/logarithmic/ln:
+    post:
+      operationId: log_ln
+      summary: Natural logarithm
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                a: {type: number}
+              required: [a]
+      responses:
+        "200": {description: OK}
+        "400": {description: Domain error}
+      x-test-cases:
+        - name: "ln(1)"
+          body: {"a": 1}
+          expected_status: 200
+          expected_body: {status: "ok", result: 0.0}
+        - name: "ln(e)"
+          body: {"a": 2.718281828459045}
+          expected_status: 200
+          expected_body: {status: "ok", result: 1.0}
+        - name: "ln(0) → domain error"
+          body: {"a": 0}
+          expected_status: 400
+          expected_body: {status: "error", error: {code: "DOMAIN_ERROR"}}
+        - name: "ln(-1) → domain error"
+          body: {"a": -1}
+          expected_status: 400
+          expected_body: {status: "error", error: {code: "DOMAIN_ERROR"}}
+
+  /api/v1/logarithmic/log10:
+    post:
+      operationId: log_log10
+      summary: Base-10 logarithm
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                a: {type: number}
+              required: [a]
+      responses:
+        "200": {description: OK}
+        "400": {description: Domain error}
+      x-test-cases:
+        - name: "log10(100)"
+          body: {"a": 100}
+          expected_status: 200
+          expected_body: {status: "ok", result: 2.0}
+        - name: "log10(1)"
+          body: {"a": 1}
+          expected_status: 200
+          expected_body: {status: "ok", result: 0.0}
+
+  /api/v1/logarithmic/log2:
+    post:
+      operationId: log_log2
+      summary: Base-2 logarithm
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                a: {type: number}
+              required: [a]
+      responses:
+        "200": {description: OK}
+        "400": {description: Domain error}
+      x-test-cases:
+        - name: "log2(8)"
+          body: {"a": 8}
+          expected_status: 200
+          expected_body: {status: "ok", result: 3.0}
+
+  /api/v1/logarithmic/log:
+    post:
+      operationId: log_log
+      summary: Logarithm with arbitrary base
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                a: {type: number}
+                base: {type: number}
+              required: [a, base]
+      responses:
+        "200": {description: OK}
+        "400": {description: Domain error}
+      x-test-cases:
+        - name: "log(8, base=2)"
+          body: {"a": 8, "base": 2}
+          expected_status: 200
+          expected_body: {status: "ok", result: 3.0}
+        - name: "log base 1 → domain error"
+          body: {"a": 10, "base": 1}
+          expected_status: 400
+          expected_body: {status: "error", error: {code: "DOMAIN_ERROR"}}
+
+  /api/v1/logarithmic/exp:
+    post:
+      operationId: log_exp
+      summary: Exponential (e^a)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                a: {type: number}
+              required: [a]
+      responses:
+        "200": {description: OK}
+      x-test-cases:
+        - name: "exp(0)"
+          body: {"a": 0}
+          expected_status: 200
+          expected_body: {status: "ok", result: 1.0}
+        - name: "exp(1)"
+          body: {"a": 1}
+          expected_status: 200
+          expected_body: {status: "ok"}
+
+  # ── Statistics ─────────────────────────────────────────────────────
+  /api/v1/statistics/mean:
+    post:
+      operationId: stats_mean
+      summary: Arithmetic mean
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                values: {type: array, items: {type: number}, minItems: 1}
+              required: [values]
+      responses:
+        "200": {description: OK}
+      x-test-cases:
+        - name: "mean"
+          body: {"values": [1, 2, 3, 4, 5]}
+          expected_status: 200
+          expected_body: {status: "ok", result: 3.0}
+
+  /api/v1/statistics/median:
+    post:
+      operationId: stats_median
+      summary: Median
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                values: {type: array, items: {type: number}, minItems: 1}
+              required: [values]
+      responses:
+        "200": {description: OK}
+      x-test-cases:
+        - name: "median odd count"
+          body: {"values": [3, 1, 2]}
+          expected_status: 200
+          expected_body: {status: "ok", result: 2.0}
+        - name: "median even count"
+          body: {"values": [1, 2, 3, 4]}
+          expected_status: 200
+          expected_body: {status: "ok", result: 2.5}
+
+  /api/v1/statistics/mode:
+    post:
+      operationId: stats_mode
+      summary: Mode (smallest on ties)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                values: {type: array, items: {type: number}, minItems: 1}
+              required: [values]
+      responses:
+        "200": {description: OK}
+      x-test-cases:
+        - name: "mode"
+          body: {"values": [1, 2, 2, 3, 3]}
+          expected_status: 200
+          expected_body: {status: "ok", result: 2}
+
+  /api/v1/statistics/stdev:
+    post:
+      operationId: stats_stdev
+      summary: Sample standard deviation (requires >= 2 values)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                values: {type: array, items: {type: number}, minItems: 2}
+              required: [values]
+      responses:
+        "200": {description: OK}
+      x-test-cases:
+        - name: "stdev"
+          body: {"values": [2, 4, 4, 4, 5, 5, 7, 9]}
+          expected_status: 200
+          expected_body: {status: "ok"}
+
+  /api/v1/statistics/variance:
+    post:
+      operationId: stats_variance
+      summary: Sample variance (requires >= 2 values)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                values: {type: array, items: {type: number}, minItems: 2}
+              required: [values]
+      responses:
+        "200": {description: OK}
+      x-test-cases:
+        - name: "variance"
+          body: {"values": [2, 4, 4, 4, 5, 5, 7, 9]}
+          expected_status: 200
+          expected_body: {status: "ok"}
+
+  /api/v1/statistics/pstdev:
+    post:
+      operationId: stats_pstdev
+      summary: Population standard deviation
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                values: {type: array, items: {type: number}, minItems: 1}
+              required: [values]
+      responses:
+        "200": {description: OK}
+      x-test-cases:
+        - name: "pstdev"
+          body: {"values": [2, 4, 4, 4, 5, 5, 7, 9]}
+          expected_status: 200
+          expected_body: {status: "ok"}
+
+  /api/v1/statistics/pvariance:
+    post:
+      operationId: stats_pvariance
+      summary: Population variance
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                values: {type: array, items: {type: number}, minItems: 1}
+              required: [values]
+      responses:
+        "200": {description: OK}
+      x-test-cases:
+        - name: "pvariance"
+          body: {"values": [2, 4, 4, 4, 5, 5, 7, 9]}
+          expected_status: 200
+          expected_body: {status: "ok"}
+
+  /api/v1/statistics/min:
+    post:
+      operationId: stats_min
+      summary: Minimum value
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                values: {type: array, items: {type: number}, minItems: 1}
+              required: [values]
+      responses:
+        "200": {description: OK}
+      x-test-cases:
+        - name: "min"
+          body: {"values": [5, 2, 8, 1, 9]}
+          expected_status: 200
+          expected_body: {status: "ok", result: 1}
+
+  /api/v1/statistics/max:
+    post:
+      operationId: stats_max
+      summary: Maximum value
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                values: {type: array, items: {type: number}, minItems: 1}
+              required: [values]
+      responses:
+        "200": {description: OK}
+      x-test-cases:
+        - name: "max"
+          body: {"values": [5, 2, 8, 1, 9]}
+          expected_status: 200
+          expected_body: {status: "ok", result: 9}
+
+  /api/v1/statistics/sum:
+    post:
+      operationId: stats_sum
+      summary: Sum all values
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                values: {type: array, items: {type: number}, minItems: 1}
+              required: [values]
+      responses:
+        "200": {description: OK}
+      x-test-cases:
+        - name: "sum"
+          body: {"values": [10, 20, 30]}
+          expected_status: 200
+          expected_body: {status: "ok", result: 60}
+
+  /api/v1/statistics/count:
+    post:
+      operationId: stats_count
+      summary: Count values
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                values: {type: array, items: {type: number}, minItems: 1}
+              required: [values]
+      responses:
+        "200": {description: OK}
+      x-test-cases:
+        - name: "count"
+          body: {"values": [1, 2, 3, 4, 5]}
+          expected_status: 200
+          expected_body: {status: "ok", result: 5}
+
+  # ── Constants ──────────────────────────────────────────────────────
+  /api/v1/constants:
+    get:
+      operationId: constants_all
+      summary: Get all constants as a map
+      responses:
+        "200": {description: OK}
+      x-test-cases:
+        - name: "get all constants"
+          expected_status: 200
+          expected_body: {status: "ok"}
+
+  /api/v1/constants/pi:
+    get:
+      operationId: constants_pi
+      summary: Pi
+      responses:
+        "200": {description: OK}
+      x-test-cases:
+        - name: "get pi"
+          expected_status: 200
+          expected_body: {status: "ok"}
+
+  /api/v1/constants/e:
+    get:
+      operationId: constants_e
+      summary: Euler's number
+      responses:
+        "200": {description: OK}
+      x-test-cases:
+        - name: "get e"
+          expected_status: 200
+          expected_body: {status: "ok"}
+
+  /api/v1/constants/tau:
+    get:
+      operationId: constants_tau
+      summary: Tau (2*pi)
+      responses:
+        "200": {description: OK}
+      x-test-cases:
+        - name: "get tau"
+          expected_status: 200
+          expected_body: {status: "ok"}
+
+  /api/v1/constants/golden_ratio:
+    get:
+      operationId: constants_golden_ratio
+      summary: Golden ratio
+      responses:
+        "200": {description: OK}
+      x-test-cases:
+        - name: "get golden_ratio"
+          expected_status: 200
+          expected_body: {status: "ok"}
+
+  /api/v1/constants/sqrt2:
+    get:
+      operationId: constants_sqrt2
+      summary: Square root of 2
+      responses:
+        "200": {description: OK}
+      x-test-cases:
+        - name: "get sqrt2"
+          expected_status: 200
+          expected_body: {status: "ok"}
+
+  /api/v1/constants/ln2:
+    get:
+      operationId: constants_ln2
+      summary: Natural log of 2
+      responses:
+        "200": {description: OK}
+      x-test-cases:
+        - name: "get ln2"
+          expected_status: 200
+          expected_body: {status: "ok"}
+
+  /api/v1/constants/ln10:
+    get:
+      operationId: constants_ln10
+      summary: Natural log of 10
+      responses:
+        "200": {description: OK}
+      x-test-cases:
+        - name: "get ln10"
+          expected_status: 200
+          expected_body: {status: "ok"}
+
+  /api/v1/constants/inf:
+    get:
+      operationId: constants_inf
+      summary: Infinity
+      responses:
+        "200": {description: OK}
+      x-test-cases:
+        - name: "get inf"
+          expected_status: 200
+          expected_body: {status: "ok"}
+
+  /api/v1/constants/nan:
+    get:
+      operationId: constants_nan
+      summary: Not a number
+      responses:
+        "200": {description: OK}
+      x-test-cases:
+        - name: "get nan"
+          expected_status: 200
+          expected_body: {status: "ok"}
+
+  # ── Conversions ────────────────────────────────────────────────────
+  /api/v1/conversions/angle:
+    post:
+      operationId: convert_angle
+      summary: Angle conversion (degrees/radians/gradians)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                value: {type: number}
+                from_unit: {type: string}
+                to_unit: {type: string}
+              required: [value, from_unit, to_unit]
+      responses:
+        "200": {description: OK}
+      x-test-cases:
+        - name: "180 degrees to radians"
+          body: {"value": 180, "from_unit": "degrees", "to_unit": "radians"}
+          expected_status: 200
+          expected_body: {status: "ok"}
+
+  /api/v1/conversions/temperature:
+    post:
+      operationId: convert_temperature
+      summary: Temperature conversion (celsius/fahrenheit/kelvin)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                value: {type: number}
+                from_unit: {type: string}
+                to_unit: {type: string}
+              required: [value, from_unit, to_unit]
+      responses:
+        "200": {description: OK}
+      x-test-cases:
+        - name: "boiling point C to F"
+          body: {"value": 100, "from_unit": "celsius", "to_unit": "fahrenheit"}
+          expected_status: 200
+          expected_body: {status: "ok", result: 212.0}
+        - name: "freezing point C to K"
+          body: {"value": 0, "from_unit": "celsius", "to_unit": "kelvin"}
+          expected_status: 200
+          expected_body: {status: "ok", result: 273.15}
+
+  /api/v1/conversions/length:
+    post:
+      operationId: convert_length
+      summary: Length conversion
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                value: {type: number}
+                from_unit: {type: string}
+                to_unit: {type: string}
+              required: [value, from_unit, to_unit]
+      responses:
+        "200": {description: OK}
+      x-test-cases:
+        - name: "1 meter to feet"
+          body: {"value": 1, "from_unit": "meters", "to_unit": "feet"}
+          expected_status: 200
+          expected_body: {status: "ok"}
+        - name: "1 mile to kilometers"
+          body: {"value": 1, "from_unit": "miles", "to_unit": "kilometers"}
+          expected_status: 200
+          expected_body: {status: "ok"}
+
+  /api/v1/conversions/weight:
+    post:
+      operationId: convert_weight
+      summary: Weight conversion
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                value: {type: number}
+                from_unit: {type: string}
+                to_unit: {type: string}
+              required: [value, from_unit, to_unit]
+      responses:
+        "200": {description: OK}
+      x-test-cases:
+        - name: "1 kg to pounds"
+          body: {"value": 1, "from_unit": "kilograms", "to_unit": "pounds"}
+          expected_status: 200
+          expected_body: {status: "ok"}
+        - name: "1 stone to kilograms"
+          body: {"value": 1, "from_unit": "stones", "to_unit": "kilograms"}
+          expected_status: 200
+          expected_body: {status: "ok"}
+
+  # ── Error cases (spec-level) ──────────────────────────────────────
+  /api/v1/nonexistent:
+    get:
+      operationId: error_not_found
+      summary: Unknown endpoint should return 404
+      responses:
+        "404": {description: Not found}
+      x-test-cases:
+        - name: "unknown endpoint → 404"
+          expected_status: 404

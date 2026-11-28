@@ -1,0 +1,5 @@
+# Devstral 2 (123B, code-specialized) — override executor model only; all other settings inherit from default.yaml
+# No global or cross-region inference profile available; region-specific only
+models:
+  executor:
+    model_id: "mistral.devstral-2-123b"
