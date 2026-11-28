@@ -1112,7 +1112,8 @@ This stage has a **two-part structure**: planning followed by generation.
    the plan file, once for both lines:
    "Generating unit-2's code for 9 plan steps. This may take several minutes
    depending on project complexity. I'll show a summary when complete." at
-   the start, and where an interrupted build picks up ("Picking up unit-2's
+   the start (on Claude Code, Codex and opencode it says instead "A line shows
+   as each step is done, and I'll show a summary when complete."), and where an interrupted build picks up ("Picking up unit-2's
    code at step 5 of 9 (1-4 done)."; with the code written and no step marked,
    "Picking up unit-2's code: the plan marks none of its 9 steps done, checking
    what is built."). When the plan groups its tasks under
@@ -1120,6 +1121,18 @@ This stage has a **two-part structure**: planning followed by generation.
    ("Generating unit-2's code for the 19 tasks in 4 plan steps ...", "Picking
    up unit-2's code at task 7 of 19, in Step 3 (tasks 1-6 done)."). The agent
    never counts the steps itself.
+
+   While the developer builds, each step it ticks in the plan file is the
+   build's progress. On the harnesses whose PostToolUse hook output reaches
+   the person (Claude Code, Codex, opencode), the `write-audit-log` hook shows
+   one line when a plan write ticks a step not yet counted
+   (`codeGenerationProgressLine`): "Code generation for unit-2: 3 of 9 plan
+   steps done, latest "...". Next: "..."." and, at the end, "Code generation
+   for unit-2: all 9 plan steps done." Claude Code shows a `systemMessage` to
+   the person and does not hand it to the model. The count
+   said last is kept per plan under the record's `.aidlc-engine/`, so an edit
+   that ticks nothing new says nothing. Kiro CLI, Kiro IDE, Copilot and Cursor
+   have no such channel and show no line.
 
    Delegate to Task tool with the aidlc-developer-agent subagent
    (subagent_type="aidlc-developer-agent").

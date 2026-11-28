@@ -702,18 +702,27 @@ switch (target) {
 
   case "audit-and-sensors": {
     // apply_patch → write-audit-log THEN run-sensors per touched file (mirrors
-    // the Claude settings.json Write|Edit registration order). Advisory.
+    // the Claude settings.json Write|Edit registration order). Advisory. The
+    // audit hook's one line, when a patch ticks a Code Generation plan step, is
+    // the person's progress line ({"systemMessage": ...}, which Codex shows in
+    // the UI); forward the last one. The duplicate delivery replays nothing, so
+    // the line is shown once.
     if ((codex.tool_name ?? "") === "apply_patch") {
       const command = (codex.tool_input?.command as string) ?? "";
+      let progress = "";
       for (const f of patchedFiles(command)) {
         const fwd = JSON.stringify({
           hook_event_name: "PostToolUse",
           tool_name: f.tool,
           tool_input: { file_path: f.path },
         });
-        runCore("aidlc-write-audit-log.ts", fwd);
+        const audit = runCore("aidlc-write-audit-log.ts", fwd);
+        if (audit.stdout.trim()) progress = `${audit.stdout.trim()}\n`;
         runCore("aidlc-run-sensors.ts", fwd);
       }
+      persistResponse("", 0);
+      if (progress) process.stdout.write(progress);
+      return 0;
     }
     persistResponse("", 0);
     return 0;
