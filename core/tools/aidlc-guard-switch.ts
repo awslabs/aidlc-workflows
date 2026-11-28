@@ -2,6 +2,10 @@ import { existsSync } from "node:fs";
 import { appendAuditEntryUnlocked, type AuditEntryInput } from "./aidlc-audit.ts";
 import { firstFrontQuestionSince, latestFrontQuestionId, readQuestion } from "./aidlc-question-store.ts";
 import {
+  freshReviewReceipts,
+  loadStageGraph,
+  parseCheckboxes,
+  resolveReviewClass,
   assertChangeControlLedgerWritable,
   auditBlockField,
   CONFIG_KEYS,
@@ -76,6 +80,12 @@ import {
   personsWordsText,
 } from "./aidlc-lib.ts";
 import { entrySkillInvocation } from "./aidlc-runtime-paths.ts";
+import {
+  asReviewGranularity,
+  PHASE_REVIEW_PHASES,
+  resolveReviewGranularity,
+  type ReviewGranularity,
+} from "./aidlc-review-granularity.ts";
 import { chatsSince, latestMessage, latestSpendingTimestamp, listMessages, type StoredMessage } from "./aidlc-message-store.ts";
 import { backOnLine, quoted, widerPlaceOffer } from "./aidlc-recorded-switches.ts";
 import { settingPurpose } from "./aidlc-settings.ts";
@@ -285,6 +295,20 @@ export function storedReviewOverride(value: ReviewOverride, scope?: string | nul
   return scope !== undefined && value === scopeReviewLevel(scope) ? "" : value;
 }
 
+// Insert a blank `- **<field>**:` line after the first anchor field present,
+// appending at the end when none is found. Shared by the Review Override and
+// Review Granularity setters so both fields land in the same state section.
+function insertStateFieldLine(content: string, field: string, anchors: readonly string[]): string {
+  for (const anchor of anchors) {
+    const updated = content.replace(
+      new RegExp(`^(- \\*\\*${anchor}\\*\\*:[^\\n]*)$`, "m"),
+      `$1\n- **${field}**:`,
+    );
+    if (updated !== content) return updated;
+  }
+  return `${content.trimEnd()}\n- **${field}**:\n`;
+}
+
 export function applyReviewOverride(
   content: string,
   value: ReviewOverride | undefined,
@@ -303,23 +327,50 @@ export function applyReviewOverride(
   const changed = storedReview !== (oldReview ?? "");
   if (!changed) return { content, oldReview, storedReview, changed };
   if (oldReview === null) {
-    const beforeInsert = content;
-    content = content.replace(
-      /^(- \*\*Test Strategy\*\*:[^\n]*)$/m,
-      "$1\n- **Review Override**:",
-    );
-    if (content === beforeInsert) {
-      content = content.replace(
-        /^(- \*\*Scope\*\*:[^\n]*)$/m,
-        "$1\n- **Review Override**:",
-      );
-    }
-    if (content === beforeInsert) {
-      content = `${content.trimEnd()}\n- **Review Override**:\n`;
-    }
+    content = insertStateFieldLine(content, "Review Override", ["Test Strategy", "Scope"]);
   }
   content = setField(content, "Review Override", storedReview);
   return { content, oldReview, storedReview, changed };
+}
+
+export function parseReviewGranularity(
+  raw: string | undefined,
+  die: (message: string) => never = throwSettingsError,
+): ReviewGranularity | undefined {
+  if (!raw) return undefined;
+  const value = asReviewGranularity(raw.toLowerCase());
+  if (value === null) {
+    die(`Unknown review granularity: "${raw}". Valid: stage, phase.`);
+  }
+  return value;
+}
+
+/** Mirror of applyReviewOverride for the `Review Granularity` field: a value
+ *  equal to the scope's own clears the override, so the scope's
+ *  review_granularity applies again and follows later scope changes. */
+export function applyReviewGranularity(
+  content: string,
+  value: ReviewGranularity | undefined,
+  scope: string | null = getField(content, "Scope"),
+): {
+  content: string;
+  oldGranularity: string | null;
+  storedGranularity: string | undefined;
+  changed: boolean;
+} {
+  const oldGranularity = getField(content, "Review Granularity");
+  if (value === undefined) {
+    return { content, oldGranularity, storedGranularity: undefined, changed: false };
+  }
+  const scopeDefault = resolveReviewGranularity(scope, null);
+  const storedGranularity = value === scopeDefault ? "" : value;
+  const changed = storedGranularity !== (oldGranularity ?? "");
+  if (!changed) return { content, oldGranularity, storedGranularity, changed };
+  if (oldGranularity === null) {
+    content = insertStateFieldLine(content, "Review Granularity", ["Review Override", "Test Strategy", "Scope"]);
+  }
+  content = setField(content, "Review Granularity", storedGranularity);
+  return { content, oldGranularity, storedGranularity, changed };
 }
 function setCeremonyField(content: string, key: CeremonyKey, value: CeremonySetting, source: string): string {
   const field = CEREMONY_FIELDS[key];
@@ -502,6 +553,8 @@ export function applyIntentSettings(
   if (rawReview !== undefined && review === undefined) {
     die(`Unknown review class: "${rawReview}". Valid: adversarial, advisory, none.`);
   }
+  // parseReviewGranularity refuses any invalid non-empty value itself.
+  const reviewGranularity = parseReviewGranularity(requested["review-granularity"]?.value, die);
   const changeControl = parseGuardPolicy(rawChangeControl);
   if (rawChangeControl !== undefined && changeControl === null) {
     die(`Unknown Guard Policy value: "${rawChangeControl}". Valid: ${GUARD_POLICY_VALUES.join(", ")}.`);
@@ -760,6 +813,59 @@ export function applyIntentSettings(
       : level === "none"
         ? `Specialist reviews are off for the rest of this work. To turn them back on, ${back}.`
         : `Specialist reviews are ${level} for the rest of this work (they were ${word(was)}). To change it back, ${back}.`);
+  }
+  if (reviewGranularity !== undefined) {
+    const target = reviewScope ?? getField(content, "Scope");
+    const update = applyReviewGranularity(content, reviewGranularity, target);
+    content = update.content;
+    if (update.changed) {
+      audit.push({
+        eventType: "REVIEW_GRANULARITY_CHANGED",
+        fields: {
+          "Old Granularity": update.oldGranularity || "none set",
+          "New Granularity": update.storedGranularity || "cleared (scope default applies)",
+        },
+      });
+    }
+    const level = update.storedGranularity === ""
+      ? resolveReviewGranularity(target, null)
+      : (update.storedGranularity ?? reviewGranularity);
+    const was = update.oldGranularity || resolveReviewGranularity(target, null);
+    const back = `say so or type ${entrySkillInvocation()} config set review-granularity ${was}`;
+    const where = (value: string): string =>
+      value === "phase"
+        ? "grouped per reviewer late in each phase (ideation and inception; Construction stays per stage)"
+        : "after every reviewed stage";
+    lines.push(!update.changed
+      ? `Specialist reviews already run ${where(level)} for this work.`
+      : `Specialist reviews now run ${where(level)} for the rest of this work. To change it back, ${back}.`);
+    // Switching back after stages already deferred their reviews drops those
+    // promised passes: a real skipped step, said once, with the way to still
+    // get one. A line, never a block.
+    if (update.changed && was === "phase" && level === "stage") {
+      try {
+        const done = new Set(
+          parseCheckboxes(content).filter((row) => row.state === "completed").map((row) => row.slug),
+        );
+        const unreviewed = loadStageGraph()
+          .filter((node) => {
+            if (!PHASE_REVIEW_PHASES.has(node.phase) || node.reviewer === undefined) return false;
+            if (node.for_each === "unit-of-work" || !done.has(node.slug)) return false;
+            const nodeClass = resolveReviewClass(node.review_class, target ?? "", content);
+            if (nodeClass === "none") return false;
+            return freshReviewReceipts(projectDir, content, node, { reviewClass: nodeClass }).stageVerdict === null;
+          })
+          .map((node) => node.name);
+        if (unreviewed.length > 0) {
+          lines.push(
+            `Heads up: ${unreviewed.join(", ")} ${unreviewed.length === 1 ? "was" : "were"} approved with ` +
+              "the review deferred, and that review now stays unrun; ask for a review of any of them at any time.",
+          );
+        }
+      } catch {
+        // The switch line was said; the scan adds color only.
+      }
+    }
   }
   // Persist scope-owned updates even while memory controls the effective value.
   // Explicit strict is also recordable; explicit relaxed was refused above.
@@ -1676,13 +1782,14 @@ export function withdrawFencesOffAtCreation(
 // test strategy and review are read back from it at creation when the command
 // carries none (levelsKeptForNextWork).
 
-const KEPT_LEVEL_KEYS = ["depth", "test-strategy", "review"] as const;
+const KEPT_LEVEL_KEYS = ["depth", "test-strategy", "review", "review-granularity"] as const;
 type KeptLevelKey = (typeof KEPT_LEVEL_KEYS)[number];
 
 const KEPT_SETTING_LABELS: Record<string, string> = {
   depth: "Depth",
   "test-strategy": "Test strategy",
   review: "Review",
+  "review-granularity": "Review granularity",
   sensors: "Sensors",
   learnings: "Learnings",
   "summary-confirmation": "Summary confirmation",
@@ -1726,6 +1833,7 @@ export function keepSettingsForNextWork(
     fail(`Unknown test strategy: "${strategy}". Valid: minimal, standard, comprehensive.`);
   }
   parseReviewOverride(value("review"), fail);
+  parseReviewGranularity(value("review-granularity"), fail);
   if (policy !== undefined && parseGuardPolicy(policy) === null) {
     fail(`Unknown Guard Policy value: "${policy}". Valid: ${GUARD_POLICY_VALUES.join(", ")}.`);
   }

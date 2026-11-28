@@ -481,6 +481,8 @@ describe("t338 atomic per-intent settings", () => {
     expect(listed.status, listed.stderr).toBe(0);
     expect(JSON.parse(listed.stdout)).toEqual({
       depth: "Minimal", "test-strategy": "Comprehensive", review: "none",
+      // Unset review-granularity reads as the raw empty field, like review.
+      "review-granularity": "",
       "guard-policy": "strict (set by you)", sensors: "off (set by you)",
       learnings: "off (set by you)", "summary-confirmation": "on (set by you)",
       "plan-approval": "on (from scope classic)",
