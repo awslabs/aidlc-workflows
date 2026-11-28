@@ -75,7 +75,7 @@ describe("a plugin's templates in every space", () => {
     const lines = mergePluginRules(proj, p);
     expect(lines).toEqual([
       "test-pro's templates are in each space's memory/templates: test-plan.md. " +
-        "The required-sections sensor checks their ## headings at the gate; a file of your own at the same path is kept as yours.",
+        "The required-sections sensor checks their ## headings at the gate; a file of your own at the same path is kept as yours (the plugin owns only the unedited copies it placed).",
     ]);
     for (const space of ["default", "alpha"]) expect(readFileSync(planPath(proj, space), "utf-8")).toBe(PLAN_V1);
     expect(readTemplatesRecord(proj, "test-pro")).toEqual({ [PLAN]: { sha256: sha(PLAN_V1), kept: [] } });
@@ -279,6 +279,21 @@ describe("review fixes: what a templates record may name, and whose file is whos
     // The plugin's update never replaces it either.
     mergePluginRules(proj, plugin({ [PLAN]: PLAN_V2 }));
     expect(readFileSync(planPath(proj, "default"), "utf-8")).toBe(PLAN_V1);
+  });
+
+  test("a hand edit that lands on the next version's exact bytes stays the person's: kept, said once, and off leaves it", () => {
+    const proj = project(["default"]);
+    const p = plugin({ [PLAN]: PLAN_V1 });
+    mergePluginRules(proj, p);
+    // The person edits the plugin's copy into what v2 will ship.
+    writeFileSync(planPath(proj, "default"), PLAN_V2);
+    writeFileSync(join(p.root, "memory", "templates", "test-plan.md"), PLAN_V2);
+    const lines = mergePluginRules(proj, p);
+    expect(lines).toEqual(["Kept your own aidlc/spaces/default/memory/templates/test-plan.md; test-pro's template did not replace it."]);
+    expect(readTemplatesRecord(proj, "test-pro")?.[PLAN].kept).toEqual(["default"]);
+    expect(mergePluginRules(proj, p)).toEqual([]);
+    stripPluginRules(proj, "test-pro", true);
+    expect(readFileSync(planPath(proj, "default"), "utf-8")).toBe(PLAN_V2);
   });
 
   test("a template-only first version leaves no level choice behind: a later version's declared level applies, and is said", () => {

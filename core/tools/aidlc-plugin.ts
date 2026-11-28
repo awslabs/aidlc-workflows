@@ -2206,7 +2206,7 @@ function templatePlacementLine(key: string, rels: string[]): string {
   const shaped = files.filter((file) => core.has(file))
     .map((file) => `${file} sets the whole layout of the ${core.get(file)} document`);
   return `${key}'s templates are in each space's memory/templates: ${files.join(", ")}. ` +
-    "The required-sections sensor checks their ## headings at the gate; a file of your own at the same path is kept as yours." +
+    "The required-sections sensor checks their ## headings at the gate; a file of your own at the same path is kept as yours (the plugin owns only the unedited copies it placed)." +
     (shaped.length === 0
       ? ""
       : ` ${shaped.join("; ")}: the agent fills it in place of the stage's own layout.`);
@@ -2251,20 +2251,19 @@ function mergePluginTemplates(
       }
       if (!lstatSync(path).isFile()) continue;
       const existing = templateLf(readFileSync(path, "utf-8"));
-      // Identical bytes are the plugin's only once its record placed them: a
-      // file that was there before the plugin's first merge is the person's,
-      // even when it matches, so turning the plugin off never takes it.
-      if (existing === content && recorded !== undefined && !keptBefore.has(basename(dirname(memoryDir)))) {
-        landed = true;
-        continue;
-      }
       const existingSha = sha256Text(existing);
-      if (recorded !== undefined && !keptBefore.has(basename(dirname(memoryDir))) && existingSha === recorded.sha256) {
-        writeFileSync(path, content);
+      const space = basename(dirname(memoryDir));
+      // The record's digest decides first: only the plugin's own unedited
+      // bytes are the plugin's. A file that does not match the record is the
+      // person's even when it equals the incoming version (a hand edit can
+      // land on the next version's exact bytes), and a file there before the
+      // plugin's first merge is the person's even when identical, so turning
+      // the plugin off never takes either.
+      if (recorded !== undefined && !keptBefore.has(space) && existingSha === recorded.sha256) {
+        if (existing !== content) writeFileSync(path, content);
         landed = true;
         continue;
       }
-      const space = basename(dirname(memoryDir));
       kept.push(space);
       if (!keptBefore.has(space)) {
         const shown = relative(projectDir, path).split(sep).join("/");
@@ -2536,10 +2535,14 @@ function rulesNeedMerge(projectDir: string, plugin: InstalledPlugin, requested?:
       if (!existsSync(path)) return true;
       if (!lstatSync(path).isFile()) return false;
       const existing = templateLf(readFileSync(path, "utf-8"));
-      if (existing === content) return false;
-      // The plugin's own previous bytes await its update; any other bytes are
-      // the person's file, which one merge records as kept (and says once) and
-      // then never touches.
+      // Matching the incoming version proves nothing by itself: bytes that do
+      // not match the record are the person's (a hand edit can land on the
+      // next version's exact bytes), and one merge records the keep (saying
+      // it once); the plugin's own previous bytes await its update.
+      if (existing === content) {
+        return sha256Text(existing) !== recordTemplates[rel].sha256 &&
+          !recordTemplates[rel].kept.includes(basename(dirname(memoryDir)));
+      }
       return sha256Text(existing) === recordTemplates[rel].sha256 ||
         !recordTemplates[rel].kept.includes(basename(dirname(memoryDir)));
     })

@@ -437,9 +437,15 @@ methodology knowledge. A plugin may also ship house rules (Method/rules, below).
   `memory/templates/`, where the `required-sections` sensor requires those
   headings at the gate (emoji-insensitive, advisory) and the stage protocol
   has the agent fill the same file as the skeleton, so the produced shape and
-  the checked shape cannot drift. A team's own file at the same path always
+  the checked shape cannot drift. A team's own file at the same path
   wins — kept, never overwritten, said once — and turning the plugin off
-  removes exactly your files, byte-proven. `test-pro` ships one for its
+  removes only your plugin's own files, byte-proven: anything the team
+  changed stays theirs, even an edit that lands on your next version's exact
+  bytes, and a file there before your first merge stays theirs even
+  byte-identical. (A byte-identical copy a person puts into a space your
+  merge found empty is the one thing the bytes cannot tell from yours: it
+  goes with the plugin when turned off, and the next compose restores the
+  same bytes.) `test-pro` ships one for its
   `test-pro-integration-test-plan`. Name the template for the file the
   artifact writes (`build-test-results` writes `test-results.md`, so its
   template is `test-results.md`). A template for a core stage's own document

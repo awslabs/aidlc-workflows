@@ -999,7 +999,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
         "test-pro's rules are in team.md (and phases/inception.md), in a section of their own at the end. " +
         "To keep them in org.md or project.md instead: /aidlc plugin select --rules-level test-pro=org\n" +
         "test-pro's templates are in each space's memory/templates: test-pro-integration-test-plan.md. " +
-        "The required-sections sensor checks their ## headings at the gate; a file of your own at the same path is kept as yours.\n",
+        "The required-sections sensor checks their ## headings at the gate; a file of your own at the same path is kept as yours (the plugin owns only the unedited copies it placed).\n",
     );
     expect(invocation.stderr).toBe("");
     expect(invocation.error).toBeNull();
