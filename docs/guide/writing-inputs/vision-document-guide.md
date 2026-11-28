@@ -51,6 +51,29 @@ label goes):
    4. Not yet defined
 ```
 
+### When the vision and the technical environment disagree
+
+The vision sets the goal for the first release. The technical environment
+describes the systems and constraints the team works with. AI-DLC gives
+neither document automatic precedence. When the approved systems cannot
+deliver a promised outcome, put the decision in **Open Questions** and name
+who can settle it.
+
+For example, a vision might promise stock counts within a minute of each
+sale, while the technical environment lists a nightly export as the only
+approved stock feed. The product owner and the owner of the feed can then
+answer this question together.
+
+> Can stores use last night's counts if the screen shows when they were
+> exported, or does the first release need an approved feed that updates
+> within a minute?
+
+If the nightly counts are enough, update the first-release success criterion
+to say how fresh the counts must be. If the minute matters, get agreement
+from the feed owner and update the technical document when that feed is
+approved. Until then, record it as a dependency. Check that the agreed
+choice appears in the requirements before approving them.
+
 ---
 
 ## The short version
