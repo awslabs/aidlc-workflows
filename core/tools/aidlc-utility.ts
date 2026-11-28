@@ -1257,7 +1257,14 @@ function removePluginFragments(content: string, plugin: string): string {
 // compose recreates them when the plugin is re-enabled.
 // The plugins whose rules sections the last strip took out, for the line
 // select says.
-const rulesTakenOut = new Set<string>();
+// What select took out of each plugin's memory surface, for its off line.
+const rulesTakenOut = new Map<string, { rules: boolean; templates: boolean }>();
+
+function memoryTakenOut(took: { rules: boolean; templates: boolean } | undefined): string {
+  if (took === undefined) return "";
+  if (took.rules && took.templates) return ", and its rules and templates,";
+  return took.templates ? ", and its templates," : ", and its rules,";
+}
 
 function stripDisabledPluginContributions(
   plugins: readonly string[],
@@ -1318,9 +1325,10 @@ function stripDisabledPluginContributions(
       rmSync(sidecar, { force: true });
       pluginTouched = true;
     }
-    if (stripPluginRules(runtimeProjectDir(), plugin, true)) {
+    const took = { rules: false, templates: false };
+    if (stripPluginRules(runtimeProjectDir(), plugin, true, took)) {
       pluginTouched = true;
-      rulesTakenOut.add(plugin);
+      rulesTakenOut.set(plugin, took);
     }
     if (pluginTouched) stripped.push(plugin);
   }
@@ -1546,7 +1554,7 @@ function handleSelectPlugins(projectDir: string, positional: string[], rulesLeve
       // again, not when it is: its pause line says so.
       for (const plugin of strippedPlugins.filter((name) => !pausedAfter.has(name))) {
         process.stdout.write(
-          `What ${plugin} added to other stages and agents${rulesTakenOut.has(plugin) ? ", and its rules," : ""} is taken out; turn ${plugin} back on and ${rulesTakenOut.has(plugin) ? "they return" : "it returns"} ${
+          `What ${plugin} added to other stages and agents${memoryTakenOut(rulesTakenOut.get(plugin))} is taken out; turn ${plugin} back on and ${rulesTakenOut.has(plugin) ? "they return" : "it returns"} ${
             nextCompose(harnessName, plugin, null)
           }.\n`,
         );
@@ -1852,8 +1860,7 @@ async function handlePluginSync(projectDir: string, pluginRoot: string | undefin
 
 function pluginSyncRules(projectDir: string, root: string): string[] {
   try {
-    const line = mergePluginRulesFromRoot(projectDir, harnessDir(), root, isPluginEnabled);
-    return line === null ? [] : [line];
+    return mergePluginRulesFromRoot(projectDir, harnessDir(), root, isPluginEnabled);
   } catch (error) {
     die(`plugin sync failed for ${root}: ${errorMessage(error)}`);
   }

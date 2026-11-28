@@ -243,7 +243,7 @@ describe.each([...HARNESSES])("$name: a plugin's rules on a real install", (harn
 
     // Off: out of every file and the next brief. On: back byte for byte.
     const off = select(p, "aidlc");
-    expect(off).toContain("What test-pro added to other stages and agents, and its rules, is taken out");
+    expect(off).toContain("What test-pro added to other stages and agents, and its rules and templates, is taken out");
     expect(holding(p)).toEqual([]);
     expect(briefHolding(p)).toEqual([]);
     expect(snapshot(p)).toEqual(before);
@@ -384,7 +384,7 @@ describe("two harnesses in one project", () => {
     const p = installed(HARNESSES[0]);
     sync(p);
     const out = select(p, "aidlc", "--rules-level", "test-pro=org");
-    expect(out).toContain("and its rules, is taken out");
+    expect(out).toContain("and its rules and templates, is taken out");
     expect(out).not.toContain("test-pro's rules are in");
     expect(out).toContain("test-pro's rules will be in org.md");
     expect(holding(p)).toEqual([]);

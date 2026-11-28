@@ -104,9 +104,10 @@ path without attributing it to the plugin currently composing.
 `contributions/`, whose files are consumed by the merge rather than copied as a
 primitive subtree.
 
-`memory` (canonical `memory/`) carries your plugin's house rules: `rules.md` and
-`phases/<phase>.md`, with `aidlc.rulesLevel` naming the rule file `rules.md`
-lands in (Method/rules, section 4).
+`memory` (canonical `memory/`) carries your plugin's house rules — `rules.md`
+and `phases/<phase>.md`, with `aidlc.rulesLevel` naming the rule file
+`rules.md` lands in — and its section policies, `templates/<artifact>.md`
+(Method/rules and Section policy, section 4).
 
 Ship only the keys your plugin uses. `test-pro` ships a support agent, a plugin
 scope, and per-agent methodology knowledge; it still reuses
@@ -244,8 +245,12 @@ marks what the compose hook merges today vs. designed-but-deferred (mirrors doc 
 - `adds.required_sections` — ✅ merged into the stage's `required_sections`. Note
   it is **not machine-enforced today**: the field is written and validates, but it
   does not reach the compiled graph node, and the shipped `required-sections`
-  sensor derives its expectations from templates, so nothing yet fails a stage for
-  a missing section. Treat it as declarative intent for now.
+  sensor derives its expectations from templates, so nothing fails a stage for
+  a missing *declared* section. To distribute an enforced section policy, ship
+  `memory/templates/<artifact>.md` instead (Section policy, section 4): the
+  sensor requires its `##` headings at the gate, and the same file is the
+  skeleton the agent fills. Treat `adds.required_sections` as declarative
+  intent for now.
 - `adds.scopes` — ✅ set-unioned into the target stage's `scopes:` list, with
   two guard rails (each violation dropped-with-log, never merged): the scope's
   identity file must be installed (`scopes/<name>.md` ships in the same
@@ -425,6 +430,31 @@ methodology knowledge. A plugin may also ship house rules (Method/rules, below).
   `Ordering:`): validate refuses them, since a plugin ships rules, never locks.
   Do **not** ship a `rules/` dir: that path is no longer read. See
   [Rules and the Loop](05-rules-and-the-loop.md) and
+  [The Plugin Mechanism](../reference/18-plugin-mechanism.md), section 7.
+- **Section policy.** Ship `memory/templates/<artifact>.md` — one flat
+  lowercase file per artifact, its `##` headings the sections the artifact
+  must carry. Plugin sync writes it whole into every space's
+  `memory/templates/`, where the `required-sections` sensor requires those
+  headings at the gate (emoji-insensitive, advisory) and the stage protocol
+  has the agent fill the same file as the skeleton, so the produced shape and
+  the checked shape cannot drift. A team's own file at the same path
+  wins — kept, never overwritten, said once — and turning the plugin off
+  removes only your plugin's own files, byte-proven: anything the team
+  changed stays theirs, even an edit that lands on your next version's exact
+  bytes, and a file there before your first merge stays theirs even
+  byte-identical. (A byte-identical copy a person puts into a space your
+  merge found empty is the one thing the bytes cannot tell from yours: it
+  goes with the plugin when turned off, and the next compose restores the
+  same bytes.) `test-pro` ships one for its
+  `test-pro-integration-test-plan`. Name the template for the file the
+  artifact writes (`build-test-results` writes `test-results.md`, so its
+  template is `test-results.md`). A template for a core stage's own document
+  (for example `requirements.md`) is allowed and sets that document's whole
+  layout in every space, in place of the stage's own: keep every section the
+  stage needs in it; validate warns and sync says so once. A template for a
+  questions/timestamp marker is never shape-checked, and one with no `##`
+  headings requires nothing; validate warns on both. Files the OS or an
+  editor leaves in the folder (`.DS_Store`, `.gitkeep`) are skipped. See
   [The Plugin Mechanism](../reference/18-plugin-mechanism.md), section 7.
 - **Knowledge.** Ship per-agent **methodology** knowledge under
   `knowledge/<agent-slug>/`, projected into the framework-shipped

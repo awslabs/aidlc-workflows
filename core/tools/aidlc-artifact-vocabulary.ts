@@ -13,10 +13,27 @@ export function artifactFilename(name: string): string {
   return ARTIFACT_FILENAMES[name] ?? `${name}.md`;
 }
 
+/** The file an artifact writes when it is not `<name>.md` (a template is named for the file), else null. */
+export function differentArtifactFilename(name: string): string | null {
+  const file = ARTIFACT_FILENAMES[name];
+  return file !== undefined && file !== `${name}.md` ? file : null;
+}
+
+/** A questions or timestamp marker: never shape-checked, so no template applies to it. */
+export function isMarkerArtifact(name: string): boolean {
+  return name.endsWith("-questions") || name.endsWith("-timestamp");
+}
+
 /** Stages whose produced artifacts live in the space-level code knowledge base. */
 export const KNOWN_CODEKB_STAGES: ReadonlySet<string> = new Set([
   "reverse-engineering",
 ]);
+
+// One flat lowercase file per artifact under memory/templates/ (a space's, or
+// a plugin's to ship): the stem is the artifact the required-sections sensor
+// keys the template by. The plugin memory reader and the plugin validator both
+// read template-name legality through this one rule.
+export const TEMPLATE_FILE_NAME = /^[a-z0-9][a-z0-9-]*\.md$/;
 
 // A run of fully-qualified emoji, optionally ZWJ-joined, then whitespace is
 // decoration, so an information-sign emoji before `Sources` still names the

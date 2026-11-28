@@ -282,7 +282,7 @@ describe("t224 plugin selection - install chooses visible plugin surfaces", () =
     const disable = runUtility(proj, ["select-plugins", "aidlc"]);
     expect(disable.status).toBe(0);
     expect(disable.stdout).toContain(
-      "What test-pro added to other stages and agents, and its rules, is taken out; turn test-pro back on and they return at the next session start.",
+      "What test-pro added to other stages and agents, and its rules and templates, is taken out; turn test-pro back on and they return at the next session start.",
     );
     const stripped = readFileSync(stagePath, "utf-8");
     expect(stripped).not.toContain("test-pro-regression-suite");
@@ -367,7 +367,7 @@ describe("t224 plugin selection - install chooses visible plugin surfaces", () =
 
     const core = runUtility(proj, ["select-plugins", "aidlc"]);
     expect(core.status, core.stderr).toBe(0);
-    expect(core.stdout).toContain(`What ${PLUGIN} added to other stages and agents, and its rules, is taken out;`);
+    expect(core.stdout).toContain(`What ${PLUGIN} added to other stages and agents, and its rules and templates, is taken out;`);
     expect(buildSensors()).not.toContain("coverage-threshold");
     expect(buildSensors()).not.toContain("requirement-coverage");
   });
@@ -541,6 +541,10 @@ describe("t224 plugin selection - install chooses visible plugin surfaces", () =
       const ruleFiles = ["team.md", "phases/inception.md"].map((rel) => join(proj, "aidlc", "spaces", "default", "memory", rel));
       const composedRules = ruleFiles.map((path) => readFileSync(path, "utf-8"));
       for (const text of composedRules) expect(text).toContain("## Rules from the test-pro plugin");
+      // And so does its template, a whole file in the space's memory/templates/.
+      const template = join(proj, "aidlc", "spaces", "default", "memory", "templates", "test-pro-integration-test-plan.md");
+      const composedTemplate = readFileSync(template, "utf-8");
+      expect(composedTemplate).toContain("## Branch Coverage");
 
       const off = config("project", "--plugins", "aidlc", "--yes");
       expect(off.status, `${off.stdout}${off.stderr}`).toBe(0);
@@ -550,6 +554,7 @@ describe("t224 plugin selection - install chooses visible plugin surfaces", () =
       expect(readFileSync(stage, "utf-8")).not.toContain("test-pro-regression-suite");
       expect(existsSync(sidecar)).toBe(false);
       for (const path of ruleFiles) expect(readFileSync(path, "utf-8")).not.toContain("## Rules from the test-pro plugin");
+      expect(existsSync(template)).toBe(false);
       const nodes = JSON.parse(readFileSync(join(proj, leaf, "tools", "data", "stage-graph.json"), "utf-8")) as GraphStage[];
       const bat = nodes.find((s) => s.slug === "build-and-test");
       expect(bat?.produces).not.toContain("test-pro-regression-suite");
@@ -561,6 +566,7 @@ describe("t224 plugin selection - install chooses visible plugin surfaces", () =
       expect(merged.map((path) => readFileSync(path, "utf-8"))).toEqual(composed);
       expect(readFileSync(sidecar, "utf-8")).toBe(composedSidecar);
       expect(ruleFiles.map((path) => readFileSync(path, "utf-8"))).toEqual(composedRules);
+      expect(readFileSync(template, "utf-8")).toBe(composedTemplate);
     });
   }
 

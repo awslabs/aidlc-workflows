@@ -638,7 +638,7 @@ and machines.
 | Your documents (`knowledge/`) | Shared. `associate` adds an intent to a document's list and can be repeated; a document with no intent is space-wide | Not shared. Each space has its own folder | `onboard` copies a file in and refuses a path outside the project, so copy the file into the other project |
 | Code knowledge (`codekb/`) | Shared, per repo. A current scan can be reused by your choice | Not shared. Another space scans again | Each project scans its own. A teammate's clone of the same repo can reuse a scan |
 | Saved scopes (`aidlc/scopes/`) | Shared | Shared by every space in the workspace | Copy the file |
-| Output-format overrides (`memory/templates/`) | Shared | Per space. Not copied into a new space | Copy the files |
+| Output-format overrides (`memory/templates/`) | Shared | Per space. Your own files are not copied into a new space; one a plugin ships arrives there on its own | Copy the files |
 | Agents you add (in the harness folder) | Shared | Shared by every space | Copy the files |
 | Repo list (`repos.json`) | One per workspace | One per workspace | Per project |
 | Model and flag policy | Shared | Shared | Set once in the machine settings file and applied to every project on the machine. A project's own `aidlc.settings.json` overrides it value by value, except bypasses, which add up across the files ([the hierarchy](18-install-and-lifecycle.md)). Model and effort policy does not apply on Cursor and GitHub Copilot, where every agent uses the model you pick in the tool. On Kiro IDE only one agent's own model and effort apply; a preset or group effort does not. |

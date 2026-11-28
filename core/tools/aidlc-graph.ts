@@ -129,6 +129,7 @@ import {
   type RuleFrontmatter,
   validateRuleFrontmatter,
 } from "./aidlc-rule-schema.ts";
+import { isMarkerArtifact } from "./aidlc-artifact-vocabulary.ts";
 import { PLUGIN_RULES_OPENING } from "./aidlc-plugin-rules.ts";
 import {
   parseSensorManifest,
@@ -1522,11 +1523,7 @@ export const PATH_SET_SENSOR_IDS: ReadonlySet<string> = new Set(["required-secti
 
 export function templateEligibleArtifacts(produces: string[]): string[] {
   return (produces ?? []).filter(
-    (a) =>
-      typeof a === "string" &&
-      a.length > 0 &&
-      !a.endsWith("-questions") &&
-      !a.endsWith("-timestamp")
+    (a) => typeof a === "string" && a.length > 0 && !isMarkerArtifact(a)
   );
 }
 
