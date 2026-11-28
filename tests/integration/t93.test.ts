@@ -214,7 +214,7 @@ describe("t93 aidlc-sensor describe (migrated from t93-sensor-list-describe.sh, 
     expect(
       hasLine(r.out, `command: ${withCopyLaunchOptions("bun .claude/tools/aidlc.ts engine sensor-traceability")}`),
     ).toBe(true);
-    expect(hasLine(r.out, "matches: **/traceability.json")).toBe(true);
+    expect(hasLine(r.out, "matches: **/{traceability.json,interaction-spec.md}")).toBe(true);
   });
 
   test("11: describe <unknown-id> exits 1 with a known-ids hint", () => {

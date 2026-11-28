@@ -22,6 +22,7 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFile
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import type { AuditShardEvent } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { PREVIEW_POLICY_TAG } from "../../dist/claude/.claude/tools/aidlc-artifact-resolution.ts";
 import { afterAll, describe, expect, test } from "bun:test";
 import { cleanupTestProject, proposalFollowUp, REPO_ROOT, setupIntegrationProject } from "./fixtures.ts";
 import { COPY_LAUNCH_CONFIG } from "./copy-launch.ts";
@@ -1806,6 +1807,10 @@ function artifactText(path: string, stage: string): string {
   const name = path.split("/").pop() ?? path;
   if (SHAPED_ARTIFACTS[name]) return SHAPED_ARTIFACTS[name];
   if (name.endsWith(".json")) return "{}\n";
+  // Refined Mockups' preview, as the stage says to write it: the policy tag first in its head.
+  if (name.endsWith(".html")) {
+    return `<!doctype html><html><head>${PREVIEW_POLICY_TAG}<title>${stage}</title></head><body>Written by the scope run.</body></html>\n`;
+  }
   return `# ${name.replace(/\.md$/, "")}\n\n## Overview\n\nWritten by the scope run for ${stage}.\n\n## Details\n\n- Covers FR1.\n`;
 }
 

@@ -546,6 +546,8 @@ function scratchProject(): string {
     "aidlc-log.ts",
     // aidlc-log.ts writes and removes the Kiro reviewer copy through this.
     "aidlc-kiro-review-copy.ts",
+    // aidlc-log.ts checks the Refined Mockups preview's policy tag through this.
+    "aidlc-artifact-resolution.ts",
     "aidlc-message-store.ts",
     // aidlc-message-store.ts reads what an archive replaced through this.
     "aidlc-doctor-bundle.ts",

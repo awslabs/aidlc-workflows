@@ -25,6 +25,7 @@ export interface ArtifactOwnerNode {
   phase: string;
   for_each?: string;
   produces?: readonly string[];
+  optional_produces?: readonly string[];
   produces_kinds?: Readonly<Record<string, readonly string[]>>;
 }
 
@@ -290,6 +291,59 @@ export function resolveArtifactInstances(
       unitKind: null,
     },
   ];
+}
+
+/**
+ * The one Content-Security-Policy the Refined Mockups preview carries. The
+ * preview is written partly from document text and opened in a browser; with
+ * this policy first in its head, the browser runs no script and loads nothing
+ * from elsewhere, whatever the rest of the file holds.
+ */
+export const PREVIEW_CONTENT_POLICY = "default-src 'none'; style-src 'unsafe-inline'; img-src data:";
+export const PREVIEW_POLICY_TAG = `<meta http-equiv="Content-Security-Policy" content="${PREVIEW_CONTENT_POLICY}">`;
+
+// A tag as a formatter may lay it out: attributes in either order, any
+// whitespace between them, an optional closing `/>`. Names are matched as
+// HTML writes them, and the policy value itself is compared exactly.
+const CHARSET_TAG = String.raw`<meta\s+charset="[^"<>]*"\s*/?>`;
+const POLICY_VALUE = PREVIEW_CONTENT_POLICY.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const POLICY_TAG = String.raw`<meta\s+(?:http-equiv="Content-Security-Policy"\s+content="${POLICY_VALUE}"` +
+  String.raw`|content="${POLICY_VALUE}"\s+http-equiv="Content-Security-Policy")\s*/?>`;
+// The policy before anything else in the head: a browser applies a meta
+// policy only to what follows it.
+const OPENS_WITH_POLICY = new RegExp(
+  String.raw`^\uFEFF?\s*(?:<!(?:doctype|DOCTYPE) html>\s*)?<html(?:\s[^<>]*)?>\s*<head>\s*(?:${CHARSET_TAG}\s*)?${POLICY_TAG}`,
+);
+
+export function opensWithPreviewPolicy(html: string): boolean {
+  return OPENS_WITH_POLICY.test(html);
+}
+
+/**
+ * Why a Refined Mockups preview that exists does not open its head with the
+ * policy tag, or null when it does or there is none. The preview is optional:
+ * only a written one is checked.
+ */
+export function previewPolicyProblem(
+  projectDir: string,
+  owner: ArtifactOwnerNode,
+  options: ArtifactResolutionOptions = {},
+): string | null {
+  if (![...(owner.produces ?? []), ...(owner.optional_produces ?? [])].includes("mockups-preview")) return null;
+  for (const instance of resolveArtifactInstances(projectDir, "mockups-preview", owner, options)) {
+    if (!existsSync(instance.absolutePath)) continue;
+    let html: string;
+    try {
+      html = readRegularFileNoFollowOrThrow(instance.absolutePath, `preview "${instance.relativePath}"`).toString("utf-8");
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error);
+    }
+    if (!opensWithPreviewPolicy(html)) {
+      return `${instance.relativePath} must open its <head> with ${PREVIEW_POLICY_TAG} ` +
+        "(after an optional <meta charset>), so the browser runs no script and loads nothing from elsewhere.";
+    }
+  }
+  return null;
 }
 
 /**

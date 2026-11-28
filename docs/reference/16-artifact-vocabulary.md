@@ -172,7 +172,8 @@ wire identifier, not the filename.
 Artifacts live on disk at paths that are derivable from `(canonical
 name) + (producing stage) + (per-unit flag)`. Markdown is the default extension;
 the canonical `traceability` artifact is the structured-data exception and
-resolves to `traceability.json`. Two placement shapes apply:
+resolves to `traceability.json`, and Refined Mockups' `mockups-preview` is the
+viewable exception and resolves to `mockups-preview.html`. Two placement shapes apply:
 
 - **Non-per-unit stages (25 of 30):**
   `<record>/<phase>/<stage>/<artifact-filename>`
@@ -196,8 +197,11 @@ stage graph + canonical name.
 
 `artifactFilename()` in `aidlc-lib.ts` is the shared extension resolver used by
 directives, per-Unit coverage, completion guards, and review fingerprints.
-Every artifact except `traceability` resolves to `<canonical-name>.md`;
-`traceability` resolves to `traceability.json`.
+Every artifact except `traceability` and `mockups-preview` resolves to
+`<canonical-name>.md`; `traceability` resolves to `traceability.json` and
+`mockups-preview` to `mockups-preview.html`, a single self-contained file, so
+when it is written (it is an optional output) review fingerprints and the
+approval's validation basis cover it like any other output.
 
 **Review records are not artifacts.** A reviewer-bearing stage's review result
 (verdict, findings, reviewer, request id, the fingerprints it binds, and the
@@ -260,7 +264,7 @@ aidlc engine graph artifacts
 Prints one canonical name per line, alphabetically sorted.
 
 It reads the compiled graph, so it lists what the last compile saw. On a
-native install of this release it prints 122 names (output trimmed):
+native install of this release it prints 123 names (output trimmed):
 
 ```text
 $ aidlc engine graph artifacts
@@ -271,7 +275,7 @@ api-documentation
 approval-handoff-questions
 ...
 $ aidlc engine graph artifacts | wc -l
-122
+123
 ```
 
 Pipe through `wc -l` for a count, `grep` for a filter, or `diff` against

@@ -245,6 +245,25 @@ Add to `aidlc/spaces/<space>/knowledge/<agent-name>/`:
 | `knowledge/aidlc-delivery-agent/` | Sprint templates, capacity models, estimation guidelines |
 | `knowledge/aidlc-pipeline-deploy-agent/` | CI/CD patterns, deployment checklists, rollback procedures |
 
+### Design system and brand
+
+Refined Mockups (2.5) designs the experience from what you give it, and the
+approved decisions then travel through Construction. Put each kind of material
+where it is read:
+
+| Material | Where | Who reads it |
+|---|---|---|
+| Rules you want followed everywhere, such as "UI only from @company/ui; primary colour is navy" | a rule in `memory/team.md` | every agent, Code Generation's worker included |
+| A design-system guide and its tokens, as Markdown | `knowledge/aidlc-shared/` (every agent) or `knowledge/aidlc-design-agent/` (the design agent) | agents told to read them |
+| Brand PDFs, design-tool exports, screenshots | `/aidlc knowledge onboard <path>` | every Inception stage, through its documents card; Refined Mockups cites each one it uses |
+| The UI the code already has (brownfield) | nothing to do: Reverse Engineering records it | Refined Mockups, as what the code uses, not what you approved |
+
+Refined Mockups shows what your documents already answer as one question for
+you to confirm, asks you only what the sources leave open, such as which layout
+fits what you meant, and, when there are screens to show, writes
+`mockups-preview.html` so you can click through each screen in its states
+before you approve.
+
 ### Where the directories come from
 
 The team creates them. On your first `/aidlc` the engine creates the empty space-level `aidlc/spaces/<space>/knowledge/` directory, and nothing inside it. There is no scaffold command, no seeded per-agent subdirectories, and no guidance READMEs. The `aidlc-shared/` and per-agent subdirectories are a convention the agent personas look for; create the ones you have content for. Match the agent slug exactly (`aidlc-architect-agent/`, not `architect/`): a typo'd directory name is silently ignored.

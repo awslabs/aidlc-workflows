@@ -6,7 +6,7 @@ default_severity: advisory
 fire_on: gate
 description: Verifies element-level upstream coverage, downstream targets, and derived orphans in traceability.json
 category: document-traceability
-matches: "**/traceability.json"
+matches: "**/{traceability.json,interaction-spec.md}"
 input_schema:
   output_path: string
   stage_slug: string
@@ -68,6 +68,18 @@ opens, on the tables as they are then:
    finished Unit is not worked again, so a criterion nobody built or settled
    would never be built; each such story is reported as an invalid target. A
    story with a Unit that is not finished on its row is not.
+   Code Generation also owes every `UX{x}.{y}.{n}` experience decision that
+   `interaction-spec.md` records for its stories, and every app-wide one
+   (`UX0.0.{n}`), and marks one it does not build `N/A` with its reason;
+   Functional Design owes them when the Unit's kind gives it
+   `frontend-components.md`, and an `OK` row for one there must target the
+   Unit's own file, which must cite the ID. Without `interaction-spec.md`
+   neither owes any. Every `UX` ID visible in `interaction-spec.md` is a
+   decision, as every AC ID in `stories.md` is a criterion.
+   Fired on Refined Mockups' `interaction-spec.md` before its gate, it checks
+   that every decision names a story `stories.md` has or is app-wide, so a
+   wrong ID is fixed before the person approves; after that only Build and
+   Test's cross-Unit check says it again.
 6. Derives functional-design orphans from `rules.md` rather than
    trusting only the self-reported `reverse` array.
 
@@ -78,16 +90,16 @@ holds, and writes nothing when nothing is missing.
 
 Build and Test's coverage gate runs the same tool with `--stage build-and-test`
 and no output path. It reads every Code Generation table and prints each
-requirement and acceptance criterion as built or not: a requirement with
-sub-requirements is built when each Unit has built its own, a row for the
-parent alone not covering them; otherwise by its own row or, when User Stories
-ran, through the criteria of the stories User Stories traced it to. One that
-nothing builds is settled when the latest stage that traced it (User Stories,
-NFR Requirements, then Code Generation) marked it `N/A` with its reason in
-every table there that lists it; an `N/A` with no reason is not settled. A
-story Units Generation kept out of every Unit, `Deferred` with its reason,
-settles its criteria the same way (a requirement, in work without stories),
-unless a later stage's table lists them. A Code Generation `N/A` that hands the
+requirement, acceptance criterion, and owed `UX` experience decision as built
+or not: a requirement with sub-requirements is built when each Unit has built
+its own, a row for the parent alone not covering them; otherwise by its own row
+or, when User Stories ran, through the criteria of the stories User Stories
+traced it to. One that nothing builds is settled when the latest stage that
+traced it (User Stories, NFR Requirements, then Code Generation) marked it
+`N/A` with its reason in every table there that lists it; an `N/A` with no
+reason is not settled. A story Units Generation kept out of every Unit,
+`Deferred` with its reason, settles its criteria the same way (a requirement,
+in work without stories), unless a later stage's table lists them. A Code Generation `N/A` that hands the
 ID to another Unit settles nothing: if no Unit built it, it is uncovered and its
 row lists the hand-offs as `handed_off` (`<Unit>/code-generation: <target>`).
 
