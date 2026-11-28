@@ -34,6 +34,17 @@ where the space and intent come from the active cursors. The fire id is the
 `audit/<host>-<clone-id>.md` shard. The detail contains the linter's structured
 output (file, line, rule, message per violation).
 
+## Cannot run
+
+When a config governs the file but no ESLint is available to run it — the
+project has no ESLint of its own and the install ships no `bunx` (a native
+install) or `bunx` cannot fetch `eslint@10` — the check is recorded as
+`SENSOR_COULD_NOT_RUN`, never a pass, so a file nothing linted is not reported
+clean. Its `Note` is `tool-unavailable: <reason>` and names both why the check
+did not run and the remedy: install ESLint in the project, or use a copy
+install, which ships `bunx`. A file no config governs still passes with
+`Note=tool-unavailable`: there is nothing to check.
+
 ## v0.6.0 carry-forward
 
 Multi-language detection at framework boundary (read project type from

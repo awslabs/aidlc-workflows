@@ -239,9 +239,23 @@ function invokeEslint(args: string[], cwd: string, filePath: string) {
 // resolution failure, registry timeout). The dispatcher's branch b
 // (status === 127) won't catch those — so we propagate by exiting 127
 // ourselves on any non-zero exit from this probe.
+const EXIT_COULD_NOT_RUN = 3;
+const NO_ESLINT_NOTE_PREFIX = "tool-unavailable: ";
+function noEslintReason(bunxMissing: boolean): string {
+	return (
+		`${NO_ESLINT_NOTE_PREFIX}no ESLint is available to lint this file: this project has no ESLint install` +
+		(bunxMissing ? " and bunx is not on PATH" : " and bunx could not fetch eslint@10") +
+		". Install ESLint in the project, or use a copy install, which ships bunx."
+	);
+}
 function probeEslintAvailable(filePath: string, cwd: string): void {
 	const result = invokeEslint(["--version"], cwd, filePath);
 	if (result.status !== 0) {
+		if (configFilePresent(filePath, cwd)) {
+			const bunxMissing = (result.error as NodeJS.ErrnoException | undefined)?.code === "ENOENT";
+			process.stderr.write(`${noEslintReason(bunxMissing)}\n`);
+			process.exit(EXIT_COULD_NOT_RUN);
+		}
 		process.stderr.write("eslint-unavailable\n");
 		process.exit(127);
 	}
