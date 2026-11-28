@@ -307,7 +307,7 @@ import { personGitNameField } from "./aidlc-git-name.ts";
 import {
   mainCheckoutChangeStep, personTurnStands, proveMessage, readMessage, requestMessageStep, standingPersonTurn,
 } from "./aidlc-message-store.ts";
-import { swarmSourceChangedSince } from "./aidlc-swarm-source.ts";
+import { STAGE_START_UNAVAILABLE, stageStartUncheckedLine, swarmSourceChangedSince } from "./aidlc-swarm-source.ts";
 import { memoryDirFor, PATH_SET_SENSOR_IDS, STAGE_WIDE_SENSOR_IDS, templateEligibleArtifacts, withStageProgressRow } from "./aidlc-graph.ts";
 import { generateFireId, recordUnfinishedFire, sensorMatchesPath, unfinishedFire } from "./aidlc-sensor-record.ts";
 import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
@@ -5864,24 +5864,24 @@ function verifyReviewerPrecondition(
   if (!attributionApplies) return;
 
   // Under relaxed or off, what changed outside the units is kept and said once;
-  // only strict holds completion on it. A start record that is not on this
-  // machine (a fresh clone) is AI-DLC's own lost bookkeeping, so strict says the
-  // same one line and carries on too; one that is here and does not match holds.
+  // only strict holds completion on it. A start record that cannot be read here
+  // carries on as stageStartUncheckedLine says.
   const acceptsChanges = guardPolicyAcceptsChanges(pd, content);
   if (
     receipts.sourceBaseline.state === "unbindable" ||
     receipts.sourceBaseline.state === "invalid" ||
     receipts.sourceBaseline.state === "missing"
   ) {
-    if (acceptsChanges || receipts.sourceBaseline.state === "missing") {
+    const notice = stageStartUncheckedLine(receipts.sourceBaseline.state, stage.name, acceptsChanges);
+    if (notice !== null) {
       acceptOutsideUnitChanges(pd, content, {
         checkpoint: "review-receipt",
         stage: stage.slug,
         unit: null,
         changed: null,
-        recorded: "(stage start unavailable)",
+        recorded: STAGE_START_UNAVAILABLE,
         current: "(not checked)",
-        notice: `I could not check ${stage.name} for files changed outside the units on this machine; carrying on.`,
+        notice,
       });
       return;
     }

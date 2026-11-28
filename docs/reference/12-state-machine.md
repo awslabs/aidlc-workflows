@@ -679,7 +679,12 @@ policy. A present but `unbindable` or corrupt modern baseline/unit snapshot,
 and a missing unit snapshot, fail closed under strict. A stage-entry baseline
 missing on this machine (a fresh clone) skips the unclaimed check with one line
 under every Guard Policy; under relaxed or off a corrupt one does the same, and a
-missing unit snapshot keeps the unit's verdict. `AIDLC_SKIP_SOURCE_FRESHNESS=1` bypasses both global and
+missing unit snapshot keeps the unit's verdict. An attempt's first swarm landing reads that baseline by the same
+rule: when it is missing on this machine, or corrupt or `unbindable` under relaxed or off, the merge starts from
+the main checkout as it is, says the one line, and records it once as `CHANGE_ACCEPTED` at the `swarm-batch`
+checkpoint with `Recorded: (stage start unavailable)`, which every later reader of the merge chain takes as that
+attempt's opening link; under strict a corrupt or `unbindable` one stops the merge, naming a restart of the stage
+or, with the person's go-ahead, Guard Policy relaxed for this piece of work. `AIDLC_SKIP_SOURCE_FRESHNESS=1` bypasses both global and
 per-unit checks; missing/invalid-manifest receipts explicitly record
 `Unit Source Binding Bypass: true`, so the switch must be present again at
 completion. In a modern Bolt, finalize also verifies the attested base-to-
