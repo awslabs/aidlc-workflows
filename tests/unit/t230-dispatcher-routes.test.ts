@@ -3651,24 +3651,182 @@ describe("t230 dispatcher help and errors", () => {
     expect(renderHumanHelp()).not.toContain("system");
   });
 
-  test("help --all reveals both hidden namespaces without changing default help", () => {
+  test("help --all lists every section without changing default help", async () => {
     const defaultHelp = renderHumanHelp();
-    const expanded = renderAllHelp();
+    const expanded = await renderAllHelp();
     expect(resolveAction(["help", "--all"])).toEqual({
       type: "help",
       scope: "all",
     });
     expect(expanded).toStartWith(defaultHelp.trimEnd());
-    expect(expanded).toContain("Hidden namespaces:");
-    expect(expanded).toContain(
-      "engine  Generated harness surfaces only; not for human scripts. Run: bun .claude/tools/aidlc.ts engine --help",
-    );
-    expect(expanded).toContain(
-      "system  This user's installation; unsupported interface. Run: bun .claude/tools/aidlc.ts system --help",
-    );
-    expect(defaultHelp).not.toContain("Hidden namespaces:");
-    expect(defaultHelp).not.toContain("aidlc engine --help");
+    for (const heading of ["TEAM WORK AND AUTHORING", "ENGINE", "SYSTEM"]) {
+      expect(expanded).toContain(`\n${heading}\n`);
+      expect(defaultHelp).not.toContain(`\n${heading}\n`);
+    }
+    // Each section says who runs its commands, so listing the engine never
+    // reads as an invitation to script it.
+    expect(expanded).toContain("Your coding agent's harness runs these");
+    expect(expanded).toContain("many of them change the workflow's records");
+    expect(expanded).toContain("an unsupported interface that may change between releases");
+    // A top-level route with several verbs lists each as the command it is
+    // (`aidlc next`), not under its route id, which nobody can type.
+    const publicSection = expanded.split("\nTEAM WORK AND AUTHORING\n")[1].split("\nENGINE\n")[0];
+    expect(publicSection).toContain("\n  next: [args]\n");
+    expect(publicSection).toContain("\n  team-board: ");
+    expect(publicSection).not.toContain("orchestrate");
     expect(defaultHelp).not.toContain("aidlc system --help");
+  });
+
+  // The guard for help drifting from the routes: every verb a route accepts is
+  // listed in `help --all`, unless the route names it in `unlistedVerbs` with
+  // its reason. Removing a form from a route's `all`, or a verb from a
+  // `helpSections` list, fails here with the route and the verb.
+  test("help --all lists every verb every route accepts, under its own noun", async () => {
+    const expanded = await renderAllHelp();
+    const [shortHelp, rest] = expanded.split("\nTEAM WORK AND AUTHORING\n");
+    const [publicSection, afterPublic] = rest.split("\nENGINE\n");
+    const [engineSection, systemSection] = afterPublic.split("\nSYSTEM\n");
+    const sections: Record<string, string> = { public: publicSection, engine: engineSection, system: systemSection };
+    // A noun's block: its own line and the indented section lines under it,
+    // so a verb another noun prints with the same word does not count.
+    const block = (section: string, key: string): string => {
+      const lines = section.split("\n");
+      const start = lines.findIndex((line) => line === `  ${key}` || line.startsWith(`  ${key}:`));
+      if (start < 0) return "";
+      const end = lines.findIndex((line, index) => index > start && !line.startsWith("    "));
+      return lines.slice(start, end < 0 ? undefined : end).join("\n");
+    };
+    const missing: string[] = [];
+    for (const route of ROUTES) {
+      for (const verb of route.verbs) {
+        if (verb.startsWith("<")) continue;
+        if (route.unlistedVerbs?.[verb]) continue;
+        if (route.kind === "top-help") continue;
+        if (route.visibility === "public") {
+          if (!shortHelp.includes(`\n  ${verb} `)) missing.push(`${route.id}: ${verb}`);
+          continue;
+        }
+        const key = route.group !== "top"
+          ? route.group
+          : route.verbs.length > 1 ? verb : route.id.replace(/^top-/, "");
+        const text = block(sections[route.namespace], key);
+        const words = new Set(text.split(/[\s,:[\]|]+/));
+        const listed = verb.includes(" ")
+          ? text.includes(verb) || (verb.startsWith("set guard.") && text.includes("set guard.<fence>"))
+          : words.has(verb);
+        if (!listed) missing.push(`${route.id}: ${verb}`);
+      }
+    }
+    expect(missing).toEqual([]);
+    for (const route of ROUTES) {
+      for (const [verb, reason] of Object.entries(route.unlistedVerbs ?? {})) {
+        expect(route.verbs, `${route.id} hides a verb it does not accept`).toContain(verb);
+        expect(reason.length, `${route.id}: ${verb} needs its reason`).toBeGreaterThan(10);
+      }
+    }
+  });
+
+  // A lone --help or -h after any command the route table holds is answered from
+  // the table, never by starting the tool, except where the tool says it
+  // answers help itself (ownHelp), a human command owns its help, or the noun
+  // has its own help verb or custom help. `aidlc park --help` used to park.
+  test("every command answers a lone --help or -h without running", () => {
+    const ran: string[] = [];
+    for (const route of ROUTES) {
+      const prefix = route.namespace === "public" ? [] : [route.namespace];
+      const heads = route.group === "top" ? route.verbs.filter((verb) => !verb.startsWith("<")) : [route.group];
+      const nounRoutes = ROUTES.filter((item) => item.namespace === route.namespace && item.group === route.group);
+      const ownsHelp =
+        ["top-doctor", "top-version", "top-help", "top-config", "top-update", "top-use", "top-uninstall"].includes(route.id) ||
+        (route.group !== "top" && nounRoutes.some((item) => item.verbs.includes("help"))) ||
+        route.custom === "config" || route.custom === "plugin";
+      if (ownsHelp) continue;
+      for (const head of heads) {
+        for (const word of ["--help", "-h"]) {
+          const argv = [...prefix, head, word];
+          const action = resolveAction(argv);
+          if (action.type === "noun-help") continue;
+          if (action.type === "delegate" && route.ownHelp === true && action.args.join(" ") === "--help") continue;
+          ran.push(`${argv.join(" ")} -> ${action.type}${action.type === "delegate" ? ` ${action.tool} ${action.args.join(" ")}` : ""}`);
+        }
+      }
+    }
+    expect(ran).toEqual([]);
+  });
+
+  test("park --help prints its usage and leaves a live workflow running", () => {
+    const projectDir = makeProject();
+    writeMinimalState(projectDir);
+    const before = readFileSync(seededStateFile(projectDir), "utf-8");
+    for (const argv of [["park", "--help"], ["park", "-h"], ["continue", "-h"], ["engine", "status", "--help"]]) {
+      const res = viaDispatcher(argv, projectDir);
+      expect(res.exitCode, `${argv.join(" ")}: ${res.stderr.toString("utf-8")}`).toBe(0);
+      expect(res.stdout.toString("utf-8"), argv.join(" ")).toStartWith("usage: ");
+      expect(readFileSync(seededStateFile(projectDir), "utf-8"), argv.join(" ")).toBe(before);
+    }
+    const park = viaDispatcher(["park", "--help"], projectDir).stdout.toString("utf-8");
+    expect(park).toContain("park the current workflow");
+    expect(park).toContain("in the chat instead");
+  });
+
+  test("a help request needs no project", () => {
+    const outside = mkdtempSync(join(tmpdir(), "aidlc-help-outside-"));
+    try {
+      for (const argv of [["engine", "state", "--help"], ["next", "--help"], ["system", "completions", "-h"]]) {
+        const res = viaDispatcher(argv, outside);
+        expect(res.exitCode, `${argv.join(" ")}: ${res.stderr.toString("utf-8")}`).toBe(0);
+        expect(res.stdout.toString("utf-8"), argv.join(" ")).toStartWith("usage: ");
+      }
+      expect(readdirSync(outside)).toEqual([]);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+
+  test("engine help lists every state verb the state tool accepts", () => {
+    const text = renderNamespaceHelp(ENGINE_NAMESPACE_HELP);
+    const stateBlock = text.split("  state:\n")[1].split("\n  audit:")[0];
+    for (const route of ROUTES.filter((item) => item.namespace === "engine" && item.group === "state")) {
+      for (const verb of route.verbs) {
+        expect(stateBlock, verb).toMatch(new RegExp(`[ ,]${verb}(,|\n|$)`));
+      }
+    }
+  });
+
+  test.each([
+    ["plugin", ["validate", "build", "test"]],
+    ["attest", ["resolve", "anchor"]],
+    ["unit", ["claim", "land", "status"]],
+  ])("a public noun answers --help with its verbs: %s", (noun, verbs) => {
+    for (const flag of ["--help", "-h", "help"]) {
+      const action = resolveAction([noun, flag]);
+      expect(action.type, `${noun} ${flag}`).toBe("noun-help");
+      if (action.type !== "noun-help") continue;
+      expect(action.message).toContain(`${noun} <verb> [flags]`);
+      for (const verb of verbs) expect(action.message).toContain(` ${noun} ${verb}`);
+    }
+    const res = viaDispatcher([noun, "--help"], REPO_ROOT);
+    expect(res.exitCode, res.stderr.toString("utf-8")).toBe(0);
+    expect(res.stderr.toString("utf-8")).toBe("");
+  });
+
+  test("engine plugin --help is the plugin noun's help, not the whole engine's", () => {
+    const action = resolveAction(["engine", "plugin", "--help"]);
+    expect(action.type).toBe("noun-help");
+    if (action.type !== "noun-help") return;
+    expect(action.message).toMatch(/^ {2}plugin select \[names\] +set enabled plugins$/m);
+    expect(action.message).not.toContain("audit:");
+  });
+
+
+  test("engine help and engine --help print the same thing", () => {
+    for (const argv of [["engine", "help"], ["engine", "--help"], ["engine", "-h"]]) {
+      expect(launcherRouteUsesPin(argv), argv.join(" ")).toBe(false);
+      const res = viaDispatcher(argv, REPO_ROOT);
+      expect(res.exitCode, `${argv.join(" ")}: ${res.stderr.toString("utf-8")}`).toBe(0);
+      expect(res.stdout.toString("utf-8")).toContain("engine <noun> <verb> [args]\n\nEngine machinery");
+    }
   });
 
   test("removed alias nouns are routing errors", () => {

@@ -52,6 +52,7 @@ import {
   runtimeProjectDirFrom,
   runtimeHarnessName,
   typedHarnessHosts,
+  entrySkillInvocation,
 } from "./aidlc-runtime-paths.ts";
 
 type Classification = "passthrough" | "translation" | "stub" | "routing-only" | "help";
@@ -113,6 +114,18 @@ export type Route = {
   helpSections?: readonly HelpSection[];
   /** The tool answers `<verb> --help` with that verb's flags (#2449). */
   verbHelp?: true;
+  /**
+   * Verbs the route accepts that no help lists, each with the reason. Every
+   * other verb must appear in `help --all` (t230 checks it), so a verb is
+   * hidden only on purpose and with its reason written next to it.
+   */
+  unlistedVerbs?: Readonly<Record<string, string>>;
+  /**
+   * The tool answers a lone `--help` / `-h` itself. Every other route has the
+   * dispatcher answer `<command> --help|-h|help` from the route table and never
+   * starts the tool (lonelyHelpAction), so a help request cannot run the command.
+   */
+  ownHelp?: true;
 };
 
 export type NamespaceHelpOptions = {
@@ -667,6 +680,21 @@ export const ROUTES: readonly Route[] = [
         label: "parking",
         forms: ["park", "unpark"],
       },
+      {
+        label: "checks",
+        forms: ["completion-checks", "checkpoint-checks"],
+      },
+      {
+        label: "units",
+        forms: [
+          "unit",
+          "set-unit-ownership",
+          "set-unit-gate-rhythm",
+          "refresh-unit-progress",
+          "sync-unit-scope-stage",
+          "fold-unit-merge",
+        ],
+      },
     ],
   },
   {
@@ -963,7 +991,8 @@ export const ROUTES: readonly Route[] = [
       { command: "config set <key> <value>", summary: "change supported project configuration" },
       { command: "config list", summary: "list supported project configuration" },
     ],
-    all: ["set depth <value>", "set test-strategy <value>", "set review <value>", "set guard-policy <strict|relaxed|off>", "set sensors <on|off>", "set learnings <on|off>", "set summary-confirmation <on|off>", "set guard.<fence> <on|off>", "get <key>", "list"],
+    all: ["set depth <value>", "set test-strategy <value>", "set review <value>", "set guard-policy <strict|relaxed|off>", "set sensors <on|off>", "set learnings <on|off>", "set summary-confirmation <on|off>", "set collaborators <on|off>", "set plan-approval <on|off>", "set guard.<fence> <on|off>", "get <key>", "list"],
+    unlistedVerbs: { "set change-control": "the retired spelling of set guard-policy, accepted for one release" },
   },
   {
     id: "plugin",
@@ -1039,7 +1068,7 @@ export const ROUTES: readonly Route[] = [
     kind: "noun-passthrough",
     classification: "passthrough",
     // `read-pdf` is the built-in PDF reader's child-process entry in a compiled binary (aidlc-knowledge.ts
-    // extractDocument); it is routed but never listed in help.
+    // extractDocument); `unlistedVerbs` below keeps it out of help.
     verbs: ["onboard", "sync", "list", "show", "associate", "dissociate", "rebind", "summarize", "help", "read-pdf"],
     tool: TOOLS.knowledge,
     ...PUBLIC_ENGINE,
@@ -1055,6 +1084,10 @@ export const ROUTES: readonly Route[] = [
       "rebind <id> --to <path>",
       "summarize <id> --text-file <path> --source-revision <sha256>",
     ],
+    unlistedVerbs: {
+      help: "the noun's own help, reached by its --help",
+      "read-pdf": "the built-in PDF reader's child process, which the knowledge tool starts itself",
+    },
   },
   {
     id: "gen",
@@ -1167,6 +1200,8 @@ export const ROUTES: readonly Route[] = [
     networkPolicy: "forbidden",
     mutationScope: "project",
     outputModes: ["human", "quiet", "json"],
+    // Every sensor worker prints its usage for --help and -h.
+    ownHelp: true,
   };
   }),
   {
@@ -1879,15 +1914,34 @@ export function renderNamespaceHelp(
   options: NamespaceHelpOptions,
   summaryOverrides: ReadonlyMap<string, string> = new Map(),
 ): string {
-  const lines: string[] = [`${aidlcInvocation()} ${options.usage}`, "", options.header];
+  const routes = ROUTES.filter((route) =>
+    route.namespace === options.namespace && !options.excludedRouteIds?.has(route.id)
+  );
+  return `${[`${aidlcInvocation()} ${options.usage}`, "", options.header, ...routeGroupLines(routes, summaryOverrides)].join("\n")}\n`;
+}
+
+// One line per noun (or per top-level verb), in route-table order: the noun's
+// summary when it has one, its labelled sections when it has those, and
+// otherwise every usage form its routes list. The namespace help and
+// `help --all` both render through here, so the two cannot list a noun
+// differently.
+function routeGroupLines(
+  routes: readonly Route[],
+  summaryOverrides: ReadonlyMap<string, string> = new Map(),
+): string[] {
+  const lines: string[] = [];
   const grouped = new Map<string, string[]>();
   const summaries = new Map<string, string>();
   const sections = new Map<string, readonly HelpSection[]>();
-  for (const route of ROUTES) {
-    if (
-      route.namespace !== options.namespace ||
-      options.excludedRouteIds?.has(route.id)
-    ) {
+  for (const route of routes) {
+    // A top-level route with several verbs (`next`, `continue`, ...) is several
+    // commands, so each gets its own line under its own name: a line headed by
+    // the route's id would read as a noun nobody can type.
+    if (route.group === "top" && route.verbs.length > 1) {
+      for (const form of routeForms(route)) {
+        const verb = form.split(" ")[0];
+        grouped.set(verb, [...(grouped.get(verb) ?? []), form]);
+      }
       continue;
     }
     const group = route.group === "top"
@@ -1919,7 +1973,7 @@ export function renderNamespaceHelp(
     }
     lines.push(`  ${group}: ${rendered.filter(Boolean).join(", ")}`);
   }
-  return `${lines.join("\n")}\n`;
+  return lines;
 }
 
 export async function renderEngineHelp(): Promise<string> {
@@ -1939,14 +1993,44 @@ function renderConfigHelp(): string {
   ].join("\n");
 }
 
-export function renderAllHelp(): string {
+// `help --all`: the short help, then every route the short help leaves out,
+// one section per audience. Each section's heading says who runs those commands
+// and what running one by hand does, so listing them never reads as an
+// invitation to script them.
+export async function renderAllHelp(): Promise<string> {
+  const { sensorHelpSummaries } = await import("./aidlc-sensor.ts");
+  const invoke = aidlcInvocation();
+  const out = process.stdout;
+  const unlisted = ROUTES.filter((route) =>
+    route.namespace === "public" && route.visibility !== "public"
+  );
+  const section = (title: string, note: string, lines: string[]): string[] => [
+    heading(title, out),
+    dim(`  ${note}`, out),
+    ...lines,
+    "",
+  ];
   return [
     renderHumanHelp().trimEnd(),
     "",
-    "Hidden namespaces:",
-    `  engine  Generated harness surfaces only; not for human scripts. Run: ${aidlcInvocation()} engine --help`,
-    `  system  This user's installation; unsupported interface. Run: ${aidlcInvocation()} system --help`,
-    "",
+    ...section(
+      "TEAM WORK AND AUTHORING",
+      `Public commands the short help leaves out: '${invoke} <command> --help' for one.`,
+      routeGroupLines(unlisted),
+    ),
+    ...section(
+      "ENGINE",
+      `Your coding agent's harness runs these as '${invoke} engine <noun> <verb>'; many of them change the workflow's records, so run one yourself only to look or to recover. '${invoke} engine <noun> --help' for one.`,
+      routeGroupLines(
+        ROUTES.filter((route) => route.namespace === "engine"),
+        sensorHelpSummaries(),
+      ),
+    ),
+    ...section(
+      "SYSTEM",
+      `This user's aidlc installation, as '${invoke} system <noun> <verb>'; an unsupported interface that may change between releases.`,
+      routeGroupLines(ROUTES.filter((route) => route.namespace === "system")),
+    ),
   ].join("\n");
 }
 
@@ -2008,16 +2092,88 @@ function nounError(noun: string, verb: string | undefined, namespace: "engine" |
   };
 }
 
-// `engine <noun> --help` (#2449): the noun's verbs, from the routes that own
-// them. A verb's tool owns its flags, so the way to them is named only where
-// every route of the noun says its tool answers `<verb> --help`.
-function nounHelp(noun: string, routes: readonly Route[], namespace: "engine" | "system"): Action {
-  const invoke = `${aidlcInvocation()} ${namespace} ${noun}`;
+// `<noun> --help` (#2449), in any namespace: the noun's usage forms when its
+// routes spell them in `all`, otherwise its verbs. A verb's tool owns its
+// flags, so the way to them is named only where every route of the noun says
+// its tool answers `<verb> --help`.
+function nounHelp(noun: string, routes: readonly Route[], namespace: RouteNamespace): Action {
+  const invoke = namespace === "public"
+    ? `${aidlcInvocation()} ${noun}`
+    : `${aidlcInvocation()} ${namespace} ${noun}`;
   const verbHelp = routes.every((route) => route.verbHelp === true);
+  const listed = routes.every((route) => route.all !== undefined)
+    ? `\n${routes.flatMap(routeForms).map((form) => `  ${invoke} ${stripHelpGroupPrefix(noun, form)}`).join("\n")}\n`
+    : `verbs: ${routes.flatMap((route) => route.verbs).join(", ")}\n`;
+  if (routes.every((route) => route.kind === "routing-only")) {
+    return {
+      type: "noun-help",
+      message: `usage: ${routes.flatMap(routeForms).map((form) => `${invoke} ${stripHelpGroupPrefix(noun, form)}`).join("\n       ")}\n`,
+    };
+  }
   return {
     type: "noun-help",
-    message: `usage: ${invoke} <verb> [flags]\nverbs: ${routes.flatMap((route) => route.verbs).join(", ")}\n` +
+    message: `usage: ${invoke} <verb> [flags]\n${listed}` +
       (verbHelp ? `For a verb's flags, run '${invoke} <verb> --help'.\n` : ""),
+  };
+}
+
+const HELP_WORDS: ReadonlySet<string> = new Set(["--help", "-h"]);
+
+// `<command> --help` (or `-h`) with nothing after it, in any
+// namespace: the dispatcher answers from the route table rather than starting
+// the tool, because most tools do not read a help flag and would do their work
+// instead (`aidlc park --help` parked a live workflow). A route whose tool
+// answers help itself says so with `ownHelp`, and gets `--help`; the six
+// human commands keep their own help (renderCommandHelp); and a noun that has
+// its own `help` verb, or its own custom help, keeps it. The bare word `help`
+// is not read here (#2504): after a noun it can be a name, as in
+// `engine intent help`. Anything followed by more words is the command's own
+// argv and is never read here.
+function lonelyHelpAction(argv: readonly string[], namespace: RouteNamespace): Action | undefined {
+  if (argv.length !== 2 || !HELP_WORDS.has(argv[1])) return undefined;
+  const head = argv[0];
+  const nounRoutes = ROUTES.filter((route) =>
+    route.namespace === namespace && route.group !== "top" && route.group === head
+  );
+  const topRoutes = nounRoutes.length > 0 ? [] : ROUTES.filter((route) =>
+    route.namespace === namespace && route.group === "top" && route.verbs.includes(head)
+  );
+  const routes = nounRoutes.length > 0 ? nounRoutes : topRoutes;
+  if (routes.length === 0) return undefined;
+  if (routes.some((route) =>
+    HUMAN_TOP_ROUTE_IDS.has(route.id) ||
+    route.verbs.includes("help") ||
+    route.custom === "config" ||
+    route.custom === "plugin"
+  )) {
+    return undefined;
+  }
+  const owner = routes.find((route) => route.ownHelp === true);
+  if (owner?.tool) {
+    return { type: "delegate", tool: owner.tool, args: ["--help"] };
+  }
+  if (nounRoutes.length > 0) return nounHelp(head, nounRoutes, namespace);
+  return topCommandHelp(head, topRoutes, namespace);
+}
+
+// A top-level verb's help (`aidlc next --help`): its usage forms and the
+// route's summary for it, plus who normally runs it.
+function topCommandHelp(verb: string, routes: readonly Route[], namespace: RouteNamespace): Action {
+  const invoke = namespace === "public" ? aidlcInvocation() : `${aidlcInvocation()} ${namespace}`;
+  const forms = routes.flatMap(routeForms).filter((form) => form === verb || form.startsWith(`${verb} `));
+  const summaries = routes.flatMap((route) => route.human ?? [])
+    .filter((line) => line.command === verb || line.command.startsWith(`${verb} `))
+    .map((line) => line.summary);
+  const who = namespace === "engine"
+    ? "Your coding agent's harness runs this command.\n"
+    : routes.some((route) => route.tool === TOOLS.orchestrate)
+    ? `Your coding agent runs this command for you during a workflow; use ${entrySkillInvocation()} in the chat instead.\n`
+    : "";
+  return {
+    type: "noun-help",
+    message: `usage: ${forms.map((form) => `${invoke} ${form}`).join("\n       ")}\n` +
+      (summaries.length > 0 ? `\n${summaries.map((line) => `  ${line}`).join("\n")}\n` : "") +
+      (who ? `\n${who}` : ""),
   };
 }
 
@@ -2288,6 +2444,8 @@ function resolveEngine(argv: string[]): Action {
   if (argv.length === 0 || argv[0] === "--help" || argv[0] === "-h" || argv[0] === "help") {
     return { type: "help", scope: "engine" };
   }
+  const help = lonelyHelpAction(argv, "engine");
+  if (help) return help;
 
   const alias = resolveAlias(argv, true);
   if (alias) return alias;
@@ -2337,6 +2495,8 @@ function resolveSystem(argv: string[]): Action {
   if (argv.length === 0 || argv[0] === "--help" || argv[0] === "-h" || argv[0] === "help") {
     return { type: "help", scope: "system" };
   }
+  const help = lonelyHelpAction(argv, "system");
+  if (help) return help;
 
   const noun = resolveNoun(argv, "system");
   if (noun) return noun;
@@ -2361,9 +2521,13 @@ function resolveSystem(argv: string[]): Action {
 function resolvePublicNoun(argv: string[]): Action | undefined {
   const noun = argv[0];
   const verb = argv[1];
-  for (const route of ROUTES.filter((item) =>
+  const routes = ROUTES.filter((item) =>
     item.namespace === "public" && item.group !== "top" && item.group === noun
-  )) {
+  );
+  if (routes.length > 0 && (verb === "--help" || verb === "-h" || verb === "help")) {
+    return nounHelp(noun, routes, "public");
+  }
+  for (const route of routes) {
     if (!verb || !route.verbs.includes(verb)) continue;
     if (route.kind === "noun-passthrough" && route.tool) {
       return {
@@ -2394,6 +2558,9 @@ function resolveActionWithoutGlobalFlags(argv: string[]): Action {
 
   const alias = resolveAlias(argv);
   if (alias) return alias;
+
+  const help = lonelyHelpAction(argv, "public");
+  if (help) return help;
 
   // The settings of the piece of work, typed at a terminal without `engine`
   // (`config set guard.review-freeze off`, `config get depth`, `config list`):
@@ -3432,7 +3599,7 @@ async function execute(action: Action): Promise<number> {
       : action.scope === "system"
       ? renderNamespaceHelp(SYSTEM_NAMESPACE_HELP)
       : action.scope === "all"
-      ? renderAllHelp()
+      ? await renderAllHelp()
       : action.scope === "config"
       ? renderConfigHelp()
       : renderHumanHelp();
@@ -4422,6 +4589,16 @@ export async function main(rawArgv: string[]): Promise<void> {
   if (lifecycleHelp?.args.some((token) => token === "--help" || token === "-h")) {
     text(1, `usage: ${lifecycleHelp.usage}\n`);
     return;
+  }
+  // `<noun> --help` and the other help the route table answers: printed here,
+  // like the command help above, so a help request needs no project and never
+  // reaches a tool, a pin or a hook's stdin read.
+  if (argv.some((token) => HELP_WORDS.has(token))) {
+    const helpAction = resolveAction(argv);
+    if (helpAction.type === "noun-help") {
+      text(1, helpAction.message);
+      return;
+    }
   }
   const route = routePolicyFor(argv);
   if (route) await pinEnclosingProject(route, argv);
