@@ -99,7 +99,7 @@ Create `<record>/inception/delivery-planning/delivery-planning-questions.md` wit
 
 - What should we build first: the riskiest parts, the most valuable parts, a thin end-to-end slice that proves the whole thing hangs together, or some mix? If a mix, say which approach applies where.
 - Should we score and rank the work with a formal model (WSJF-style: value and urgency against size)? If so, how much weight goes on risk, on value, and on size?
-- How big should one Bolt be: a single Unit of Work, several related Units bundled together, or thin slices that cut across Units?
+- How big should one Bolt be: a single Unit of Work or several dependency-linked Units? If the desired delivery slice cuts through a Unit, revisit Units Generation to split that Unit before grouping it into Bolts.
 - Can several Bolts be built at the same time, or do they need to go one after another?
 - Is anything outside this team going to hold us up (APIs, data, approvals, another team's hand-off)? For each one, capture who owns it, how long it takes, which Bolt it blocks, and what we do if it slips.
 - What worries you most about this build, so we tackle it early?
