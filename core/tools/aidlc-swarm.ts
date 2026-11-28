@@ -92,6 +92,7 @@
 //   - aidlc-bolt fail              -> close a failed unit's Bolt lifecycle
 //     (BOLT_FAILED paired with the BOLT_STARTED that `start --worktree` emitted).
 
+import { reviewedSourceMoved } from "./aidlc-swarm-source.ts";
 import { projectDirFlag, settleClaudeTurnsFirst } from "./aidlc-claude-turn-pending.ts";
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS, LONG_SUBPROCESS_TIMEOUT_MS, EXTENDED_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { spawnSync, type SpawnSyncReturns } from "node:child_process";
@@ -172,6 +173,7 @@ import {
   type SourceClaimModel,
   toPosix,
   UNBINDABLE_FINGERPRINT,
+  unclaimableIgnoredSourceKeys,
   validateUnitName,
   verificationCommandDetails,
   verificationCommandRecovery,
@@ -179,6 +181,8 @@ import {
   worktreeRuntimeGraphPath,
   workspaceSourceEmbeddedGitPaths,
   workspaceSourceFingerprint as worktreeSourceFingerprint,
+  workspaceSourceState,
+  readWorkspaceSourceSnapshot,
   workspaceSourceListing,
   workspaceSourceSnapshotPaths,
   worktreeStateFilePath,
@@ -195,7 +199,7 @@ import {
 import { messagesSince, proveMessage, requestMessageStep } from "./aidlc-message-store.ts";
 import { codeGenerationPlanNamedPaths } from "./aidlc-plan-approval-ask.ts";
 import { quoted } from "./aidlc-recorded-switches.ts";
-import { aidlcDispatcherInvocation, compiledExecutable } from "./aidlc-runtime-paths.ts";
+import { aidlcDispatcherInvocation, bunLaunchFlags, compiledExecutable } from "./aidlc-runtime-paths.ts";
 import {
   beginCodeGeneration,
   bindCodeGenerationWorktreeApproval,
@@ -247,6 +251,8 @@ interface ReceiptCheck {
   error: string | null;
   artifactFingerprint?: string;
   sourceFingerprint?: string;
+  /** The worktree's fingerprint finalize checked, when it binds the reviewed one past ignored files. */
+  checkedSourceFingerprint?: string;
   unitSourceFingerprint?: string;
   /** Changes kept under a relaxed or off Guard Policy, recorded once at finalize. */
   accepted?: AcceptedChange[];
@@ -291,7 +297,7 @@ function runTool(toolFile: string, args: string[], projectDir: string): ToolRun 
   const noun = toolFile.replace(/^aidlc-/, "").replace(/\.ts$/, "");
   const command = executable
     ? [executable, "engine", noun, ...args, "--project-dir", projectDir]
-    : [process.execPath, join(TOOLS_DIR, toolFile), "--project-dir", projectDir, ...args];
+    : [process.execPath, ...bunLaunchFlags(), join(TOOLS_DIR, toolFile), "--project-dir", projectDir, ...args];
   const result = spawnSync(command[0], command.slice(1), {
     encoding: "utf-8",
     cwd: projectDir,
@@ -732,13 +738,19 @@ function reviewerReceiptError(
         `re-run the reviewer in the worktree and record a fresh verdict before finalizing`,
     };
   }
-  const currentSourceFp = worktreeSourceFingerprint(wt);
+  const currentSource = workspaceSourceState(wt);
+  const currentSourceFp = currentSource?.fingerprint ?? null;
   const sourceChanged = recordedSourceFp !== UNBINDABLE_FINGERPRINT && currentSourceFp !== null &&
     !sameWorkspaceSource(recordedSourceFp, currentSourceFp);
+  // Under every policy, a move only in files Git ignores and HEAD does not
+  // track since the listing the review's request kept is no change: the review
+  // stands as it was, and nothing is said.
+  const ignoredOnly = sourceChanged && currentSource !== null &&
+    !reviewedSourceMoved(wt, stage, readWorkspaceSourceSnapshot(wt, stage, recordedSourceFp), currentSource).moved;
   if (
     recordedSourceFp === UNBINDABLE_FINGERPRINT ||
     currentSourceFp === null ||
-    (sourceChanged && !acceptsChanges)
+    (sourceChanged && !acceptsChanges && !ignoredOnly)
   ) {
     return {
       error:
@@ -750,7 +762,7 @@ function reviewerReceiptError(
   }
   // The kept code is what finalize binds and lands.
   let sourceFingerprint = recordedSourceFp;
-  if (sourceChanged) {
+  if (sourceChanged && !ignoredOnly) {
     accepted.push({
       checkpoint: "review-receipt", stage, unit, changed: null,
       recorded: recordedSourceFp, current: currentSourceFp,
@@ -874,8 +886,13 @@ function reviewerReceiptError(
       for (const path of currentListing.keys()) {
         if (!verifiedBaseListing.has(path)) outside.add(path.slice(path.indexOf("\0") + 1));
       }
+      // A file Git ignores, HEAD does not track and no registry names (a test
+      // run's output) rides no Source Commit and is no write a Unit could claim;
+      // whatever the Source Commit does change against the base is still named.
+      const committed = new Set(diff.stdout.split("\0").filter((token, index) => index % 2 === 1 && token.length > 0));
+      const ignored = unclaimableIgnoredSourceKeys(wt, [...outside].filter((path) => !committed.has(path)).map((path) => `\0${path}`), false);
       const outsideClaims = [...outside]
-        .filter((path) => !sourceClaimCovers(`\0${path}`, reviewedClaims));
+        .filter((path) => !ignored.has(`\0${path}`) && !sourceClaimCovers(`\0${path}`, reviewedClaims));
       if (outsideClaims.length > 0 && acceptsChanges) {
         // Under relaxed or off the files stay and merge; they are named once.
         accepted.push({
@@ -902,6 +919,7 @@ function reviewerReceiptError(
     error: null,
     artifactFingerprint,
     sourceFingerprint,
+    ...(ignoredOnly ? { checkedSourceFingerprint: currentSourceFp } : {}),
     unitSourceFingerprint,
     ...(accepted.length > 0 ? { accepted } : {}),
     ...(manifestKept ? { manifestKept } : {}),
@@ -1951,13 +1969,16 @@ function initializedSubmoduleSourceError(
 // from the commit the Bolt shares with `landingBranch`, which prepare
 // recorded, so records a Bolt commit carried stay behind; without it, from
 // HEAD. Recompute the fingerprint after the object is written to close a
-// concurrent-edit window; the validated value is the one carried to the
-// convergence row.
+// concurrent-edit window: it must equal the one finalize checked. The
+// convergence row carries `fingerprint`, the reviewed one when finalize found
+// only files Git ignores moved.
 function bindReviewedSource(
   identity: BoltIdentity,
   fingerprint: string,
   recoveryBudget: NewGitlinkRecoveryBudget,
   landingBranch: string | null,
+  // The fingerprint finalize checked, when the binding is the reviewed one.
+  checked = fingerprint,
 ): { binding?: SourceBinding; error?: string } {
   const wt = identity.dir;
   const idx = join(tmpdir(), `aidlc-swarm-source-${process.pid}-${randomUUID().slice(0, 8)}`);
@@ -2108,7 +2129,7 @@ function bindReviewedSource(
     const commit = git(["commit-tree", tree.stdout.trim(), "-p", head.stdout.trim(), "-m", `Reviewed source for Bolt ${identity.slug}`]);
     if (commit.status !== 0 || !commit.stdout.trim()) return { error: "cannot create the immutable reviewed-source commit" };
     const after = worktreeSourceFingerprint(wt);
-    if (after === null || !sameWorkspaceSource(fingerprint, after)) {
+    if (after === null || !sameWorkspaceSource(checked, after)) {
       return { error: "source-fingerprint mismatch while binding the reviewed source; re-run the reviewer" };
     }
     const commitSha = commit.stdout.trim();
@@ -2340,6 +2361,15 @@ function writeResumeJournal(pd: string, resume: SwarmResume): void {
   })));
 }
 
+/** A row recording that `unit`'s source landed in this batch and attempt. */
+function isSourceMergedRow(row: AuditShardEvent, unit: string, batch: string, attempt: SwarmAttemptStamp): boolean {
+  return row.event === "SWARM_SOURCE_MERGED" &&
+    auditBlockField(row.block, "Unit name") === unit &&
+    auditBlockField(row.block, "Batch number") === batch &&
+    auditBlockField(row.block, "Stage") === attempt.stage &&
+    auditBlockField(row.block, "Run floor") === attempt.floor;
+}
+
 function latestResumeRow(rows: readonly AuditShardEvent[]): AuditShardEvent | null {
   const latest = maximalAttemptEvents(rows);
   return latest.length === 1 ? latest[0] : null;
@@ -2503,11 +2533,7 @@ function validateSwarmResume(
   // Native source landing removes its child. A checkpoint revision may create a
   // new child only after that exact prior Unit source was durably landed.
   if (!existsSync(worktree)) {
-    const merged = latestResumeRow(rows.filter((row) => row.event === "SWARM_SOURCE_MERGED" &&
-      auditBlockField(row.block, "Unit name") === unit &&
-      auditBlockField(row.block, "Batch number") === batch &&
-      auditBlockField(row.block, "Stage") === attempt.stage &&
-      auditBlockField(row.block, "Run floor") === attempt.floor &&
+    const merged = latestResumeRow(rows.filter((row) => isSourceMergedRow(row, unit, batch, attempt) &&
       auditBlockField(row.block, "Repo") === (repoName ?? "-")));
     const converged = merged && latestResumeRow(rows.filter((row) =>
       row.event === "SWARM_UNIT_CONVERGED" &&
@@ -3385,6 +3411,33 @@ function handleFinalize(rest: string[]): void {
   const review = reviewerRequirement(projectDir);
   const currentAttempt = currentSwarmAttempt(projectDir);
 
+  const identities = new Map<string, BoltIdentity>();
+  for (const unit of allUnits) {
+    try {
+      identities.set(unit, resolveBoltIdentity(projectDir, swarmBoltSlug(unit), selection));
+    } catch (error) {
+      if (error instanceof BoltIdentityError) fail(error.message);
+      throw error;
+    }
+  }
+
+  // A claimed Unit whose source already landed in this attempt and whose
+  // worktree is gone has nothing to re-verify. Recording it as failed would
+  // contradict the landing, so refuse before the loop below runs checks or
+  // writes rows; the batch checkpoint's Request Changes rebuilds it instead.
+  const missing = allUnits.filter((unit) => claimedSet.has(unit) && !existsSync(identities.get(unit)!.dir));
+  if (currentAttempt && missing.length > 0) {
+    const rows = readAuditShardEvents(projectDir);
+    const landed = missing.filter((unit) => rows.some((row) => isSourceMergedRow(row, unit, batch, currentAttempt)));
+    if (landed.length > 0) {
+      fail(
+        `finalize: ${landed.join(", ")} already landed in batch ${batch} with worktrees removed, ` +
+        "so there is nothing to re-verify and nothing was recorded. Use the batch checkpoint instead: " +
+        `${aidlcDispatcherInvocation("bolt swarm-checkpoint")} --action status --batch ${batch} --units "<batch units>".`,
+      );
+    }
+  }
+
   // Optional per-declined-unit typed reasons: `--reasons a=unsatisfiable,b=budget-exhausted`.
   // The conductor judged WHY each unclaimed unit gave up (knowledge → conductor,
   // D-I); the tool records that attribution faithfully (determinism → tool),
@@ -3421,13 +3474,7 @@ function handleFinalize(rest: string[]): void {
     process.env.AIDLC_SKIP_SOURCE_FRESHNESS === "1";
   const recoveryBudget = newGitlinkRecoveryBudget();
   for (const unit of allUnits) {
-    let identity: BoltIdentity;
-    try {
-      identity = resolveBoltIdentity(projectDir, swarmBoltSlug(unit), selection);
-    } catch (error) {
-      if (error instanceof BoltIdentityError) fail(error.message);
-      throw error;
-    }
+    const identity = identities.get(unit)!;
     if (claimedSet.has(unit)) {
       const verdict = verdictFor(unit, projectDir, identity, check.command, testFile, false, timeoutMs);
       const preparedAttempt = preparedSwarmAttempt(
@@ -3512,6 +3559,7 @@ function handleFinalize(rest: string[]): void {
                 receipt.sourceFingerprint,
                 recoveryBudget,
                 preparedLandingBranch(readAuditShardEvents(projectDir), batch, unit),
+                receipt.checkedSourceFingerprint,
               )
             : {};
           if (captured.error || !captured.snapshot) {

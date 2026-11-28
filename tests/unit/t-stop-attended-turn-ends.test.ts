@@ -24,6 +24,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { setGuardPolicyLine } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { cleanupTestProject, intentsDirOf, seededStateFile, setupIntegrationProject } from "../harness/fixtures.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -162,7 +163,8 @@ describe("t-stop-attended-turn-ends", () => {
 // arguments its own terminal classifier calls terminal, whatever the command's text, and a `next` that hands out
 // stage work after it clears the mark.
 describe("a command of AI-DLC's own asked over work in hand ends the turn where the work carries on by itself", () => {
-  const INVOKE = "bun .claude/tools/aidlc.ts";
+  // The dispatcher as a copy tree prints it, so the stand-in finds and runs the command a print names.
+  const INVOKE = withCopyLaunchOptions("bun .claude/tools/aidlc.ts");
   const chat = (unattended: boolean): NodeJS.ProcessEnv =>
     ({ AIDLC_SESSION_OVERRIDE: SESSION, ...(unattended ? { AIDLC_UNATTENDED: "1" } : {}) });
 
@@ -185,9 +187,9 @@ describe("a command of AI-DLC's own asked over work in hand ends the turn where 
   // The turn as the agent runs it, with the engine's own results: the first command, then (with no record of their
   // line, unattended) the command the request-file step leaves on the command line, then the command its print
   // names, then anything after it.
-  function turn(proj: string, typed: string, unattended: boolean, after: string[][] = []): string {
+  function turn(proj: string, typed: string, unattended: boolean, after: string[][] = [], tool: "claude" | "codex" = "claude"): string {
     const said = engine(proj, ["engine", "hook", "record-human-turn"], JSON.stringify({
-      hook_event_name: "UserPromptSubmit", session_id: SESSION, prompt: `/aidlc ${typed}`,
+      hook_event_name: "UserPromptSubmit", session_id: SESSION, prompt: `${tool === "codex" ? "$aidlc" : "/aidlc"} ${typed}`,
     }), chat(unattended));
     expect(said.status, said.out).toBe(0);
     const calls: Array<{ command: string; output: string }> = [];
@@ -201,6 +203,7 @@ describe("a command of AI-DLC's own asked over work in hand ends the turn where 
     const then = named(out);
     if (then !== null) call(then);
     for (const args of after) call(args);
+    if (tool === "codex") return codexRollout(proj, typed, calls);
     const stamp = { version: "2.1.330" };
     const entries: unknown[] = [{ ...stamp, type: "user", message: { role: "user", content: `/aidlc ${typed}` } }];
     calls.forEach(({ command, output }, i) => {
@@ -212,10 +215,26 @@ describe("a command of AI-DLC's own asked over work in hand ends the turn where 
     writeFileSync(path, `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`);
     return path;
   }
-  function stop(proj: string, transcript: string, unattended: boolean) {
+  // The same turn as Codex records it: the person's `$aidlc` line, then each command as an exec_command call (its
+  // command under `cmd`, Codex's own tool path) and its output, then the agent's words. The Stop hook reads a
+  // `rollout-*.jsonl` path as a Codex rollout.
+  function codexRollout(proj: string, typed: string, calls: Array<{ command: string; output: string }>): string {
+    const row = (payload: Record<string, unknown>) => ({ type: "response_item", payload });
+    const rows: unknown[] = [row({ type: "message", role: "user", content: [{ type: "input_text", text: `$aidlc ${typed}` }] })];
+    calls.forEach(({ command, output }, i) => {
+      const cmd = command.replace(INVOKE, withCopyLaunchOptions("bun .codex/tools/aidlc.ts"));
+      rows.push(row({ type: "function_call", name: "exec_command", arguments: JSON.stringify({ cmd }), call_id: `call_${i}` }));
+      rows.push(row({ type: "function_call_output", call_id: `call_${i}`, output: `Process exited with code 0\nOutput:\n${output}` }));
+    });
+    rows.push(row({ type: "message", role: "assistant", content: [{ type: "output_text", text: "Here it is." }] }));
+    const path = join(proj, "rollout-2026-11-23T00-00-00-own-command.jsonl");
+    writeFileSync(path, `${rows.map((entry) => JSON.stringify(entry)).join("\n")}\n`);
+    return path;
+  }
+  function stop(proj: string, transcript: string, unattended: boolean, tool: "claude" | "codex" = "claude") {
     const result = engine(proj, ["engine", "hook", "continue-workflow"], JSON.stringify({
       hook_event_name: "Stop", stop_hook_active: false, session_id: SESSION, transcript_path: transcript,
-    }), { AIDLC_HARNESS_NAME: "claude", ...chat(unattended) });
+    }), { AIDLC_HARNESS_NAME: tool, ...chat(unattended) });
     expect(result.status, result.out).toBe(0);
     return result.stdout.trim();
   }
@@ -232,6 +251,15 @@ describe("a command of AI-DLC's own asked over work in hand ends the turn where 
         expect(stop(proj, turn(proj, line, unattended), unattended)).toBe("");
       });
     }
+  }
+
+  // On Codex the first command is `next --entry` too, and Codex's rollout shows only that command's text, so the turn
+  // end rests on the engine's own mark, as on Claude Code.
+  for (const [place, autonomous, unattended] of PLACES) {
+    test(`$aidlc intent list on Codex, ${place}: the turn ends after it`, () => {
+      const proj = project(autonomous);
+      expect(stop(proj, turn(proj, "intent list", unattended, [], "codex"), unattended, "codex")).toBe("");
+    });
   }
 
   // A switch keeps its own stop rule: a switch that only selects (the person asked for it, nothing after) still ends

@@ -12,8 +12,8 @@
 //
 // WHY SUBPROCESS. The group is a dispatcher route: the stdin, stdout, exit code
 // and process identity ARE the contract, so every behavioural case drives the
-// shipped `bun .claude/tools/aidlc.ts engine hook guard-tool-call` in a scratch
-// project, as Claude Code runs it.
+// shipped `bun .claude/tools/aidlc.ts engine hook guard-tool-call`, with the
+// copy tree's two Bun options, in a scratch project, as Claude Code runs it.
 
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
@@ -28,11 +28,13 @@ import { hookGroupMembers, PRE_TOOL_USE_GROUP_TARGET } from "../../core/tools/ai
 import { hooksTracedToCompletion } from "../../scripts/ci-update-from-previous.ts";
 import { stateDigest, writeActiveDirectiveMarker } from "../../core/tools/aidlc-lib.ts";
 import { AIDLC_SRC, createTestProject, REPO_ROOT, seedAidlcMemory, seededStateFile } from "../harness/fixtures.ts";
+import { COPY_LAUNCH_CONFIG, withCopyLaunchOptions } from "../harness/copy-launch.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-const GROUP_COMMAND =
-  `bun "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts" engine hook ${PRE_TOOL_USE_GROUP_TARGET}`;
+const GROUP_COMMAND = withCopyLaunchOptions(
+  `bun "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts" engine hook ${PRE_TOOL_USE_GROUP_TARGET}`,
+);
 
 interface Settings {
   hooks: Record<string, Array<{ matcher?: string; hooks: Array<{ command: string; timeout?: number }> }>>;
@@ -80,7 +82,14 @@ function runGroup(
   delete env.AIDLC_UNATTENDED;
   const r = spawnSync(
     "bun",
-    [join(project, ".claude", "tools", "aidlc.ts"), "engine", "hook", PRE_TOOL_USE_GROUP_TARGET],
+    [
+      `--config=${join(project, ".claude", "tools", COPY_LAUNCH_CONFIG)}`,
+      "--no-env-file",
+      join(project, ".claude", "tools", "aidlc.ts"),
+      "engine",
+      "hook",
+      PRE_TOOL_USE_GROUP_TARGET,
+    ],
     {
       cwd: project,
       env,

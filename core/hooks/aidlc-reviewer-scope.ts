@@ -43,7 +43,7 @@
 // the run's record shows when the bound bit; audit failures never change the
 // decision.
 
-import { existsSync, statSync, unlinkSync } from "node:fs";
+import { existsSync, readdirSync, statSync, unlinkSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import {
   hookOutsideGate,
@@ -61,7 +61,9 @@ import {
   isoTimestamp,
   recordHookDrop,
   readActiveDirectiveMarker,
+  readRecordedSourceCheckouts,
   readStateFile,
+  recordedCheckoutAt,
   readUnitScopeStamp,
   resolveProjectFlag,
   resolveProjectDirFromHook,
@@ -113,6 +115,10 @@ export interface ScopeVerdict {
    *  command with no path operand falls back to, not a token the caller typed.
    *  Lets the refusal message say the offending path was implied, not written. */
   defaulted?: boolean;
+  /** True when `target` is not in another unit's folder: it is a folder that
+   *  holds the units' folders, refused as the start of a search or a listing.
+   *  The refusal says that, and where to start instead. */
+  above?: boolean;
 }
 
 /** Optional path context for the pure matcher. The live hook supplies both:
@@ -121,6 +127,10 @@ export interface ScopeVerdict {
 export interface ScopeContext {
   recordRoot?: string;
   cwd?: string;
+  /** The folders of the checkouts the work records for its review (`intent
+   *  add-checkout`). The reviewer read scope passes them; the claimed-checkout
+   *  write bound does not. */
+  checkouts?: readonly string[];
 }
 
 // Glob metacharacters. A sibling segment carrying any of these spans units
@@ -265,6 +275,10 @@ interface PreparedScope {
   constructionRoot?: string;
   unitRoot?: string;
   bases: string[];
+  checkoutRoots: string[];
+  // bases[0] is the folder the hook tracks for the tool (the payload's cwd), which
+  // judgeCommandText moves at a cd.
+  toolDirFirst: boolean;
 }
 
 function normalizeForCompare(p: string): string {
@@ -322,6 +336,8 @@ function prepareScope(
     constructionRoot: constructionRoot ? normalizeForCompare(constructionRoot) : undefined,
     unitRoot: unitRoot ? normalizeForCompare(unitRoot) : undefined,
     bases,
+    checkoutRoots: (context?.checkouts ?? []).map((root) => normalizeForCompare(resolve(root))),
+    toolDirFirst: cwd !== undefined,
   };
 }
 
@@ -342,10 +358,38 @@ function judgeLexicalPath(text: string, scope: PreparedScope): ScopeVerdict | nu
   for (let i = 0; i < comps.length; i++) {
     if (constructionIndex([comps[i]], true) !== 0) continue;
     if (judgeOccurrence(comps.slice(i), scope.unitFolded, scope.exemptSuffixes)) {
-      return verdict(text);
+      // A folder named construction itself, with no unit named after it.
+      return i === comps.length - 1 && constructionIndex([comps[i]]) === 0 ? { ...verdict(text), above: true } : verdict(text);
     }
   }
   return null;
+}
+
+// As typed, a folder from the first wildcard on that is, or that a shell may
+// expand to, ".." (a brace piece "..", or a dot-led pattern such as ".*"):
+// resolving the path would fold it away before the cut below could see it.
+function climbsAfterWildcard(text: string): boolean {
+  const comps = toPosix(text).split("/");
+  const wild = comps.findIndex((comp) => WILDCARD_RE.test(comp));
+  return wild !== -1 && comps.slice(wild).some((comp) =>
+    comp.split(/[{},]/).some((piece) => piece === ".." || (piece.startsWith(".") && WILDCARD_RE.test(piece))));
+}
+
+// Read from the folder the hook tracks for the tool, a path in a checkout the
+// work records for its review is that checkout's file, so its readings from the
+// record and the Unit's folder are not judged: from the Unit's folder
+// "../shop-web/app.js" would read as a Unit named shop-web. The path is cut at
+// its first wildcard folder, and opens only when that lies neither in nor above
+// the record's construction/ folder and nothing from the wildcard on climbs.
+function readsRecordedCheckout(text: string, scope: PreparedScope, bases: readonly string[]): boolean {
+  const construction = scope.constructionRoot;
+  if (!scope.toolDirFirst || construction === undefined || scope.checkoutRoots.length === 0) return false;
+  if (climbsAfterWildcard(text)) return false;
+  const comps = normalizeForCompare(resolvePathStrings(text, bases)[0]).split("/");
+  const wild = comps.findIndex((comp) => WILDCARD_RE.test(comp));
+  const path = (wild === -1 ? comps : comps.slice(0, wild)).join("/");
+  if (containsPath(construction, path) || containsPath(path, construction)) return false;
+  return scope.checkoutRoots.some((root) => containsPath(root, path));
 }
 
 function judgeResolvedPath(
@@ -355,6 +399,7 @@ function judgeResolvedPath(
   bases: readonly string[] = scope.bases,
 ): ScopeVerdict | null {
   if (scope.constructionRoot === undefined) return null;
+  if (readsRecordedCheckout(text, scope, bases)) return null;
 
   for (const path of normalizeResolved(text, bases)) {
     if (containsPath(scope.constructionRoot, path)) {
@@ -371,7 +416,7 @@ function judgeResolvedPath(
     // Recursive/search roots above construction/ sweep every sibling unit even
     // when the command never spells `construction` (for example `rg X .`).
     if (mode === "search-root" && containsPath(path, scope.constructionRoot)) {
-      return verdict(text);
+      return { ...verdict(text), above: true };
     }
   }
   return null;
@@ -798,7 +843,28 @@ export function parseDispatchRecord(raw: string): ReviewerDispatch | null {
 // PreToolUse error channel. Self-explaining and redirecting: it names the
 // scope, the offending target, and the sanctioned alternative, so the
 // reviewer self-corrects without retrying the same call.
-export function blockReason(target: string, dispatch: ReviewerDispatch, defaulted = false): string {
+export function blockReason(
+  target: string,
+  dispatch: ReviewerDispatch,
+  defaulted = false,
+  starts?: StartsBelow,
+): string {
+  if (starts) {
+    const implied = defaulted ? " (the folder this call starts in when it names none)" : "";
+    const why = starts.alsoMeans === undefined
+      ? "a search or a listing that starts there runs through every unit's folder"
+      : `this check also takes "${target}" to mean ${starts.alsoMeans}, and a search or a listing that ` +
+        `starts there runs through every unit's folder`;
+    const below = starts.onlyUnit
+      ? ""
+      : starts.folders.length === 0
+        ? `, or in the folder below "${target}" that holds the code you mean`
+        : `, or in one of these: ${starts.folders.join(", ")}${starts.more > 0 ? ` (and ${starts.more} more)` : ""}`;
+    return (
+      `This review cannot open "${target}"${implied} because ${why}; the current review covers ` +
+      `${dispatch.unit}. Start it lower instead: in ${starts.unitFolder} for this unit's documents${below}.`
+    );
+  }
   const defaultNote = defaulted
     ? ` (this command names no path, so "${target}" is the implicit recursive search ` +
       `root it falls back to - not a path you typed; give it an explicit in-scope path)`
@@ -811,6 +877,69 @@ export function blockReason(target: string, dispatch: ReviewerDispatch, defaulte
     `literally in shell paths because variables cannot be checked, and keep searches inside ` +
     `the current unit.`
   );
+}
+
+const FOLDERS_NAMED = 12;
+
+/** Where a search or a listing refused for starting above the units' folders can start instead. */
+export interface StartsBelow {
+  /** This unit's folder. */
+  unitFolder: string;
+  /** Up to FOLDERS_NAMED more folders a search may start in, written as the call wrote its folder. */
+  folders: string[];
+  /** How many more such folders there are. */
+  more: number;
+  /** No folder but this unit's is named: the refused one is named construction, or is this unit's own. */
+  onlyUnit: boolean;
+  /** Set when the refused folder, written in full from the tool's own folder, is open: what the check also took it to mean. */
+  alsoMeans?: string;
+}
+
+/**
+ * Where a search or a listing refused at `target` can start instead, or nothing
+ * when this unit's own folder is refused too. Every folder it names is first
+ * asked of evaluateReviewerScope as a listing, so a call that starts in that
+ * folder is not refused for it. Folder names are read only inside the project
+ * folder.
+ */
+export function startsBelow(
+  target: string,
+  dispatch: Pick<ReviewerDispatch, "unit" | "exempt">,
+  context: ScopeContext,
+  projectDir: string,
+): StartsBelow | undefined {
+  const unitFolder = toPosix(resolve(context.recordRoot ?? "", "construction", dispatch.unit));
+  const open = (path: string) => !evaluateReviewerScope("LS", { path }, dispatch, context).block;
+  if (!open(unitFolder)) return undefined;
+  const refused = resolve(context.cwd ?? "", target);
+  if (open(toPosix(refused))) {
+    // Refused where the matcher also read the path from the record or this unit's folder.
+    const scope = prepareScope(dispatch, context);
+    const alsoMeans = scope.bases.slice(scope.toolDirFirst ? 1 : 0)
+      .map((base) => toPosix(resolve(base, target)))
+      .find((path) => !open(path));
+    // Not refused from any base this context knows (a cd earlier in the line moved it): this unit's folder only.
+    if (alsoMeans === undefined) return { unitFolder, folders: [], more: 0, onlyUnit: true };
+    const own = normalizeForCompare(refused) === normalizeForCompare(unitFolder);
+    return { unitFolder, folders: own ? [] : [toPosix(refused)], more: 0, onlyUnit: own, alsoMeans };
+  }
+  if (constructionIndex(normalizedComps(target).slice(-1)) === 0) {
+    return { unitFolder, folders: [], more: 0, onlyUnit: true };
+  }
+  let names: string[] = [];
+  if (containsPath(normalizeForCompare(resolve(projectDir)), normalizeForCompare(refused))) {
+    try {
+      names = readdirSync(refused, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
+        .map((entry) => entry.name)
+        .sort();
+    } catch {
+      // Not a folder that can be listed: the unit's folder is still named.
+    }
+  }
+  const root = toPosix(target).replace(/\/+$/, "");
+  const folders = names.map((name) => (root === "." ? name : `${root}/${name}`)).filter(open);
+  return { unitFolder, folders: folders.slice(0, FOLDERS_NAMED), more: Math.max(0, folders.length - FOLDERS_NAMED), onlyUnit: false };
 }
 
 /**
@@ -1115,13 +1244,28 @@ async function checkScope(input: string, projectDir: string, outside: boolean, b
     agentType.length > 0 ? agentType === dispatch.reviewer : scopedRegistration;
   if (!isDispatchedReviewer) return 0;
 
-  let verdict: ScopeVerdict;
+  // Each recorded checkout's real folder, and its path as typed while that
+  // still leads to it (a checkout named through a link). Read outside the
+  // matcher's fail-open: a record that cannot be read opens no checkout.
+  let checkouts: string[] = [];
   try {
-    const cwdField = (parsed as { cwd?: unknown }).cwd;
-    verdict = evaluateReviewerScope(toolName, toolInput, dispatch, {
-      recordRoot: dirname(dirname(recordPath)),
-      cwd: typeof cwdField === "string" && cwdField.length > 0 ? cwdField : projectDir,
+    checkouts = readRecordedSourceCheckouts(projectDir).flatMap((entry) => {
+      const typed = resolve(projectDir, entry.path);
+      return recordedCheckoutAt(typed, [entry]) === null ? [entry.real] : [entry.real, typed];
     });
+  } catch {
+    // No checkout opened: the read scope as it is without one.
+  }
+
+  let verdict: ScopeVerdict;
+  const cwdField = (parsed as { cwd?: unknown }).cwd;
+  const scopeContext: ScopeContext = {
+    recordRoot: dirname(dirname(recordPath)),
+    cwd: typeof cwdField === "string" && cwdField.length > 0 ? cwdField : projectDir,
+    checkouts,
+  };
+  try {
+    verdict = evaluateReviewerScope(toolName, toolInput, dispatch, scopeContext);
   } catch (e) {
     recordHookDrop(projectDir, HOOK_NAME, errorMessage(e));
     return 0; // matcher failure - fail open
@@ -1131,8 +1275,16 @@ async function checkScope(input: string, projectDir: string, outside: boolean, b
   if (reviewerScopeStandsAside(projectDir, parsed, toolName, dispatch.unit, verdict.target ?? "", dispatch.stage)) {
     return 0;
   }
+  let starts: StartsBelow | undefined;
+  if (verdict.above) {
+    try {
+      starts = startsBelow(verdict.target ?? ".", dispatch, scopeContext, projectDir);
+    } catch {
+      // The refusal stands, in the other wording.
+    }
+  }
   process.stderr.write(
-    `${blockReason(verdict.target ?? "", dispatch, verdict.defaulted)}\n`,
+    `${blockReason(verdict.target ?? "", dispatch, verdict.defaulted, starts)}\n`,
   );
   emitReviewerScopeBlocked(
     projectDir,

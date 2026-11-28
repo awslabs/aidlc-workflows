@@ -26,19 +26,20 @@ import {
   runOrchestrateNext,
   seedStateFile,
 } from "../harness/fixtures.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 // Each harness's projected tree and the invocation its directives name.
 const TREES: ReadonlyArray<{ harness: string; tools: string; invoke: string }> = [
-  { harness: "claude", tools: join("dist", "claude", ".claude", "tools"), invoke: "bun .claude/tools/aidlc.ts" },
-  { harness: "codex", tools: join("dist", "codex", ".codex", "tools"), invoke: "bun .codex/tools/aidlc.ts" },
-  { harness: "copilot", tools: join("dist", "copilot", ".aidlc", "tools"), invoke: "bun .aidlc/tools/aidlc.ts" },
-  { harness: "cursor", tools: join("dist", "cursor", ".cursor", "tools"), invoke: "bun .cursor/tools/aidlc.ts" },
-  { harness: "kiro", tools: join("dist", "kiro", ".kiro", "tools"), invoke: "bun .kiro/tools/aidlc.ts" },
-  { harness: "kiro-ide", tools: join("dist", "kiro-ide", ".kiro", "tools"), invoke: "bun .kiro/tools/aidlc.ts" },
-  { harness: "opencode", tools: join("dist", "opencode", ".aidlc", "tools"), invoke: "bun .aidlc/tools/aidlc.ts" },
+  { harness: "claude", tools: join("dist", "claude", ".claude", "tools"), invoke: withCopyLaunchOptions("bun .claude/tools/aidlc.ts") },
+  { harness: "codex", tools: join("dist", "codex", ".codex", "tools"), invoke: withCopyLaunchOptions("bun .codex/tools/aidlc.ts") },
+  { harness: "copilot", tools: join("dist", "copilot", ".aidlc", "tools"), invoke: withCopyLaunchOptions("bun .aidlc/tools/aidlc.ts") },
+  { harness: "cursor", tools: join("dist", "cursor", ".cursor", "tools"), invoke: withCopyLaunchOptions("bun .cursor/tools/aidlc.ts") },
+  { harness: "kiro", tools: join("dist", "kiro", ".kiro", "tools"), invoke: withCopyLaunchOptions("bun .kiro/tools/aidlc.ts") },
+  { harness: "kiro-ide", tools: join("dist", "kiro-ide", ".kiro", "tools"), invoke: withCopyLaunchOptions("bun .kiro/tools/aidlc.ts") },
+  { harness: "opencode", tools: join("dist", "opencode", ".aidlc", "tools"), invoke: withCopyLaunchOptions("bun .aidlc/tools/aidlc.ts") },
 ];
 const CLAUDE = TREES[0];
 
@@ -223,7 +224,7 @@ describe("one list of Unit verbs", () => {
       timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     });
     const verbList = unknown.stderr.trim();
-    expect(verbList).toContain("Usage: bun .claude/tools/aidlc.ts unit <");
+    expect(verbList).toContain(`Usage: ${CLAUDE.invoke} unit <`);
     for (const verb of UNIT_VERBS.keys()) {
       const run = spawnSync(process.execPath, [tool, verb, "--project-dir", proj], {
         encoding: "utf-8",

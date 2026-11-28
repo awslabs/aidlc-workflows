@@ -1038,7 +1038,9 @@ function cursorAdapterTarget(command: string): string | null {
   if (
     invocation === "aidlc engine hook cursor-adapter" ||
     invocation === "aidlc engine adapter cursor" ||
-    /^bun\s+(?:"[^"]*\/hooks\/aidlc-cursor-adapter\.ts"|'[^']*\/hooks\/aidlc-cursor-adapter\.ts'|\S*\/hooks\/aidlc-cursor-adapter\.ts)$/.test(
+    // With or without the copy launch's two Bun options (copyLaunchPrefix in aidlc-runtime-paths.ts),
+    // so a refresh replaces either spelling of AI-DLC's own entry.
+    /^bun\s+(?:--config=\S*\/tools\/aidlc-bunfig\.toml\s+--no-env-file\s+)?(?:"[^"]*\/hooks\/aidlc-cursor-adapter\.ts"|'[^']*\/hooks\/aidlc-cursor-adapter\.ts'|\S*\/hooks\/aidlc-cursor-adapter\.ts)$/.test(
       invocation,
     )
   ) {

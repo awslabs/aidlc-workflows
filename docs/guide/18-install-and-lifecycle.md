@@ -1192,15 +1192,16 @@ Refresh preserves:
   time it starts on its 3.0 engine. When the release changes what such a file
   allows (it drops an allow entry or adds a deny entry the file Kiro upgraded
   from had), the refresh puts the release's version back by itself, provided
-  Kiro upgrades it again by itself at its next 3.0 start (its auto-upgrade is
-  on: `chat.enableAutoAgentUpgrade` is true in your own Kiro settings, as
-  **Enable auto-upgrade** at Kiro's first 3.0 start saves it), that file is
-  the one AI-DLC wrote there, and nobody changed Kiro's copy since Kiro wrote it
-  (the `kiroUpgrade` stamp Kiro writes into the file still matches it; for a
-  copy Kiro did not stamp, every field but `tools`, `hooks` and `permissions`
-  is still the file's own); otherwise it keeps Kiro's copy and says, in one line,
-  that the file still allows what an older release allowed and that `--force`
-  takes the release's version. When the release no longer ships such a file,
+  `chat.enableAutoAgentUpgrade` is not `false` in your own Kiro settings (from
+  Kiro CLI 2.37 Kiro then upgrades it again by itself at its next 3.0 start; an
+  older Kiro CLI asks first), that file is the one AI-DLC wrote there, and
+  nobody changed Kiro's copy since Kiro wrote it (the `kiroUpgrade` stamp Kiro
+  writes into the file still matches it; a copy Kiro did not stamp goes back
+  only when the setting is `true` and every field but `tools`, `hooks` and
+  `permissions` is still the file's own); otherwise it keeps Kiro's copy and
+  says, in one line, that the file still allows what an older release allowed
+  and that `--force` takes the release's version. When the release no longer
+  ships such a file,
   the file Kiro upgraded from is the one AI-DLC wrote there and its stamp still
   matches, the refresh removes it like any file the release no longer ships,
   keeps Kiro's backups of it, and says so in one line
@@ -1969,7 +1970,12 @@ run it twice.
 The supported manual-copy payload is the versioned `aidlc-copy-runtime-X.Y.Z.tar.gz`
 release asset. Download one exact release, extract it, and copy the complete
 `runtime/<harness>/` root so the harness tree, `aidlc/` workspace shell, and
-any project-root files the harness needs stay together. The copy runtime leaves
+any project-root files the harness needs stay together. On Kiro, install with the
+guide's manual-copy steps instead:
+[Kiro](harnesses/kiro.md#versioned-manual-copy-alternative) copies
+`runtime/kiro-ide/` and
+[Kiro CLI (V2)](harnesses/kiro.md#kiro-cli-v2-versioned-manual-copy-alternative)
+copies `runtime/kiro/`, and both say how to keep the project's own Kiro settings. The copy runtime leaves
 out files a team's editor owns, such as Copilot's `.vscode/settings.json`, so
 copying never replaces them; the [Copilot guide](harnesses/copilot.md#vs-code-request-cap)
 names the one setting to add yourself. It leaves out your `.gitignore` and
@@ -1982,12 +1988,15 @@ by default; to turn the shipped servers on, run
 `bun .claude/tools/aidlc.ts config project --harness claude --mcp defaults --yes`. It also leaves out the team's memory
 files (`aidlc/spaces/default/memory/team.md`, where Practices Discovery records
 the practices you affirmed, and `project.md`, where your project rules and
-learnings go) and your chosen space (`aidlc/active-space`). Copying a newer
-release, or a second harness, over a project therefore keeps them. In a fresh
+learnings go) and your chosen space (`aidlc/active-space`). Copying a second
+harness into a project therefore keeps them. In a fresh
 copy, AI-DLC creates the two memory files from its bundled copy the first time
 you start work. Use **Bun 1.4.4 or newer**, which includes the Brotli decoder fix
 for CVE-2026-111497; the native `aidlc` executable is not required. Updating
 a copied runtime does not update the Bun installation that runs it.
+AI-DLC's own hooks and commands in a copy add two Bun options,
+`--config=<harness folder>/tools/aidlc-bunfig.toml --no-env-file`, so your
+project's `bunfig.toml` and `.env` stay your project's and never load into AI-DLC.
 Native installations instead need an AI-DLC release built with the fixed Bun:
 updating a separate Bun installation does not replace the runtime embedded in
 the `aidlc` executable. Markdown analysis (summary confirmation,
@@ -2022,6 +2031,23 @@ The last line is the copy's own setup, run once from the extracted runtime: it
 adds AI-DLC's lines to your `.gitignore` and `AGENTS.md` before the first chat
 and checks the rest of the setup. Without it, AI-DLC adds them when the first
 chat starts, or at the latest when you start work.
+
+To move a copied project to a newer release, run the lines above with the newer
+`tag` and leave out the `cp -R` line; on another harness, the last line names
+that harness's folder and the `--harness` name the project was set up with. That
+line, the project's own setup command, brings the project's AI-DLC files to the
+newer release and keeps what the project recorded: the setup answers, the plugin
+choices and the space's memory files, as a native refresh does. An AI-DLC file
+you changed is named for you to keep or replace. A second copy over the project
+replaces those answers and choices, and any AI-DLC file you changed, without
+saying so.
+
+This needs a project whose setup line ran on 2.11.0 or later; on 2.11.0, run
+the line twice: its own tool does the first run, and the newer release's tool
+finishes it. A project copied from an earlier release, or one whose setup line
+never ran (the line then stops on conflicts with the files AI-DLC copied), runs
+all the lines above, `cp -R` included. That copy turns every plugin back on, so
+turn off again any you had turned off.
 
 Later, a copied project fetches releases itself. When a config command needs
 files the project does not have (a teammate's newer pin, a harness you add,
@@ -2200,7 +2226,7 @@ still holds what AI-DLC wrote; a value your team changed is yours, so keep it:
 |------|--------|
 | `.gitignore` | The lines from `# BEGIN AI-DLC:gitignore` to `# END AI-DLC:gitignore`, and the blank line above them. Several harnesses share this one block. |
 | `AGENTS.md` | The lines from `<!-- BEGIN AI-DLC:agents -->` to `<!-- END AI-DLC:agents -->`, and the blank line above them. |
-| `.claude/settings.json` | `companyAnnouncements`, unless your team set its own. `statusLine` when its command runs `aidlc`. Every hook group whose command runs `aidlc` (`aidlc engine hook ...`, or `bun "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts" engine hook ...` in a copied project). The `permissions.allow` entries that name `aidlc`, and `Edit(/**)`, `Task` and `WebSearch` unless you added them. `env` keys that start with `AIDLC_` or `AWS_AIDLC_`, and any provider keys you chose in `aidlc config providers`. |
+| `.claude/settings.json` | `companyAnnouncements`, unless your team set its own. `statusLine` when its command runs `aidlc`. Every hook group whose command runs `aidlc` (`aidlc engine hook ...`, or `bun "--config=$CLAUDE_PROJECT_DIR/.claude/tools/aidlc-bunfig.toml" --no-env-file "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts" engine hook ...` in a copied project, and the same without the two Bun options from an older copy). The `permissions.allow` entries that name `aidlc`, and `Edit(/**)`, `Task` and `WebSearch` unless you added them. `env` keys that start with `AIDLC_` or `AWS_AIDLC_`, and any provider keys you chose in `aidlc config providers`. |
 | `.claude/settings.local.json` | A `statusLine` whose command runs `aidlc`; AI-DLC's status line lands here when it is turned on. Step 1's `--statusline off` takes it out. |
 | `.mcp.json` (Claude Code), `.kiro/settings/mcp.json` (Kiro CLI) | The MCP servers AI-DLC ships (`context7`, `aws-mcp`, `aws-pricing`, `aws-iac`, `aws-serverless`), unless you set one up yourself. Kiro CLI gets them by default, turned off; Claude Code gets them when you turned them on, by answering yes when `aidlc config` asked at a terminal or with `config project --mcp defaults`. |
 | `.codex/config.toml` | `developer_instructions`, `sandbox_mode`, `suppress_unstable_features_warning` and `tool_output_token_limit`; AI-DLC's keys in `[shell_environment_policy]` (`set`, holding `AIDLC_RULES_DIR`), `[sandbox_workspace_write]` (`network_access`), `[agents]` (`max_depth`), `[features]` (`default_mode_request_user_input`), `[tools]` (`experimental_request_user_input`) and `[tui]` (`status_line`); the `#` comments directly above them; and any of those tables left empty. Keep keys you set yourself, also inside those tables. |

@@ -21,6 +21,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { settingsDoctorChecks } from "../../core/tools/aidlc-config-diagnostics.ts";
 import { readConfigDiagnosticRecords } from "../../core/tools/aidlc-config-diagnostics.ts";
+import { resolveProjectFlag } from "../../core/tools/aidlc-lib.ts";
 import {
   AIDLC_SETTINGS_SCHEMA,
   _resetSettingsCacheForTests,
@@ -249,6 +250,46 @@ describe("t298 aidlc.settings hierarchy", () => {
     expect(resolved.sources["flags.bypasses.AIDLC_DISABLE_LEARNINGS"]).toBe("machine");
     expect(resolved.sources["flags.bypasses.AIDLC_DISABLE_SENSORS"]).toBe("local");
     expect(resolved.sources["flags.bypasses.AIDLC_DISABLE_PLAN_APPROVAL_GUARD"]).toBe("local");
+  });
+
+  // The files are written as text: in source, a "__proto__" key in an object
+  // literal sets the prototype instead of making the key JSON.parse makes.
+  test("a __proto__ key in a settings file changes no object but is left out of the merged settings", () => {
+    const machine = temp("aidlc-t298-proto-machine-");
+    const project = temp("aidlc-t298-proto-chain-");
+    process.env.AIDLC_INSTALL_ROOT = machine;
+    const switches = ["AIDLC_DISABLE_PLAN_APPROVAL_GUARD", "AIDLC_DISABLE_REVIEW_FREEZE_HOOK", "AIDLC_DISABLE_REVIEWER_SCOPE_HOOK"];
+    const carried = `"__proto__":{"bypasses":${JSON.stringify(switches)},"polluted":"yes","nested":{"deep":1}}`;
+    writeFileSync(
+      projectSettingsPath(project),
+      `{"schemaVersion":1,"flags":{"schemaVersion":1,"swarm":true,"statuslineReplaced":{"type":"command","command":"mine.sh",${carried}}}}\n`,
+    );
+    writeFileSync(
+      localSettingsPath(project),
+      `{"schemaVersion":1,"flags":{"schemaVersion":1,"statuslineReplaced":{${carried}}}}\n`,
+    );
+    const plain = {} as Record<string, unknown>;
+    try {
+      const resolved = resolveAidlcSettings(project);
+      for (const name of ["bypasses", "polluted", "nested"]) {
+        expect(Object.hasOwn(Object.prototype, name), name).toBe(false);
+        expect(plain[name], name).toBeUndefined();
+      }
+      // No switch is recorded, and the status line keeps the keys that are its own.
+      expect(resolved.flags).toEqual({
+        schemaVersion: 1,
+        swarm: true,
+        statuslineReplaced: { type: "command", command: "mine.sh" },
+      });
+      expect(Object.keys(resolved.flags?.statuslineReplaced ?? {}).sort()).toEqual(["command", "type"]);
+      expect(resolved.flags?.bypasses).toBeUndefined();
+      expect(Object.keys(resolved.sources).filter((path) => path.includes("__proto__"))).toEqual([]);
+      // What a guard asks: none of the named checks reads as switched off.
+      for (const name of switches) expect(resolveProjectFlag(name, {}, project), name).toBeUndefined();
+    } finally {
+      // A failing run must not leave the names on every object for the tests after it.
+      for (const name of ["bypasses", "polluted", "nested"]) delete (Object.prototype as Record<string, unknown>)[name];
+    }
   });
 
   test("$schema is tolerated while unknown and machine-only project keys fail closed", () => {

@@ -11,10 +11,11 @@
 
 import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import kiro from "../../harness/kiro/manifest.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -22,6 +23,8 @@ setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const KIRO_TREE = join(REPO_ROOT, "dist", "kiro", ".kiro");
 const WINDOWS = process.platform === "win32";
+// The copy tree's dispatcher launch, its two Bun options included.
+const DISPATCHER = withCopyLaunchOptions("bun .kiro/tools/aidlc.ts");
 
 type Agent = { hooks?: Record<string, Array<{ command: string }>> };
 
@@ -60,10 +63,11 @@ describe("a Kiro CLI hook's exit code reaches Kiro as the hook set it", () => {
     expect(suffix).toBe("; exit $LASTEXITCODE");
     const commands = shippedCommands();
     expect(commands.length).toBeGreaterThan(0);
+    const escaped = DISPATCHER.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
     for (const { agent, event, command } of commands) {
       expect(command.endsWith(suffix ?? "\0"), `${agent} ${event}: ${command}`).toBe(true);
       expect(command.slice(0, -(suffix ?? "").length), `${agent} ${event}`)
-        .toMatch(/^bun \.kiro\/tools\/aidlc\.ts engine adapter kiro [a-z-]+(?: [a-z-]+)?$/);
+        .toMatch(new RegExp(`^${escaped} engine adapter kiro [a-z-]+(?: [a-z-]+)?$`));
     }
   });
 
@@ -74,36 +78,37 @@ describe("a Kiro CLI hook's exit code reaches Kiro as the hook set it", () => {
       spawnSync("git", ["init", "-q"], { cwd: dir });
       const path = `${dirname(process.execPath)}${delimiter}${process.env.PATH ?? ""}`;
       const skill = readFileSync(join(dir, ".kiro", "skills", "aidlc", "SKILL.md"), "utf-8");
-      const prompt = asKiroRuns(shipped("verb-intercept"), dir, JSON.stringify({
+      const says = (typed: string) => asKiroRuns(shipped("verb-intercept"), dir, JSON.stringify({
         hook_event_name: "userPromptSubmit",
         cwd: dir,
         session_id: "t-kiro-hook-exit-code",
-        prompt: skill.replaceAll("$ARGUMENTS", "fix the login page, please"),
+        prompt: skill.replaceAll("$ARGUMENTS", typed),
       }), path);
-      expect(prompt.status, prompt.stderr).toBe(0);
-      expect(prompt.stdout).toContain("Your first tool call is exactly the call below");
-      const forwarded = /engine orchestrate next (.*)\n/.exec(prompt.stdout)?.[1] ?? "";
-      expect(forwarded.length).toBeGreaterThan(0);
-      const guard = (command: string) => asKiroRuns(shipped("guard-tool-call"), dir, JSON.stringify({
+      const entry = `${DISPATCHER} engine orchestrate next --entry`;
+      const guard = () => asKiroRuns(shipped("guard-tool-call"), dir, JSON.stringify({
         hook_event_name: "preToolUse",
         cwd: dir,
         tool_name: "shell",
-        tool_input: { command },
+        tool_input: { command: entry },
       }), path);
-      // The agent's rewrite seen live: the whole line inside one pair of double quotes.
-      const altered = guard(`bun .kiro/tools/aidlc.ts engine orchestrate next "${forwarded}"`);
-      expect(altered.status, altered.stderr).toBe(2);
-      expect(altered.stderr).toContain("Run exactly:");
-      const asTold = guard(`bun .kiro/tools/aidlc.ts engine orchestrate next ${forwarded}`);
+      // The hook ran the status itself: the agent's first command this turn would roll the workflow forward.
+      const status = says("--status");
+      expect(status.status, status.stderr).toBe(0);
+      const refused = guard();
+      expect(refused.status, refused.stderr).toBe(2);
+      expect(refused.stderr).toContain("This was a read-only command and AIDLC already ran it this turn");
+      const request = says("fix the login page, please");
+      expect(request.status, request.stderr).toBe(0);
+      expect(request.stdout).toContain(`Run \`${entry}\` now and do only what it prints.`);
+      const asTold = guard();
       expect(asTold.status, asTold.stderr).toBe(0);
-      expect(existsSync(join(dir, "aidlc", ".aidlc-sessions", ".kiro-cli-forwarding-latch.json"))).toBe(false);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
   test("the native release's line keeps the launcher's exit code through the same shell", () => {
-    // The native release ships the same line with `aidlc` for the copy's `bun .kiro/tools/aidlc.ts`;
+    // The native release ships the same line with `aidlc` for the copy's launch of `.kiro/tools/aidlc.ts`;
     // a stand-in launcher that refuses stands for it here (aidlc.cmd on Windows).
     const bin = mkdtempSync(join(tmpdir(), "t-kiro-hook-exit-bin-"));
     try {
@@ -112,7 +117,7 @@ describe("a Kiro CLI hook's exit code reaches Kiro as the hook set it", () => {
       } else {
         writeFileSync(join(bin, "aidlc"), "#!/bin/sh\necho refused >&2\nexit 2\n", { mode: 0o755 });
       }
-      const line = shipped("guard-tool-call").replace("bun .kiro/tools/aidlc.ts", "aidlc");
+      const line = shipped("guard-tool-call").replace(DISPATCHER, "aidlc");
       mkdirSync(join(bin, "proj"));
       const run = asKiroRuns(line, join(bin, "proj"), "{}", `${bin}${delimiter}${process.env.PATH ?? ""}`);
       expect(run.status, `${line}: ${run.stderr}`).toBe(2);

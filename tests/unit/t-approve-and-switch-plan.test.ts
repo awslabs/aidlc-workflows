@@ -12,6 +12,7 @@ import { join } from "node:path";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { AIDLC_SRC, cleanupTestProject, createOrchestrationTestProject, removeWorkspaceRecord } from "../harness/fixtures.ts";
 import { env, exec, next, say, type Exec } from "../harness/aidlc-input-corpus.ts";
+import { COPY_LAUNCH_CONFIG, withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import {
   getField,
   readAuditShardEvents,
@@ -33,7 +34,7 @@ const NO_OUTPUT_CHECKS = {
 const REPLY = "approve. and switch back to the poc plan, i dont need the deployment stuff after all";
 const ANSWER_STEP =
   "If their message also answered the open Build and Test question, record it now with " +
-  "`bun .claude/tools/aidlc-orchestrate.ts report --stage build-and-test --result approved --user-input Approve` " +
+  `\`${withCopyLaunchOptions("bun .claude/tools/aidlc-orchestrate.ts report --stage build-and-test --result approved --user-input Approve")}\` ` +
   '(a change request: `--result rejected --user-input "Request Changes"`) and re-run `next`; ' +
   "otherwise stop: the question still waits.";
 
@@ -47,10 +48,15 @@ const box = (proj: string, slug: string): string =>
   new RegExp(`^- \\[(.)\\] ${slug} \u2014 (EXECUTE|SKIP)`, "m").exec(state(proj))?.slice(1).join(" ") ?? "";
 const events = (proj: string): string[] => readAuditShardEvents(proj).map((entry) => entry.event);
 
-/** A command a step names (`bun .claude/tools/<tool>.ts ...`), run from the shipped tree on this project. */
+/**
+ * A command a step names (`bun .claude/tools/<tool>.ts ...`, with or without the copy launch's two Bun options), run
+ * from the shipped tree on this project.
+ */
 async function runNamed(proj: string, command: string): Promise<Exec> {
   const parts = (command.match(/'[^']*'|"[^"]*"|\S+/g) ?? []).map((part) => part.replace(/^['"]|['"]$/g, ""));
   if (parts[0] === "bun") parts.shift();
+  if (parts[0]?.startsWith("--config=") && parts[0].endsWith(`/${COPY_LAUNCH_CONFIG}`)) parts.shift();
+  if (parts[0] === "--no-env-file") parts.shift();
   const tool = join(AIDLC_SRC, "tools", (parts.shift() ?? "").replace(/^.*tools\//, ""));
   return exec([process.execPath, tool, ...parts, "--project-dir", proj],
     { cwd: proj, env: env(proj, { env: NO_OUTPUT_CHECKS }) });

@@ -646,12 +646,31 @@ describe("t289 a hardlinked document", () => {
     linkSync(original, linked);
     const result = onboard(p, SPACE, linked, NOW);
     expect(result.refused?.path).toBe("linked.md");
-    expect(result.refused?.reason).toMatch(/multiply linked/);
+    expect(result.refused?.reason).toStartWith(
+      "linked.md is multiply linked (a hardlink) and is not trusted. " +
+        "It has 2 links, and AI-DLC cannot see where the other one is.",
+    );
     expect(result.refused?.reason).toContain(
       "Copy the file, delete the original, give the copy the original's name, then re-run.",
     );
     expect(result.refused?.reason).not.toMatch(/&&|\bcp |\bmv /);
     expect(result.indexed).toEqual([]);
+  });
+
+  test("a hardlinked document named among several is left out, and its reason says it is multiply linked", () => {
+    const p = scratchProject();
+    const original = join(p, "original.md");
+    writeFileSync(original, "text\n");
+    const linked = join(documentsDir(p, SPACE), "linked.md");
+    linkSync(original, linked);
+    const other = doc(p, "other.md");
+    const result = onboard(p, SPACE, [linked, other], NOW);
+    expect(result.not_added?.map((entry) => entry.path)).toEqual([linked]);
+    expect(result.not_added?.[0]?.reason).toStartWith(
+      "it is multiply linked (a hardlink) and is not trusted. " +
+        "It has 2 links, and AI-DLC cannot see where the other one is.",
+    );
+    expect(result.indexed).toHaveLength(1);
   });
 });
 

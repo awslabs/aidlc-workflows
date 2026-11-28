@@ -58,7 +58,7 @@ function toLateQuestion(policy: Policy): { run: ScopeRun; late: Directive } {
         if (stage === "units-generation" && !off) {
           off = true;
           agent.person.say("build the Units one at a time, but do not stop after each Unit; I will approve them together at the end");
-          const set = agent.host.bash(`bun .claude/tools/aidlc-state.ts set-construction-checkpoints disabled --message ${agent.latestMessageId()}`);
+          const set = agent.host.bash(`${agent.host.bunWords().join(" ")} .claude/tools/aidlc-state.ts set-construction-checkpoints disabled --message ${agent.latestMessageId()}`);
           if (set.status !== 0) agent.fail(`checkpoints off was refused: ${set.stdout}${set.stderr}`);
         }
         return undefined;
@@ -113,7 +113,7 @@ describe("a change for one Unit's stage at the one late question", () => {
       personAsksForTheChange(agent, late);
       const print = agent.next("--stage", "nfr-design", "--unit", "beta", "--change");
       expect(print.kind, JSON.stringify(print)).toBe("print");
-      const command = /`(bun \.claude\/tools\/[^`]+)`/.exec(String(print.message))?.[1];
+      const command = /`(bun (?:--config=\S+ --no-env-file )?\.claude\/tools\/[^`]+)`/.exec(String(print.message))?.[1];
       expect(command, String(print.message)).toContain("reopen --target nfr-design");
       expect(command).toContain("--units beta");
       const ran = agent.host.bash(command!);

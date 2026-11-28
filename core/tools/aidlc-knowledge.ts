@@ -52,7 +52,7 @@
 
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS, LONG_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { readPdfMain } from "./aidlc-pdf.ts";
-import { compiledExecutable } from "./aidlc-runtime-paths.ts";
+import { acceptsSyncUploadLinks, bunLaunchFlags, compiledExecutable, hardLinkRefusal } from "./aidlc-runtime-paths.ts";
 import { createHash } from "node:crypto";
 import { type SpawnSyncReturns, spawnSync } from "node:child_process";
 import {
@@ -79,7 +79,6 @@ import {
   errorMessage,
   type FileIdentity,
   fileIdentity,
-  HARDLINK_REMEDY,
   intentsDir,
   isPidAlive,
   knowledgeDir,
@@ -507,7 +506,7 @@ function builtinPdfCommand(): readonly string[] {
   const exe = compiledExecutable();
   return exe !== null
     ? [exe, "engine", "knowledge", "read-pdf", "--page-cap", String(EXTRACT_PAGE_CAP)]
-    : [process.execPath, fileURLToPath(new URL("./aidlc-pdf.ts", import.meta.url)), "--page-cap", String(EXTRACT_PAGE_CAP)];
+    : [process.execPath, ...bunLaunchFlags(), fileURLToPath(new URL("./aidlc-pdf.ts", import.meta.url)), "--page-cap", String(EXTRACT_PAGE_CAP)];
 }
 
 /** The page count the built-in reader reports as the last line of its stderr (0 when it says none). */
@@ -1696,7 +1695,8 @@ function statOnlyRefusal(real: string, rel: string): string | null {
   // every sync quietly passed over it — the exact list/sync disagreement the
   // present_but_refused state exists to prevent.
   if (st.nlink !== 1) {
-    return `${rel} is multiply linked (a hardlink) and is not trusted. ${HARDLINK_REMEDY}`;
+    const { accepted, result } = acceptsSyncUploadLinks(real, st);
+    if (!accepted) return hardLinkRefusal(rel, null, st.nlink, result);
   }
   try {
     // fs.constants.R_OK, as a literal: this file's restricted fs allowlist
@@ -3190,6 +3190,7 @@ export type UnreadReason =
   | "new"
   | "changed"
   | "no-reader"
+  | "not-utf8"
   | "office"
   | "pdf"
   | "no-extractor"
@@ -3202,6 +3203,11 @@ export interface UnreadDocument {
   reason: UnreadReason;
 }
 
+/** The names the no-reader line asks for. A file that already has one and still
+ *  has no reader is text that is not UTF-8 (looksBinary): an Excel "CSV" or an
+ *  "ANSI" Notepad file is Windows-1252, a "Unicode" one UTF-16. */
+const TEXT_NAME = /\.(?:md|markdown|txt|csv|tsv)$/i;
+
 function unreadReason(row: DocumentRow, abs: string): UnreadReason | null {
   switch (effectiveExtractionState(row)) {
     case "extracted":
@@ -3210,7 +3216,10 @@ function unreadReason(row: DocumentRow, abs: string): UnreadReason | null {
       return "changed";
     case "unsupported_type":
       // A Word, Excel or HTML file added before AI-DLC read them is read on the next sync.
-      return builtinReadsRow(row, abs) ? "office" : "no-reader";
+      if (builtinReadsRow(row, abs)) return "office";
+      // Saving it as .md, .txt or .csv is what the person already did: the
+      // encoding is what stands in the way, so that is what the line names.
+      return TEXT_NAME.test(abs) ? "not-utf8" : "no-reader";
     case "extractor_unavailable":
       // A PDF added when the computer had no PDF reader: AI-DLC reads it itself on the next sync (the rule
       // shouldRetryExtraction uses). A team's own extractor that is missing stays a program to install.
@@ -3261,7 +3270,7 @@ export function unreadDocuments(projectDir: string, space: string): UnreadDocume
 }
 
 const UNREAD_ORDER: readonly UnreadReason[] = [
-  "new", "changed", "no-reader", "office", "pdf", "no-extractor", "failed", "no-text",
+  "new", "changed", "no-reader", "not-utf8", "office", "pdf", "no-extractor", "failed", "no-text",
 ];
 // One sentence per kind, the files its subject, so the line reads the same
 // when it is passed on. `them` is "it" for one file, "each" for several.
@@ -3270,6 +3279,8 @@ const UNREAD_SENTENCES: Readonly<Record<UnreadReason, (names: string, one: boole
   changed: (names, one) => `${names} changed since ${one ? "it was" : "they were"} added.`,
   "no-reader": (names, one) =>
     `The knowledge base has no reader for ${names}: save ${one ? "it" : "each"} as .md, .txt or .csv beside ${one ? "it" : "the original"}.`,
+  "not-utf8": (names, one) =>
+    `${names} ${one ? "is" : "are"} not UTF-8 text, which is the only text the knowledge base reads: save ${one ? "it" : "each"} again as UTF-8 (from Excel, "CSV UTF-8").`,
   office: (names, one) => `${names} ${one ? "was" : "were"} added before AI-DLC could read Word, Excel and HTML files.`,
   pdf: (names, one) => `${names} ${one ? "was" : "were"} added before AI-DLC could read a PDF without pdftotext.`,
   "no-extractor": (names, one) =>

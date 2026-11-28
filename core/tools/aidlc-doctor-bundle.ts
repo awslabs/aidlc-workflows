@@ -1494,6 +1494,7 @@ function tryArchive(
   try {
     const dirName = basename(bundleDir);
     const res = Bun.spawnSync(["tar", "-czf", archivePath, "-C", outParentDir, dirName], {
+      env: process.env,
       stdout: "ignore",
       stderr: "pipe",
     });

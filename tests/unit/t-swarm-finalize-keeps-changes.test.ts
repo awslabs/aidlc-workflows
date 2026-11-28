@@ -4,17 +4,19 @@
 // documents or list of files changed after its review keeps the review: finalize
 // lands the Unit with one line saying what changed, and the batch checkpoint
 // that follows is ready to ask, with no second line. Under strict, finalize
-// still sends the Unit back for a fresh review, naming what changed.
+// still sends the Unit back for a fresh review, naming what changed. Under every
+// policy, test output the project ignores, written after the review, is no
+// change: the Unit lands and the batch is ready, with nothing said.
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
-import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { auditBlockField, auditShardDir, boltSlugForUnit, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { codeGenerationRecordDir } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 import { seededStateFile } from "../harness/fixtures.ts";
 import {
-  cleanupCheckpointFixtures, fixture, prepare, publish, reviewRevisedSource, runCheckpointTool,
+  cleanupCheckpointFixtures, fixture, fixtureWithSource, prepare, publish, reviewRevisedSource, runCheckpointTool,
   swarm, wt, writeUnitSource,
 } from "../harness/swarm-checkpoint.ts";
 
@@ -136,6 +138,33 @@ describe("a swarm Unit changed after its review", () => {
     const status = batchStatus(pd);
     expect(status.errors).toEqual([]);
     expect(status.ready).toBe(true);
+  });
+
+  for (const policy of ["strict", "relaxed (set by you)"]) test(`${policy.split(" ")[0]}: test output the project ignores, written by a run after the review, lands the Unit and the batch is ready`, () => {
+    const pd = fixtureWithSource((code) => appendFileSync(join(code, ".gitignore"), ".ci-runs/\n"));
+    if (policy !== "strict") setPolicy(pd, policy);
+    const prepared = prepare(pd);
+    expect(prepared.code, `${prepared.out}\n${prepared.err}`).toBe(0);
+    writeUnitSource(pd, "alpha", 2);
+    const report = (n: number) => {
+      mkdirSync(join(wt(pd), ".ci-runs", `run-${n}`), { recursive: true });
+      writeFileSync(join(wt(pd), ".ci-runs", `run-${n}`, "result.xml"), `<testsuite run="${n}"/>\n`);
+    };
+    report(1);
+    const checked = swarm(pd, ["check", "alpha"]);
+    expect(checked.code, `${checked.out}\n${checked.err}`).toBe(0);
+    reviewRevisedSource(pd);
+    report(2);
+    const finalized = swarm(pd, ["finalize", "--batch", "1", "--units", "alpha", "--claimed", "alpha"]);
+    expect(finalized.code, `${finalized.out}\n${finalized.err}`).toBe(0);
+    const row = (JSON.parse(finalized.out) as { units: Array<{ unit: string; change_notices?: string[] }> })
+      .units.find((unit) => unit.unit === "alpha");
+    expect(row?.change_notices ?? []).toEqual([]);
+    const status = landAndStatus(pd);
+    expect(status.errors).toEqual([]);
+    expect(status.ready).toBe(true);
+    expect(ask(pd)).toEqual([]);
+    expect(accepted(pd)).toHaveLength(0);
   });
 
   test("its list of files changed after finalize: strict names it; off keeps it with one line", () => {

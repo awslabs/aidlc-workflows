@@ -8,6 +8,7 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import { gitBashPath, gitBashSkipReason } from "../harness/git-bash.ts";
 import { NATIVE_COMPILE_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS } from "../harness/test-budget.ts";
@@ -218,16 +219,16 @@ describe("ci-update-from-previous helpers", () => {
     }, NATIVE_COMPILE_TIMEOUT_MS + NATIVE_STARTUP_TIMEOUT_MS);
   });
 
-  // A copied project runs its own tool, so its wiring names `bun <dir>/tools/aidlc.ts`,
+  // A copied project runs its own tool, so its wiring names `bun <its two options> <dir>/tools/aidlc.ts`,
   // and Copilot and Cursor name their adapter file itself (dist/<harness> is the copy runtime's tree).
   test("a copied tree's hook commands are found on every harness that wires them in JSON", () => {
     const found = (harness: string, dir: string) => hookCommands(join(REPO_ROOT, "dist", harness, dir));
-    expect(found("claude", ".claude")).toContain('bun "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts" engine hook session-start');
-    expect(found("codex", ".codex")).toContain("bun .codex/tools/aidlc.ts engine adapter codex continue-workflow");
-    expect(found("copilot", ".github")).toContain("bun .aidlc/hooks/aidlc-copilot-adapter.ts guard-tool-call");
-    expect(found("cursor", ".cursor")).toContain("bun .cursor/hooks/aidlc-cursor-adapter.ts guards");
-    expect(found("kiro", ".kiro")).toContain(`bun .kiro/tools/aidlc.ts engine adapter kiro continue-workflow${kiroManifest.hookCommandSuffix}`);
-    expect(found("kiro-ide", ".kiro")).toContain("bun .kiro/tools/aidlc.ts engine adapter kiro-ide guard-tool-call");
+    expect(found("claude", ".claude")).toContain(withCopyLaunchOptions('bun "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts" engine hook session-start'));
+    expect(found("codex", ".codex")).toContain(withCopyLaunchOptions("bun .codex/tools/aidlc.ts engine adapter codex continue-workflow"));
+    expect(found("copilot", ".github")).toContain(withCopyLaunchOptions("bun .aidlc/hooks/aidlc-copilot-adapter.ts guard-tool-call"));
+    expect(found("cursor", ".cursor")).toContain(withCopyLaunchOptions("bun .cursor/hooks/aidlc-cursor-adapter.ts guards"));
+    expect(found("kiro", ".kiro")).toContain(withCopyLaunchOptions(`bun .kiro/tools/aidlc.ts engine adapter kiro continue-workflow${kiroManifest.hookCommandSuffix}`));
+    expect(found("kiro-ide", ".kiro")).toContain(withCopyLaunchOptions("bun .kiro/tools/aidlc.ts engine adapter kiro-ide guard-tool-call"));
   });
 
   test("only a command the engine's dispatcher runs is held to the hook phase trace", () => {

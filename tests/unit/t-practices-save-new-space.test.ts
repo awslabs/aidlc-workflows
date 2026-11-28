@@ -236,18 +236,56 @@ describe("Practices Discovery's save in a space made by space create", () => {
     expect(stripRulesBlock(after, "test-pro")).toBe(`# Team practices\n\n${SAVED_SECTIONS}`);
   });
 
-  test("a stub with Windows line endings saves", () => {
+  test("a stub with Windows line endings saves and keeps them", () => {
     const { proj, draftDir } = newSpaceProject();
     writeFileSync(join(memoryOf(proj, SPACE), "team.md"), "# Team practices\r\n");
     writeFileSync(join(memoryOf(proj, SPACE), "project.md"), "# Project overrides\r\n");
     const saved = promote(proj, draftDir);
     expect(saved.status, saved.out).toBe(0);
     const after = files(proj, SPACE);
-    for (const heading of ["Way of Working", "Walking Skeleton", "Testing Posture", "Deployment", "Code Style"]) {
-      expect(after.team).toContain(`## ${heading}\n`);
-    }
-    expect(after.project).toContain("- ALWAYS validate request bodies with zod (affirmed ");
-    expect(after.project).toContain("- NEVER log the text of a note (affirmed ");
+    expect(after.team).toBe(crlf(`# Team practices\n\n${SAVED_SECTIONS}`));
+    expect(after.project.replace(DATE, "")).toBe(crlf(
+      "# Project overrides\n\n## Mandated\n- ALWAYS validate request bodies with zod\n\n" +
+        "## Forbidden\n- NEVER log the text of a note\n",
+    ));
+  });
+});
+
+const crlf = (text: string): string => text.replaceAll("\n", "\r\n");
+
+describe("Practices Discovery's save across line endings", () => {
+  test("drafts with Windows line endings save the same text as Unix ones, with no blank line added under a heading", () => {
+    const { proj, draftDir } = newSpaceProject();
+    writeFileSync(join(draftDir, "team-practices.md"), crlf(TEAM_PRACTICES));
+    writeFileSync(join(draftDir, "discovered-rules.md"), crlf(DISCOVERED_RULES));
+    const saved = promote(proj, draftDir);
+    expect(saved.status, saved.out).toBe(0);
+    const after = files(proj, SPACE);
+    expect(after.team).toBe(`# Team practices\n\n${SAVED_SECTIONS}`);
+    expect(after.project.replace(DATE, "")).toBe(
+      "# Project overrides\n\n## Mandated\n- ALWAYS validate request bodies with zod\n\n" +
+        "## Forbidden\n- NEVER log the text of a note\n",
+    );
+  });
+
+  test("a team.md and project.md with Windows line endings get the same text and keep their line endings", () => {
+    const saveOn = (lineEnding: (text: string) => string): { team: string; project: string } => {
+      const proj = createTestProject();
+      created.push(proj);
+      seedAidlcMemory(proj);
+      for (const name of ["team.md", "project.md"]) {
+        const path = join(memoryOf(proj, "default"), name);
+        writeFileSync(path, lineEnding(readFileSync(path, "utf-8").replaceAll("\r\n", "\n")));
+      }
+      const saved = promote(proj, practicesInProgress(proj, "default"));
+      expect(saved.status, saved.out).toBe(0);
+      return files(proj, "default");
+    };
+    const unix = saveOn((text) => text);
+    const windows = saveOn(crlf);
+    expect(windows.team).toBe(crlf(unix.team));
+    expect(windows.project).toBe(crlf(unix.project));
+    expect(unix.team).toContain("## Way of Working\n\nTrunk-based, branches live a day.\n");
   });
 });
 

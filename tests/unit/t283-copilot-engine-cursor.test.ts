@@ -31,6 +31,7 @@ import {
   seededRecordDir,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -215,8 +216,9 @@ function receiptSha256(receipt: string): string {
   return createHash("sha256").update(receipt, "utf-8").digest("hex");
 }
 
+// The `continue` a copy tree prints, with the copy launch's two Bun options.
 function continueCommand(harness: Harness, receipt: string): string {
-  return `bun ${harness.dir}/tools/aidlc-orchestrate.ts continue ${receipt}`;
+  return withCopyLaunchOptions(`bun ${harness.dir}/tools/aidlc-orchestrate.ts continue ${receipt}`);
 }
 
 // A `continue` the engine could not honour: answered as a bare `next`, which in

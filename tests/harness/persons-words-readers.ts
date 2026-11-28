@@ -21,10 +21,10 @@
 //     and its place is where it is made.
 //   - Shape reads are followed no further: `isNonAnswer` and the `/aidlc` parse (BOUNDARY). The person's own line
 //     taken as `next`'s flags (`takePersonsOwnLine`), their line of tokens alone taken as `next`'s command
-//     (`entryTokens`), and a plain reply taken as `next`'s words (`entryLine`), hand back `next`'s own arguments, read
-//     from there as an agent's arguments are, but for one: a plain reply that names only a plan while one plan
-//     question waits is that question's answer (`planNamedReply`, on ALLOWED_UNREACHED, as the scan does not follow
-//     these results).
+//     (`entryTokens`), and a plain reply or the words of a kept message an id names taken as `next`'s words
+//     (`entryLine`, `namedMessageWords`), hand back `next`'s own arguments, read from there as an agent's arguments
+//     are, but for one: a plain reply that names only a plan while one plan question waits is that question's answer
+//     (`planNamedReply`, on ALLOWED_UNREACHED, as the scan does not follow these results).
 //   - A place is a named function (`file#name`, the outermost one): the use there is "decides" when the words are
 //     compared, matched, searched, decoded or handed to a parameter that is, and "keeps" otherwise (copied, cut,
 //     hashed, tested for presence or blankness). A place the words reach only through its parameters also names the
@@ -113,6 +113,7 @@ const FIELD_READERS = new Set(["auditBlockField", "auditField"]);
 const BOUNDARY: Record<string, "clean" | "words" | "object"> = {
   isNonAnswer: "clean",
   aidlcEntryWords: "words",
+  shortcutEntryWords: "words",
   isAidlcCommandPrompt: "clean",
   splitKiroCommandArgs: "words",
   withTypedSpacing: "words",
@@ -126,11 +127,11 @@ const BOUNDARY: Record<string, "clean" | "words" | "object"> = {
 const RECORD_PATHS = new Set(["messageRel", "gateWordsPath", "gateWordsDir", "protectedResponsePath", "planApprovalRuntimeDir"]);
 /**
  * Followed inside, but what they hand back is `next`'s own arguments, read from there as an agent's arguments are: the
- * person's own `/aidlc` line taken as `next`'s flags, their line of tokens alone taken as `next`'s command, and a plain
- * reply taken as `next`'s words. The one place that reads entryLine's result before `next` does, planNamedReply, is on
- * ALLOWED_UNREACHED.
+ * person's own `/aidlc` line taken as `next`'s flags, their line of tokens alone taken as `next`'s command, a plain
+ * reply taken as `next`'s words, and the words of a kept message an id names taken as `next`'s words. The one place
+ * that reads entryLine's result before `next` does, planNamedReply, is on ALLOWED_UNREACHED.
  */
-const STRUCTURE_RESULT = new Set(["takePersonsOwnLine", "entryTokens", "entryLine"]);
+const STRUCTURE_RESULT = new Set(["takePersonsOwnLine", "entryTokens", "entryLine", "namedMessageWords"]);
 
 const COMPARE_OPS = new Set([
   ts.SyntaxKind.EqualsEqualsEqualsToken, ts.SyntaxKind.ExclamationEqualsEqualsToken, ts.SyntaxKind.EqualsEqualsToken,
@@ -989,7 +990,7 @@ export const ALLOWED: Record<string, Allowed> = {
   [`${STORE}#messageIsReply`]: { use: "keeps", why: "the presence shape: a message with words or none (words === null)" },
   [`${STORE}#noReplySince`]: { use: "keeps", why: "the presence shape: a line of settings alone is no reply (words === null)" },
   [`${ORCH}#handOutSettingsLine`]: { use: "keeps", why: "the presence shape: a line of settings alone (words === null) is handed to its setter once" },
-  [UNWRAP]: { use: "keeps", why: "the brand's one way back to text, for the places below that read the message store or the gate-words record", from: [`${TURN}#settleClaudeTurns`, `${LIB}#gateWordsSinceUnitReview`, `${LIB}#personsGateReply`, `${LIB}#requireProtectedResponse`, `${LOG}#answerEnginePlanApproval`, `${ORCH}#takePersonsOwnLine`, `${STATE}#parkedWords`, `${STATE}#personsWordsFields`, `${GUARD_SWITCH}#saidInChat`, `${ORCH}#emit`, `${ORCH}#entryTokens`, `${ORCH}#entryLine`, `${SWITCHES}#recordSwitchChange`, `${STATE}#requireHumanConstructionPolicyChange`, "core/tools/aidlc-utility.ts#handleReclassify", `${STATE}#handleReject`, `${LOG}#handleAnswer`, `${LIB}#keptRepliesSinceStageStart`, `${LIB}#latestReplyAfter`, `${UNIT_CP}#approveConstructionCheckpoint`, `${LIB}#personsWordsKept`, `${SWARM}#handleAllowChange`, "core/hooks/system-install.ts#recordAllowed", "core/tools/aidlc-jump.ts#changeAsked", `${SWARM}#handleTakeOver`, `${LOG}#handleInstall`] },
+  [UNWRAP]: { use: "keeps", why: "the brand's one way back to text, for the places below that read the message store or the gate-words record", from: [`${TURN}#settleClaudeTurns`, `${LIB}#gateWordsSinceUnitReview`, `${LIB}#personsGateReply`, `${LIB}#requireProtectedResponse`, `${LOG}#answerEnginePlanApproval`, `${ORCH}#takePersonsOwnLine`, `${STATE}#parkedWords`, `${STATE}#personsWordsFields`, `${GUARD_SWITCH}#saidInChat`, `${ORCH}#emit`, `${ORCH}#entryTokens`, `${ORCH}#entryLine`, `${ORCH}#namedMessageWords`, `${SWITCHES}#recordSwitchChange`, `${STATE}#requireHumanConstructionPolicyChange`, "core/tools/aidlc-utility.ts#handleReclassify", `${STATE}#handleReject`, `${LOG}#handleAnswer`, `${LIB}#keptRepliesSinceStageStart`, `${LIB}#latestReplyAfter`, `${UNIT_CP}#approveConstructionCheckpoint`, `${LIB}#personsWordsKept`, `${SWARM}#handleAllowChange`, "core/hooks/system-install.ts#recordAllowed", "core/tools/aidlc-jump.ts#changeAsked", `${SWARM}#handleTakeOver`, `${LOG}#handleInstall`] },
   [`${LIB}#keptRepliesSinceStageStart`]: { use: "keeps", why: "the resume re-show: every reply since the stage started that nothing has used yet, a typed message's words and a box's replies, unpaired (R26: the agent pairs them)" },
   [`${LIB}#latestReplyAfter`]: { use: "keeps", why: "the audit writer: the plan override receipt's Person Reply, their latest reply since the offer, with its message" },
   [`${LIB}#protectedResponseFields`]: { use: "keeps", why: "the audit writer: a protected question's decision row, the response's words with every message they came in (Message Ids)" },
@@ -1049,8 +1050,11 @@ export const ALLOWED: Record<string, Allowed> = {
   [`${ORCH}#planProposalDirective`]: { use: "decides", why: "keeps the request as a question and previews it; reuses the question the words came through without comparing them", from: [`${ORCH}#freshWorkRoute`, `${ORCH}#routeNext`] },
   [`${ORCH}#saveReadingQuestion`]: { use: "keeps", why: "keeps the words as a routing question with the message they came in", from: [`${ORCH}#newWorkRoutingAskDirective`, `${ORCH}#routeNext`] },
   [`${ORCH}#takePersonsOwnLine`]: { use: "decides", why: "the /aidlc parse of the person's own line: whether a call quoting its words for the same plan meets a line that also types a setting (with no work selected, --skip/--add or --project-type too) and nothing else, so it is read as a bare next reads that line; already read is the message id; never what the words mean" },
-  [`${ORCH}#entryTokens`]: { use: "keeps", why: "an /aidlc line of the chat's whose record keeps no words, split as typed and handed on as next's command; whether it may be read again is classifyTerminalCommand's" },
-  [`${ORCH}#entryLine`]: { use: "keeps", why: "reads whether the chat's latest message is an /aidlc line, and hands a plain reply the record holds whole on as the command's one argument while a plan or routing question, or unselected work, waits" },
+  [`${ORCH}#entryTokens`]: { use: "keeps", why: "an /aidlc line of the chat's whose record keeps no words, split as typed and handed on as next's command; whether it may be read again is classifyTerminalCommand's; a shortcut's line of tokens alone (its record keeps the line as words) handed on as that shortcut's own command, each time" },
+  [`${ORCH}#typedEntryWords`]: { use: "keeps", why: "the chat's line as an /aidlc line: theirs, or the one their shortcut's line stands for, by the command name alone", from: [`${ORCH}#takePersonsOwnLine`, `${ORCH}#entryLine`, `${ORCH}#namedMessageWords`] },
+  [`${ORCH}#shortcutTokensAlone`]: { use: "keeps", why: "a shortcut's line as the tokens it stands for, kept only when next's own parse finds no words in them", from: [`${ORCH}#takePersonsOwnLine`, `${ORCH}#entryTokens`] },
+  [`${ORCH}#entryLine`]: { use: "keeps", why: "reads whether the chat's latest message is an /aidlc line or a shortcut's line, and hands a plain reply the record holds whole on as the command's one argument while a plan or routing question, or unselected work, waits" },
+  [`${ORCH}#namedMessageWords`]: { use: "keeps", why: "the words of the kept message an id names where a request's goes, handed on whole as next's one argument: whether the record keeps them whole, and for an /aidlc line the words after its flags as typed (the /aidlc parse), never its flags" },
   [`${ORCH}#cutLineGoesOn`]: { use: "keeps", why: "hands the parse of a cut line with no whole copy to the agent's one step", from: [`${ORCH}#takePersonsOwnLine`] },
   [`${ORCH}#cutMessageStep`]: { use: "keeps", why: "the agent's one step for a cut line: the parse's plan, verb and reading in its command", from: [`${ORCH}#cutLineGoesOn`] },
   [`${ORCH}#cutMessageArgs`]: { use: "keeps", why: "the plan, verb and settings of a cut line's parse as next's arguments", from: [`${ORCH}#cutMessageStep`] },
@@ -1137,7 +1141,7 @@ export const ALLOWED: Record<string, Allowed> = {
   [`${ORCH}#sayPendingPersonLines`]: { use: "keeps", why: "a step's narration, which may carry their request" },
   [`${ORCH}#prepareEmission`]: { use: "decides", why: "the step's text cut at a character boundary" },
   [`${ORCH}#authoritativeRequest`]: { use: "decides", why: "the request a question shows back: its directions outside a pasted document", from: [`${ORCH}#composeDispatchDirective`, `${ORCH}#requestPreview`] },
-  [`${ORCH}#requestPreview`]: { use: "decides", why: "the request a question shows back, cut to 240 characters", from: [`${ORCH}#createPrintDirective`, `${ORCH}#freshWorkOfferDirective`, `${ORCH}#intentPickPromptIfRecordsExist`, `${ORCH}#newWorkRoutingAskDirective`, `${ORCH}#newestRequestReplaces`, `${ORCH}#planProposalDirective`, `${ORCH}#routeNext`] },
+  [`${ORCH}#requestPreview`]: { use: "decides", why: "the request a question shows back, cut to 240 characters", from: [`${ORCH}#createPrintDirective`, `${ORCH}#freshWorkOfferDirective`, `${ORCH}#intentPickPromptIfRecordsExist`, `${ORCH}#newWorkRoutingAskDirective`, `${ORCH}#newestRequestReplaces`, `${ORCH}#planOrWaitingRequestStep`, `${ORCH}#planProposalDirective`, `${ORCH}#routeNext`] },
   [`${ORCH}#newestRequestReplaces`]: { use: "decides", why: "the line that says the newer request is used shows it back, as a question does", from: [`${ORCH}#createPrintDirective`, `${ORCH}#planProposalDirective`, `${ORCH}#routeNext`] },
   [`${ORCH}#documentSplitSentence`]: { use: "decides", why: "the one line a question adds when the request carries a pasted document", from: [`${ORCH}#createPrintDirective`, `${ORCH}#freshWorkOfferDirective`, `${ORCH}#intentPickPromptIfRecordsExist`, `${ORCH}#planProposalDirective`, `${ORCH}#routeNext`] },
   [`${ORCH}#scopeConfirmAskDirective`]: { use: "keeps", why: "as above (the scope confirmation)", from: [`${ORCH}#freshWorkOfferDirective`] },
@@ -1157,6 +1161,7 @@ export const ALLOWED: Record<string, Allowed> = {
   [`${ORCH}#planTypedAloneBesideWork`]: { use: "keeps", why: "the presence shape: a plan's name with no words after it" },
   [`${ORCH}#freshWorkOfferDirective`]: { use: "decides", why: "as above (the plan offer)" },
   [`${ORCH}#createPrintDirective`]: { use: "decides", why: "a question that shows their request back and keeps it in the question store; where a plan's name took the reply, the step hands the agent its preview" },
+  [`${ORCH}#planOrWaitingRequestStep`]: { use: "decides", why: "the step for a plan the agent sent as a switch beside the open plan question names that question's request by its preview" },
   [`${ORCH}#planNamedAloneStep`]: { use: "keeps", why: "as above" },
   [`${ORCH}#pastedDocumentNote`]: { use: "decides", why: "as above, for the composer", from: [`${ORCH}#composeDispatchDirective`] },
   [`${ORCH}#composeDispatchDirective`]: { use: "decides", why: "as above (the composer's step)" },

@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-jump:reopen, function:claimedCheckoutReopens
+// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-jump:reopen, function:claimedCheckoutReopens, function:claimedCheckoutMove, function:unitStepWorkOrPause
 //
 // A checkout that claimed a team Unit reopens that Unit's own stages itself:
 // the recovery question's "Reopen the approved stage" and the person's own
@@ -16,10 +16,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   artifactFilename,
+  auditBlockField,
+  getField,
+  unitParkedPath,
+  unitCompletedReceipts,
   evaluateGuardRefusal,
   loadStageGraphAll,
   readAuditShardEvents,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { renderTestingContract, resolveTestingPosture } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 import {
   AIDLC_SRC,
   cleanupTestProject,
@@ -99,7 +104,7 @@ function stateBody(): string {
 `;
 }
 
-function makeSeed(): { seed: string; remote: string } {
+function makeSeed(workflowStarted = false): { seed: string; remote: string } {
   const seed = createTestProject();
   tempDirs.push(seed);
   seedAidlcMemory(seed);
@@ -117,6 +122,10 @@ function makeSeed(): { seed: string; remote: string } {
       "aidlc/.aidlc-claim-generations.json\naidlc/.aidlc-unit-participant\n" +
       "aidlc/.aidlc-claim-registry.json\naidlc/.aidlc-unit-releases/\n",
   );
+  if (workflowStarted) {
+    mkdirSync(seededAuditDir(seed), { recursive: true });
+    writeFileSync(join(seededAuditDir(seed), "seed-workflow.md"), "# AI-DLC Audit Log\n\n---\n\n## Workflow Started\n**Timestamp**: 2026-08-20T00:00:00Z\n**Event**: WORKFLOW_STARTED\n**Scope**: feature\n");
+  }
   git(seed, ["init", "-b", "main"]);
   git(seed, ["config", "user.name", "seed"]);
   git(seed, ["config", "user.email", "seed@example.test"]);
@@ -158,12 +167,12 @@ function run(tool: string, args: string[], cwd: string, env: Record<string, stri
 
 type Directive = Record<string, unknown> & { kind?: string; message?: string };
 
-function next(cwd: string, args: string[] = []): Directive {
-  const first = run(ORCH, ["next", ...args], cwd);
+function next(cwd: string, args: string[] = [], env: Record<string, string> = {}): Directive {
+  const first = run(ORCH, ["next", ...args], cwd, env);
   expect(first.status, first.out).toBe(0);
   const directive = JSON.parse(first.stdout) as Directive;
   if (directive.kind === "load-steering" && typeof directive.receipt === "string") {
-    const continued = run(ORCH, ["continue", directive.receipt], cwd);
+    const continued = run(ORCH, ["continue", directive.receipt], cwd, env);
     expect(continued.status, continued.out).toBe(0);
     return JSON.parse(continued.stdout) as Directive;
   }
@@ -196,7 +205,7 @@ function stageDir(checkout: string, unit: string, slug: string): string {
 
 // A per-Unit stage's work for the Unit, as the stage's own steps record it, up
 // to its gate. Each attempt's review starts again at its first pass.
-function workStage(checkout: string, unit: string, slug: string, version: number): void {
+function workStage(checkout: string, unit: string, slug: string, version: number, finish: "written" | "reviewed" | "complete" = "complete"): void {
   const stage = loadStageGraphAll().find((entry) => entry.slug === slug)!;
   const started = run(STATE, ["unit", "start", "--stage", slug, "--unit", unit], checkout);
   expect(started.status, started.out).toBe(0);
@@ -205,6 +214,7 @@ function workStage(checkout: string, unit: string, slug: string, version: number
   for (const name of stage.produces ?? []) writeFileSync(join(dir, artifactFilename(name)), `# ${name} ${version}\n`);
   expect(run(LOG, ["decision", "--stage", slug, "--decision", "A choice", "--unit", unit], checkout).status).toBe(0);
   expect(run(LOG, ["answer", "--stage", slug, "--details", "An answer", "--unit", unit], checkout).status).toBe(0);
+  if (finish === "written") return;
   const review = ["review", "--stage", slug, "--reviewer", REVIEWER, "--iteration", "1", "--unit", unit];
   const requested = run(LOG, review, checkout);
   expect(requested.status, requested.out).toBe(0);
@@ -215,6 +225,7 @@ function workStage(checkout: string, unit: string, slug: string, version: number
   );
   const verdict = run(LOG, [...review, "--verdict", "READY"], checkout);
   expect(verdict.status, verdict.out).toBe(0);
+  if (finish === "reviewed") return;
   const completed = run(STATE, ["unit", "complete", "--stage", slug, "--unit", unit], checkout);
   expect(completed.status, completed.out).toBe(0);
 }
@@ -257,14 +268,14 @@ function frozenEdit(checkout: string, name: string): void {
 
 // A checkout that claimed alpha, with alpha's Functional Design approved and
 // its walk on NFR Requirements.
-function claimedPastFunctionalDesign(shape: "shared" | "clone"): { checkout: string; seed: string } {
-  const { seed, remote } = makeSeed();
+function claimedPastFunctionalDesign(shape: "shared" | "clone", workflowStarted = false, syncNfr = true): { checkout: string; seed: string } {
+  const { seed, remote } = makeSeed(workflowStarted);
   const checkout = shape === "shared" ? seed : clone(remote, "team");
   const claim = run(UNIT, ["claim", "alpha", "--team", "lead"], checkout);
   expect(claim.status, claim.out).toBe(0);
   workStage(checkout, "alpha", FD, 1);
   approveStage(checkout, "alpha", FD, "awaiting-approval");
-  expect(next(checkout)).toMatchObject({ kind: "run-stage", stage: "nfr-requirements", unit: "alpha" });
+  if (syncNfr) expect(next(checkout)).toMatchObject({ kind: "run-stage", stage: "nfr-requirements", unit: "alpha" });
   return { checkout, seed };
 }
 
@@ -615,5 +626,239 @@ describe("a claimed checkout reopens its own Unit's stages", () => {
     expect(ops(team, "build-and-test")).toContain("lower-fence");
     expect(ops(team, FD, "alpha")).toContain("restore-or-jump");
     expect(ops(seed, "build-and-test")).toContain("restore-or-jump");
+  });
+});
+
+const NFR = "nfr-requirements";
+const ALPHA_NFR = ["--stage", NFR, "--unit", "alpha"];
+const NFR_CHANGE = "Change NFR Requirements to cover the retry path.";
+const NAMED_CHAT = { AIDLC_SESSION_OVERRIDE: SESSION };
+const eventRows = (checkout: string, event: string) =>
+  readAuditShardEvents(checkout).filter((row) => row.event === event);
+
+function checked(tool: string, args: string[], checkout: string) {
+  const result = run(tool, args, checkout, NAMED_CHAT);
+  expect(result.status, result.out).toBe(0);
+  return result;
+}
+
+function pauseAlpha(checkout: string, args: string[], extra: string[] = []) {
+  checked(STATE, ["unit", "pause", ...args, "--reason", "Waiting for input",
+    "--next-action", "Continue", ...extra], checkout);
+}
+
+function printedArgs(directive: Directive, pattern: RegExp): string[] {
+  expect(directive.kind, JSON.stringify(directive)).toBe("print");
+  const command = pattern.exec(directive.message ?? "")?.[1];
+  expect(command, directive.message).toBeDefined();
+  return command!.split(" ");
+}
+
+function changeReopen(directive: Directive, stage: string, stages: string, name: string): string[] {
+  const args = printedArgs(directive, /`[^`]*\b(reopen --target [^`]+)`/);
+  expect(args).toEqual(["reopen", "--target", stage, "--stages", stages,
+    "--units", "alpha", "--scope", "feature", "--via", "change"]);
+  expect(directive.message).toContain(`"Making your change in ${name} for unit alpha."`);
+  return args;
+}
+
+function expectChangeRow(checkout: string, stage: string) {
+  const rows = eventRows(checkout, "GATE_REJECTED");
+  expect(rows).toHaveLength(1);
+  expect(auditBlockField(rows[0].block, "Stage")).toBe(stage);
+  expect(auditBlockField(rows[0].block, "Unit")).toBe("alpha");
+  expect(auditBlockField(rows[0].block, "Reopen")).toBe("change");
+  return rows[0];
+}
+
+test("claimed completed Functional Design with a missing artifact reopens for change", () => {
+  const { checkout } = claimedPastFunctionalDesign("clone", true);
+  expect(getField(readFileSync(seededStateFile(checkout), "utf-8"), "Current Stage")).toBe(NFR);
+  rmSync(join(stageDir(checkout, "alpha", FD), artifactFilename("entities")));
+  expect(unitCompletedReceipts(checkout, FD).has("alpha")).toBe(true);
+  const plain = next(checkout, ["--stage", FD, "--unit", "alpha"], NAMED_CHAT);
+  expect(printedReopen(plain.message)).toBe(
+    "reopen --target functional-design --stages functional-design,nfr-requirements,nfr-design," +
+      "infrastructure-design,code-generation --units alpha --scope feature",
+  );
+  says(checkout, "Change Functional Design for alpha.");
+  const change = next(checkout, ["--stage", FD, "--unit", "alpha", "--change"], NAMED_CHAT);
+  const args = printedArgs(change, /`[^`]*\b(reopen --target [^`]+)`/);
+  expect(args).toEqual([
+    "reopen", "--target", FD, "--stages", "functional-design,nfr-requirements,nfr-design,infrastructure-design,code-generation",
+    "--units", "alpha", "--scope", "feature", "--via", "change",
+  ]);
+  expect(eventRows(checkout, "GATE_REJECTED")).toHaveLength(0);
+  checked(JUMP, args, checkout);
+  expectChangeRow(checkout, FD);
+});
+
+test("claimed NFR paused with review owed stays parked on change", () => {
+  const { checkout } = claimedPastFunctionalDesign("clone", true);
+  workStage(checkout, "alpha", NFR, 1, "written");
+  expect(next(checkout, ALPHA_NFR, NAMED_CHAT).message).toContain("its review was never asked for");
+  pauseAlpha(checkout, ALPHA_NFR);
+  expect(next(checkout, [], NAMED_CHAT)).toMatchObject({ kind: "ask", ask_type: "unit-paused", stage: NFR, unit: "alpha" });
+  checked(ORCH, ["park"], checkout);
+  const marker = unitParkedPath(checkout);
+  const parked = readFileSync(marker, "utf-8");
+  says(checkout, NFR_CHANGE);
+  expect(next(checkout, [...ALPHA_NFR, "--change"], NAMED_CHAT)).toMatchObject({ kind: "parked", stage: NFR });
+  expect(readFileSync(marker, "utf-8")).toBe(parked);
+  expect(eventRows(checkout, "GATE_REJECTED")).toHaveLength(0);
+  expect(eventRows(checkout, "UNIT_RESUMED")).toHaveLength(0);
+});
+
+for (const paused of [false, true]) {
+  for (const finish of ["written", "reviewed"] as const) {
+    test(`claimed NFR ${finish}, paused=${paused}: change reopens alpha`, () => {
+      const { checkout } = claimedPastFunctionalDesign("clone", true);
+      workStage(checkout, "alpha", NFR, 1, finish);
+      expect(next(checkout, ALPHA_NFR, NAMED_CHAT).message).toContain(
+        finish === "written" ? "its review was never asked for" : "unit complete",
+      );
+      if (paused) {
+        pauseAlpha(checkout, ALPHA_NFR);
+        expect(next(checkout, ALPHA_NFR, NAMED_CHAT)).toMatchObject({
+          kind: "ask", ask_type: "unit-paused", stage: NFR, unit: "alpha",
+        });
+      }
+      says(checkout, NFR_CHANGE);
+      const change = next(checkout, [...ALPHA_NFR, "--change"], NAMED_CHAT);
+      const args = changeReopen(change, NFR,
+        "nfr-requirements,nfr-design,infrastructure-design,code-generation", "NFR Requirements");
+      expect(eventRows(checkout, "GATE_REJECTED")).toHaveLength(0);
+      checked(JUMP, args, checkout);
+      const row = expectChangeRow(checkout, NFR);
+      if (!paused) expect(auditBlockField(row.block, "Feedback")).toBe(NFR_CHANGE);
+      expect(next(checkout, [], NAMED_CHAT)).toMatchObject({
+        kind: "run-stage", stage: NFR, unit: "alpha", gate: false,
+      });
+    });
+  }
+}
+
+for (const mode of ["ordinary", "set aside", "unsynced", "revising", "parked"] as const) {
+  test(`claimed NFR paused with work left (${mode})`, () => {
+    const { checkout } = claimedPastFunctionalDesign("clone", false, mode !== "unsynced");
+    checked(STATE, ["unit", "start", ...ALPHA_NFR], checkout);
+    if (mode === "revising") {
+      checked(ORCH, ["report", ...ALPHA_NFR, "--result", "rejected",
+        "--user-input", "Request Changes", "--reason", "Cover retry."], checkout);
+      expect(next(checkout, [], NAMED_CHAT)).toMatchObject({
+        kind: "run-stage", stage: NFR, unit: "alpha",
+      });
+      checked(STATE, ["unit", "start", ...ALPHA_NFR], checkout);
+    }
+    pauseAlpha(checkout, ALPHA_NFR, mode === "set aside" ? ["--set-aside-for", "beta"] : []);
+    expect(next(checkout, [], NAMED_CHAT)).toMatchObject({
+      kind: "ask", ask_type: "unit-paused", stage: NFR, unit: "alpha",
+    });
+    if (mode === "unsynced") {
+      expect(getField(readFileSync(seededStateFile(checkout), "utf-8"), "Current Stage")).toBe(FD);
+    }
+    const marker = unitParkedPath(checkout);
+    let parked: string | undefined;
+    if (mode === "parked") {
+      checked(ORCH, ["park"], checkout);
+      parked = readFileSync(marker, "utf-8");
+    }
+
+    const prior = eventRows(checkout, "GATE_REJECTED");
+    expect(prior).toHaveLength(mode === "revising" ? 1 : 0);
+    if (mode === "revising") expect(auditBlockField(prior[0].block, "Feedback")).toBe("Cover retry.");
+    says(checkout, NFR_CHANGE);
+    const change = next(checkout, [...ALPHA_NFR, "--change"], NAMED_CHAT);
+    if (mode === "parked") {
+      expect(change).toMatchObject({ kind: "parked", stage: NFR });
+      expect(change.reason).toContain("Resume with /aidlc --resume.");
+      expect(readFileSync(marker, "utf-8")).toBe(parked!);
+      expect(eventRows(checkout, "UNIT_RESUMED")).toHaveLength(0);
+    } else {
+      const args = printedArgs(change, /`[^`]*\b(unit resume --stage [^`]+)`/);
+      expect(args).toEqual(["unit", "resume", ...ALPHA_NFR]);
+      expect(change.message).toContain('"Picked unit alpha up at NFR Requirements."');
+      expect(eventRows(checkout, "UNIT_RESUMED")).toHaveLength(0);
+      const resumed = checked(STATE, args, checkout);
+      expect(JSON.parse(resumed.stdout)).toMatchObject({
+        emitted: "UNIT_RESUMED", stage: NFR, unit: "alpha",
+      });
+      expect(next(checkout, [], NAMED_CHAT)).toMatchObject({
+        kind: "run-stage", stage: NFR, unit: "alpha", gate: false,
+      });
+      expect(eventRows(checkout, "UNIT_RESUMED")).toHaveLength(1);
+    }
+    expect(eventRows(checkout, "GATE_REJECTED")).toEqual(prior);
+  });
+}
+
+function allow(checkout: string, hook: string, tool_name: string, tool_input: object) {
+  const result = spawnSync(process.execPath, [hook], {
+    cwd: checkout, encoding: "utf-8",
+    env: { ...process.env, ...NAMED_CHAT, CLAUDE_PROJECT_DIR: checkout },
+    input: JSON.stringify({ hook_event_name: "PreToolUse", session_id: SESSION,
+      tool_name, tool_input, cwd: checkout }),
+  });
+  expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+  expect(result.stdout).not.toContain('"deny"');
+}
+
+test("claimed current Code Generation: paused change reopens the approved plan for revision", () => {
+  const { checkout } = claimedPastFunctionalDesign("clone", true);
+  for (const slug of [NFR, "nfr-design", "infrastructure-design"]) {
+    expect(next(checkout, [], NAMED_CHAT)).toMatchObject({
+      kind: "run-stage", stage: slug, unit: "alpha",
+    });
+    workStage(checkout, "alpha", slug, 1);
+    approveStage(checkout, "alpha", slug, "awaiting-approval");
+  }
+  const stage = "code-generation";
+  const args = ["--stage", stage, "--unit", "alpha"];
+  expect(next(checkout, [], NAMED_CHAT)).toMatchObject({ kind: "run-stage", stage, unit: "alpha" });
+  checked(STATE, ["unit", "start", ...args], checkout);
+  const dir = stageDir(checkout, "alpha", stage);
+  mkdirSync(dir, { recursive: true });
+  const plan = join(dir, "code-generation-plan.md");
+  writeFileSync(plan,
+    "# Code Generation Plan\n\n## Summary\n\n- Builds: retry\n- Touches: src/\n- Tests: unit test\n\n" +
+    "## Steps\n\n- [ ] Step 1: write `src/retry.ts`\n\n" + renderTestingContract(resolveTestingPosture(checkout)));
+  writeFileSync(join(dir, "unit-test-instructions.md"), "# Unit Test Instructions\n\nRun `bun test src/retry.test.ts`.\n");
+  expect(next(checkout, [], NAMED_CHAT)).toMatchObject({
+    kind: "ask", ask_type: "plan-approval", stage, unit: "alpha",
+  });
+  says(checkout, "Approve Plan");
+  const approval = run(LOG, ["answer", "--stage", stage, "--checkpoint", "plan-approval",
+    "--details", "Approve Plan", "--session", SESSION], checkout,
+  { ...NAMED_CHAT, AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0" });
+  expect(approval.status, approval.out).toBe(0);
+  expect(next(checkout, [], NAMED_CHAT)).toMatchObject({
+    kind: "run-stage", stage, unit: "alpha", plan_approval: { status: "approved" },
+  });
+  const brief = checked(join(AIDLC_SRC, "tools", "aidlc-testing-posture.ts"), ["brief", "--unit", "alpha"], checkout);
+  allow(checkout, PLAN_GUARD, "Task", { subagent_type: "aidlc-developer-agent", prompt: brief.stdout });
+  writeFileSync(plan, readFileSync(plan, "utf-8").replace("- [ ] Step 1", "- [x] Step 1"));
+  mkdirSync(join(checkout, "src"), { recursive: true });
+  writeFileSync(join(checkout, "src", "retry.ts"), "export const retry = true;\n");
+  for (const name of ["code-summary", "traceability"]) {
+    writeFileSync(join(dir, artifactFilename(name)), `# ${name}\n`);
+  }
+  writeFileSync(join(dir, "source-manifest.json"), JSON.stringify({
+    stage, unit: "alpha", version: 1, writes: [{ path: "src/retry.ts" }],
+  }));
+  expect(next(checkout, [], NAMED_CHAT).message).toContain("its review was never asked for");
+  pauseAlpha(checkout, args);
+  expect(next(checkout, [], NAMED_CHAT)).toMatchObject({
+    kind: "ask", ask_type: "unit-paused", stage, unit: "alpha",
+  });
+  says(checkout, "Change the plan to cover retry.");
+  const jump = changeReopen(next(checkout, [...args, "--change"], NAMED_CHAT), stage, stage, "Code Generation");
+  for (const hook of [PLAN_GUARD, TRANSITION_GUARD]) {
+    allow(checkout, hook, "Bash", { command: `aidlc engine jump ${jump.join(" ")}` });
+  }
+  expect(eventRows(checkout, "GATE_REJECTED")).toHaveLength(0);
+  checked(JUMP, jump, checkout);
+  expectChangeRow(checkout, stage);
+  expect(next(checkout, [], NAMED_CHAT)).toMatchObject({
+    kind: "run-stage", stage, unit: "alpha", plan_approval: { status: "revise" },
   });
 });

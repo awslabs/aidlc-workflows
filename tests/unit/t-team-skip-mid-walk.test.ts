@@ -26,6 +26,7 @@ import {
   NATIVE_STARTUP_TIMEOUT_MS,
   remainingOperationTimeoutMs,
 } from "../harness/test-budget.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import { cleanupTestProject, runOrchestrateNext, setupIntegrationProject } from "../harness/fixtures.ts";
 import { artifactFilename, auditBlockField, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
@@ -203,12 +204,16 @@ function unitSkips(proj: string, stage: string): string[] {
 
 // The commands a step names for the agent to run, in order.
 function commands(step: Step): string[] {
-  return [...String(step.message).matchAll(/`(bun \.claude\/tools\/aidlc[a-z-]*\.ts [^`]*)`/g)].map((match) => match[1]);
+  return [...String(step.message).matchAll(/`(bun (?:--config=\S+ --no-env-file )?\.claude\/tools\/aidlc[a-z-]*\.ts [^`]*)`/g)]
+    .map((match) => match[1]);
 }
 
 const report = (stage: string, unit?: string): string =>
-  `bun .claude/tools/aidlc-orchestrate.ts report --stage ${stage}${unit ? ` --unit ${unit}` : ""} --result skipped --reason '${PERSON}'`;
-const recompose = (stage: string): string => `bun .claude/tools/aidlc.ts engine recompose --skip ${stage} --reason '${PERSON}'`;
+  withCopyLaunchOptions(
+    `bun .claude/tools/aidlc-orchestrate.ts report --stage ${stage}${unit ? ` --unit ${unit}` : ""} --result skipped --reason '${PERSON}'`,
+  );
+const recompose = (stage: string): string =>
+  withCopyLaunchOptions(`bun .claude/tools/aidlc.ts engine recompose --skip ${stage} --reason '${PERSON}'`);
 // alpha's team approval, given as the person gives it. After a reopen the
 // approval comes back through the step that records the revision first.
 const approveAlpha = (proj: string, stage: string): void => {
@@ -306,7 +311,7 @@ describe("a skip the person asks for on a team main that works every Unit itself
     const message = String(step.message);
     expect(message).toContain('"Skipped Code Generation for every Unit from here. You can undo that until Build and Test starts."');
     expect(message).toContain(
-      "If they later ask to undo skipping it for every Unit, run `bun .claude/tools/aidlc.ts engine recompose --add code-generation`.",
+      `If they later ask to undo skipping it for every Unit, run \`${withCopyLaunchOptions("bun .claude/tools/aidlc.ts engine recompose --add code-generation")}\`.`,
     );
     const replanned = runNamed(proj, recompose("code-generation"));
     expect(replanned.status, replanned.out).toBe(0);
@@ -402,7 +407,7 @@ describe("a jump that names one Unit on a team main that works every Unit itself
     const message = String(back.message);
     expect(message).not.toContain("can only be reopened for every unit");
     expect(commands(back)[0], message).toBe(
-      "bun .claude/tools/aidlc-jump.ts reopen --target code-generation --stages code-generation --units alpha --scope feature",
+      withCopyLaunchOptions("bun .claude/tools/aidlc-jump.ts reopen --target code-generation --stages code-generation --units alpha --scope feature"),
     );
     expect(message).toContain('tell the person in one line: "Reopened Code Generation for unit alpha."');
     // On a team main a jump for every Unit is not a reopen (it is the plain
@@ -425,10 +430,10 @@ describe("a jump that names one Unit on a team main that works every Unit itself
     const back = backTo(proj, "code-generation", "alpha");
     const message = String(back.message);
     const [pause, reopen] = commands(back);
-    expect(pause, message).toStartWith("bun .claude/tools/aidlc-state.ts unit pause --stage functional-design --unit beta ");
+    expect(pause, message).toStartWith(withCopyLaunchOptions("bun .claude/tools/aidlc-state.ts unit pause --stage functional-design --unit beta "));
     expect(pause).toEndWith("--set-aside-for alpha");
     expect(reopen).toBe(
-      "bun .claude/tools/aidlc-jump.ts reopen --target code-generation --stages code-generation --units alpha --scope feature",
+      withCopyLaunchOptions("bun .claude/tools/aidlc-jump.ts reopen --target code-generation --stages code-generation --units alpha --scope feature"),
     );
     expect(message).toContain(
       '"Paused unit beta at Functional Design and reopened Code Generation for unit alpha. You can pick beta up again any time."',
@@ -486,10 +491,10 @@ describe("a jump that names one Unit on a team main that works every Unit itself
   test("with approvals after every stage, a Unit at its approval of the step it names reopens it, not the approval again", () => {
     const proj = walk(["alpha", "beta"], 1, "per-stage");
     const back = backTo(proj, "functional-design", "alpha");
-    expect(commands(back)[0], String(back.message)).toBe(
+    expect(commands(back)[0], String(back.message)).toBe(withCopyLaunchOptions(
       "bun .claude/tools/aidlc-jump.ts reopen --target functional-design " +
         "--stages functional-design,nfr-requirements,nfr-design,infrastructure-design,code-generation --units alpha --scope feature",
-    );
+    ));
     expect(String(back.message)).toContain('"Reopened Functional Design for unit alpha."');
     expect(runNamed(proj, commands(back)[0]).status).toBe(0);
     const at = next(proj);
@@ -504,7 +509,7 @@ describe("a jump that names one Unit on a team main that works every Unit itself
       const step = next(proj, args);
       expect(String(step.message), JSON.stringify(step)).not.toContain("aidlc-jump.ts reopen");
       expect(commands(step)[0], JSON.stringify(step)).toBe(
-        "bun .claude/tools/aidlc-jump.ts execute --target nfr-design --direction forward --scope feature",
+        withCopyLaunchOptions("bun .claude/tools/aidlc-jump.ts execute --target nfr-design --direction forward --scope feature"),
       );
     }
   });
@@ -530,10 +535,10 @@ describe("a forward jump on a team main that works every Unit itself", () => {
   test("before alpha has written anything: only alpha skips its design steps, and beta starts at Functional Design", () => {
     const proj = walk(["alpha", "beta"], false);
     const step = next(proj, ["--stage", "code-generation"]);
-    expect(commands(step)[0], JSON.stringify(step)).toBe(
+    expect(commands(step)[0], JSON.stringify(step)).toBe(withCopyLaunchOptions(
       "bun .claude/tools/aidlc-jump.ts execute --target code-generation --direction forward --units alpha " +
         "--stages functional-design,nfr-requirements,nfr-design,infrastructure-design --scope feature",
-    );
+    ));
     const ran = runNamed(proj, commands(step)[0]);
     expect(ran.status, ran.out).toBe(0);
     expect(stageWideSkips(proj)).toEqual([]);
@@ -552,10 +557,10 @@ describe("a forward jump on a team main that works every Unit itself", () => {
   test("alpha waiting at its Functional Design approval: alpha skips the steps after it, and the approval stays", () => {
     const proj = walk(["alpha", "beta"], 1, "per-stage");
     const step = next(proj, ["--stage", "code-generation"]);
-    expect(commands(step)[0], JSON.stringify(step)).toBe(
+    expect(commands(step)[0], JSON.stringify(step)).toBe(withCopyLaunchOptions(
       "bun .claude/tools/aidlc-jump.ts execute --target code-generation --direction forward --units alpha " +
         "--stages nfr-requirements,nfr-design,infrastructure-design --scope feature",
-    );
+    ));
     const ran = runNamed(proj, commands(step)[0]);
     expect(ran.status, ran.out).toBe(0);
     expect(stageWideSkips(proj)).toEqual([]);

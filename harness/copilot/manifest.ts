@@ -211,6 +211,8 @@ const manifest: HarnessManifest = {
           // The variant whose Documentation section and Copilot guide line named this
           // repository's docs/ folder.
           "sha256:a885fe6b7137ba16e0c24ce168b30ef5c780fe9991fc2d6bdff10cc15ad83c05",
+          // The variant whose copy commands started Bun without the copy launch's two options.
+          "sha256:7b09e1c003a983ea0c328b7935b2305f35efb8a0927a0bc9f0f7c21c6b3e13d4",
         ],
       },
     },

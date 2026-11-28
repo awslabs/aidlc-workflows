@@ -67,7 +67,7 @@ block:
   "version": "0.1.0",                 // semver
   "description": "Full-featured testing plugin — unit/branch coverage, functional, integration, regression, edge, and API positive+negative.",
   "author": { "name": "AWS AIDLC" },
-  "dependencies": ["core"],           // core plus at most one base, e.g. ["core", "compliance@^1.2.0"]
+  "dependencies": ["core"],           // core plus at most one base, e.g. ["core@>=2.11.4", "compliance@^1.2.0"] — a range on core names the AI-DLC releases you built against
   "aidlc": {
     // "marketplace": "acme-aidlc-plugins",  // optional, your plugin's catalogue (below)
     "contributes": {                  // which subtrees this plugin ships
@@ -931,11 +931,27 @@ skipped result, so a green test run can mean the live check did not run.
   <base-root>`. `aidlc plugin create` writes `["core"]`, so add the base by
   hand: until you do, validate and build stop on a stage or agent of another
   plugin, which would otherwise compose only when the names happen to sort the
-  right way. If the installed base is missing, outside your range, builds
-  on another plugin or lacks a stage your scopes include, your plugin is not
+  right way. If the installed base is missing, itself not composed, outside
+  your range, builds on another plugin or lacks a stage your scopes include, your plugin is not
   composed (a version composed before stays as it was) and the person sees one
   line saying why; everything else still composes. A second base, your own name, or a range npm cannot read fails
   `aidlc plugin validate` (doc 18 §8).
+- **An engine requirement on `core`.** A range on the `core` entry —
+  `"dependencies": ["core@>=2.11.4"]`, a floor, a ceiling, or both
+  (`"core@>=2.11.0 <2.12.0"`) — declares which AI-DLC releases your plugin is
+  made for. Sync checks it against the AI-DLC version the project runs (the
+  version `aidlc config` last brought it to; a preview build counts as the
+  stable release it was built after, so `2.11.5-preview.…` reads as 2.11.4)
+  and holds your plugin outside it the same way a base outside its range is
+  held, with one line naming the requirement (`needs AI-DLC >=2.11.4`); once
+  the project moves into the range, `aidlc engine plugin list` and doctor say
+  so and the next sync checks the plugin again (your other dependencies must
+  hold too). Offline `aidlc plugin validate` and `build`
+  accept any core range npm can read — they cannot know the target project —
+  so declare only what you tested against. Write release versions there: a
+  range naming a preview version is read but validate warns, since only a
+  release version can meet it. An AI-DLC release before this check reads only
+  the `core` name and ignores the range (doc 18 §8).
 - **Additive only.** Contributions add — they cannot override or remove a core
   stage's fields, agent, or prose. (A genuine need to _change_ upstream behavior
   is a framework design decision, not a plugin concern.)

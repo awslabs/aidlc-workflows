@@ -27,7 +27,7 @@ import {
 import { inProject, projectInRepo } from "./aidlc-git.ts";
 import type { ProjectionDescriptor } from "./aidlc-distribution.ts";
 import { committedRecordIgnoreConflicts, untrackedSetupLine } from "./aidlc-gitignore.ts";
-import { aidlcToolInvocation, discoverProjectHarnesses } from "./aidlc-runtime-paths.ts";
+import { aidlcInvocation, aidlcToolInvocation, discoverProjectHarnesses } from "./aidlc-runtime-paths.ts";
 import {
   parseWorkspaceManifest,
   WORKSPACE_GITIGNORE_GATE_BEGIN as GATE_BEGIN,
@@ -45,10 +45,9 @@ export interface DoctorCheck {
 }
 
 // The name earlier releases of the Kiro CLI (V2) hook adapter
-// (harness/kiro/hooks/aidlc-kiro-adapter.ts, forwardingLatchPath) wrote its
-// forwarding latch under; it now writes inside the git-ignored sessions
-// folder, so a file here is one left behind, which a project may have
-// committed.
+// (harness/kiro/hooks/aidlc-kiro-adapter.ts) wrote its forwarding latch
+// under; it writes none here any more, so a file here is one left behind,
+// which a project may have committed.
 const FORWARDING_LATCH = "aidlc/.aidlc-forwarding-latch";
 
 /**
@@ -62,7 +61,12 @@ const FORWARDING_LATCH = "aidlc/.aidlc-forwarding-latch";
  */
 export function workspaceManifestChecks(projectDir: string): DoctorCheck[] {
   const results: DoctorCheck[] = [];
-  const syncCmd = aidlcToolInvocation("workspace-sync");
+  // The sync is a system command, so a native install names its system route;
+  // a Bun tree names the tool file, which runs with no `aidlc` command.
+  const invoke = aidlcInvocation();
+  const syncCmd = invoke.startsWith("bun ")
+    ? aidlcToolInvocation("workspace-sync")
+    : `${invoke} system workspace-sync`;
 
   // W1c first - Files that hold the person's words and that git can see (the
   // request folder, the forwarding latch an earlier Kiro CLI (V2) release

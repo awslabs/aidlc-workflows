@@ -1,5 +1,5 @@
 // covers: subcommand:aidlc-orchestrate:report, subcommand:aidlc-orchestrate:next, subcommand:aidlc-bolt:checkpoint
-// covers: function:broughtFilesChanged, function:broughtFilesLine, function:unheardBroughtFilesLine, function:workStartSourceBaseline
+// covers: function:broughtFilesChanged, function:broughtFilesLine, function:unheardBroughtFilesLine, function:workStartSourceBaseline, function:remoteBranchCopies
 //
 // The build replaced the README the person brought and nothing on screen said
 // so (t51, P182). The gate that approves Code Generation now says once which
@@ -10,14 +10,21 @@
 // work started is not theirs; nothing is said when the engine cannot know. Built
 // Unit by Unit, a Unit's approval names what that Unit changed and puts it back
 // as that Unit found it. The gate itself is unchanged: no refusal, no question,
-// no step.
+// no step. After a git pull, a teammate's files are not the build's change: a
+// file exactly as the branch the person's branch tracks holds it, as merged
+// here, is not named, and one the build changed on top of the teammate's copy
+// is put back as the teammate left it. A submodule a teammate moved, pulled and
+// updated, is read the same way, at the commit that branch records for it.
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import {
   AIDLC_SRC, cleanupTestProject, createTestProject, runOrchestrateNext, seedAidlcMemory, seedBoltDag, seededRecordDir, seededStateFile,
+  toPortablePath,
 } from "../harness/fixtures.ts";
 import { createCodeGenerationProject, reply, reviewText, runNamed, stageDir, writePlan } from "../harness/code-generation-states.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
@@ -65,6 +72,9 @@ function next(proj: string, env: NodeJS.ProcessEnv = chat(CHAT_A)): Record<strin
 
 interface Setup {
   type?: "Greenfield" | "Brownfield";
+  policy?: "strict" | "relaxed" | "off";
+  // The project is a folder (shop/) of its repository, as a monorepo's package is.
+  folder?: boolean;
   // The person's files, there when the work starts.
   brought: Record<string, string>;
   git?: boolean;
@@ -72,13 +82,24 @@ interface Setup {
   uncommitted?: string[];
   // Added after the work started and before the build (a teammate's, an earlier attempt's).
   later?: Record<string, string>;
+  // Brought files git stops tracking before the work starts, kept on disk as last committed.
+  untracked?: string[];
+  // A submodule at web with these files, from its own team remote, there when the work starts.
+  web?: Record<string, string>;
 }
 
 // A poc project at Code Generation with plan approval off (t51's path), its
 // work started over the person's files and the build begun.
 function atBuild(setup: Setup): string {
-  const proj = createCodeGenerationProject("off", "off");
+  let proj = createCodeGenerationProject(setup.policy ?? "off", "off");
   created.push(proj);
+  let root = proj;
+  if (setup.folder) {
+    root = toPortablePath(realpathSync(mkdtempSync(join(process.env.TMPDIR || tmpdir(), "aidlc-test-repo-"))));
+    created.push(root);
+    renameSync(proj, join(root, "shop"));
+    proj = join(root, "shop");
+  }
   const stateFile = seededStateFile(proj);
   writeFileSync(stateFile, readFileSync(stateFile, "utf-8")
     .replace("- **Project Type**: Brownfield", `- **Project Type**: ${setup.type ?? "Greenfield"}`)
@@ -89,9 +110,26 @@ function atBuild(setup: Setup): string {
     writeFileSync(join(proj, path), text, "utf-8");
   }
   if (setup.git) {
-    git(proj, ["init", "-q"]);
+    git(root, ["init", "-q"]);
     git(proj, ["add", "-A", "--", ...Object.keys(setup.brought).filter((path) => !setup.uncommitted?.includes(path))]);
     git(proj, ["commit", "-qm", "the person's files"]);
+    if (setup.untracked) {
+      git(proj, ["rm", "-q", "--cached", "--", ...setup.untracked]);
+      git(proj, ["commit", "-qm", "stop tracking them"]);
+    }
+    if (setup.web) {
+      const web = `${proj}-web`;
+      created.push(web, `${web}.git`);
+      write(web, setup.web);
+      git(web, ["init", "-q"]);
+      git(web, ["add", "-A"]);
+      git(web, ["commit", "-qm", "the web page"]);
+      git(web, ["init", "-q", "--bare", `${web}.git`]);
+      git(web, ["remote", "add", "origin", `${web}.git`]);
+      git(web, ["push", "-q", "-u", "origin", "HEAD"]);
+      git(proj, ["-c", "protocol.file.allow=always", "submodule", "add", "-q", toPortablePath(`${web}.git`), "web"]);
+      git(proj, ["commit", "-qm", "the web page as a submodule"]);
+    }
   }
   appendAuditEntry("WORKFLOW_STARTED", { Scope: "poc", ...sourceBaselineAuditFields(proj, workspaceBaselineStageSlugs()) }, proj);
   for (const [path, text] of Object.entries(setup.later ?? {})) {
@@ -667,3 +705,259 @@ describe("t-gate-says-replaced-files: a later Unit's approval puts back only tha
     );
   });
 });
+
+// After a git pull, a teammate's files are not the build's change. The
+// person's project is a clone whose branch tracks a branch of a team remote (a
+// bare repository here), and a teammate pushes to that branch from a clone of
+// their own; the person runs a plain git pull while the build is open.
+const WEB = { "web/app.js": "render();\n", "web/index.html": "<html></html>\n", "web/styles.css": "body {}\n" };
+const MOVED_README = `${README}\nThe web page now lives in its own repository.\n`;
+const MOVE = { web: null, "README.md": MOVED_README };
+
+// The team remote the project's branch tracks, and a teammate's clone of it.
+function tracked(proj: string): string {
+  const remote = `${proj}-origin.git`;
+  const mate = `${proj}-mate`;
+  created.push(remote, mate);
+  git(proj, ["init", "-q", "--bare", remote]);
+  git(proj, ["remote", "add", "origin", remote]);
+  git(proj, ["push", "-q", "-u", "origin", "HEAD"]);
+  const branch = git(proj, ["rev-parse", "--abbrev-ref", "HEAD"]).trim();
+  git(proj, ["clone", "-q", "-b", branch, remote, mate]);
+  return mate;
+}
+
+// A teammate's commit, pushed to the team's branch: each file written, or removed when null.
+function teammatePushes(mate: string, files: Record<string, string | null>): void {
+  for (const [path, text] of Object.entries(files)) {
+    if (text === null) git(mate, ["rm", "-q", "-r", "--", path]);
+    else write(mate, { [path]: text });
+  }
+  git(mate, ["add", "-A"]);
+  git(mate, ["commit", "-qm", "a teammate's change"]);
+  git(mate, ["push", "-q"]);
+}
+
+const pull = (proj: string): string => git(proj, ["pull", "-q", "--no-rebase"]);
+const short = (proj: string, rev = "HEAD"): string => git(proj, ["rev-parse", "--short", rev]).trim();
+
+describe("t-gate-says-replaced-files after a git pull", () => {
+  for (const policy of ["off", "relaxed", "strict"] as const) {
+    test(`${policy}: a teammate's move of web/ and README change, pulled during the build, are not named`, () => {
+      const proj = atBuild({ type: "Brownfield", policy, git: true, brought: { "README.md": README, ...WEB } });
+      teammatePushes(tracked(proj), MOVE);
+      pull(proj);
+      expect(said(openGate(proj))).not.toContain("you had before this work started");
+    });
+  }
+
+  test("a file the teammate and the build both changed is named, and its way back keeps the teammate's change", () => {
+    const proj = atBuild({ type: "Brownfield", git: true, brought: { "README.md": README } });
+    const theirs = `${README}\nThe teammate's line.\n`;
+    teammatePushes(tracked(proj), { "README.md": theirs });
+    pull(proj);
+    write(proj, { "README.md": `${theirs}The build's line.\n` });
+    expect(said(openGate(proj))).toContain(
+      "The build changed README.md, a file you had before this work started. To put it back, run `git checkout HEAD -- README.md`.",
+    );
+    git(proj, ["checkout", "HEAD", "--", "README.md"]);
+    expect(readFileSync(join(proj, "README.md"), "utf-8")).toBe(theirs);
+  });
+
+  test("a file of the person's the build deleted, never committed, is still named beside a pull", () => {
+    const proj = atBuild({
+      type: "Brownfield", git: true, brought: { "README.md": README, ...WEB, "NOTES.md": "my notes\n" }, uncommitted: ["NOTES.md"],
+    });
+    teammatePushes(tracked(proj), MOVE);
+    pull(proj);
+    unlinkSync(join(proj, "NOTES.md"));
+    expect(said(openGate(proj))).toContain(
+      "The build deleted NOTES.md, a file you had before this work started. There is no committed copy to put back.",
+    );
+  });
+
+  test("the person's uncommitted edit, put back to the committed copy, is still named beside a pull", () => {
+    const proj = atBuild({ type: "Brownfield", git: true, brought: { "README.md": README, ...WEB }, later: { "README.md": `${README}My edit.\n` } });
+    teammatePushes(tracked(proj), { web: null });
+    pull(proj);
+    git(proj, ["checkout", "--", "README.md"]);
+    expect(said(openGate(proj))).toContain(
+      "The build changed README.md, a file you had before this work started. There is no committed copy to put back.",
+    );
+  });
+
+  test("a checkout that writes line endings as CRLF: the pulled files are not named", () => {
+    const proj = atBuild({ type: "Brownfield", git: true, brought: { "README.md": README, ...WEB } });
+    const mate = tracked(proj);
+    git(proj, ["config", "core.autocrlf", "true"]);
+    teammatePushes(mate, MOVE);
+    pull(proj);
+    expect(readFileSync(join(proj, "README.md"), "utf-8")).toContain("\r\n");
+    expect(said(openGate(proj))).not.toContain("you had before this work started");
+  });
+
+  test("a project in a folder of its repository: the pulled files are not named", () => {
+    const proj = atBuild({ type: "Brownfield", folder: true, git: true, brought: { "README.md": README, ...WEB } });
+    teammatePushes(tracked(proj), { "shop/web": null, "shop/README.md": MOVED_README });
+    pull(proj);
+    expect(said(openGate(proj))).not.toContain("you had before this work started");
+  });
+
+  test("fetched and not merged: the build's own README change keeps its way back at HEAD, and its own deletion is named", () => {
+    const proj = atBuild({ type: "Brownfield", git: true, brought: { "README.md": README, ...WEB } });
+    teammatePushes(tracked(proj), MOVE);
+    git(proj, ["fetch", "-q"]);
+    write(proj, { "README.md": "# The build's own\n" });
+    unlinkSync(join(proj, "web", "app.js"));
+    expect(said(openGate(proj))).toContain(
+      "The build changed README.md and deleted web/app.js, files you had before this work started. " +
+        "To put them back, run `git checkout HEAD -- web/app.js README.md`.",
+    );
+  });
+
+  test("the person's own commit of their README edit, not pushed, is named as before", () => {
+    const proj = atBuild({ type: "Brownfield", git: true, brought: { "README.md": README } });
+    tracked(proj);
+    const theirs = short(proj);
+    write(proj, { "README.md": `${README}My own edit.\n` });
+    git(proj, ["commit", "-qam", "my edit"]);
+    expect(said(openGate(proj))).toContain(`To put it back, run \`git checkout ${theirs} -- README.md\`.`);
+  });
+
+  test("the build's own README commit is named until it is pushed to the branch the person's branch tracks", () => {
+    const local = atBuild({ type: "Brownfield", git: true, brought: { "README.md": README } });
+    tracked(local);
+    const first = short(local);
+    write(local, { "README.md": "# The app's own\n" });
+    git(local, ["commit", "-qam", "the build"]);
+    expect(said(openGate(local))).toContain(`To put it back, run \`git checkout ${first} -- README.md\`.`);
+    const pushed = atBuild({ type: "Brownfield", git: true, brought: { "README.md": README } });
+    tracked(pushed);
+    write(pushed, { "README.md": "# The app's own\n" });
+    git(pushed, ["commit", "-qam", "the build"]);
+    git(pushed, ["push", "-q"]);
+    expect(said(openGate(pushed))).not.toContain("you had before this work started");
+  });
+
+  test("with no branch to compare (a detached head) or one git cannot read, the pulled files are named as before", () => {
+    for (const how of ["detached", "unreadable"] as const) {
+      const proj = atBuild({ type: "Brownfield", git: true, brought: { "README.md": README, ...WEB } });
+      const mate = tracked(proj);
+      const first = short(proj);
+      teammatePushes(mate, MOVE);
+      pull(proj);
+      if (how === "detached") git(proj, ["checkout", "-q", "--detach"]);
+      else {
+        const branch = git(proj, ["rev-parse", "--abbrev-ref", "HEAD"]).trim();
+        writeFileSync(join(proj, ".git", "refs", "remotes", "origin", branch), `${"1".repeat(40)}\n`);
+      }
+      expect(said(openGate(proj)), how).toContain(
+        "The build changed README.md and deleted web/app.js, web/index.html and web/styles.css, files you had before this work " +
+          `started. To put them back, run \`git checkout ${first} -- web/app.js web/index.html web/styles.css README.md\`.`,
+      );
+    }
+  });
+
+  test("a branch whose files git cannot list: the build's own deletion keeps its way back", () => {
+    const proj = atBuild({ type: "Brownfield", git: true, brought: { "README.md": README, LICENSE: "MIT\n", "docs/guide.md": "a guide\n" } });
+    tracked(proj);
+    // One folder of the commit can no longer be read, so git cannot list the branch's files.
+    const docs = git(proj, ["rev-parse", "HEAD:docs"]).trim();
+    const object = join(proj, ".git", "objects", docs.slice(0, 2), docs.slice(2));
+    // git keeps its objects read-only, and Windows deletes no read-only file.
+    chmodSync(object, 0o644);
+    unlinkSync(object);
+    unlinkSync(join(proj, "LICENSE"));
+    expect(said(openGate(proj))).toContain(
+      "The build deleted LICENSE, a file you had before this work started. To put it back, run `git checkout HEAD -- LICENSE`.",
+    );
+  });
+
+  test("a pulled file saved again unchanged is not named, and asking writes nothing in git's index", () => {
+    const proj = atBuild({ type: "Brownfield", git: true, brought: { "README.md": README, ...WEB } });
+    teammatePushes(tracked(proj), MOVE);
+    pull(proj);
+    // A formatter rewrote the file with the same bytes: only its time changed.
+    utimesSync(join(proj, "README.md"), new Date("2030-01-01T00:00:00Z"), new Date("2030-01-01T00:00:00Z"));
+    const index = (): string => createHash("sha256").update(readFileSync(join(proj, ".git", "index"))).digest("hex");
+    const before = index();
+    expect(said(openGate(proj))).not.toContain("you had before this work started");
+    expect(index()).toBe(before);
+  });
+
+  test("a file the teammate deleted and the build wrote again is named, and its way back is the copy the person had", () => {
+    const proj = atBuild({ type: "Brownfield", git: true, brought: { "README.md": README, "docs/guide.md": "the guide\n" } });
+    const mate = tracked(proj);
+    const first = short(proj);
+    teammatePushes(mate, { "docs/guide.md": null });
+    pull(proj);
+    write(proj, { "docs/guide.md": "the build's guide\n" });
+    expect(said(openGate(proj))).toContain(
+      `The build changed docs/guide.md, a file you had before this work started. To put it back, run \`git checkout ${first} -- docs/guide.md\`.`,
+    );
+  });
+
+  test("with no pull, a file git no longer tracks, kept as last committed and changed by the build, keeps its way back", () => {
+    const proj = atBuild({
+      type: "Brownfield", git: true, brought: { "README.md": README, "docs/notes.md": "the old notes\n" }, untracked: ["docs/notes.md"],
+    });
+    tracked(proj);
+    const held = short(proj, "HEAD~1");
+    write(proj, { "docs/notes.md": "the build's notes\n" });
+    expect(said(openGate(proj))).toContain(
+      `The build changed docs/notes.md, a file you had before this work started. To put it back, run \`git checkout ${held} -- docs/notes.md\`.`,
+    );
+  });
+
+  test("checkpoints: a teammate's README change pulled during a Unit's build is not named at its checkpoint", () => {
+    const p = unitsProject(false);
+    const mate = tracked(p);
+    recordCommand(p);
+    unitStep(p, "alpha");
+    teammatePushes(mate, { "README.md": `${README}\nThe teammate's line.\n` });
+    pull(p);
+    unitBuild(p, "alpha", {}, false);
+    expect((next(p) as { construction_checkpoint?: { unit: string } }).construction_checkpoint?.unit).toBe("alpha");
+    const asked = askCheckpoint(p, "alpha");
+    expect(asked.changed_files, JSON.stringify(asked)).toBeUndefined();
+  });
+
+  for (const policy of ["off", "strict"] as const) {
+    test(`${policy}: a teammate's move of the web submodule, pulled and updated during the build, is not named`, () => {
+      const proj = atBuild({ type: "Brownfield", policy, git: true, brought: { "README.md": README }, web: WEB_PAGE });
+      teammateMovesWeb(tracked(proj), { "app.js": "render(wishlist);\n", "README.md": "# web\n\nA wishlist.\n" });
+      pullAndUpdate(proj);
+      expect(said(openGate(proj))).not.toContain("you had before this work started");
+    });
+  }
+
+  test("beside a teammate's move of the web submodule, the build's own change inside it is named", () => {
+    const proj = atBuild({ type: "Brownfield", git: true, brought: { "README.md": README }, web: WEB_PAGE });
+    teammateMovesWeb(tracked(proj), { "app.js": "render(wishlist);\n" });
+    pullAndUpdate(proj);
+    write(proj, { "web/README.md": "# web\n\nThe build's line.\n" });
+    expect(said(openGate(proj))).toContain(
+      "The build changed web/README.md, a file you had before this work started. There is no committed copy to put back.",
+    );
+  });
+});
+
+const WEB_PAGE = { "app.js": "render();\n", "index.html": "<html></html>\n", "README.md": "# web\n" };
+
+// A teammate's commit in the web submodule, pushed to web's own remote, and the shop's pointer moved to it and pushed.
+function teammateMovesWeb(mate: string, files: Record<string, string>): void {
+  git(mate, ["-c", "protocol.file.allow=always", "submodule", "update", "-q", "--init"]);
+  const web = join(mate, "web");
+  write(web, files);
+  git(web, ["commit", "-qam", "the wishlist"]);
+  const branch = git(web, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]).trim().replace(/^origin\//, "");
+  git(web, ["push", "-q", "origin", `HEAD:refs/heads/${branch}`]);
+  git(mate, ["add", "--", "web"]);
+  git(mate, ["commit", "-qm", "web moved on"]);
+  git(mate, ["push", "-q"]);
+}
+
+function pullAndUpdate(proj: string): void {
+  pull(proj);
+  git(proj, ["-c", "protocol.file.allow=always", "submodule", "update", "-q"]);
+}

@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-orchestrate:next, function:openFrontQuestion, function:planProposalDirective, function:newestRequestReplaces
+// covers: subcommand:aidlc-orchestrate:next, function:openFrontQuestion, function:planProposalDirective, function:newestRequestReplaces, function:retireRequest
 //
 // A new /aidlc request typed while an earlier request's plan question still
 // waits, with no work started, is the one the work plans from and records
@@ -17,7 +17,7 @@ import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { cleanupTestProject, createOrchestrationTestProject, proposalFollowUp } from "../harness/fixtures.ts";
+import { cleanupTestProject, createOrchestrationTestProject, FIXTURES_DIR, proposalFollowUp, seedStateFile } from "../harness/fixtures.ts";
 import {
   DISPATCHER,
   type Directive,
@@ -250,6 +250,29 @@ describe("t-newest-request-wins: the newest request is the one the work plans fr
     expect(newerLines(question)).toEqual([lineFor(FULLER)]);
     await picks(proj, SECOND_SESSION, question);
     expect(JSON.stringify(await wordsDuringWork(proj, SECOND_SESSION))).not.toContain(WAITS);
+  });
+
+  // A request dropped beside work whose newer request then started was overtaken by that work: once the work is
+  // archived, the next request finds no plan question waiting, so it is asked about at once and no line says a
+  // newer request was used in its place.
+  test("a request dropped beside finished work, a later one started and all work archived: the next request has its plan question at once, with no newer-request line", async () => {
+    const proj = fresh();
+    seedStateFile(proj, join(FIXTURES_DIR, "state-completed.md"));
+    expect((await asks(proj, SESSION, SHORT)).kind).toBe("ask");
+    await later();
+    await picks(proj, SESSION, await newestReading(proj, SESSION, await asks(proj, SESSION, "add a word counter to the notes page")));
+    const intents = join(proj, "aidlc", "spaces", "default", "intents");
+    for (const dir of readdirSync(intents).filter((name) => existsSync(join(intents, name, "aidlc-state.md")))) {
+      const archived = spawnSync(process.execPath, [DISPATCHER, "engine", "intent", "archive", dir, "--project-dir", proj], {
+        cwd: proj, env: env(proj, { session: SESSION }), encoding: "utf-8",
+      });
+      expect(archived.status, `${archived.stdout}${archived.stderr}`).toBe(0);
+    }
+    await later();
+    const question = await asks(proj, SECOND_SESSION, FULLER);
+    expect(JSON.stringify(question)).not.toContain(WAITS);
+    expect(question.kind, JSON.stringify(question).slice(0, 300)).toBe("ask");
+    expect(newerLines(question)).toEqual([]);
   });
 
   test("the newer request sent to a tailored plan marks the waiting one replaced and says the line", async () => {

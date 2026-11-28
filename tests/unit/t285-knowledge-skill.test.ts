@@ -110,9 +110,12 @@ const HARDCODED_SKILL_ARRAY_HARNESSES = ["codex", "copilot"] as const;
 const CLAUDE_SKILL = join(REPO, "dist", "claude", ".claude", "skills", "aidlc-knowledge", "SKILL.md");
 const TOOL_SRC = join(REPO, "core", "tools", "aidlc-knowledge.ts");
 
+// The copy tree's two Bun options, which go to Bun, not to the tool.
+const COPY_LAUNCH_OPTIONS = /\bbun --config=\S+ --no-env-file /g;
+
 /** Flags the skill's prose tells an LLM to pass. */
 function flagsInSkill(text: string): Set<string> {
-  return new Set(text.match(/--[a-z][a-z-]+/g) ?? []);
+  return new Set(text.replace(COPY_LAUNCH_OPTIONS, "bun ").match(/--[a-z][a-z-]+/g) ?? []);
 }
 
 /** Flags the shipped tool actually accepts, read out of its parser + entrypoint.
@@ -183,9 +186,10 @@ describe("t285 - the knowledge skill ships everywhere, and its prose matches the
       test(`${h.name}: the tool path in the prose RESOLVES in the shipped layout`, () => {
         const text = readFileSync(join(REPO, h.root, h.skill), "utf-8");
         // Every invocation the skill prints, not just the first: a skill can get
-        // one path right and another wrong.
-        const refs = [...new Set(text.match(/bun (\S*tools\/aidlc-\S+\.ts)/g) ?? [])]
-          .map((m) => m.replace(/^bun /, ""));
+        // one path right and another wrong. The launch config a copy tree names
+        // must resolve too, or Bun refuses to start.
+        const refs = [...new Set([...text.matchAll(/bun (?:--config=(\S+) --no-env-file )?(\S*tools\/aidlc-\S+\.ts)/g)]
+          .flatMap((m) => m[1] === undefined ? [m[2]] : [m[1], m[2]]))];
         expect(refs.length, "the skill names no tool to run").toBeGreaterThan(0);
         for (const ref of refs) {
           expect(existsSync(join(REPO, h.root, ref)), `${h.name}: ${ref} does not resolve`).toBe(true);

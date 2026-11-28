@@ -21,6 +21,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
@@ -40,7 +41,7 @@ const TIMEOUT_MS = NATIVE_FIXTURE_SETUP_TIMEOUT_MS;
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 const PLUGIN = "test-pro";
 const STAGE_TABLE_BEGIN =
-  "<!-- BEGIN: compiled stage graph via `bun .claude/tools/aidlc.ts engine gen stage-table` - do NOT hand-edit -->";
+  `<!-- BEGIN: compiled stage graph via \`${withCopyLaunchOptions("bun .claude/tools/aidlc.ts engine gen stage-table")}\` - do NOT hand-edit -->`;
 const STAGE_TABLE_END = "<!-- END: compiled stage graph -->";
 
 function copyClaudeInstall(project: string): void {

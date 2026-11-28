@@ -842,10 +842,14 @@ describe("t-plan-proposed-by-the-agent: creation retires the request's whole cha
     // the work this chat starts next and says so; then the agent asks again and
     // the person gets the question of which work to pick up.
     const step = next(CLAUDE_TOOLS, proj, first as string[], chat);
-    const setter = /Run `bun \.claude\/tools\/aidlc\.ts ([^`]+)`/.exec(String(step.message))?.[1];
+    // The copy tree's two Bun options, its config taken from the shipped tree as the tool is.
+    const printed = /Run `bun (?:--config=\.claude\/tools\/(\S+) --no-env-file )?\.claude\/tools\/aidlc\.ts ([^`]+)`/
+      .exec(String(step.message));
+    const setter = printed?.[2];
     // A check turned off: the step asks the setter for its lines alone, as it prints them verbatim.
     expect(setter, JSON.stringify(step).slice(0, 300)).toBe("engine config set guard.review-freeze off --verbatim");
-    const kept = spawnSync(process.execPath, [join(CLAUDE_TOOLS, "aidlc.ts"), ...(setter as string).split(" ")], {
+    const options = printed?.[1] ? [`--config=${join(CLAUDE_TOOLS, printed[1])}`, "--no-env-file"] : [];
+    const kept = spawnSync(process.execPath, [...options, join(CLAUDE_TOOLS, "aidlc.ts"), ...(setter as string).split(" ")], {
       cwd: proj,
       encoding: "utf-8",
       env: { ...chat, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj },

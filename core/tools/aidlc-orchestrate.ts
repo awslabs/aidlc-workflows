@@ -144,6 +144,7 @@ import {
   aidlcEntryWords,
   APPROVAL_GATE_CHOICES,
   protectedChoices,
+  shortcutEntryWords,
   SUMMARY_CONFIRMATION_CHOICES,
   typedWordGap,
 } from "./aidlc-reply-reader.ts";
@@ -680,6 +681,7 @@ import {
 } from "./aidlc-utility.ts";
 import { checkboxIsUnitProjection, ledgerStageActivity } from "./aidlc-doctor-bundle.ts";
 import {
+  bunLaunchFlags,
   aidlcDispatcherInvocation,
   aidlcEngineCommand,
   aidlcInvocation,
@@ -3371,7 +3373,7 @@ function toolCommand(toolFile: string, args: string[]): string[] {
     }
     throw new Error(`No compiled dispatcher route for ${toolFile} ${args.join(" ")}`);
   }
-  return [process.execPath, toolPath(toolFile), ...args];
+  return [process.execPath, ...bunLaunchFlags(), toolPath(toolFile), ...args];
 }
 
 // The result of spawning a sibling tool: its exit code plus captured streams.
@@ -3892,7 +3894,8 @@ function fillStoredSettings(flags: ParsedFlags, question: StoredQuestion): boole
  * The plan question the person was asked and has not answered: the latest copy
  * this engine kept, when it is one of its own front questions and nothing was
  * started from it. A question whose answer created work is answered, one a
- * newer request replaced waits no more (newestRequestReplaces), and a routing
+ * newer request replaced waits no more (newestRequestReplaces, retireRequest),
+ * and a routing
  * question has its own step (openRoutingQuestion). A proposal step's request
  * was never put to the person (the agent may answer the words beside finished
  * work from its status and propose nothing), so it is passed over here, as is
@@ -3911,9 +3914,14 @@ function openFrontQuestion(
   // says so instead of naming one: the agent has the question it asked in its
   // own chat, with that question's own commands. A question this one was
   // derived from (its root, such as the compose entry it was described on) is
-  // the same request, not another open question. A replaced one still counts:
-  // its own chat may still show it, and its commands still answer it there.
-  const earliest = firstFrontQuestionSince(projectDir, new Date(0).toISOString(), Number.POSITIVE_INFINITY, { shown: true });
+  // the same request, not another open question. A replaced one still counts
+  // while the request that replaced it waits: its own chat may still show it,
+  // and its commands still answer it there. Once that request has started work,
+  // the work has overtaken it (retireRequest), and it counts no more.
+  const earliest = firstFrontQuestionSince(projectDir, new Date(0).toISOString(), Number.POSITIVE_INFINITY, {
+    shown: true,
+    waiting: true,
+  });
   return { question: latest, sole: earliest === null || earliest === latest.id || earliest === latest.composedFrom };
 }
 
@@ -4022,8 +4030,10 @@ function scopeConfirmAskDirective(
 // word is considered, not the first, so "Update README.md from docs/spec.pdf"
 // finds the spec. The note offers the step and leaves the judgement with the
 // person: the agent asks them before onboarding something they may have named
-// for another reason.
-const NAMED_DOCUMENT = /(?:^|[\s"'`(<])([\w.][\w./-]*\.(?:pdf|docx))(?=$|[\s"'`)>,;])/gi;
+// for another reason. A file name is letters and digits of any script
+// (docs/Вимоги.docx, docs/需求.pdf), including accents stored as combining
+// marks (\p{M}).
+const NAMED_DOCUMENT = /(?:^|[\s"'`(<])([\p{L}\p{N}_.][\p{L}\p{M}\p{N}_./-]*\.(?:pdf|docx))(?=$|[\s"'`)>,;])/giu;
 
 function onboardableDocument(raw: string, projectDir: string): string | null {
   for (const match of raw.matchAll(NAMED_DOCUMENT)) {
@@ -5650,7 +5660,13 @@ function teamShareOffer(
 // at this HEAD. Null when not due.
 function teamPublishOffer(projectDir: string, unit: string): AskDirective | null {
   if (publishedAtHead(projectDir)) return null;
-  const head = Bun.spawnSync({ cmd: ["git", "rev-parse", "HEAD"], cwd: projectDir, stdout: "pipe", stderr: "ignore" });
+  const head = Bun.spawnSync({
+    cmd: ["git", "rev-parse", "HEAD"],
+    cwd: projectDir,
+    env: process.env,
+    stdout: "pipe",
+    stderr: "ignore",
+  });
   const key = `${unit}-${head.exitCode === 0 ? new TextDecoder().decode(head.stdout).trim().slice(0, 12) : "none"}`;
   const mark = teamHandoverMarkName("publish", key);
   if (handoverOffered(projectDir, mark)) return null;
@@ -6206,6 +6222,7 @@ function localClaimCheckouts(
   const listed = Bun.spawnSync({
     cmd: ["git", "worktree", "list", "--porcelain"],
     cwd: projectDir,
+    env: process.env,
     stdout: "pipe",
     stderr: "ignore",
   });
@@ -7527,7 +7544,7 @@ export function nextArgsAreOnlyWords(args: string[]): boolean {
 // The plan a line names when it says nothing else ("/aidlc bugfix"), by the
 // same one reading; null for any other line. Unlike a reply, a token typed
 // beside the plan, a flag `next` does not take included, is more than the plan.
-export function nextArgsNameOnlyAPlan(args: string[]): string | null {
+function nextArgsNameOnlyAPlan(args: string[]): string | null {
   const parsed = parseNextFlags(args);
   return Object.keys(parsed).length === 1 && typeof parsed.positionalScope === "string"
     ? parsed.positionalScope
@@ -7539,9 +7556,9 @@ export function nextArgsNameOnlyAPlan(args: string[]): string | null {
 // whole text beside it): `next` reads that line from AI-DLC's own copy
 // (takePersonsOwnLine), so the agent runs `next` with nothing after it and
 // does not type tens of thousands of characters again, often past what one
-// command line can carry. The sentence is the one Kiro IDE's adapter (Kiro
-// IDE and Kiro CLI on its V3 engine) says for every such line, firstStepLine,
-// which a test holds to these words. "" for any other line: words that
+// command line can carry. It opens with the words of the Kiro adapters'
+// first-step lines (Kiro IDE and Kiro CLI on both engines), which name
+// `next --entry`; a test holds them to those words. "" for any other line: words that
 // are not words alone (nextArgsAreOnlyWords), or that hold a flag-shaped
 // token `next` does not take, which a bare `next` hands back for the agent to
 // send again behind `--`; a record with no whole copy; no chat, whose `next`
@@ -8136,10 +8153,20 @@ function createPrintDirective(
   if (flags.testStrategy) cmd.push(`--test-strategy ${flags.testStrategy}`);
   if (flags.projectType) cmd.push(`--project-type ${flags.projectType}`);
   if (flags.review) cmd.push(`--review ${flags.review}`);
-  // A lowered Guard Policy typed with routed new work rides to creation when it
-  // is the person's (routedGuardPolicyRides); otherwise the routed note says
-  // where it stands.
-  if (flags.changeControl && !(routedGuardPolicyNote && guardPolicyLowered(flags) && !routedGuardPolicyRides(flags, projectDir))) {
+  // A team's locked strict Guard Policy outranks a lowered Guard Policy or plan
+  // approval off typed with the request, never the request: neither goes on
+  // the command (creation refuses both under the lock), the work starts at the
+  // team's strict, and the team's line is said once. A check typed off rides,
+  // and creation keeps it on with its own line.
+  const team = teamKeepsLowered(projectDir, {
+    guardPolicy: guardPolicyLowered(flags),
+    fence: undefined,
+    planApproval: flags.ceremony?.plan_approval === "off",
+  });
+  // With no lock, a lowered Guard Policy typed with routed new work rides to
+  // creation when it is the person's (routedGuardPolicyRides); otherwise the
+  // routed note says where it stands.
+  if (flags.changeControl && !(guardPolicyLowered(flags) && (team !== null || (routedGuardPolicyNote && !routedGuardPolicyRides(flags, projectDir))))) {
     cmd.push(`--guard-policy ${flags.changeControl}`);
   }
   // A check typed with the work: creation takes it under the person-turn rule.
@@ -8147,6 +8174,7 @@ function createPrintDirective(
     if (flags.fences?.[fence]) cmd.push(`--guard.${fence} ${flags.fences[fence]}`);
   }
   for (const key of CEREMONY_KEYS) {
+    if (key === "plan_approval" && team !== null && flags.ceremony?.[key] === "off") continue;
     if (flags.ceremony?.[key]) cmd.push(`${CEREMONY_FLAGS[key]} ${flags.ceremony[key]}`);
   }
   if (flags.planChanges?.skip.length) cmd.push(`--skip ${flags.planChanges.skip.join(",")}`);
@@ -8196,6 +8224,7 @@ function createPrintDirective(
   for (const name of discoverSiblingRepos(projectDir, true)) {
     directive.narration += ` The folder "${name}" is not part of this work: its name ${repoNameProblem(name)}.`;
   }
+  if (team !== null) directive.narration += ` ${team}`;
   if (routedGuardPolicyNote) directive.narration += ` ${routedGuardPolicyNote}`;
   // Beside other work the chat still holds that work's conversation: the
   // person can start this one in a clean chat instead, said once, never as a
@@ -8329,6 +8358,45 @@ function planNamedBesideWorkStep(plan: string, flags: ParsedFlags, stateContent:
   );
 }
 
+// The agent's `next --scope <plan>` with nothing else, over work on another
+// plan, while the plan question for a separate request is the question on top
+// of that work (planQuestionChoice): the plan's name may be the person's pick
+// for that request, so the agent reads which, once per line of theirs. Their
+// own --scope (settingTheirs) switches at once. The line is marked handed out
+// before the step is given, so the same command sent again reaches the switch;
+// a mark that cannot be kept gives no step.
+function planSentBesideWaitingRequest(
+  flags: ParsedFlags, pd: string, current: string,
+): ReturnType<typeof planQuestionChoice> {
+  const plan = flags.scope;
+  if (plan === undefined || plan === current || !validScopes().has(plan) || engineSessionId === undefined) return null;
+  if (!Object.entries(flags).every(([key, value]) => key === "scope" || value === undefined || value === false)) return null;
+  const choice = planQuestionChoice(pd, plan);
+  if (choice === null || settingTheirs(pd, engineSessionId, "scope", plan) !== null) return null;
+  const line = chatLatestMessage(pd, engineSessionId);
+  if (line === null || line.source !== "prompt" || lineHandedOut(pd, engineSessionId, line.id)) return null;
+  if (isReadOnlyEngineProbe()) return choice;
+  markLineHandedOut(pd, engineSessionId, line.id);
+  return lineHandedOut(pd, engineSessionId, line.id) ? choice : null;
+}
+
+function planOrWaitingRequestStep(
+  plan: string, choice: NonNullable<ReturnType<typeof planQuestionChoice>>, stateContent: string,
+): PrintDirective {
+  const next = `${aidlcToolInvocation("orchestrate")} next --scope ${scopeArg(plan)}`;
+  const work = activeWorkLabel(stateContent);
+  const current = (getField(stateContent, "Scope") ?? "").trim();
+  return printDirective(
+    `This command names the \`${plan}\` plan for the work on "${work}" (on the \`${current}\` plan), while the ` +
+      `person's separate request "${requestPreview(choice.question.text)}" still waits for its plan: a plan's name ` +
+      "here may pick the plan for that request or ask for this work to move. Read what they meant. To start that " +
+      `request on the \`${plan}\` plan, run \`${next} ${choice.args.slice(2).join(" ")}\` and follow what it returns. ` +
+      `For the work on "${work}" to move to the \`${plan}\` plan, run \`${next}\` again: it now moves the work; follow ` +
+      "what it returns. If you cannot tell which they meant, ask them once in plain words, then run the command for " +
+      "their answer.",
+  );
+}
+
 // The optional line offering a clean chat for new work, with the step of the
 // tool the person is in from the tree's own harness.json (its manifest's
 // newChatStep). A tree that names none, or a native engine that cannot tell the
@@ -8373,15 +8441,15 @@ function routedGuardPolicyRides(flags: ParsedFlags, projectDir: string): boolean
 // New work picked on a routing question with a lowered Guard Policy: what the
 // person hears. Theirs, it is said once with where it landed; a value the new
 // work's plan already has is nothing new and goes unsaid. Under a team's strict
-// Guard Policy, the team's line. With no message of theirs in this chat it is
+// Guard Policy, nothing: the creation print says the team's line
+// (createPrintDirective). With no message of theirs in this chat it is
 // not tried on the new work: the person hears where it stands and is asked,
 // about the work the question was about, read from its own state (not whatever
 // the answer selects).
 function routedGuardPolicyNote(flags: ParsedFlags, projectDir: string, question: StoredQuestion): string {
   if (!guardPolicyLowered(flags)) return "";
   const value = flags.changeControl as string;
-  const team = teamKeepsTyped(flags, projectDir);
-  if (team !== null) return team;
+  if (teamKeepsTyped(flags, projectDir) !== null) return "";
   if (personAskedInThisChat(projectDir)) {
     // What the setting does comes with its name, as it does on the check line beside it.
     return flags.scope !== undefined && scopeGuardPolicyDefault(flags.scope) === value
@@ -11481,7 +11549,9 @@ const QUOTED_LINE_CREATION_KEYS = new Set(["projectType", "planChanges"]);
 // two ways to start, or a creation with no words), and the agent picked the plan
 // for them. The human-turn hook already kept their message as it arrived
 // (aidlc-message-store.ts), so when this chat's latest message came through their
-// own prompt and is an `/aidlc` line with words, that line is the request, and
+// own prompt and is an `/aidlc` line with words (or a shortcut's line with
+// words, read as the `/aidlc` line it stands for: typedEntryWords; a shortcut's
+// line of tokens alone is never read here, see entryTokens), that line is the request, and
 // `next` reads it exactly as if the agent had passed it: the same reply reading
 // while a plan question is open, the same plan question for words alone, the same
 // creation for a plan they named, their own settings carried. A scope the agent
@@ -11587,6 +11657,9 @@ function takePersonsOwnLine(flags: ParsedFlags, pd: string): string[] | null {
   if (!carriesNothing) return null;
   const message = chatLatestMessage(pd, engineSessionId);
   if (message === null || message.source !== "prompt") return null;
+  // A shortcut's line of tokens alone is the first command's to run, each time
+  // it runs (entryTokens), never a bare `next`'s.
+  if (shortcutTokensAlone(personsWordsText(message.text)) !== null) return null;
   const stateContent = loadStateFileIfPresent(pd);
   if (message.words !== null) {
     // Their words name work; with work selected, only while nothing has run
@@ -11615,7 +11688,7 @@ function takePersonsOwnLine(flags: ParsedFlags, pd: string): string[] | null {
   // A typed prompt its record cut is read whole from the copy kept beside the
   // record; a plain reply is that text trimmed, as the record's words are.
   const whole = wholeMessageText(pd, message);
-  const typed = aidlcEntryWords(personsWordsText(whole ?? message.text));
+  const typed = typedEntryWords(personsWordsText(whole ?? message.text));
   let argv: string[];
   if (typed === null) {
     if (
@@ -11785,15 +11858,19 @@ function cutMessageStep(shape: ParsedFlags, message: StoredMessage, reply: boole
   );
 }
 
-// AI-DLC's first command (`next --entry`, the Claude Code skill's step 1)
+// AI-DLC's first command (`next --entry`, step 1 of the Claude Code, Codex and Kiro skills)
 // carries none of the person's words: the bare `next` reads the words of their
 // typed line from the record (takePersonsOwnLine), and a line of tokens alone
-// runs as the command before this is asked (entryTokens). With no `/aidlc` line of
+// runs as the command before this is asked (entryTokens). A shortcut's line
+// (`/aidlc-bugfix ...`) is read as the `/aidlc` line it stands for
+// (typedEntryWords), and a Claude Code shortcut's first command carries the
+// shortcut's own arguments after `--entry`. With no `/aidlc` or shortcut line of
 // this chat's to read (the hooks off, which stop before the record is read; a
 // run nobody attends, whose prompts are not kept; a latest message that is no
-// `/aidlc` line; no chat), the agent hands their words over in the request
+// such line; no chat), the agent hands their words over in the request
 // file, never on a command line (noTypedLineStep), which cannot know what they
-// typed, so it always says where their flags go; what the agent put after
+// typed, so it always says where their flags go; a shortcut's own arguments stay
+// on that step's command, and anything else the agent put after
 // `--entry` is the command there instead (`main`). One plain message on record
 // goes on itself: a reply while a plan or routing question waits, or while work
 // here is in progress and none is selected, which routeNext reads only as
@@ -11806,7 +11883,7 @@ function entryLine(pd: string, selection: WorkflowSelection, unjoined: boolean):
   if (!unjoined && hooksOffStop(pd, selection, []) !== null) return "step";
   const message = chatLatestMessage(pd, selection.sessionId);
   if (message === null || message.source !== "prompt") return "step";
-  if (aidlcEntryWords(personsWordsText(message.text)) !== null) return "bare";
+  if (typedEntryWords(personsWordsText(message.text)) !== null) return "bare";
   const reply = message.words === null || message.cut === true ? null : personsWordsText(message.words);
   if (reply === null) return "step";
   // Presence alone: reading the record would bring an older one up to date.
@@ -11814,11 +11891,32 @@ function entryLine(pd: string, selection: WorkflowSelection, unjoined: boolean):
   const waits = openRoutingQuestion(pd) !== null || openFrontQuestion(pd) !== null || (unselected?.selectable.length ?? 0) > 0;
   return waits ? [reply] : "step";
 }
+// The words of the message the human-turn hook named by id, when the agent
+// passes that id where a request's goes: they go on whole as one argument, as
+// the agent hands words to `next` and entryLine a plain message. An `/aidlc`
+// line gives its words as typed and never its flags, which its own command ran
+// once (a jump run again would redo the stage). Null for no such message, no
+// whole words, or a line naming a request (`main`'s, so one message is read).
+function namedMessageWords(pd: string, id: string): string | null {
+  const message = readMessage(pd, id);
+  if (message === null || message.words === null) return null;
+  const whole = wholeMessageText(pd, message);
+  // A box answer is marked cut for a long question too; the hook cuts its words only at MESSAGE_TEXT_MAX_CHARS.
+  const wordsCut = message.source === "picker" ? personsWordsText(message.words).length >= MESSAGE_TEXT_MAX_CHARS : whole === null;
+  if (message.cut === true && wordsCut) return null;
+  const typed = message.source === "prompt" ? typedEntryWords(personsWordsText(whole ?? message.text)) : null;
+  if (typed === null) return personsWordsText(whole ?? message.words).trim();
+  const own = parseNextFlags(splitKiroCommandArgs(typed));
+  const said = own.personWords ?? own.intent;
+  if (own.request !== undefined || said === undefined) return null;
+  return requestAsTyped(said, typed) ?? withTypedSpacing(said, typed);
+}
 // A plan's name alone, handed on by entryLine while one plan question waits,
 // is that question's answer: it runs as the command the question gave for that
 // plan, so the work starts on the request it was asked about, with the
 // settings typed with it. With more than one plan question kept unanswered (a
-// replaced request's included), a routing question open, or, with no work
+// replaced request's included while the request that replaced it waits), a
+// routing question open, or, with no work
 // selected, work listed to pick under that same name (the which-work question
 // names the work), which question it answers is not the tool's to tell, so the
 // reply goes on as handed on. Beside
@@ -11829,7 +11927,12 @@ function entryLine(pd: string, selection: WorkflowSelection, unjoined: boolean):
 // agent's to read.
 function planNamedReply(pd: string, args: string[]): string[] | null {
   const plan = nextArgsNameOnlyAPlan(args);
-  if (plan === null || openRoutingQuestion(pd) !== null) return null;
+  return plan === null ? null : planQuestionChoice(pd, plan)?.args ?? null;
+}
+// The open plan question a plan's name may answer, by planNamedReply's rules,
+// and the arguments of its own command for that plan.
+function planQuestionChoice(pd: string, plan: string): { question: StoredQuestion; args: string[] } | null {
+  if (openRoutingQuestion(pd) !== null) return null;
   const onTop = openEngineQuestion(pd);
   const working = existsSync(engineStateFilePath(pd));
   if (working && onTop !== "scope-confirm" && onTop !== "compose-offer") return null;
@@ -11839,7 +11942,8 @@ function planNamedReply(pd: string, args: string[]): string[] | null {
   if (front === null || !front.sole) return null;
   const kept = openQuestionSettings(pd, front.question);
   const carried = `${kept ? carriedCreationFlags(kept) : ""}${typedStageAnswers(plan, kept?.planChanges, kept?.planName).plan}`;
-  return ["--scope", plan, "--request", front.question.id, ...carried.split(" ").filter((token) => token.length > 0)];
+  const args = ["--scope", plan, "--request", front.question.id, ...carried.split(" ").filter((token) => token.length > 0)];
+  return { question: front.question, args };
 }
 // Their `/aidlc` line of tokens alone (a flag, a verb, a plan's name, a
 // setting, a jump: the record keeps no words for it) runs as the first command,
@@ -11851,7 +11955,11 @@ function planNamedReply(pd: string, args: string[]): string[] | null {
 // again; any other is taken once, on takePersonsOwnLine's bounds (not handed
 // out yet; with work selected, nothing run since they spoke), and marked, so a later
 // first command before their next message goes on from where the work now
-// stands. Null leaves the first command to entryLine.
+// stands. A shortcut's line of tokens alone (`/aidlc-bugfix --status`; its
+// record keeps the line as words) meets none of those bounds and no mark: it
+// runs as that shortcut's own command, each time the first command runs, and
+// planSentBesideWaitingRequest's mark decides beside a waiting plan question.
+// Null leaves the first command to entryLine.
 function entryTokens(pd: string): string[] | null {
   if (!humanTurnMintAllowed()) return null;
   let selection: WorkflowSelection;
@@ -11863,7 +11971,10 @@ function entryTokens(pd: string): string[] | null {
   const session = selection.sessionId;
   if (!session) return null;
   const message = chatLatestMessage(pd, session);
-  if (message === null || message.source !== "prompt" || message.cut === true || message.words !== null) return null;
+  if (message === null || message.source !== "prompt" || message.cut === true) return null;
+  const shortcut = shortcutTokensAlone(personsWordsText(message.text));
+  if (shortcut !== null) return shortcut;
+  if (message.words !== null) return null;
   const typed = aidlcEntryWords(personsWordsText(message.text));
   if (!typed) return null;
   const tokens = splitKiroCommandArgs(typed);
@@ -11883,13 +11994,36 @@ function chatOutsideWork(pd: string, selection: WorkflowSelection): boolean {
 function outsideSelection(selection: WorkflowSelection): WorkflowSelection {
   return { ...selection, intent: null, binding: null };
 }
-function noTypedLineStep(): PrintDirective {
-  const next = `${aidlcToolInvocation("orchestrate")} next`;
+// The line the person typed, as an `/aidlc` line: theirs, or the one their
+// shortcut's line stands for.
+function typedEntryWords(text: string): string | null {
+  return aidlcEntryWords(text) ?? shortcutEntryWords(text, (name) => validScopes().has(name));
+}
+// A shortcut's line that holds none of their words (the shortcut alone, a
+// status, a setting, a jump): the tokens it stands for. Null for any other line.
+function shortcutTokensAlone(text: string): string[] | null {
+  const typed = shortcutEntryWords(text, (name) => validScopes().has(name));
+  if (typed === null) return null;
+  const tokens = splitKiroCommandArgs(typed);
+  return parseNextFlags(tokens).intent === undefined ? tokens : null;
+}
+// The arguments a shortcut's first command carries after `--entry`, as its
+// generated file writes them: a plan, the compose verb, or new work.
+function isShortcutTail(tail: readonly string[]): boolean {
+  if (tail.length === 2) return tail[0] === "--scope" && validScopes().has(tail[1]);
+  return tail.length === 1 && (tail[0] === "compose" || tail[0] === "--new-intent");
+}
+// `tail` is a shortcut's own arguments, kept on the step's command.
+function noTypedLineStep(tail: readonly string[]): PrintDirective {
+  const next = [`${aidlcToolInvocation("orchestrate")} next`, ...tail].join(" ");
+  const kept = tail.length === 0
+    ? "the plan, command word and flags they typed stay on the command, before `--request-file`. When they typed " +
+      "nothing after the entry word,"
+    : "the flags they typed stay on the command, before `--request-file`. When they typed nothing after the command,";
   return printDirective(
     "AI-DLC has no copy of what the person typed in this chat. Write the words of their request, exactly as they " +
       `typed them, with your file tool to \`${CUT_MESSAGE_FILE}\`, then run \`${next} --request-file ` +
-      `${CUT_MESSAGE_FILE}\` and follow what it returns. Only their words go in the file: the plan, command word and ` +
-      "flags they typed stay on the command, before `--request-file`. When they typed nothing after the entry word, " +
+      `${CUT_MESSAGE_FILE}\` and follow what it returns. Only their words go in the file: ${kept} ` +
       `run \`${next}\` with nothing after it and follow what it returns.`,
   );
 }
@@ -12288,9 +12422,11 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   if (openFront !== null) {
     const tool = `${aidlcToolInvocation("orchestrate")} next`;
     const open = openFront.question;
-    // The commands named here carry the stage changes typed with the request,
-    // as the question's own do, from the request's stored copy.
+    // The commands named here carry the settings and the stage changes typed
+    // with the request, as the question's own do, from the request's stored copy;
+    // what a team's locked strict keeps stays off at creation (createPrintDirective).
     const kept = openQuestionSettings(questionDir, open);
+    const settings = kept ? carriedCreationFlags(kept) : "";
     const stages = typedStageAnswers(open.proposedScope, kept?.planChanges, kept?.planName);
     const answer = !openFront.sole
       // More than one plan question is open on this work, so which one they are
@@ -12299,9 +12435,9 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       ? "the command that question gave for their choice, as that question still stands in your own chat, " +
         "with the `--request` id it came with"
       : open.proposedScope.length > 0
-        ? `\`${tool} --scope ${scopeArg(open.proposedScope)} --request ${open.id}${stages.plan}\`, ` +
-          `or \`${tool} compose --request ${open.id}${stages.tailored}\` for a plan tailored to it`
-        : `\`${tool} compose --request ${open.id}${stages.tailored}\`, or one of the plan commands that question listed, ` +
+        ? `\`${tool} --scope ${scopeArg(open.proposedScope)} --request ${open.id}${settings}${stages.plan}\`, ` +
+          `or \`${tool} compose --request ${open.id}${settings}${stages.tailored}\` for a plan tailored to it`
+        : `\`${tool} compose --request ${open.id}${settings}${stages.tailored}\`, or one of the plan commands that question listed, ` +
           `each with \`--request ${open.id}\``;
     // The request it was asked about: a chat that never saw the question cannot
     // tell an answer from the same work asked again without it (#3609).
@@ -12410,7 +12546,13 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     const found = readQuestion(questionDir, flags.request);
     if (!found) {
       pruneQuestions();
-      emit(repeatedAnswerDirective(questionDir, startedRequestFor(questionDir, flags.request)) ?? errorDirective(QUESTION_UNAVAILABLE));
+      const repeated = repeatedAnswerDirective(questionDir, startedRequestFor(questionDir, flags.request));
+      const words = repeated === null ? namedMessageWords(questionDir, flags.request) : null;
+      if (words !== null) {
+        routeNext([words], projectDir);
+        return;
+      }
+      emit(repeated ?? errorDirective(QUESTION_UNAVAILABLE));
       return;
     }
     // A routing question that stopped an answer is answered once that answer's
@@ -13646,6 +13788,11 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       : `print its output verbatim followed by "${stillParked}", and stop.${resumeOnYes()}`;
     if (!unitScope && flags.positionalScope && planTypedAloneBesideWork(flags, stateContent)) {
       emit(planNamedBesideWorkStep(flags.positionalScope, flags, stateContent));
+      return;
+    }
+    const waiting = unitScope ? null : planSentBesideWaitingRequest(flags, pd, currentStateScope);
+    if (waiting !== null && flags.scope !== undefined) {
+      emit(planOrWaitingRequestStep(flags.scope, waiting, stateContent));
       return;
     }
     if (
@@ -18401,8 +18548,7 @@ function finishedUnitNotRedoneHere(
 // Unit's stages itself (claimedCheckoutReopens): back to one the Unit has
 // reached, for that Unit only, with the steps after it, as a solo walk reopens
 // one Unit's step (unitMajorReopen), so the redone work is the person's to
-// approve again. "route" when the walk is on that stage and the Unit has done
-// nothing there yet. Any other move waits until the Unit has landed.
+// approve again. Any other move waits until the Unit has landed.
 function claimedCheckoutMove(
   projectDir: string,
   stateContent: string,
@@ -18478,6 +18624,36 @@ function claimedCheckoutMove(
     const redo = picked ? unitMajorRedo(projectDir, scope, stateContent, cursorSlug, { unit: claimedUnit, stage: target }) : null;
     if (redo?.jump) return jumpStepPrint(redo.message, redo.jump);
     const at = unitStages.indexOf(target);
+    if (flags.change === true) {
+      const beat = teamUnitMajorWalkBeat(projectDir, scope, stateContent, target);
+      const matched = beat === null ? null : unitStepWorkOrPause(projectDir, scope, stateContent, beat, target, claimedUnit);
+      if (matched !== null && !(beat?.step.kind === "work" && beat.step.ledger.receipts.has(claimedUnit))) {
+        if (existsSync(unitParkedPath(projectDir))) return "route";
+        if (matched.owed !== null) {
+          const jump = [
+            "reopen", "--target", target, "--stages", unitStages.slice(at).join(","), "--units", claimedUnit,
+            "--scope", scope, "--via", "change",
+          ];
+          return jumpStepPrint(
+            `Run \`${jumpCommandText(jump)}\` to reopen "${target}" and the steps after it for unit "${claimedUnit}" only, ` +
+              `as the person's change, then tell the person in one line: "Making your change in ${name} for unit ${claimedUnit}." ` +
+              `and re-run \`next\` to continue. When "${target}" comes back for unit "${claimedUnit}", ` +
+              "make the change from their own words; they already said what to change, so do not ask whether to keep, " +
+              "change or redo its files.",
+            jump,
+          );
+        }
+        if (matched.step.kind === "paused") {
+          const resume = `${aidlcToolInvocation("state")} unit resume --stage ${shellArg(target)} --unit ${shellArg(claimedUnit)}`;
+          return {
+            kind: "print",
+            message: `Run \`${resume}\` to pick unit "${claimedUnit}" up where it stopped, ` +
+              `then tell the person in one line: "Picked unit ${claimedUnit} up at ${name}." and re-run \`next\` to continue.`,
+          };
+        }
+        return "route";
+      }
+    }
     // The walk keeps Current Stage on the step it routes the Unit to, until
     // every Unit's row is done and the record moves on past the Unit's stages
     // (to Build and Test, the work's stage). There the Unit's own walk says
@@ -18532,7 +18708,7 @@ function walkStepUnit(step: UnitJumpStep): string | null {
   return step.kind === "paused" ? step.checkpoint.unit : step.kind === "covered" ? null : step.unit;
 }
 
-function unitStepOwedOnlyReceipt(
+function unitStepOwesOnlyRecords(
   projectDir: string,
   scope: string,
   stateContent: string,
@@ -18540,24 +18716,34 @@ function unitStepOwedOnlyReceipt(
   stageSlug: string,
   unit: string,
 ): boolean {
-  const step = walk.step;
-  const paused = unitPausedOnStep(step, stageSlug, unit);
-  if (!paused && (step.kind !== "work" || step.stage.slug !== stageSlug || step.unit !== unit)) return false;
-  const target = walk.block.find((stage) => stage.slug === stageSlug);
-  if (target === undefined) return false;
-  const owed = unitReceiptOnlyStep(
-    projectDir, target, unit, walk.context.recordPrefix, walk.context.codekbCtx,
-    walk.context.kinds?.get(unit) ?? null, unitLedgerFor(projectDir, stageSlug), stateContent, scope, paused,
-  );
-  // Paused with its files all written, a Unit owes only its records (its review
-  // or its completion): picking it up would leave no work to make the person's
-  // change in, so that counts too.
-  return paused ? owed !== null : owed?.receipt === true;
+  const matched = unitStepWorkOrPause(projectDir, scope, stateContent, walk, stageSlug, unit);
+  return matched !== null && matched.owed !== null;
 }
 
 // The walk's step is that Unit's own pause on that stage.
 function unitPausedOnStep(step: UnitJumpStep, stageSlug: string, unit: string): boolean {
   return step.kind === "paused" && step.stage === stageSlug && step.checkpoint.unit === unit;
+}
+
+function unitStepWorkOrPause(
+  projectDir: string,
+  scope: string,
+  stateContent: string,
+  walk: { step: UnitJumpStep; block: GraphStage[]; context: UnitWorkContext },
+  stageSlug: string,
+  unit: string,
+): { step: Extract<UnitJumpStep, { kind: "work" | "paused" }>; owed: UnitRecordStep | null } | null {
+  const step = walk.step;
+  const paused = unitPausedOnStep(step, stageSlug, unit);
+  if (step.kind !== "paused" && step.kind !== "work") return null;
+  if (!paused && (step.kind !== "work" || step.stage.slug !== stageSlug || step.unit !== unit)) return null;
+  const target = walk.block.find((stage) => stage.slug === stageSlug);
+  if (target === undefined) return null;
+  const owed = unitReceiptOnlyStep(
+    projectDir, target, unit, walk.context.recordPrefix, walk.context.codekbCtx,
+    walk.context.kinds?.get(unit) ?? null, unitLedgerFor(projectDir, stageSlug), stateContent, scope, paused,
+  );
+  return { step, owed };
 }
 
 function unitStepChangeReopen(
@@ -18572,7 +18758,7 @@ function unitStepChangeReopen(
   const walk = unitJumpWalk(projectDir, scope, stateContent, true);
   if (
     walk === null ||
-    !(unitPausedOnStep(walk.step, stageSlug, unit) || unitStepOwedOnlyReceipt(projectDir, scope, stateContent, walk, stageSlug, unit))
+    !(unitPausedOnStep(walk.step, stageSlug, unit) || unitStepOwesOnlyRecords(projectDir, scope, stateContent, walk, stageSlug, unit))
   ) return null;
   const reopen = unitMajorReopen(projectDir, scope, stateContent, stageSlug, {
     stage: stageSlug, jumpUnit: unit, everyUnit: false, change: true,
@@ -18657,14 +18843,9 @@ function unitMajorReopen(
         message: `${outside.said} ${outside.nameOne} with \`${entrySkillInvocation()} --stage ${targetSlug} --unit <name>\`.`,
       };
     }
-    // The Unit in flight on the target itself: that is where the walk already is.
-    // Asked for by name with no change, it carries on there; only the person's
-    // change reopens it, once nothing but its completion is left (paused there,
-    // nothing but its records). Paused with work still to do, their change picks
-    // it up, and is made on the step as live.
     const onItsStep = named === inFlight && liveStage === targetSlug;
     const reopens = onItsStep && flags.change === true &&
-      unitStepOwedOnlyReceipt(projectDir, scope, stateContent, walk, targetSlug, named);
+      unitStepOwesOnlyRecords(projectDir, scope, stateContent, walk, targetSlug, named);
     const picksUp = onItsStep && flags.change === true && !reopens && unitPausedOnStep(step, targetSlug, named);
     if (onItsStep && !reopens && !picksUp) return "route";
     // A Unit set aside on the target is picked up where it stopped.
@@ -21396,6 +21577,27 @@ function practicesDraftPostureProblem(pd: string): string | null {
   return promotableTestingPosture(extractMarkdownSection(content, "## Testing Posture")).problem;
 }
 
+function practicesDraftRuleFormProblem(pd: string): string | null {
+  const prefix = engineRelativeRecordDir(pd);
+  if (prefix === null) return null;
+  let draft: string;
+  try {
+    draft = readFileSync(join(pd, prefix, "inception", "practices-discovery", "discovered-rules.md"), "utf-8");
+  } catch {
+    return null;
+  }
+  const { mandated, forbidden } = practicesRulesToAdd(draft, "");
+  const stray = [
+    ...mandated.filter((rule) => !/^ALWAYS\s+\S/.test(rule)).map((rule) => `"${rule}" under ## Mandated`),
+    ...forbidden.filter((rule) => !/^NEVER\s+\S/.test(rule)).map((rule) => `"${rule}" under ## Forbidden`),
+  ];
+  if (stray.length === 0) return null;
+  return (
+    `these list items are not rules: ${stray.join("; ")}. Each list item under ## Mandated is one rule starting ALWAYS, ` +
+    "each under ## Forbidden one starting NEVER, and a heading with no new rule holds only a plain None. line with no list marker."
+  );
+}
+
 // The rules Approve at Practices Discovery adds to the project's rules, said
 // with the gate from the reading practices-promote writes them from; said too
 // when it adds none, so a summary that counts rules the draft does not hold as
@@ -21460,6 +21662,7 @@ function checkStageCompletionEvidence(
   const pipelineEvidence = checkPipelineLinkEvidence(node, slug, pd, approval && retry ? { approval: retry } : {});
   if (!pipelineEvidence.ok) return pipelineEvidence;
 
+  const reportAgain = retry ?? `\`${gateReportCommand(slug, "awaiting-approval")}\` again`;
   if (slug === "practices-discovery") {
     const problem = practicesDraftPostureProblem(pd);
     if (problem !== null) {
@@ -21470,12 +21673,23 @@ function checkStageCompletionEvidence(
           "Once that line is fixed, Practices Discovery comes back for approval.",
       };
     }
+    // At the approved report the person has already answered the gate:
+    // refusing then would lose their Approve.
+    const ruleProblem = approval ? null : practicesDraftRuleFormProblem(pd);
+    if (ruleProblem !== null) {
+      return {
+        ok: false,
+        step: true,
+        message:
+          `Practices Discovery is not ready for approval yet. In discovered-rules.md: ${ruleProblem} ` +
+          `Fix those items, then run ${reportAgain}.`,
+      };
+    }
   }
 
   // Construction walks its Units from Units Generation's units block, so the
   // stage's gate never opens over a block the engine cannot read: the agent
   // writes it, then runs the same report again.
-  const reportAgain = retry ?? `\`${gateReportCommand(slug, "awaiting-approval")}\` again`;
   if (slug === "units-generation") {
     const dag = resolveBoltDag(pd);
     if (dag.state === "malformed") {
@@ -23781,12 +23995,14 @@ function handleTeamBoard(
     const top = Bun.spawnSync({
       cmd: ["git", "rev-parse", "--show-toplevel"],
       cwd: requestedProjectDir,
+      env: process.env,
       stdout: "pipe",
       stderr: "pipe",
     });
     const common = Bun.spawnSync({
       cmd: ["git", "rev-parse", "--git-common-dir"],
       cwd: requestedProjectDir,
+      env: process.env,
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -24457,7 +24673,8 @@ export function main(argv: string[]): void {
   // The skill's first command is `next --entry`; it comes off before anything
   // reads the command, and their typed line is read from the record (see
   // entryLine). What an agent puts after it is the command only where no line
-  // of theirs is on record.
+  // of theirs is on record, and a shortcut's own arguments not even there: they
+  // stay on the request-file step's command.
   const entry = subcommand === "next" && subArgs[0] === "--entry";
   const entryTail = entry ? subArgs.slice(1) : [];
   if (entry) subArgs = [];
@@ -24492,7 +24709,7 @@ export function main(argv: string[]): void {
     // reads it below, so where none is the tail is the command from the start.
     const outside = chatOutsideWork(resolvedProjectDir, selected);
     engineSelections.set(resolvedProjectDir, outside ? outsideSelection(selected) : selected);
-    if (entryLine(resolvedProjectDir, selected, outside) === "step") {
+    if (entryLine(resolvedProjectDir, selected, outside) === "step" && !isShortcutTail(entryTail)) {
       subArgs = entryTail;
       entryCommand = false;
     }
@@ -24573,7 +24790,7 @@ export function main(argv: string[]): void {
   if (line === "step") {
     // The command this step names carries the hook notice where one applies.
     activeHookHealthNotice = null;
-    emit(noTypedLineStep());
+    emit(noTypedLineStep(isShortcutTail(entryTail) ? entryTail : []));
     return;
   }
   if (line !== "bare") {

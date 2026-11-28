@@ -8,9 +8,14 @@ import {
   loadStageGraph,
   parseCheckboxes,
   parseStateStageSuffixes,
+  pathContainedBy,
   printUsageAndExit,
+  readRecordedSourceCheckouts,
   readStateFile,
+  type RecordedSourceCheckout,
   recordDir,
+  recordedCheckoutAt,
+  recordedCheckoutOfListingPath,
   resolveBoltDag,
   resolveProjectDir,
   usesStageLevelPerUnitArtifacts,
@@ -938,8 +943,9 @@ function verifyTargets(
 
   if (stage === "code-generation") {
     const projectRoot = resolve(projectDir);
+    const checkouts = readRecordedSourceCheckouts(projectDir);
     for (const entry of okEntries) {
-      const problem = codeTargetProblem(projectRoot, entry.target);
+      const problem = codeTargetProblem(projectRoot, entry.target, checkouts);
       if (problem) invalidTargets.push(`${entry.id}: ${problem}`);
     }
   }
@@ -970,18 +976,47 @@ function verifyTargets(
 }
 
 // Why a Code Generation `OK` target is not one existing workspace-relative file.
-function codeTargetProblem(projectRoot: string, rawTarget: string | undefined): string | null {
+// A file in a checkout the work records counts too (recordedCheckoutFile).
+function codeTargetProblem(
+  projectRoot: string,
+  rawTarget: string | undefined,
+  checkouts: readonly RecordedSourceCheckout[],
+): string | null {
   const target = normalizePath(rawTarget?.trim() ?? "");
   if (target === "" || isAbsolute(target) || /^[A-Za-z]:\//.test(target)) {
     return "target must be a workspace-relative file path";
   }
-  const absolute = resolve(projectRoot, target);
+  const recorded = recordedCheckoutFile(projectRoot, target, checkouts);
+  const absolute = recorded ?? resolve(projectRoot, target);
   const rel = relative(projectRoot, absolute);
-  if (rel.startsWith("..") || isAbsolute(rel)) return "target escapes the project directory";
+  if (recorded === null && (rel.startsWith("..") || isAbsolute(rel))) return "target escapes the project directory";
   try {
     if (!existsSync(absolute) || !statSync(absolute).isFile()) return `target file does not exist: ${target}`;
   } catch {
     return `target file is unreadable: ${target}`;
+  }
+  return null;
+}
+
+// The file a Code Generation target names in a checkout the work records for
+// its review (`intent add-checkout`), or null. In the order a Unit's claims read
+// it (sourceClaimCheckout): the listing name `<label>@checkout/<path>` while the
+// file stays in that checkout, else the path from the project when it leaves the
+// project into one. A clone with no such record reads every target from the project.
+function recordedCheckoutFile(
+  projectRoot: string,
+  target: string,
+  checkouts: readonly RecordedSourceCheckout[],
+): string | null {
+  const named = recordedCheckoutOfListingPath(target, checkouts);
+  if (named !== null) {
+    const file = resolve(named.checkout.real, named.rest);
+    if (pathContainedBy(named.checkout.real, file)) return file;
+  }
+  const file = resolve(projectRoot, target);
+  if (checkouts.length === 0 || pathContainedBy(projectRoot, file)) return null;
+  for (let dir = dirname(file); dir !== dirname(dir); dir = dirname(dir)) {
+    if (recordedCheckoutAt(dir, checkouts) !== null) return file;
   }
   return null;
 }
@@ -1115,6 +1150,7 @@ function finalCoverage(projectDir: string): FinalCoverage {
   ];
 
   const projectRoot = resolve(projectDir);
+  const checkouts = readRecordedSourceCheckouts(projectDir);
   const add = (map: Map<string, string[]>, key: string, value: string) => map.set(key, [...(map.get(key) ?? []), value]);
   // The plan's Units and the story map's rows, for the `N/A` rows that hand an
   // ID to another Unit; with no Unit DAG there are none.
@@ -1173,7 +1209,7 @@ function finalCoverage(projectDir: string): FinalCoverage {
         add(handedOff, entry.id, `${where("code-generation")}: ${entry.target.trim()}`);
       }
       if (entry.status !== "OK") continue;
-      const problem = codeTargetProblem(projectRoot, entry.target);
+      const problem = codeTargetProblem(projectRoot, entry.target, checkouts);
       if (problem) {
         add(badTargets, entry.id, `${owner}: ${entry.id}: ${problem}`);
         add(badTargets, `${owner}: ${entry.id}`, `${owner}: ${entry.id}: ${problem}`);

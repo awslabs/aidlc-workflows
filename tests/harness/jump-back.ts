@@ -78,7 +78,7 @@ export function toBuildAndTest(policy: Policy, at: "gate" | "work"): { run: Scop
 
 export function followPrint(agent: AgentStandIn, d: Directive): { ran: string; said: string; next: Directive } {
   const message = String(d.message ?? "");
-  const command = /`(bun \.claude\/tools\/[^`]+)`/.exec(message)?.[1];
+  const command = /`(bun (?:--config=\S+ --no-env-file )?\.claude\/tools\/[^`]+)`/.exec(message)?.[1];
   expect(command, message).toBeDefined();
   const res = agent.host.bash(command!);
   expect(res.status, res.stdout + res.stderr).toBe(0);

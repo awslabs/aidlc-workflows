@@ -60,6 +60,7 @@ import {
   seededStateFile,
 } from "../harness/fixtures.ts";
 import { namedCommands, respell, SESSION as SHAPE_SESSION, SHAPES } from "../harness/code-generation-states.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import {
   AS_ITS_OWN_COMMAND,
   codeGenerationRulesArrivingReason,
@@ -86,10 +87,10 @@ const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 const GUARD = join(AIDLC_SRC, "hooks", "aidlc-plan-approval-guard.ts");
 const RELEASE_GUARD = join(REPO_ROOT, "dist-release", "claude", ".claude", "hooks", "aidlc-plan-approval-guard.ts");
 const SESSION = "01995000-7a11-7000-8000-0000000000a1";
-const SOURCE_NEXT = "bun .claude/tools/aidlc-orchestrate.ts next";
+const SOURCE_NEXT = withCopyLaunchOptions("bun .claude/tools/aidlc-orchestrate.ts next");
 const ON_ITS_OWN = "exactly as written, as a command of its own (no `cd` before it, no pipe or second command after it)";
 const ALREADY_APPROVED = "is already approved: do not ask the person to approve it again yourself";
-const SOURCE_BRIEF = "bun .claude/tools/aidlc-testing-posture.ts brief --stage-level";
+const SOURCE_BRIEF = withCopyLaunchOptions("bun .claude/tools/aidlc-testing-posture.ts brief --stage-level");
 
 interface Emitted {
   kind: string;
@@ -308,7 +309,7 @@ function namedBrief(words: string): string {
 // Runs a command a refusal named, the way the conductor would, from the
 // project's own copy of the tools.
 function runInstalled(proj: string, command: string): string {
-  expect(command).toMatch(/^bun \.claude\/tools\/[\w.-]+\.ts( [\w-]+)+$/);
+  expect(command).toMatch(/^bun (?:--config=\.claude\/tools\/aidlc-bunfig\.toml --no-env-file )?\.claude\/tools\/[\w.-]+\.ts( [\w-]+)+$/);
   const [, ...args] = command.split(" ");
   const result = spawnSync(BUN, args, {
     cwd: proj,
@@ -404,7 +405,7 @@ describe("a stale build step after approval: the refusal names the way back", ()
     expect(next(proj).kind).toBe("run-stage");
     inherit();
     const refused = said(twoTargetHandoff(proj));
-    expect(namedBrief(refused)).toBe("bun .claude/tools/aidlc-testing-posture.ts brief --unit unit-2");
+    expect(namedBrief(refused)).toBe(withCopyLaunchOptions("bun .claude/tools/aidlc-testing-posture.ts brief --unit unit-2"));
   });
 
   test.each([false, true])("plan approval off (plan edited after it was built: %p): no approval is needed, nobody approved", (edited) => {
@@ -594,7 +595,7 @@ describe("while the rules arrive in parts", () => {
       continue_token: "abcdEFGH", state_sha256: "0".repeat(64),
     } as Parameters<typeof codeGenerationRulesArrivingReason>[0]);
     expect(reason).toContain(`Run each command named here ${AS_ITS_OWN_COMMAND}.`);
-    expect(reason).toContain("`bun .claude/tools/aidlc-orchestrate.ts continue abcdEFGH`");
+    expect(reason).toContain(`\`${withCopyLaunchOptions("bun .claude/tools/aidlc-orchestrate.ts continue abcdEFGH")}\``);
   });
 });
 
@@ -618,8 +619,9 @@ describe("an isolated Code Generation run, the workflow at another stage: the re
   // The named command, run as printed (its rule parts followed as the agent follows them).
   function follow(proj: string, command: string): Emitted {
     const words = command.split(" ");
-    expect(words.slice(0, 3)).toEqual(["bun", ".claude/tools/aidlc-orchestrate.ts", "next"]);
-    return next(proj, words.slice(3));
+    const head = SOURCE_NEXT.split(" ");
+    expect(words.slice(0, head.length)).toEqual(head);
+    return next(proj, words.slice(head.length));
   }
 
   test.each(["strict", "relaxed", "off"] as const)("no plan yet, Guard Policy %s: a write and the handoff name it, and it brings back the plan step", (policy) => {
@@ -732,7 +734,7 @@ describe("a lowered fence never refuses because its audit row could not be writt
     if (mode === "relaxed") {
       expect(write.stdout).toContain(
         "Not recorded in the audit trail, which was busy or could not be written; " +
-          "`bun .claude/tools/aidlc.ts doctor` lists it",
+          `\`${withCopyLaunchOptions("bun .claude/tools/aidlc.ts doctor")}\` lists it`,
       );
     } else {
       // Off says nothing; the doctor still lists the row it could not write.

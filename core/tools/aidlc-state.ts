@@ -29,7 +29,7 @@ import {
 import { fileURLToPath } from "node:url";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import { putBackBeforePick, sayWritesDuringWork } from "./aidlc-before-pick.ts";
-import { buildStartListing, unitSourceManifests } from "./aidlc-brought-files.ts";
+import { buildStartListing, remoteBranchCopies, unitSourceManifests } from "./aidlc-brought-files.ts";
 import {
   approvalDispositionField,
   findingNeverShown,
@@ -307,12 +307,13 @@ import { personGitNameField } from "./aidlc-git-name.ts";
 import {
   mainCheckoutChangeStep, personTurnStands, proveMessage, readMessage, requestMessageStep, standingPersonTurn,
 } from "./aidlc-message-store.ts";
-import { swarmSourceChangedSince } from "./aidlc-swarm-source.ts";
+import { STAGE_START_UNAVAILABLE, stageStartUncheckedLine, swarmSourceChangedSince } from "./aidlc-swarm-source.ts";
 import { memoryDirFor, PATH_SET_SENSOR_IDS, STAGE_WIDE_SENSOR_IDS, templateEligibleArtifacts, withStageProgressRow } from "./aidlc-graph.ts";
 import { generateFireId, recordUnfinishedFire, sensorMatchesPath, unfinishedFire } from "./aidlc-sensor-record.ts";
 import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
-import { aidlcDispatcherInvocation, aidlcToolInvocation, compiledExecutable, entrySkillInvocation, syncFolderClause } from "./aidlc-runtime-paths.ts";
+import { aidlcDispatcherInvocation, aidlcToolInvocation, bunLaunchFlags, compiledExecutable, entrySkillInvocation, syncFolderClause } from "./aidlc-runtime-paths.ts";
 import { markdownBlocks, projectVisibleMarkdownLines } from "./aidlc-markdown.ts";
+import { newlineOf } from "./aidlc-distribution.ts";
 import { type EngineUnitDirective, readEngineUnitDirective, reviewHasUnseenFinding, routesUnitStep, routesWave } from "./aidlc-log.ts";
 import {
   stageLabel,
@@ -2972,6 +2973,22 @@ function handleUnit(args: string[]): void {
       // a unit set aside for another can be picked up again (#1411).
       const own = open.find((entry) => entry.unit === unit);
       const active = open.find((entry) => entry.unit !== unit && entry.state === "in-progress");
+      if (active === undefined && own?.state === "in-progress") {
+        let healed = setOrInsertField(content, "## Runtime State", "Active Unit", unit);
+        healed = setOrInsertField(healed, "## Runtime State", "Unit Stage", slug);
+        healed = setOrInsertField(healed, "## Runtime State", "Unit State", "in-progress");
+        healed = removeField(healed, "Unit Pause Reason");
+        healed = removeField(healed, "Unit Next Action");
+        if (healed !== content) writeStateFile(pd, healed);
+        console.log(JSON.stringify({
+          unit,
+          stage: slug,
+          state: "in-progress",
+          already_active: true,
+          warning: `Unit "${unit}" is already in progress on "${slug}"; nothing to resume.`,
+        }));
+        return;
+      }
       if (own?.state !== "paused" || active) {
         const shown = active ?? checkpoint;
         error(
@@ -3177,7 +3194,7 @@ function requireEngineRoutedWaveUnit(
       ? [executable, "engine", "orchestrate", ...subargs]
       : [
           process.execPath,
-          fileURLToPath(new URL("./aidlc-orchestrate.ts", import.meta.url)),
+          ...bunLaunchFlags(), fileURLToPath(new URL("./aidlc-orchestrate.ts", import.meta.url)),
           ...subargs,
         ];
     const result = spawnSync(command[0], command.slice(1), {
@@ -4085,7 +4102,7 @@ function fireGateSensors(
       ];
       const command = executable
         ? [executable, "engine", "sensor", ...args]
-        : [process.execPath, sensorTool, ...args];
+        : [process.execPath, ...bunLaunchFlags(), sensorTool, ...args];
       const startedAt = Date.now();
       const result = spawnSync(command[0], command.slice(1), {
         cwd: pd,
@@ -5287,14 +5304,15 @@ function noteVerdictNotFinished(
   }
 }
 
-// Of the changed source paths, sorted, the ones a Unit's manifest could claim
-// (`paths`): the stage's completion and `lookup source-changes` leave out the
-// same ones. `claimed` takes out the paths the caller's Unit claims already
+// Of the source paths changed since `start`, sorted, the ones a Unit's manifest
+// could claim (`paths`): the stage's completion and `lookup source-changes`
+// leave out the same ones. `claimed` takes out the paths the caller's Unit claims already
 // cover. `ignored` holds the ones left out as ignored by git, which the lookup
 // reads for the checkouts it cannot see into.
 function unitClaimableSourceChanges(
   pd: string,
   stageSlug: string,
+  start: ReadonlyMap<string, string>,
   changed: Iterable<string>,
   current: ReadonlyMap<string, string>,
   claimed: (pathKey: string) => boolean = () => false,
@@ -5319,6 +5337,11 @@ function unitClaimableSourceChanges(
     const otherWork = otherOpenWorkClaims(pd, stageSlug);
     outsideClaims = outsideClaims.filter((pathKey) => !otherWork.some((work) => sourceClaimCovers(pathKey, work.claims)));
   }
+  // Nor is a file the remote branch of its own repository holds as it is now: a teammate's commit pulled.
+  if (outsideClaims.length > 0) {
+    const remote = remoteBranchCopies(pd, start, current, outsideClaims);
+    outsideClaims = outsideClaims.filter((pathKey) => remote.get(pathKey)?.held !== true);
+  }
   const ignored = unclaimableIgnoredSourceKeys(pd, outsideClaims);
   const unclaimable = new Set(ignored);
   for (const key of registryExcludedSourceKeys(pd, outsideClaims)) unclaimable.add(key);
@@ -5336,7 +5359,8 @@ function unitClaimableSourceChanges(
 // `listed_by` names the other Units whose manifest lists a path, and
 // `not_listed` the places it leaves out because it cannot list them as a
 // manifest claims them: a checkout recorded with `intent add-checkout` (one
-// recorded after the build began reads as all created), a folder a link leads
+// recorded after the build began reads as all created, save the files its own
+// remote branch holds as they are), a folder a link leads
 // to outside the project, and a checkout of its own the project's git ignores.
 function sourceChangesSinceBuildStart(pd: string, unit: string | null): Record<string, unknown> {
   const named = unit === null ? {} : { unit };
@@ -5353,6 +5377,7 @@ function sourceChangesSinceBuildStart(pd: string, unit: string | null): Record<s
     const { paths, ignored } = unitClaimableSourceChanges(
       pd,
       "code-generation",
+      recorded,
       sourceListingChangedKeys(recorded, current.listing),
       current.listing,
     );
@@ -5579,6 +5604,7 @@ function verifyReviewerPrecondition(
     baselineUnclaimed = unitClaimableSourceChanges(
       pd,
       stage.slug,
+      baseline,
       baselineChanged,
       receipts.currentSourceListing,
       (pathKey) => claimModels.some((claims) => sourceClaimCovers(pathKey, claims)),
@@ -5838,24 +5864,24 @@ function verifyReviewerPrecondition(
   if (!attributionApplies) return;
 
   // Under relaxed or off, what changed outside the units is kept and said once;
-  // only strict holds completion on it. A start record that is not on this
-  // machine (a fresh clone) is AI-DLC's own lost bookkeeping, so strict says the
-  // same one line and carries on too; one that is here and does not match holds.
+  // only strict holds completion on it. A start record that cannot be read here
+  // carries on as stageStartUncheckedLine says.
   const acceptsChanges = guardPolicyAcceptsChanges(pd, content);
   if (
     receipts.sourceBaseline.state === "unbindable" ||
     receipts.sourceBaseline.state === "invalid" ||
     receipts.sourceBaseline.state === "missing"
   ) {
-    if (acceptsChanges || receipts.sourceBaseline.state === "missing") {
+    const notice = stageStartUncheckedLine(receipts.sourceBaseline.state, stage.name, acceptsChanges);
+    if (notice !== null) {
       acceptOutsideUnitChanges(pd, content, {
         checkpoint: "review-receipt",
         stage: stage.slug,
         unit: null,
         changed: null,
-        recorded: "(stage start unavailable)",
+        recorded: STAGE_START_UNAVAILABLE,
         current: "(not checked)",
-        notice: `I could not check ${stage.name} for files changed outside the units on this machine; carrying on.`,
+        notice,
       });
       return;
     }
@@ -6170,7 +6196,7 @@ function reviewerPreconditionError(
       receipts,
     });
   }
-  // A request that can never finish is requested again at its own pass.
+  // A request whose outputs or source changed is requested again at its own pass.
   const ordinal = pending?.state === "outstanding" ? String(pending.iteration) : "<next ordinal>";
   if (action === "present-approval-gate") {
     const message =
@@ -10012,8 +10038,8 @@ function handlePracticesPromote(args: string[]): void {
   let teamPracticesDraft: string;
   let discoveredRulesDraft: string;
   try {
-    teamPracticesDraft = readFileSync(teamPracticesPath, "utf-8");
-    discoveredRulesDraft = readFileSync(discoveredRulesPath, "utf-8");
+    teamPracticesDraft = readFileSync(teamPracticesPath, "utf-8").replaceAll("\r\n", "\n");
+    discoveredRulesDraft = readFileSync(discoveredRulesPath, "utf-8").replaceAll("\r\n", "\n");
   } catch (e) {
     fail(`could not read drafts: ${errorMessage(e)}`);
     return;
@@ -10026,9 +10052,15 @@ function handlePracticesPromote(args: string[]): void {
 
   let teamMd: string;
   let guardrailsMd: string;
+  let teamNewline: string;
+  let guardrailsNewline: string;
   try {
     teamMd = readFileSync(teamMdPath, "utf-8");
     guardrailsMd = readFileSync(guardrailsPath, "utf-8");
+    teamNewline = newlineOf(teamMd);
+    guardrailsNewline = newlineOf(guardrailsMd);
+    teamMd = teamMd.replaceAll("\r\n", "\n");
+    guardrailsMd = guardrailsMd.replaceAll("\r\n", "\n");
   } catch (e) {
     fail(`could not read targets: ${errorMessage(e)}`);
     return;
@@ -10103,13 +10135,13 @@ function handlePracticesPromote(args: string[]): void {
   // the user re-enters the gate. Identical project rules are deduplicated
   // above, so a retry cannot accumulate copies after this partial-write path.
   try {
-    writeFileSync(guardrailsPath, newGuardrailsMd, "utf-8");
+    writeFileSync(guardrailsPath, newGuardrailsMd.replaceAll("\n", guardrailsNewline), "utf-8");
   } catch (e) {
     fail(`writing project.md failed: ${errorMessage(e)}`);
     return;
   }
   try {
-    writeFileSync(teamMdPath, newTeamMd, "utf-8");
+    writeFileSync(teamMdPath, newTeamMd.replaceAll("\n", teamNewline), "utf-8");
   } catch (e) {
     fail(
       `writing team.md failed AFTER project.md was written: ${errorMessage(e)}`

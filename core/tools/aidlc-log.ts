@@ -6,6 +6,7 @@
 // (the §12a reviewer step). Orchestrator-callable; state tool doesn't own these
 // because they fire per-question / per-review, not per state transition.
 
+import { reviewedSourceMoved } from "./aidlc-swarm-source.ts";
 import { constructionPolicyRecovery } from "./aidlc-guard-operation.ts";
 import { projectDirFlag, settleClaudeTurnsFirst } from "./aidlc-claude-turn-pending.ts";
 import { CHANGE_NOTICES_NOTE, otherWorkNote, reviewRequestNote, reviewVerdictNote } from "./aidlc-directive.ts";
@@ -281,6 +282,7 @@ import {
   writeBaselineSourceSnapshot,
   writeUnitSourceSnapshot,
   writeWorkspaceSourceSnapshot,
+  readWorkspaceSourceSnapshot,
   otherOpenWorkClaims,
   PLAN_APPROVAL_ASKED_BY_ENGINE,
   planApprovalAskIsOpen,
@@ -331,7 +333,7 @@ import {
   REVIEW_TESTING_CONTRACT_FIELD,
   reviewedTestingContract,
 } from "./aidlc-testing-posture.js";
-import { aidlcDispatcherInvocation, aidlcEngineCommand, aidlcToolInvocation, compiledExecutable, entrySkillInvocation, quoteCommandArgument, swarmUnitTestCommand } from "./aidlc-runtime-paths.ts";
+import { aidlcDispatcherInvocation, aidlcEngineCommand, aidlcToolInvocation, bunLaunchFlags, compiledExecutable, entrySkillInvocation, quoteCommandArgument, swarmUnitTestCommand } from "./aidlc-runtime-paths.ts";
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { chatTookStepHere } from "./aidlc-record-core.ts";
 import { personGitNameField } from "./aidlc-git-name.ts";
@@ -3630,7 +3632,7 @@ export function readEngineUnitDirective(
       ? [executable, "engine", "orchestrate", ...subargs]
       : [
           process.execPath,
-          fileURLToPath(new URL("./aidlc-orchestrate.ts", import.meta.url)),
+          ...bunLaunchFlags(), fileURLToPath(new URL("./aidlc-orchestrate.ts", import.meta.url)),
           ...subargs,
         ];
     const result = spawnSync(command[0], command.slice(1), {
@@ -4838,10 +4840,10 @@ function handleReview(args: string[]): void {
           return;
         }
         // A pending request whose outputs or source changed before its verdict
-        // can never finish: a retry re-dispatches the old bytes, and a verdict
-        // cannot bind to them. A new request at the same pass replaces it (and a
-        // replacement interrupted in turn is replaced the same way), so an
-        // interrupted review never leaves the stage with no way to be reviewed.
+        // is not retried: a retry re-dispatches the old bytes. A new request at
+        // the same pass replaces it (and a replacement interrupted in turn is
+        // replaced the same way), so an interrupted review never leaves the
+        // stage with no way to be reviewed.
         const replaceIteration = pendingStatus?.replaceable ? pendingStatus.iteration : null;
         if (replaceIteration !== null) {
           if (iteration !== replaceIteration) {
@@ -5516,7 +5518,16 @@ function handleReview(args: string[]): void {
               "request with --retry-pending before recording the verdict.",
           );
         }
-        const sourceMoved = !sameWorkspaceSource(requestBinding.sourceFingerprint, sourceFingerprint);
+        let sourceMoved = !sameWorkspaceSource(requestBinding.sourceFingerprint, sourceFingerprint);
+        // Under strict, what moved is read against the listing the request kept
+        // (reviewedSourceMoved): a file Git ignores and HEAD does not track, such
+        // as a test run's output, is not a change to the reviewed source.
+        let requestedListing: string | undefined;
+        if (sourceMoved && !changesAccepted && sourceState !== null) {
+          const requested = readWorkspaceSourceSnapshot(pd, flags.stage as string, requestBinding.sourceFingerprint as string);
+          ({ moved: sourceMoved, listing: requestedListing } =
+            reviewedSourceMoved(pd, flags.stage as string, requested, sourceState, intent, space));
+        }
         if (sourceMoved && !changesAccepted) {
           refuseReview(
             `Refusing REVIEW_COMPLETED for "${flags.stage}": workspace source changed after ` +
@@ -5530,13 +5541,14 @@ function handleReview(args: string[]): void {
         fields["Request Source Fingerprint"] = sourceFingerprint;
         fields["Source Fingerprint"] = sourceFingerprint;
         // The listing the reviewer saw, so the completion can tell an AI-DLC
-        // update after the review from a change to source. Only when the source
-        // did not move during the review: a move kept under relaxed or off is
-        // still said at the gate. Without it the completion compares
-        // fingerprints, so a failed write never fails the verdict.
+        // update after the review from a change to source; under strict, the
+        // request's when only files Git ignores moved. None when the source
+        // moved otherwise: a move kept under relaxed or off is still said at
+        // the gate. Without it the completion compares fingerprints, so a
+        // failed write never fails the verdict.
         if (sourceState !== null && !sourceMoved) {
           try {
-            fields["Source Listing"] = writeBaselineSourceSnapshot(pd, flags.stage as string, sourceState.listing, intent, space);
+            fields["Source Listing"] = requestedListing ?? writeBaselineSourceSnapshot(pd, flags.stage as string, sourceState.listing, intent, space);
           } catch {
             // Left out: fingerprints decide.
           }

@@ -35,6 +35,7 @@ This chapter covers common issues and their solutions, organized by symptom.
 | Kiro CLI (or a Kiro ACP client): every approval says no human reply has arrived, and restarting does not help | The engine does not match the distribution: Kiro CLI (V2) needs Kiro CLI's v2 engine (`kiro-cli --v2`), or v3 once Kiro has upgraded its agent files; Kiro needs v3 (`kiro-cli --v3`) (see [Kiro CLI hooks not running](#kiro-cli-hooks-not-running)) |
 | AI-DLC says its knowledge base cannot read files in your knowledge documents folder, or `aidlc doctor` warns about them | Those files were never added to the knowledge base, or have no text it can read. Do what the line says for each one (add it, or save a `.md`, `.txt` or `.csv` copy beside it), then run `/aidlc knowledge sync` (see [Document Knowledge](08-knowledge.md#document-knowledge-documentkb)) |
 | `aidlc doctor` says this project is in a synced folder (Google Drive, OneDrive, Dropbox, Box or iCloud Drive), or a review or plan approval is refused for a file nobody edited | The sync client can rewrite files AI-DLC checks, and a changed file stops an approval until it is reviewed again. Move the project out of the synced folder, or pause sync for it, then take the step the refusal names |
+| AI-DLC refuses a file that `is multiply linked (a hardlink) and is not trusted` | Google Drive's Folder backup links each file it is uploading into a hidden `.tmp.driveupload` folder until the upload ends, and AI-DLC reads a file whose only other links are there. Any other second link is refused: the refusal names the links it found in an upload folder and how many it cannot account for. Exclude the folder from the backup or sync client that made the link, then copy the file, delete the original, give the copy the original's name, and re-run |
 | Context compacted mid-session | Run `/aidlc` to resume from checkpoint |
 | Audit log too large | Leave it where it is: a long project's audit file is large by design, and the engine reads it to know what you approved and finished (see [Audit Log Growing Too Large](#audit-log-growing-too-large)) |
 | Hooks appear to hang | Diagnose lock ownership with `/aidlc --doctor`; see [Lock Files Left Behind](#lock-files-left-behind) |
@@ -353,7 +354,7 @@ If Cursor keeps asking you to approve the same plan, or says your choice did not
 
 ### Reviewer tool calls refused ("This review cannot open ...")
 
-During a per-unit Construction review, the reviewer-scope hook refuses the dispatched reviewer's tool calls that reach into sibling units' `construction/` paths (the read-scope bound in stage-protocol-reviewer-unit.md); the refusal names the current unit and directs the reviewer to the supplied files and that unit's own path, and each refusal records a `REVIEWER_SCOPE_BLOCKED` audit row. If your own source tree contains a `construction/` directory unrelated to AI-DLC units (so legitimate reviewer reads are being refused), `/aidlc config set guard.reviewer-scope off` lowers just the reviewer read-scope check for the piece of work you are on (recorded as a `GUARD_DISABLED` audit row, back on for the next one), and `AIDLC_DISABLE_REVIEWER_SCOPE_HOOK=1` disables that read-scope enforcement machine-wide; the prose bound still governs under either. Neither setting permits a claimed team checkout to write another Unit's `construction/` subtree. A general request in chat does not lower the read-scope check: type the switch above and the agent runs the setter for it. Changing scope alone never lowers the running policy. A reviewer being refused with NO review in flight means a stale dispatch record - check `/aidlc --doctor`'s hook-drop counters (`reviewer-scope.drops`) and delete `<record>/.aidlc-engine/reviewer-dispatch.json` if present (records older than 6 hours are ignored and cleaned automatically).
+During a per-unit Construction review, the reviewer-scope hook refuses the dispatched reviewer's tool calls that reach into sibling units' `construction/` paths (the read-scope bound in stage-protocol-reviewer-unit.md); the refusal names the current unit and directs the reviewer to the supplied files and that unit's own path, and each refusal records a `REVIEWER_SCOPE_BLOCKED` audit row. A search or a listing refused for starting at a folder that holds every unit's folder, such as the project folder, says so and names the folders the reviewer can start in instead. If your own source tree contains a `construction/` directory unrelated to AI-DLC units (so legitimate reviewer reads are being refused), `/aidlc config set guard.reviewer-scope off` lowers just the reviewer read-scope check for the piece of work you are on (recorded as a `GUARD_DISABLED` audit row, back on for the next one), and `AIDLC_DISABLE_REVIEWER_SCOPE_HOOK=1` disables that read-scope enforcement machine-wide; the prose bound still governs under either. Neither setting permits a claimed team checkout to write another Unit's `construction/` subtree. A general request in chat does not lower the read-scope check: type the switch above and the agent runs the setter for it. Changing scope alone never lowers the running policy. A reviewer being refused with NO review in flight means a stale dispatch record - check `/aidlc --doctor`'s hook-drop counters (`reviewer-scope.drops`) and delete `<record>/.aidlc-engine/reviewer-dispatch.json` if present (records older than 6 hours are ignored and cleaned automatically).
 
 Ordinary filters such as `grep latency construction/U03-scoring/nfr.md | grep endpoint` are allowed because the second `grep` searches the piped text. A pipe does not exempt commands that still traverse files: recursive `grep`, `rg --files`, and `rg -f -` still need an in-scope search root or, for `rg`, a glob constrained to the current unit. Pattern files supplied with `-f` must also be in scope. When a pathless command falls back to `.` and is refused, the message identifies that root as implicit.
 
@@ -394,10 +395,10 @@ registrations produces a warning. Your own additional hooks do not trigger
 drift warnings. A status line your team set in that file is kept. AI-DLC's own
 status line is not shipped there: each person turns it on for themselves with
 `/aidlc --statusline on`.
-For a manual copy,
-replace the complete harness root from the same versioned
-`runtime/<harness>/` archive (a copy never replaces your `.gitignore` or
-`AGENTS.md`); do not patch one hook command in isolation. The manual archive is Bun-shaped and
+For a manual copy, the copy-channel command above is the repair, not a second
+copy of the `runtime/<harness>/` archive over the project, which replaces the
+setup answers and plugin choices it recorded; do not patch one hook command in
+isolation. The manual archive is Bun-shaped and
 does not require the native `aidlc` executable.
 
 ### Hooks disabled globally (`disableAllHooks`)
@@ -657,7 +658,11 @@ with no further review; remove the line to put the path back. A path the
 project's `.gitignore` already ignores is never counted, and neither is a file
 another open piece of work in this folder lists in its own Units' source
 manifests (a second chat building its own work here), or anything under a folder
-it lists: that is the other work's change, and its own checks cover it.
+it lists: that is the other work's change, and its own checks cover it. Nor is a
+file exactly as the remote branch your branch tracks holds it once you have
+pulled it (a teammate's commit, or a change already pushed there, the build's
+own included): it is nobody's change in this work. A change only on your
+machine is still counted.
 Archiving a piece of work you will not finish (`/aidlc intent archive <name>`)
 ends its claims. Under Guard Policy relaxed or off the change is kept and said
 once instead.

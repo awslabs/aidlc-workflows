@@ -7,15 +7,19 @@
 // a sibling repo whose folder has a space is quoted in the undo a gate gives; a
 // doctor export folder with a space is quoted in the command the agent runs;
 // and a plugin's "rules are not in the rule files yet" line names the plugin's
-// folder, quoted, on every host whose tool keeps no plugin list.
+// folder, quoted, on every host whose tool keeps no plugin list. A copy
+// install's launch with Bun's `--config=<file>` and `--no-env-file` reaches Bun
+// as those two words from PowerShell, cmd.exe and Git Bash, so the project's own
+// bunfig.toml and .env stay out of the process the launch starts.
 import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { cpSync, mkdtempSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { broughtFilesLine } from "../../dist/claude/.claude/tools/aidlc-brought-files.ts";
 import { quoteCommandArgument } from "../../dist/claude/.claude/tools/aidlc-runtime-paths.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
+import { gitBashPath, gitBashSkipReason } from "../harness/git-bash.ts";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -116,4 +120,105 @@ describe("a plugin's sync line names its folder on every host that keeps no plug
       else expect(line).toEndWith(` --plugin-root ${quoteCommandArgument(root)}`);
     });
   }
+});
+
+describe("a copy launch's two Bun options reach Bun whole from the shell that runs it", () => {
+  // A scratch project in a folder with a space: the launch's config file (no
+  // settings), a stand-in for the dispatcher that prints what Bun handed it, a
+  // bunfig.toml at the root and in a subfolder whose preload writes a marker
+  // file, and a .env that sets one name.
+  const project = join(mkdtempSync(join(tmpdir(), "aidlc-copy-launch-")), "my project");
+  const marker = join(project, "preload-ran.txt");
+  const preload = `require("fs").appendFileSync(${JSON.stringify(marker)}, "ran\\n");\n`;
+  const sub = join(project, "src", "app");
+  for (const dir of [".codex", ".claude"]) {
+    mkdirSync(join(project, dir, "tools"), { recursive: true });
+    writeFileSync(join(project, dir, "tools", "aidlc-bunfig.toml"), "# no settings\n");
+    writeFileSync(
+      join(project, dir, "tools", "aidlc.ts"),
+      "console.log(JSON.stringify({ execArgv: process.execArgv, args: process.argv.slice(2), dotenv: process.env.COPY_LAUNCH_DOTENV ?? null }));\n",
+    );
+  }
+  mkdirSync(sub, { recursive: true });
+  for (const dir of [project, sub]) {
+    writeFileSync(join(dir, "preload.ts"), preload);
+    writeFileSync(join(dir, "bunfig.toml"), 'preload = ["./preload.ts"]\n');
+    writeFileSync(join(dir, ".env"), "COPY_LAUNCH_DOTENV=from-the-project\n");
+  }
+
+  // The shells find `bun` on PATH, as a hook does: the Bun running this file first.
+  const env: NodeJS.ProcessEnv = { ...process.env, CLAUDE_PROJECT_DIR: project };
+  delete env.COPY_LAUNCH_DOTENV;
+  const pathKey = Object.keys(env).find((key) => key.toUpperCase() === "PATH") ?? "PATH";
+  env[pathKey] = [dirname(BUN), env[pathKey]].filter(Boolean).join(delimiter);
+
+  const preloadRuns = (): number => existsSync(marker) ? readFileSync(marker, "utf-8").split("\n").length - 1 : 0;
+  function launched(res: ReturnType<typeof spawnSync>): { execArgv: string[]; args: string[]; dotenv: string | null } {
+    expect(res.status, `${res.stdout}${res.stderr}`).toBe(0);
+    return JSON.parse(String(res.stdout).trim().split(/\r?\n/).at(-1) ?? "");
+  }
+  const options = ["--config=.codex/tools/aidlc-bunfig.toml", "--no-env-file"];
+  const relative = `bun ${options.join(" ")} .codex/tools/aidlc.ts engine adapter codex session-start`;
+
+  test.skipIf(process.platform !== "win32")("Windows PowerShell hands Bun each option as one word", () => {
+    const before = preloadRuns();
+    const res = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", relative], {
+      cwd: project,
+      encoding: "utf-8",
+      env,
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    const seen = launched(res);
+    expect(seen.execArgv).toEqual(options);
+    expect(seen.args).toEqual(["engine", "adapter", "codex", "session-start"]);
+    expect(seen.dotenv).toBeNull();
+    expect(preloadRuns()).toBe(before);
+  });
+
+  test.skipIf(process.platform !== "win32")("cmd.exe hands Bun each option as one word", () => {
+    const before = preloadRuns();
+    const res = spawnSync(relative, {
+      cwd: project,
+      encoding: "utf-8",
+      env,
+      shell: process.env.ComSpec ?? "cmd.exe",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    const seen = launched(res);
+    expect(seen.execArgv).toEqual(options);
+    expect(seen.args).toEqual(["engine", "adapter", "codex", "session-start"]);
+    expect(seen.dotenv).toBeNull();
+    expect(preloadRuns()).toBe(before);
+  });
+
+  const skipBash = process.platform === "win32" ? gitBashSkipReason() : null;
+  test.skipIf(skipBash !== null)("the hook bash runs, rooted at a project folder with a space, from a subfolder with its own bunfig.toml", () => {
+    // Claude Code's hook spelling: the config path in the same quotes as the script.
+    const before = preloadRuns();
+    const hook = 'bun "--config=$CLAUDE_PROJECT_DIR/.claude/tools/aidlc-bunfig.toml" --no-env-file ' +
+      '"$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts" engine hook session-start';
+    const res = spawnSync(process.platform === "win32" ? gitBashPath() : "bash", ["-c", hook], {
+      cwd: sub,
+      encoding: "utf-8",
+      env,
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    const seen = launched(res);
+    expect(seen.execArgv).toEqual([`--config=${project}/.claude/tools/aidlc-bunfig.toml`, "--no-env-file"]);
+    expect(seen.args).toEqual(["engine", "hook", "session-start"]);
+    expect(seen.dotenv).toBeNull();
+    expect(preloadRuns()).toBe(before);
+  });
+
+  test("the same launch without the options runs the project's preload and reads its .env", () => {
+    const before = preloadRuns();
+    const res = spawnSync(BUN, [join(project, ".claude", "tools", "aidlc.ts")], {
+      cwd: sub,
+      encoding: "utf-8",
+      env,
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(launched(res).dotenv).toBe("from-the-project");
+    expect(preloadRuns()).toBe(before + 1);
+  });
 });

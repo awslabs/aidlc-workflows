@@ -66,6 +66,8 @@ import {
 } from "./aidlc-distribution.ts";
 import {
   aidlcInvocation,
+  bunLaunchFor,
+  copyLaunchPrefix,
   discoverProjectHarnesses,
   inHostShell,
   kiroTreeLayout,
@@ -85,6 +87,7 @@ import { cmdScriptLaunch, isCmdScript, pathEntries, resolveExecutableOnPath } fr
 import { personaTwinRels } from "./aidlc-plugin.ts";
 import { readBoundedRegularFile } from "./aidlc-inline-context.ts";
 import { KIRO_IDE_STEERING } from "./aidlc-includes.ts";
+import { sameDirectory } from "./aidlc-lib.ts";
 import {
   HARNESS_PRODUCT_NAMES,
   isModelHarness,
@@ -221,7 +224,17 @@ export type ConfigDiagnosticOverrides = {
 function invocationForHarness(harnessDir: string): string {
   return aidlcInvocation() === "aidlc"
     ? "aidlc"
-    : `bun ${harnessDir}/tools/aidlc.ts`;
+    : `${bunLaunchFor(harnessDir)} ${harnessDir}/tools/aidlc.ts`;
+}
+
+// The fixes doctor and config print are written for the project folder ("run
+// `aidlc config`", "move the file", git commands), so a run from another folder
+// names that folder once, above them. It states the fact only: a fix's own
+// words say where it runs (one runs git outside the project).
+export function otherFolderLine(projectDir: string, command: "doctor" | "config"): string | null {
+  if (sameDirectory(projectDir, process.cwd())) return null;
+  const folder = resolve(projectDir).replace(/\p{Cc}/gu, "?");
+  return `Project folder for this report: ${folder} (not the folder you ran ${command} from).`;
 }
 
 // The one command that rebuilds a missing workspace shell: an explicit
@@ -2331,15 +2344,19 @@ export function completionInstruction(
   harnessDir: string,
   shell: Exclude<CompletionShell, "none">,
 ): string {
-  const usesBun = runtimeCommandFiles(projectDir, harnessDir).some((file) => {
-    if (file.replaceAll("\\", "/").includes("/skills/")) return false;
+  // The tree's files name its launch, with a copy launch's two Bun options or (an older tree) without.
+  const launches = runtimeCommandFiles(projectDir, harnessDir).flatMap((file) => {
+    if (file.replaceAll("\\", "/").includes("/skills/")) return [];
     try {
-      return readFileSync(file, "utf-8").includes(`bun ${harnessDir}/tools/aidlc.ts`);
+      const text = readFileSync(file, "utf-8");
+      const flagged = `${copyLaunchPrefix(harnessDir)} ${harnessDir}/tools/aidlc.ts`;
+      if (text.includes(flagged)) return [flagged];
+      return text.includes(`bun ${harnessDir}/tools/aidlc.ts`) ? [`bun ${harnessDir}/tools/aidlc.ts`] : [];
     } catch {
-      return false;
+      return [];
     }
   });
-  const invoke = usesBun ? `bun ${harnessDir}/tools/aidlc.ts` : "aidlc";
+  const invoke = launches[0] ?? "aidlc";
   if (shell === "fish") {
     return `${invoke} system completions fish | source`;
   }

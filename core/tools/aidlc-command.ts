@@ -7,7 +7,7 @@ import {
   fixLabel,
   heading,
 } from "./aidlc-color.ts";
-import { aidlcInvocation } from "./aidlc-runtime-paths.ts";
+import { aidlcInvocation, bunLaunchFor } from "./aidlc-runtime-paths.ts";
 
 export const ROUTE_NAMESPACE_DECLARATIONS = {
   public: { trustedPrefix: false },
@@ -807,7 +807,7 @@ export function readTerminalLine(
 // was projected for (native `aidlc`, or the copy channel's bun dispatcher).
 export function projectInvocationTokens(text: string, harnessDir: string): string {
   const invoke = aidlcInvocation();
-  const toolPrefix = invoke === "aidlc" ? `${TRUSTED_COMMAND_PREFIX} ` : `bun ${harnessDir}/tools/`;
+  const toolPrefix = invoke === "aidlc" ? `${TRUSTED_COMMAND_PREFIX} ` : `${bunLaunchFor(harnessDir)} ${harnessDir}/tools/`;
   // Token names are assembled, not written whole: the packager would otherwise
   // project the literals in this file's own source.
   const token = (name: string): string => `{{${name}}}`;

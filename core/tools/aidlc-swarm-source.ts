@@ -8,7 +8,8 @@
 // no commit holds them and no Unit's checkout gets them.
 // The rule applies when listings are compared, never to the walk, so no
 // fingerprint, receipt or recorded listing changes. A build in the project
-// itself keeps its own compare: there an ignored file can be source.
+// itself keeps its own compare, `reviewedSourceMoved`, which finalize and the
+// landing also read for a review: there an ignored file can be source.
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
@@ -17,6 +18,7 @@ import {
   type AuditShardEvent,
   type WorkspaceSourceListing,
   type WorkspaceSourceState,
+  aidlcOwnedSourceKey,
   currentSwarmSourceMergeChain,
   currentSwarmSourceOpeningFingerprint,
   isLinkTargetListingKey,
@@ -26,10 +28,12 @@ import {
   recordedSourceListingUnderCurrentBoundary,
   repoDir,
   sourceChangedOutsideAidlc,
+  sourceKeysChangedOutsideAidlcSince,
   sourceListingChangedKeys,
   sourcePathIsRegistered,
   splitSourcePathKey,
   withRepoBaselineAdditions,
+  writeBaselineSourceSnapshot,
 } from "./aidlc-lib.ts";
 
 // Deeper than this, a submodule's paths are asked of nobody and stay source.
@@ -199,6 +203,29 @@ export function swarmSourceChangedSince(
   return swarmSourceChanged(projectDir, before, current.listing);
 }
 
+// The Recorded value of the CHANGE_ACCEPTED row written when the work carries on
+// without the record of what the stage started from.
+export const STAGE_START_UNAVAILABLE = "(stage start unavailable)";
+
+// The record of what a stage started from, when it cannot be read on this
+// machine: a copy that is not here (a fresh clone, a teammate's machine) is
+// AI-DLC's own lost bookkeeping, so the work carries on under every Guard
+// Policy; one that is here and does not match, or that could not be taken,
+// carries on unless strict holds it. Stage completion and the swarm's first
+// landing both decide here (a record of an earlier release, `legacy`, reaches
+// neither: completion skips its check, and a converged Unit is modern
+// evidence). The line the person reads when it carries on; null when strict
+// holds it.
+export function stageStartUncheckedLine(
+  state: "legacy" | "unbindable" | "invalid" | "missing",
+  stageName: string,
+  acceptsChanges: boolean,
+): string | null {
+  return acceptsChanges || state === "missing"
+    ? `I could not check ${stageName} for files changed outside the units on this machine; carrying on.`
+    : null;
+}
+
 // Whether the person's source is as the build last verified it (the last
 // landing's listing, else the stage's opening listing): the comparison a landing
 // makes. False when no listing reads back or the evidence cannot be read; the
@@ -221,4 +248,32 @@ export function swarmSourceUnchangedInStage(
   } catch {
     return false;
   }
+}
+
+/**
+ * Whether source moved since `reviewed` (the listing a review's request kept)
+ * in more than files Git ignores and HEAD does not track, such as a test run's
+ * output: the gate's own rule (sourceKeysChangedOutsideAidlcSince), with
+ * AI-DLC's own files still counted. A listing that is missing or cannot be kept
+ * counts as moved. `listing` names the kept copy, which a verdict records.
+ */
+export function reviewedSourceMoved(
+  dir: string,
+  stage: string,
+  reviewed: WorkspaceSourceListing | null,
+  current: WorkspaceSourceState,
+  intent?: string,
+  space?: string,
+): { moved: boolean; listing?: string } {
+  if (reviewed === null) return { moved: true };
+  let listing: string;
+  try {
+    listing = writeBaselineSourceSnapshot(dir, stage, reviewed, intent, space);
+  } catch {
+    return { moved: true };
+  }
+  const counted = sourceKeysChangedOutsideAidlcSince(dir, stage, listing, current, [], null);
+  const owned = aidlcOwnedSourceKey(dir);
+  const moved = counted === null || counted.size > 0 || [...sourceListingChangedKeys(reviewed, current.listing)].some(owned);
+  return { moved, listing };
 }

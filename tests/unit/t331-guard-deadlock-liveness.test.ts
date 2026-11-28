@@ -22,6 +22,7 @@ import {
   NATIVE_STARTUP_TIMEOUT_MS,
   remainingOperationTimeoutMs,
 } from "../harness/test-budget.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
@@ -546,7 +547,7 @@ describe("bounded guard-remedy liveness", () => {
       }
 
       expect(command, harness.name).toBe(
-        `bun ${harness.engineDir}/tools/aidlc-orchestrate.ts next --stage requirements-analysis`,
+        withCopyLaunchOptions(`bun ${harness.engineDir}/tools/aidlc-orchestrate.ts next --stage requirements-analysis`),
       );
       expect(command).not.toContain("<");
       const run = runExactCommand(project, command!, {
@@ -639,7 +640,7 @@ describe("bounded guard-remedy liveness", () => {
       if (priorHarness === undefined) delete process.env.AIDLC_HARNESS_DIR;
       else process.env.AIDLC_HARNESS_DIR = priorHarness;
     }
-    expect(command).toContain("bun .claude/tools/aidlc-bolt.ts abort");
+    expect(command).toContain(withCopyLaunchOptions("bun .claude/tools/aidlc-bolt.ts abort"));
     expect(command).not.toContain("<");
 
     const aborted = runExactCommand(project, command!);
@@ -750,8 +751,8 @@ describe("bounded guard-remedy liveness", () => {
     });
     expect(finish?.operation).toBeUndefined();
     expect(finish?.action).toContain(
-      "bun .claude/tools/aidlc-orchestrate.ts report --stage functional-design " +
-        "--result revised --project-dir /workspace",
+      withCopyLaunchOptions("bun .claude/tools/aidlc-orchestrate.ts report --stage functional-design " +
+        "--result revised --project-dir /workspace"),
     );
 
     const restart = refusal.remedies.find((remedy) => remedy.op === "redo-jump");

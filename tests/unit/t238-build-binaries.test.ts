@@ -16,6 +16,7 @@ import {
   NATIVE_STARTUP_TIMEOUT_MS,
   remainingOperationTimeoutMs,
 } from "../harness/test-budget.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
@@ -381,6 +382,8 @@ describe("t238 build-binaries release builder", () => {
       const registry = join(pluginFixture, "installed_plugins.json");
       const settings = join(pluginFixture, "settings.json");
       writeFileSync(join(pluginFixture, "package.json"), "{}\n");
+      // Plugin sync runs only in an AI-DLC project; a spaces folder is the least that makes one.
+      mkdirSync(join(pluginFixture, "aidlc", "spaces"), { recursive: true });
       writeFileSync(registry, '{"version":2,"plugins":{}}\n');
       writeFileSync(settings, '{"enabledPlugins":{}}\n');
       const pluginSync = spawnSync(native.artifact, ["engine", "plugin", "sync"], {
@@ -668,7 +671,7 @@ describe("t238 build-binaries release builder", () => {
       expect(JSON.parse(copySettingsText).statusLine).toBeUndefined();
       expect(JSON.parse(nativeSettingsText).statusLine).toBeUndefined();
       expect(shippedStatusLine(copyRoot).command).toBe(
-        'bun "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts" engine statusline',
+        withCopyLaunchOptions('bun "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts" engine statusline'),
       );
       expect(copySettingsText).not.toContain('"command": "aidlc engine');
       expect(shippedStatusLine(nativeRoot).command).toBe("aidlc engine statusline");

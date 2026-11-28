@@ -115,3 +115,22 @@ describe("replaceSection", () => {
     );
   });
 });
+
+describe("a heading on a Windows (CRLF) line", () => {
+  test("extract starts the section after the whole line break", () => {
+    const c = "# Title\r\n\r\n## Branching\r\nWe trunk-base.\r\n\r\n## Testing\r\nTDD.\r\n";
+    expect(extractMarkdownSection(c, "## Branching")).toBe("We trunk-base.\r\n\r\n");
+    expect(extractMarkdownSection(c, "## Testing")).toBe("TDD.\r\n");
+  });
+
+  test("replace keeps the heading on its own line", () => {
+    const c = "## Branching\r\nOld.\r\n\r\n## Testing\r\nTDD.\r\n";
+    expect(replaceSection(c, "## Branching", "New.\r\n\r\n")).toBe("## Branching\r\nNew.\r\n\r\n## Testing\r\nTDD.\r\n");
+  });
+
+  test("a heading that ends the text with no line break gets the content right after it", () => {
+    expect(extractMarkdownSection("## Testing", "## Testing")).toBe("");
+    expect(replaceSection("## Testing", "## Testing", "\nTDD.\n")).toBe("## Testing\nTDD.\n");
+    expect(appendUnderHeading("## Mandated\r", "## Mandated", "\n- a")).toBe("## Mandated\r\n- a");
+  });
+});

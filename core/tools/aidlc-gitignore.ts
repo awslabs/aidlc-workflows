@@ -28,6 +28,7 @@ export function committedRecordIgnoreConflicts(projectDir: string): string[] {
         // -z needs --stdin; the probe paths go in NUL-terminated.
         "git", "-C", projectDir, "check-ignore", "-v", "-z", "--stdin", "--no-index",
       ],
+      env: process.env,
       stdin: Buffer.from(PROBE_PATHS.map((path) => `${path}\0`).join("")),
       stdout: "pipe",
       stderr: "pipe",
@@ -62,6 +63,7 @@ export function committedRecordIgnoreConflicts(projectDir: string): string[] {
   let gitRoot = projectRoot;
   const root = Bun.spawnSync({
     cmd: ["git", "-C", projectDir, "rev-parse", "--show-toplevel"],
+    env: process.env,
     stdout: "pipe",
     stderr: "pipe",
   });

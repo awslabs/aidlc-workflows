@@ -111,7 +111,7 @@ with a fresh timestamp.
 | # | Check |
 |---|-------|
 | 1 | At the approval gate, call `aidlc engine orchestrate report --stage <slug> --result awaiting-approval`. When `ceremony.sensors` is `on` and no review was asked for in this attempt, the report first runs the advisory gate checks once and, when one reports findings, returns the agent's step with the same report instead of opening the gate. Then, gate-bound sensors run once per existing deliverable (`upstream-coverage` and `claim-sources` once per output folder; at Reverse Engineering, `required-sections` and `upstream-coverage` once for the stage over every repository's files) before the transaction when a person will answer the gate (a gate the engine approves itself under Construction autonomy runs only its blocking sensors). A blocking binding requires a verified pass. To override, log and present the separate `Fix findings` / `Override blocking sensors` decision, wait for the exact human-backed answer, then retry with `--override-blocking-sensors --user-input "Override blocking sensors"`; a bare flag and autonomous mode are refused. The engine then flips state from `[-]` to `[?]` AwaitingApproval and emits `STAGE_AWAITING_APPROVAL` atomically, so status shows the held gate while the prompt is open. (`STAGE_STARTED` / the `[-]` transition was emitted when the stage became active.) |
-| 2 | For non-gate questions, log options BEFORE calling `AskUserQuestion` via `aidlc engine log decision` (not by hand-writing to the `audit/` shards), then log the exact response via `aidlc engine log answer`. A question logged after the person already replied takes that reply (any reply of theirs in this chat that no decision has used yet); `--message <id>` names one sent while another engine question was open. The person is never asked again. |
+| 2 | A question the person answers by editing the stage's questions file is recorded by that file, unless its own step logs it. For any other structured non-gate question (the mode question, a learnings question, a blocking-sensor override, a re-use choice), log options BEFORE calling `AskUserQuestion` via `aidlc engine log decision` (not by hand-writing to the `audit/` shards), then log the exact response via `aidlc engine log answer`. A question logged after the person already replied takes that reply (any reply of theirs in this chat that no decision has used yet); `--message <id>` names one sent while another engine question was open. The person is never asked again. |
 | 3 | After an approval-gate response, call `aidlc engine orchestrate report --stage <slug> --result approved --user-input "Approve"` for approval or `aidlc engine orchestrate report --stage <slug> --result rejected --user-input "Request Changes"` for request-changes, passing the choice they made by its label (the engine keeps their own words as the feedback; add `--reason '<what they asked to change>'` only to say more). Never call the log tool's `decision` or `answer` verb for the gate. After revision work, report `--result revised` before re-presenting it. |
 | 4 | Record the choice the person made, read from their reply; the human-turn hook keeps their exact words with it. Never choose for them or paraphrase their words in an answer or note; for automated stages use `N/A -- [reason]` |
 | 5 | One audit entry per interaction -- the log/state tools enforce single-event emission; never merge multiple events into one call |
@@ -547,7 +547,9 @@ short follow-up.
 
 - Open-ended conversation; extract decisions as they emerge
 - End signal: "When ready to proceed, say **done** and I'll summarize."
-- Write extracted answers to file with value, timestamp, and `**Mode:** chat`
+- Write extracted answers to file with value, timestamp, and `**Mode:** chat`,
+  then record them in one `log answer`, once for the stage and with no
+  `log decision`, so the audit trail keeps the person's replies
 - Only when `ceremony.summary_confirmation` is `on`, present the decision summary, then persist and use the same **Looks correct / Request changes** structured confirmation before proceeding
 - Best for: exploratory stages, brainstorming, questions needing discussion
 
@@ -715,8 +717,8 @@ AIDLC's commands and hooks write it. Never create, edit, rename, or delete audit
 records yourself. The existing write guard is a guardrail, not a security
 boundary, and reads stay open by any means.
 
-- Non-gate questions and responses: `aidlc engine log decision` BEFORE showing
-  the options, `aidlc engine log answer` AFTER the response.
+- Non-gate questions and responses: as Critical Compliance Checklist row 2
+  says.
 - Approval gates: report-owned (`report --result awaiting-approval`, then
   `approved` or `rejected` with the exact user input).
 - Reviews and pipeline-link receipts: `aidlc engine log review` and
@@ -757,9 +759,9 @@ through the log and report tools (most commonly missed step).
 the exact user input. The report-owned lifecycle events are the gate's complete
 audit record; do not call `aidlc-log.ts decision` or `aidlc-log.ts answer`.
 
-**At each non-gate question interaction:** BEFORE presenting -- `aidlc-log.ts
-decision` with the options shown; AFTER receiving answers -- `aidlc-log.ts
-answer` with the exact selections.
+**At each logged non-gate question (Critical Compliance Checklist row 2):**
+BEFORE presenting -- `aidlc-log.ts decision` with the options shown; AFTER
+receiving answers -- `aidlc-log.ts answer` with the exact selections.
 
 ---
 
