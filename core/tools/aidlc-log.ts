@@ -620,6 +620,7 @@ const DECISION_OPTIONS: ReadonlySet<string> = new Set([
   "--decision",
   "--decision-file",
   "--rationale",
+  "--recommended-options",
   "--exact-option-labels",
   "--question-kind",
 ]);
@@ -1280,6 +1281,18 @@ function handleDecision(args: string[]): void {
   if (flags.checkpoint !== undefined && !DECISION_CHECKPOINTS.includes(flags.checkpoint)) {
     error(unknownCheckpointMessage(flags.checkpoint, DECISION_CHECKPOINTS));
   }
+  const positions = flags["recommended-options"];
+  let explicitRecommendations: string[] | undefined;
+  if (positions !== undefined) {
+    if (flags.checkpoint !== undefined) error("--recommended-options is for ordinary stage questions.");
+    const choices = optionsList(flags.options);
+    const indexes = positions.split(",").map(Number);
+    if (!/^[1-9]\d*(?:,[1-9]\d*)*$/.test(positions) ||
+        indexes.some((index) => !choices[index - 1])) {
+      error("--recommended-options needs comma-separated positions of offered choices, starting at 1.");
+    }
+    explicitRecommendations = choices.filter((_label, index) => indexes.includes(index + 1));
+  }
   if (stageWaitsAtItsGate(flags, "decision")) return;
   refusePlainSummaryConfirmation(flags, "decision");
   const pd = resolveActiveProjectDir(projectDir, flags.stage);
@@ -1351,7 +1364,7 @@ function handleDecision(args: string[]): void {
           )
         ? "[protected exact choices]"
         : flags.options;
-    const recommended = recommendedChoices(optionsList(fields.Options));
+    const recommended = explicitRecommendations ?? recommendedChoices(optionsList(fields.Options));
     if (recommended.length > 0) fields.Recommended = optionsText(recommended);
   }
   if (flags.rationale) fields.Rationale = flags.rationale;
@@ -5839,6 +5852,7 @@ function logUsage(subcommand: string | undefined): string {
       "  Records a question before it is shown to the person. Required: --stage, --decision.",
       "  When a choice holds a comma, pass each choice as its own --option '<choice>' in place of --options; when one holds a $ or a backtick, write the choices one a line to <record>/.aidlc-engine/answer-text/options.txt and pass --options-file .aidlc-engine/answer-text/options.txt.",
       `  --checkpoint: ${DECISION_CHECKPOINTS.join(", ")}. An ordinary question, the learnings one included, takes none.`,
+      "  Pass --recommended-options <positions> to record recommendations by one-based choice position.",
       `  Options: ${flags(DECISION_OPTIONS)}`,
     ],
     answer: [

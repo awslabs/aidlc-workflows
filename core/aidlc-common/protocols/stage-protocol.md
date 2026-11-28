@@ -719,6 +719,13 @@ At each logged non-gate question (Critical Compliance Checklist item 2):
 1. BEFORE presenting the question: `{{INVOKE}} engine log decision --stage <slug> --decision '<summary>' --options '<A,B,C>'` (emits `DECISION_RECORDED`). When a choice holds a comma, pass each choice as its own `--option '<choice>'` in place of `--options` (`--option '<A>' --option '<B>' --option '<C>'`), so the question comes back with each choice whole. When the question or a choice holds any of the characters an answer goes in a file for (`$`, a backtick, a quote, `%`, `&`, `|`, `<`, `>`, `^`, `!` or a line break), both go in files instead, so no shell reads them: write the question to `<record>/.aidlc-engine/answer-text/question.txt` and the choices one a line to `<record>/.aidlc-engine/answer-text/options.txt` with your file tool, and pass `--decision-file .aidlc-engine/answer-text/question.txt --options-file .aidlc-engine/answer-text/options.txt`; the engine reads both and removes them.
 2. AFTER response: `{{INVOKE}} engine log answer --stage <slug> --details '<summary of answers>'` (emits `QUESTION_ANSWERED`).
 
+For an ordinary stage question with a recommendation, log the exact question
+and the choices as you will display them. Add `--recommended-options 1` if you
+recommend the first choice, or `--recommended-options 1,3` for two choices.
+Explain the recommendation in the conversation language, in the option's
+description or beside the numbered list. The positions record it without
+requiring an English suffix in the option label.
+
 This pair is also a deterministic human-wait signal for the forwarding-loop Stop
 hook. Once `decision` succeeds, render that question and END THE TURN.
 If you showed the question before recording it, the person already has it: end
