@@ -10,8 +10,11 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry } from "../tools/aidlc-audit.ts";
 import {
+  type AuditShardEvent,
+  type WorkflowSelection,
   workflowParticipation,
   type ClaudeCodeHookInput,
+  auditBlockField,
   completeSubagentInflight,
   errorMessage,
   getField,
@@ -33,10 +36,13 @@ import {
   REVIEW_FILE_DIGEST_FIELD,
   reviewCopyRequest,
   reviewFileDigestOnDisk,
+  sortAttemptEvents,
   stateFilePathForSelection,
   swarmUnitOpenReviews,
+  usesStageLevelPerUnitArtifacts,
   validSessionId,
 } from "../tools/aidlc-lib.ts";
+import { runtimeHarnessName } from "../tools/aidlc-runtime-paths.ts";
 
 // The selection's record takes a helper's rows while its workflow runs or a
 // stage run on its own is open on it (finished work is live then, as every hook
@@ -50,6 +56,75 @@ function recordsHelpers(projectDir: string, selection: ReturnType<typeof resolve
     return isolatedRunWithoutWork(projectDir, selection);
   }
   return getField(stateContent, "Status") === "Running" || isolatedRunIsOpen(projectDir, selection);
+}
+
+const DEVELOPER_AGENT = "aidlc-developer-agent";
+const CODE_GENERATION_SLUG = "code-generation";
+const DEVELOPER_RECORD_DIGEST_FIELD = "Record Digest";
+const CODE_GENERATION_RECORD_FILES: readonly string[] = [
+  "code-generation-plan.md",
+  "unit-test-instructions.md",
+  "code-summary.md",
+  "traceability.json",
+  "source-manifest.json",
+];
+
+function selectedStateContent(projectDir: string, selection: WorkflowSelection): string | null {
+  try {
+    return readFileSync(stateFilePathForSelection(projectDir, selection), "utf-8");
+  } catch {
+    return null;
+  }
+}
+
+function codeGenerationRecord(
+  projectDir: string,
+  intent: string | undefined,
+  space: string | undefined,
+  stateContent: string,
+): { dir: string; unit: string | null } | null {
+  const stage = getField(stateContent, "Unit Stage")?.trim() || getField(stateContent, "Current Stage")?.trim();
+  if (stage !== CODE_GENERATION_SLUG) return null;
+  const record = recordDir(projectDir, intent, space);
+  if (record === null) return null;
+  if (usesStageLevelPerUnitArtifacts(getField(stateContent, "Scope"), stateContent)) {
+    return { dir: join(record, "construction", CODE_GENERATION_SLUG), unit: null };
+  }
+  const unit = getField(stateContent, "Active Unit")?.trim() || null;
+  if (unit === null) return null;
+  return { dir: join(record, "construction", unit, CODE_GENERATION_SLUG), unit };
+}
+
+function renderedRecordDigest(dir: string): string {
+  return CODE_GENERATION_RECORD_FILES
+    .map((name) => `${name}=${reviewFileDigestOnDisk(join(dir, name))}`)
+    .join("; ");
+}
+
+function latestDeveloperRecordDigest(events: ReadonlyArray<AuditShardEvent>): string | null {
+  let digest: string | null = null;
+  for (const row of sortAttemptEvents(events)) {
+    if (row.event !== "SUBAGENT_DISPATCHED") continue;
+    if (auditBlockField(row.block, "Agent Type") !== DEVELOPER_AGENT) continue;
+    const value = auditBlockField(row.block, DEVELOPER_RECORD_DIGEST_FIELD);
+    if (value !== null) digest = value;
+  }
+  return digest;
+}
+
+function unitBuildReviewed(events: ReadonlyArray<AuditShardEvent>, unit: string | null): boolean {
+  return events.some((row) =>
+    row.event === "REVIEW_REQUESTED" &&
+    auditBlockField(row.block, "Stage") === CODE_GENERATION_SLUG &&
+    (unit === null || auditBlockField(row.block, "Unit") === unit));
+}
+
+function unchangedRecordWarning(unit: string | null): string {
+  const whose = unit === null ? "Code Generation" : `Code Generation for unit "${unit}"`;
+  const remedy = unit === null ? "the stage" : "the unit";
+  return `${whose} reported completed, but its record did not change: code-summary.md and traceability.json ` +
+    `are unchanged since the developer sub-agent was dispatched, so it wrote nothing. ` +
+    `Re-dispatch ${remedy} before continuing.`;
 }
 
 /**
@@ -80,13 +155,15 @@ export function recordSubagentDispatch(projectDir: string, rawSessionId: unknown
     const copy = named.length === 1 && isScopedReviewCopy(agentType)
       ? reviewCopyRequest(openReviewRequests(readAuditShardEvents(projectDir, intent, space)), agentType)
       : undefined;
-    appendAuditEntry(
-      "SUBAGENT_DISPATCHED",
-      copy ? { "Agent Type": copy.reviewer, "Dispatch Agent": agentType } : { "Agent Type": agentType },
-      projectDir,
-      intent,
-      space,
-    );
+    const fields: Record<string, string> = copy
+      ? { "Agent Type": copy.reviewer, "Dispatch Agent": agentType }
+      : { "Agent Type": agentType };
+    if (agentType === DEVELOPER_AGENT) {
+      const stateContent = selectedStateContent(projectDir, selection);
+      const record = stateContent === null ? null : codeGenerationRecord(projectDir, intent, space, stateContent);
+      if (record !== null) fields[DEVELOPER_RECORD_DIGEST_FIELD] = renderedRecordDigest(record.dir);
+    }
+    appendAuditEntry("SUBAGENT_DISPATCHED", fields, projectDir, intent, space);
   } catch (e) {
     recordHookDrop(projectDir, "log-subagent", `dispatch not recorded: ${errorMessage(e)}`, intent, space);
   }
@@ -162,6 +239,27 @@ export async function run(input: string): Promise<number> {
       : "unknown";
   const agentId: string = parsed.agent_id ?? "";
   const agentMessage: string = (parsed.last_assistant_message ?? "").slice(0, 200);
+  if (agentType === DEVELOPER_AGENT) {
+    try {
+      const stateContent = selectedStateContent(projectDir, selection);
+      const record = stateContent === null ? null : codeGenerationRecord(projectDir, intent, space, stateContent);
+      const events = record === null ? [] : readAuditShardEvents(projectDir, intent, space);
+      const dispatched = record === null ? null : latestDeveloperRecordDigest(events);
+      if (
+        record !== null &&
+        dispatched !== null &&
+        !unitBuildReviewed(events, record.unit) &&
+        dispatched === renderedRecordDigest(record.dir)
+      ) {
+        const line = unchangedRecordWarning(record.unit);
+        process.stdout.write(
+          `${runtimeHarnessName() === "claude" ? JSON.stringify({ systemMessage: line }) : line}\n`,
+        );
+      }
+    } catch (e) {
+      recordHookDrop(projectDir, "log-subagent", `record change not checked: ${errorMessage(e)}`, intent, space);
+    }
+  }
   // A reviewer copy (Kiro, aidlc-kiro-review-copy.ts) is its request's
   // reviewer under another name: the row names the reviewer, so the review's
   // evidence is found as the reviewer's, and keeps the copy's name beside it.
