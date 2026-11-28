@@ -39,7 +39,8 @@ type HarnessCapabilities = {
     | "cursor-rule"
     | "kiro-resources"
     | "kiro-steering"
-    | "opencode-instructions";
+    | "opencode-instructions"
+    | "hermes-md";
   kiroAgentJson: boolean;
   ideAgentTools: boolean;
   reviewerScopeRegistration: ReviewerScopeRegistration;
@@ -175,6 +176,29 @@ const HARNESS_CAPABILITIES = {
     ideAgentTools: true,
     reviewerScopeRegistration: "kiro-agent-json",
   },
+  hermes: {
+    harnessDir: ".hermes",
+    onboarding: {
+      mode: "manifest",
+      fills: "onboarding.fills.ts",
+      dist: ".hermes.md",
+      harnessDist: ".hermes.md",
+    },
+    rootFiles: [".gitignore", ".hermes.md"],
+    skillsRoot: ".hermes/skills",
+    plugin: {
+      kind: "store",
+      manifestDir: ".hermes-plugin",
+      marketplaceDir: ".hermes-plugin",
+      // The projection carries the neutral compose wiring, as opencode's does;
+      // Hermes runs no project hook, so the wiring is a manual step (guide).
+      wiringFile: "hooks/hooks.json",
+    },
+    memoryInclude: "hermes-md",
+    kiroAgentJson: false,
+    ideAgentTools: false,
+    reviewerScopeRegistration: "unsupported",
+  },
   opencode: {
     harnessDir: ".aidlc",
     onboarding: {
@@ -305,7 +329,9 @@ function validateManifest(
         manifest.harnessDir === ".aidlc" &&
         manifest.skipRunnerGen === true) ||
     (capabilities.memoryInclude === "cursor-rule") !==
-      manifest.harnessFiles.some((file) => file.dst === "rules/aidlc.mdc")
+      manifest.harnessFiles.some((file) => file.dst === "rules/aidlc.mdc") ||
+    (capabilities.memoryInclude === "hermes-md") !==
+      (manifest.onboarding?.projectRoot === true && manifest.onboarding.dst === ".hermes.md")
   ) {
     fail(name, "memoryInclude does not agree with manifest-owned include surfaces");
   }

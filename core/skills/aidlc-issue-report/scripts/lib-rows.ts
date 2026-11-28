@@ -133,7 +133,7 @@ const RECORD_DIRS = new Set([
   "issue-reports", "learnings", "units", "bolts", "artifacts", "requests", ".aidlc-engine", "stage", "unit", "sensors",
 ]);
 // The AI tools' own folders at the project's top (`.kiro/steering/`), and the folders under them they name.
-const TOOL_TOP = new Set([".claude", ".kiro", ".codex", ".copilot", ".cursor", ".agents", ".aidlc", ".github", ".vscode"]);
+const TOOL_TOP = new Set([".claude", ".kiro", ".codex", ".copilot", ".cursor", ".agents", ".aidlc", ".github", ".vscode", ".hermes"]);
 const TOOL_SUB = new Set(["settings", "steering", "skills", "prompts", "agents", "hooks", "tools", "rules", "commands", "data", "aidlc-common"]);
 // The default space AI-DLC makes; any other space is named by the person.
 const DEFAULT_SPACE = "default";

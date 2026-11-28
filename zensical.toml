@@ -70,6 +70,7 @@ nav = [
       "guide/harnesses/cursor.md",
       "guide/harnesses/opencode.md",
       "guide/harnesses/copilot.md",
+      "guide/harnesses/hermes.md",
     ] },
     { "Help and Examples" = [
       "guide/15-troubleshooting.md",

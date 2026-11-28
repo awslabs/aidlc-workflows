@@ -308,7 +308,7 @@ function outsideLabels(text: string, fn: (part: string) => string): string {
 // side) or a name the person hid, unless that word starts another path (`mv ~/a /home/alice/b`); a `<user>` inside
 // is read through, so what follows it is not left behind; a quoted path is read to its closing quote.
 export const TOOL_DIRS: string[][] = [
-  [".claude"], [".kiro"], [".codex"], [".copilot"], [".cursor"], [".agents"], [".aidlc"], [".config"], [".vscode"],
+  [".claude"], [".kiro"], [".codex"], [".copilot"], [".cursor"], [".agents"], [".aidlc"], [".config"], [".vscode"], [".hermes"],
   [".local", "share", "aidlc"], ["AppData", "Local", "aidlc"], ["Library", "Application Support", "Kiro"],
   ["Library", "Application Support", "Code"], ["Library", "Application Support", "Cursor"],
 ];

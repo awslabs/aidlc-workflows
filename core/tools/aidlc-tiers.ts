@@ -114,6 +114,11 @@ export type TierProjection = {
    *  accounts reject every named model), so a pinned id would hard-fail
    *  installs on lower plans; agents inherit the session model instead. */
   cursor: { model: string | null };
+  /** Hermes Agent persona files carry no model or effort key: the conductor
+   *  hands the persona's text to `delegate_task`, and the session's own model
+   *  and reasoning effort apply. Model-only BY DESIGN, like kiro and copilot,
+   *  so a pinned value can never leak into a harness that would not read it. */
+  hermes: { model: null };
 };
 
 export type Harness = keyof TierProjection;
@@ -130,6 +135,7 @@ export const TIER_PROJECTIONS: Record<Tier, TierProjection> = {
     opencode: { model: null, variant: null },
     copilot: { model: null },
     cursor: { model: null },
+    hermes: { model: null },
   },
   balanced: {
     // Effort pinned to medium. Balanced is the reviewer tier - both
@@ -143,6 +149,7 @@ export const TIER_PROJECTIONS: Record<Tier, TierProjection> = {
     kiro: { model: null },
     opencode: { model: null, variant: "medium" },
     copilot: { model: null },
+    hermes: { model: null },
   },
   templated: {
     // The tier remains a models-dial group for pattern-following work, but the
@@ -154,6 +161,7 @@ export const TIER_PROJECTIONS: Record<Tier, TierProjection> = {
     opencode: { model: null, variant: null },
     copilot: { model: null },
     cursor: { model: null },
+    hermes: { model: null },
   },
 };
 

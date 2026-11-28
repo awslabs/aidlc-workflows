@@ -20,6 +20,7 @@ export const BINDING_HEADINGS: Readonly<Record<string, string>> = {
   cursor: "Cursor",
   opencode: "opencode",
   copilot: "GitHub Copilot",
+  hermes: "Hermes Agent",
 };
 
 const TOOL_NAMES: ReadonlySet<string> = new Set(Object.values(BINDING_HEADINGS));

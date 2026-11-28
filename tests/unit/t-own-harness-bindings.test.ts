@@ -24,6 +24,7 @@ const TREES: ReadonlyArray<readonly [string, string, string]> = [
   ["cursor", ".cursor", "Cursor"],
   ["opencode", ".aidlc", "opencode"],
   ["copilot", ".aidlc", "GitHub Copilot"],
+  ["hermes", ".hermes", "Hermes Agent"],
 ];
 const TOOLS = TREES.map(([, , heading]) => heading);
 const MODULES = [
