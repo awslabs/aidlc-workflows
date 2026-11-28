@@ -38,6 +38,9 @@ Do this before the first `/aidlc` of the piece of work. When the plan includes
 Practices Discovery, early in Inception, it asks how your team works; on a new
 project, the answers already in this document are quick to confirm.
 
+If a first-release requirement cannot be met with the approved tools or data,
+see [When the vision and the technical environment disagree](vision-document-guide.md#when-the-vision-and-the-technical-environment-disagree).
+
 ---
 
 ## The short version
