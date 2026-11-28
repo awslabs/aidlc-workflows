@@ -79,11 +79,11 @@ import {
   workspaceSourceFailureSuffix,
   recordedSourceListingUnderCurrentBoundary,
   sameWorkspaceSource,
-  workspaceSourceFingerprint,
   workspaceSourceExclusionPathspecs,
   workspaceSourcePathIsExcluded,
   unmergedRootSettingsNotices,
   workspaceSourceState,
+  readWorkspaceSourceSnapshot,
   worktreePath,
   writeBaselineSourceSnapshot,
   worktreesDir,
@@ -91,15 +91,17 @@ import {
   writeFileAtomic,
   repoNameRefusal,
   entrySkillInvocation,
+  findStageBySlug,
   asksForHelp,
   printUsageAndExit,
 } from "./aidlc-lib.js";
 import { afterApprovedSkeleton, autonomyGrantedOnRecord } from "./aidlc-construction-checkpoints.ts";
 import { quoted } from "./aidlc-brought-files.ts";
 import { mainCheckoutChangeStep } from "./aidlc-message-store.ts";
-import { swarmSourceChanged, swarmSourceChangedSince } from "./aidlc-swarm-source.ts";
+import { reviewedSourceMoved, swarmSourceChanged, swarmSourceChangedSince } from "./aidlc-swarm-source.ts";
 import { aidlcDispatcherInvocation } from "./aidlc-runtime-paths.ts";
 import { captureCodeGenerationDiscardApproval } from "./aidlc-testing-posture.ts";
+import { STAGE_START_UNAVAILABLE, stageStartUncheckedLine } from "./aidlc-swarm-source.ts";
 
 // kebab-case slug shape: lowercase letter, then lowercase letters / digits /
 // hyphens. Mirrors SLUG_RE in aidlc-stage-schema.ts: the codebase already
@@ -1977,8 +1979,11 @@ function assertConvergedSourceUnchanged(
   record: ConvergedSourceRecord | null,
 ): string | null {
   if (!record || record.kind === "bypass") return null;
-  const current = workspaceSourceFingerprint(wtPath);
-  if (current === null || !sameWorkspaceSource(record.fingerprint, current)) {
+  const current = workspaceSourceState(wtPath);
+  // What finalize took as no change (files Git ignores and HEAD does not track
+  // since the review this row binds) is none here either.
+  if (current === null || (!sameWorkspaceSource(record.fingerprint, current.fingerprint) &&
+    reviewedSourceMoved(wtPath, record.stage, readWorkspaceSourceSnapshot(wtPath, record.stage, record.fingerprint), current).moved)) {
     errorWithSlug(
       slug,
       `refusing to merge: the worktree source no longer matches the state this unit ` +
@@ -2000,16 +2005,17 @@ const PERSON_DECIDES_CHANGES =
   "for this piece of work) or undo them themselves; then run the merge again.";
 
 // A landing finished after it stopped staged (a clash, a refused commit) does
-// not compare the checkout again, so the change of the person's it kept is the
-// row its first run wrote from the fingerprint this link opens at, since this
-// Unit last converged.
+// not compare the checkout again, so what it kept is the row its first run
+// wrote from `recorded` (the fingerprint this link opens at, or
+// STAGE_START_UNAVAILABLE), since this Unit last converged. `opened` is that
+// row's Current: the checkout the first run opened from.
 function keptByStagedLanding(
   pd: string,
   record: BoundConvergedSourceRecord,
   recorded: string,
   intent?: string,
   space?: string,
-): { kept?: string } {
+): { kept?: string; opened?: string } {
   const rows = readAuditShardEvents(pd, intent, space);
   const converged = sortWorktreeAuditRows(rows.filter((row) =>
     row.event === "SWARM_UNIT_CONVERGED" &&
@@ -2026,7 +2032,8 @@ function keptByStagedLanding(
     !auditBlockField(candidate.block, "Message Id") &&
     rowAfter(candidate, converged))).at(-1);
   const kept = row === undefined ? null : auditBlockField(row.block, "Details");
-  return kept ? { kept } : {};
+  const opened = row === undefined ? null : auditBlockField(row.block, "Current");
+  return kept ? { kept, ...(opened ? { opened } : {}) } : {};
 }
 
 function assertAggregateSourceBeforeMerge(
@@ -2041,7 +2048,8 @@ function assertAggregateSourceBeforeMerge(
 ): {
   state: WorkspaceSourceState;
   openingFingerprint: string;
-  // The person's own change this landing keeps, said once it has landed.
+  // What this landing says once it has landed: the person's own change it
+  // keeps, or that the record of where the stage started could not be read.
   kept?: string;
 } | null {
   if (!record || record.kind === "bypass") return null;
@@ -2050,13 +2058,19 @@ function assertAggregateSourceBeforeMerge(
   // the build are kept: the merge starts from the checkout as it is, and the
   // change is recorded once so the merge chain stays readable. Under strict so
   // are the files the person asked to change (swarm allow-change), recorded
-  // with the message they asked in; that step already told them. The line is
-  // not said here: the merge can still stop, and a run that stopped already
-  // wrote the row the run that lands finds.
-  const keepChange = (recorded: string, changed: string[] | null, asked: string[] | null = null) => {
-    const notice = changed && changed.length > 0
+  // with the message they asked in; that step already told them. A first
+  // landing that cannot read the record of where the stage started starts from
+  // the checkout as it is too, with its own line. The line is not said here:
+  // the merge can still stop, and a run that stopped already wrote the row the
+  // run that lands finds.
+  const keepChange = (
+    recorded: string,
+    changed: string[] | null,
+    asked: string[] | null = null,
+    notice = changed && changed.length > 0
       ? `You changed ${renderChangedPaths(changed)} during the build${asked ? ", as you asked" : ""}; kept them and merged unit ${record.unit}.`
-      : `The main checkout changed during the build; kept it and merged unit ${record.unit}.`;
+      : `The main checkout changed during the build; kept it and merged unit ${record.unit}.`,
+  ) => {
     recordAcceptedChanges(pd, [{
       checkpoint: "swarm-batch", stage: record.stage, unit: record.unit, changed,
       recorded, current: current!.fingerprint, notice, ...(asked ? { messageIds: asked } : {}),
@@ -2127,9 +2141,24 @@ function assertAggregateSourceBeforeMerge(
     space,
   );
   if (opening.state === "invalid") {
+    // The record of what the stage started from cannot be read here: the
+    // landing starts from the main checkout as it is, unless strict holds it.
+    const stage = findStageBySlug(record.stage)?.name ?? record.stage;
+    const unchecked = opening.baseline === undefined ? null : stageStartUncheckedLine(opening.baseline, stage, acceptsChanges);
+    if (unchecked !== null) {
+      // A landing finished after it stopped staged opens where its first run did.
+      const opened = resuming ? keptByStagedLanding(pd, record, STAGE_START_UNAVAILABLE, intent, space).opened : undefined;
+      if (opened !== undefined) return { state: current, openingFingerprint: opened, kept: unchecked };
+      return keepChange(STAGE_START_UNAVAILABLE, null, null, unchecked);
+    }
     errorWithSlug(
       slug,
-      `refusing to merge: the current stage has no verifiable predecessor for the first aggregate link (${opening.reason})`,
+      opening.baseline === undefined
+        ? `refusing to merge: the current stage has no verifiable predecessor for the first aggregate link (${opening.reason})`
+        : `refusing to merge: AI-DLC ${opening.baseline === "unbindable" ? "could not record" : "has no usable record of"} what ` +
+          `${stage} started from, so changes outside the units cannot be checked. Restart the stage with ` +
+          `\`${entrySkillInvocation()} --stage ${record.stage}\` to check again from here, or, with the person's go-ahead, ` +
+          "set Guard Policy relaxed for this piece of work and run the merge again.",
     );
   }
   if (resuming) {

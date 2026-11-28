@@ -65,7 +65,9 @@ const SHIPPED: Record<Harness, { file: string; allowed: (text: string) => string
   codex: {
     file: join("codex", ".codex", "rules", "default.rules"),
     allowed: (text) => [...text.matchAll(/prefix_rule\(pattern = (\[[\s\S]*?\]), decision = "allow"\)/g)].flatMap((match) => {
-      const [program, next] = JSON.parse(match[1]) as [string, string | string[]];
+      const [program, ...rest] = JSON.parse(match[1]) as [string, ...Array<string | string[]>];
+      // The script: the first word after the launcher's own options (a copy launch's --config= and --no-env-file).
+      const next = rest.find((word) => Array.isArray(word) || !word.startsWith("-")) ?? [];
       return (Array.isArray(next) ? next : [next]).map((word) => [program, word]);
     }),
   },
@@ -86,7 +88,9 @@ function ownToolForms(harness: Harness): Array<{ launcher: RegExp; folder: RegEx
   if (known) return known;
   const file = join(DIST, SHIPPED[harness].file);
   const forms = new Map<string, { launcher: RegExp; folder: RegExp }>();
-  for (const [program, script] of SHIPPED[harness].allowed(readFileSync(file, "utf8"))) {
+  for (const [program, ...rest] of SHIPPED[harness].allowed(readFileSync(file, "utf8"))) {
+    // The script: the first word after the launcher's own options (a copy launch's --config= and --no-env-file).
+    const script = rest.find((word) => !word.startsWith("-"));
     if (!program || !script?.includes("/")) continue;
     const folder = script.slice(0, script.lastIndexOf("/")).split("/").map(literal).join(String.raw`[/\\]+`);
     forms.set(`${program} ${folder}`, {

@@ -117,6 +117,7 @@ import {
   seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
@@ -1332,7 +1333,7 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
     // allow an AI-DLC internal step).
     expect(emitted.reviewed_at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
     expect(emitted.recordVerdict).toBe(
-      "bun .claude/tools/aidlc-log.ts review --stage requirements-analysis " +
+      withCopyLaunchOptions("bun .claude/tools/aidlc-log.ts review --stage requirements-analysis ") +
         "--reviewer aidlc-product-lead-agent --iteration 1 " +
         `--verdict '<READY|NOT-READY>' --project-dir ${p}`,
     );
@@ -1344,7 +1345,7 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
       single: true,
       iteration: 2,
     })).toBe(
-      "bun .claude/tools/aidlc-log.ts review --stage code-generation " +
+      withCopyLaunchOptions("bun .claude/tools/aidlc-log.ts review --stage code-generation ") +
         "--reviewer aidlc-architecture-reviewer-agent --unit alpha --single " +
         `--iteration 2 --verdict '<READY|NOT-READY>' --project-dir ${p}`,
     );

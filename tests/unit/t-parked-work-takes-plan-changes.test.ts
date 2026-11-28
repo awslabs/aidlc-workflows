@@ -196,7 +196,9 @@ class Walk {
   // The commands the message names for now, not the ones for a later yes or undo.
   runNamed(message: string): Ran[] {
     const now = message.split(/ If they (?:say yes|later ask)/)[0];
-    const commands = [...now.matchAll(/`(bun \.claude\/tools\/[^`]+)`/g)].map((m) => m[1]);
+    // A copy tree prints its launch with Bun's own config and --no-env-file before the script.
+    const commands = [...now.matchAll(/`(bun (?:--config=\.claude\/tools\/aidlc-bunfig\.toml --no-env-file )?\.claude\/tools\/[^`]+)`/g)]
+      .map((m) => m[1]);
     return commands.map((command) => this.bash(command));
   }
 

@@ -10,6 +10,7 @@ import { appendFileSync, cpSync, mkdirSync, mkdtempSync, realpathSync, rmSync, s
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { copyChannelOmits, projectionFiles } from "../../core/tools/aidlc-distribution.ts";
+import { COPY_LAUNCH_CONFIG, withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 
@@ -74,7 +75,7 @@ describe.skipIf(process.platform === "win32")("doctor and config run from anothe
     const { project, tool } = copyProject(true);
     const elsewhere = temp("aidlc-fix-folder-elsewhere-");
     const report = run(tool, ["doctor", "--project-dir", project], elsewhere);
-    expect(report.out).toContain("run `bun .claude/tools/aidlc.ts config --force`");
+    expect(report.out).toContain(`run \`${withCopyLaunchOptions("bun .claude/tools/aidlc.ts config --force")}\``);
     const lines = report.out.split("\n");
     const said = lines.indexOf(line(project, "doctor"));
     expect(said, report.out).toBeGreaterThan(0);
@@ -131,10 +132,12 @@ describe.skipIf(process.platform === "win32")("doctor and config run from anothe
     const elsewhere = temp("aidlc-fix-folder-elsewhere-");
     const away = run(tool, ["config", "providers", "--check", "--project-dir", project], elsewhere);
     expect(away.out.split("\n")[0]).toBe(line(project, "config"));
-    expect(away.out).toContain(`Record one with 'bun ${tool} config providers --project-dir ${project}'`);
+    // By its full path the tool's launch names its config by its full path too.
+    const config = join(project, ".claude", "tools", COPY_LAUNCH_CONFIG);
+    expect(away.out).toContain(`Record one with 'bun --config=${config} --no-env-file ${tool} config providers --project-dir ${project}'`);
     const home = run(tool, ["config", "providers", "--check"], project);
     expect(home.out).not.toContain("Project folder for this report");
-    expect(home.out).toContain("Record one with 'bun .claude/tools/aidlc.ts config providers'");
+    expect(home.out).toContain(`Record one with '${withCopyLaunchOptions("bun .claude/tools/aidlc.ts config providers")}'`);
   });
 
   test("config flags --check names the project folder above its result only from another folder", () => {

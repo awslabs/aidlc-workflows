@@ -26,6 +26,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { harnessArgsAsIds, harnessIdFromTyped, harnessNameFor, typedHarnessHosts, typedHarnessName } from "../../core/tools/aidlc-runtime-paths.ts";
 import { escapeRegex } from "../../core/tools/aidlc-markdown.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -343,7 +344,7 @@ describe("Kiro harness names a person types", () => {
   // the refresh an install has, in the names a person types, never with the
   // framework repository's own build step.
   test("a Kiro CLI (V2) project's onboarding names the refresh each harness tree takes, in the names config reads", () => {
-    for (const invoke of ["aidlc", "bun .kiro/tools/aidlc.ts"]) {
+    for (const invoke of ["aidlc", withCopyLaunchOptions("bun .kiro/tools/aidlc.ts")]) {
       const { onboarding } = v2Project(invoke, invoke === "aidlc" ? RELEASE : join(REPO_ROOT, "dist", "kiro"));
       const bullet = onboarding.split("\n").find((line) => line.includes("workspace tree is harness-neutral")) ?? "";
       expect(bullet).not.toContain("packaging");
@@ -418,7 +419,7 @@ describe("Kiro harness names a person types", () => {
   // names the same command with --download, which the onboarding says to run
   // at once under the person's request.
   test("on a copy install the switch the onboarding names stops, names the download, and leaves Kiro CLI (V2)", () => {
-    const { dir, onboarding, command } = v2Project("bun .kiro/tools/aidlc.ts", join(REPO_ROOT, "dist", "kiro"));
+    const { dir, onboarding, command } = v2Project(withCopyLaunchOptions("bun .kiro/tools/aidlc.ts"), join(REPO_ROOT, "dist", "kiro"));
     expect(onboarding).toContain(
       "If the switch then stops saying that switching `.kiro` needs the release files (a copy install, which holds only its own tree), " +
         "the `fix:` command it names adds `--download` to the same switch: run it at once.",
@@ -427,7 +428,9 @@ describe("Kiro harness names a person types", () => {
     expect(switched.status, switched.out).not.toBe(0);
     // The stop the onboarding's run-at-once rule names, in the tool's words.
     expect(switched.out).toMatch(/switching \.kiro from kiro-v2 to kiro needs the \S+ release files/);
-    expect(switched.out).toMatch(/^fix: bun \.kiro\/tools\/aidlc\.ts config --harness kiro --yes --download\r?$/m);
+    expect(switched.out).toMatch(
+      new RegExp(`^fix: ${escapeRegex(withCopyLaunchOptions("bun .kiro/tools/aidlc.ts config --harness kiro --yes --download"))}\\r?$`, "m"),
+    );
     expect(stamp(dir)).toBe("kiro");
   });
 

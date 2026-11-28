@@ -9,12 +9,15 @@
 // `swarm prepare` failed with "Read-only file system" and Codex asked to run it
 // outside the sandbox; with approval "never" the build stopped there.
 //
-// The rules allow AI-DLC's own commands as it runs them, and nothing wider: the
+// The rules allow AI-DLC's own commands as it runs them (Bun, the copy launch's
+// two options that keep the project's bunfig.toml and .env out, the script), and
+// nothing wider: the launch without the options, the
 // tool scripts behind a machine-changing command, a config change and anything
 // else stay with Codex's sandbox and its ask, as on every other harness.
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { copyChannelToolScripts, machineReachingTools } from "../../core/tools/aidlc.ts";
 import { TRUSTED_ROUTE_NAMESPACE } from "../../core/tools/aidlc-command.ts";
@@ -69,13 +72,16 @@ function textFiles(dir: string): string[] {
   });
 }
 
+// A copy launch: Bun and its two options, then the script.
+const LAUNCH = ["bun", "--config=.codex/tools/aidlc-bunfig.toml", "--no-env-file"];
+
 // Every AI-DLC command shape the copy tree names: the dispatcher's engine
 // commands and the tool scripts, up to their first two words after the script.
 function copyTreeShapes(): string[][] {
   const shapes = new Set<string>();
   for (const file of textFiles(COPY_ROOT)) {
     const text = readFileSync(file, "utf-8");
-    for (const match of text.matchAll(/bun \.codex\/tools\/aidlc[a-z-]*\.ts(?: [a-z][a-z-]*){0,3}/g)) {
+    for (const match of text.matchAll(/bun --config=\.codex\/tools\/aidlc-bunfig\.toml --no-env-file \.codex\/tools\/aidlc[a-z-]*\.ts(?: [a-z][a-z-]*){0,3}/g)) {
       shapes.add(match[0]);
     }
   }
@@ -86,33 +92,39 @@ const tool = (script: string) => `.codex/tools/${script}`;
 
 // The commands that need more than the sandbox gives, as the agent ran them live.
 const LIVE_COMMANDS: string[][] = [
-  ["bun", tool("aidlc.ts"), "engine", "swarm", "prepare", "--batch", "1", "--units", "u1-shout,u2-version", "--base", "main"],
-  ["bun", tool("aidlc.ts"), "engine", "swarm", "finalize", "--batch", "1", "--units", "u1-shout,u2-version", "--claimed", "u1-shout,u2-version"],
-  ["bun", tool("aidlc-worktree.ts"), "merge", "--slug", "u1-shout", "--target", "main", "--strategy", "squash"],
-  ["bun", tool("aidlc-orchestrate.ts"), "next"],
+  [...LAUNCH, tool("aidlc.ts"), "engine", "swarm", "prepare", "--batch", "1", "--units", "u1-shout,u2-version", "--base", "main"],
+  [...LAUNCH, tool("aidlc.ts"), "engine", "swarm", "finalize", "--batch", "1", "--units", "u1-shout,u2-version", "--claimed", "u1-shout,u2-version"],
+  [...LAUNCH, tool("aidlc-worktree.ts"), "merge", "--slug", "u1-shout", "--target", "main", "--strategy", "squash"],
+  [...LAUNCH, tool("aidlc-orchestrate.ts"), "next"],
 ];
 
 // What stays with Codex's sandbox and its ask: a config change, the commands
 // that change the machine's AI-DLC install and their scripts, the bare
 // dispatcher, a longer file name, the tools folder itself, a Codex worker.
 const LEFT_TO_CODEX: string[][] = [
-  ["bun", tool("aidlc.ts")],
-  ["bun", tool("aidlc.ts"), "config", "--statusline", "on", "--harness", "codex"],
-  ["bun", tool("aidlc.ts"), "config", "--pin", "2.11.0"],
-  ["bun", tool("aidlc.ts"), "update"],
-  ["bun", tool("aidlc.ts"), "uninstall", "--yes"],
-  ["bun", tool("aidlc-state.tsx"), "get"],
-  ["bun", ".codex/tools/"],
-  ["bun", ".codex/hooks/aidlc-human-turn.ts"],
+  [...LAUNCH, tool("aidlc.ts")],
+  [...LAUNCH, tool("aidlc.ts"), "config", "--statusline", "on", "--harness", "codex"],
+  [...LAUNCH, tool("aidlc.ts"), "config", "--pin", "2.11.0"],
+  [...LAUNCH, tool("aidlc.ts"), "update"],
+  [...LAUNCH, tool("aidlc.ts"), "uninstall", "--yes"],
+  [...LAUNCH, tool("aidlc-state.tsx"), "get"],
+  [...LAUNCH, ".codex/tools/"],
+  [...LAUNCH, ".codex/hooks/aidlc-human-turn.ts"],
+  // The launch without its two options, which would load the project's bunfig.toml and .env, and one naming another config file.
+  ["bun", tool("aidlc.ts"), "engine", "orchestrate", "next"],
+  ["bun", "--config=other.toml", "--no-env-file", tool("aidlc.ts"), "engine", "orchestrate", "next"],
   ["codex", "exec", "--skip-git-repo-check", "-C", "/tmp/w", "build it"],
-  ...machineReachingTools().map((script) => ["bun", tool(script), "run"]),
+  ...machineReachingTools().map((script) => [...LAUNCH, tool(script), "run"]),
 ];
 
 const codexOnPath = spawnSync("codex", ["--version"], { encoding: "utf-8" }).status === 0;
+// Codex makes a tmp folder in its home even for a rules check: a scratch one, never the person's.
+const codexHome = mkdtempSync(join(tmpdir(), "codex-rules-home-"));
 
 function codexAllows(rulesPath: string, argv: string[]): boolean {
   const result = spawnSync("codex", ["execpolicy", "check", "--rules", rulesPath, "--", ...argv], {
     encoding: "utf-8",
+    env: { ...process.env, CODEX_HOME: codexHome },
   });
   expect(result.status).toBe(0);
   return (JSON.parse(result.stdout) as { decision?: string }).decision === "allow";
@@ -123,9 +135,10 @@ describe("Codex copy channel: the shipped rules match AI-DLC's own commands", ()
 
   test("every engine command and tool script the copy tree names is allowed", () => {
     const scripts = new Set(copyChannelToolScripts());
+    const at = LAUNCH.length;
     const expected = copyTreeShapes().filter((argv) =>
-      (argv[1] === tool("aidlc.ts") && argv[2] === TRUSTED_ROUTE_NAMESPACE) ||
-      scripts.has(argv[1].slice(".codex/tools/".length))
+      (argv[at] === tool("aidlc.ts") && argv[at + 1] === TRUSTED_ROUTE_NAMESPACE) ||
+      scripts.has(argv[at].slice(".codex/tools/".length))
     );
     expect(expected.length).toBeGreaterThan(20);
     expect(expected.filter((argv) => !allowed(rules, argv)).map((argv) => argv.join(" "))).toEqual([]);
@@ -137,7 +150,7 @@ describe("Codex copy channel: the shipped rules match AI-DLC's own commands", ()
 
   test("each tool script a copy channel pre-approves is allowed, bare or with arguments", () => {
     const missing = copyChannelToolScripts().filter((script) =>
-      !allowed(rules, ["bun", tool(script)]) || !allowed(rules, ["bun", tool(script), "--help"])
+      !allowed(rules, [...LAUNCH, tool(script)]) || !allowed(rules, [...LAUNCH, tool(script), "--help"])
     );
     expect(missing).toEqual([]);
   });
@@ -157,7 +170,7 @@ describe("Codex copy channel: the shipped rules match AI-DLC's own commands", ()
       expect(line).toBeDefined();
       expect(line).not.toContain("`bun .codex/hooks/`");
       expect(line).not.toContain("`bun .codex/tools/`");
-      expect(line).toContain(`\`bun .codex/tools/aidlc.ts ${TRUSTED_ROUTE_NAMESPACE} ...\``);
+      expect(line).toContain(`\`${LAUNCH.join(" ")} .codex/tools/aidlc.ts ${TRUSTED_ROUTE_NAMESPACE} ...\``);
       // The scripts behind config, doctor and the machine's install are not
       // pre-allowed, and the line says so.
       for (const left of ["`config`", "`doctor`", "`update`", "`uninstall`"]) expect(line).toContain(left);

@@ -36,6 +36,8 @@ afterEach(() => {
 const CHAT = "01995000-7a11-7000-8000-0000000065c7";
 const IN_CHAT = { AIDLC_SESSION_OVERRIDE: CHAT };
 const claude = SHAPES[0];
+// The redo step's jump as the copy tree prints it, the two Bun options included, so the guard sees what an agent runs.
+const JUMP = /`(bun (?:--config=\S+ --no-env-file )?\.claude\/tools\/aidlc-jump\.ts execute [^`]+)`/;
 
 const DOORS = [
   {
@@ -113,7 +115,7 @@ describe.each(["strict", "relaxed", "off"] as const)("Guard Policy %s, finished 
   test("the agent's own redo and switch are refused in plain words, and run once the person asks", async () => {
     const proj = joined(policy);
     const redo = (next(proj, ["--stage", "code-generation"]).message ?? "") as string;
-    const jump = /`(bun \.claude\/tools\/aidlc-jump\.ts execute [^`]+)`/.exec(redo)?.[1];
+    const jump = JUMP.exec(redo)?.[1];
     expect(jump, redo).toBeDefined();
     for (const command of [jump as string, DOORS[0].command]) {
       const held = await claude.call(proj, CHAT, { tool: "Bash", command });
@@ -137,7 +139,7 @@ describe.each(["strict", "relaxed", "off"] as const)("Guard Policy %s, the chat 
     const proj = finishedAtCodeGeneration(policy, "on");
     created.push(proj);
     const redo = (next(proj, ["--stage", "code-generation"]).message ?? "") as string;
-    const jump = /`(bun \.claude\/tools\/aidlc-jump\.ts execute [^`]+)`/.exec(redo)?.[1];
+    const jump = JUMP.exec(redo)?.[1];
     expect(jump, redo).toBeDefined();
     const held = await claude.call(proj, SESSION, { tool: "Bash", command: jump as string });
     expect(held.code).toBe(2);

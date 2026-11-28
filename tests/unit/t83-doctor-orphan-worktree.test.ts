@@ -87,7 +87,8 @@ import { spawnSync } from "node:child_process";
 import { hostname } from "node:os";
 import { appendFileSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
-import { type EngineInvocation, renderEngineInvocation } from "../../core/tools/aidlc-guard-operation.ts";
+// The doctor under test is the Claude copy tree's, so its recovery commands are rendered by that tree's own renderer.
+import { type EngineInvocation, renderEngineInvocation } from "../../dist/claude/.claude/tools/aidlc-guard-operation.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { boltName, createIntent, legacyParkedRefPrefix, legacyWorktreePath, parkedRefPrefix, worktreePath } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {

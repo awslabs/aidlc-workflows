@@ -273,7 +273,8 @@ const realSpawnSync = childProcess.spawnSync;
 const target = realpathSync(${JSON.stringify(scriptPath(project))});
 childProcess.spawnSync = function (...args) {
   const result = realSpawnSync.apply(this, args);
-  if (args[1]?.[0] === target) {
+  // The script follows the copy launch's two Bun options when the tree holds their config file.
+  if (Array.isArray(args[1]) && args[1].includes(target)) {
     writeFileSync(${JSON.stringify(receiptPath)}, JSON.stringify({
       pid: result.pid,
       signal: result.signal,

@@ -14,6 +14,7 @@ import { join } from "node:path";
 import { copyChannelOmits, projectionFiles } from "../../core/tools/aidlc-distribution.ts";
 import { quoteCommandArgument } from "../../dist/claude/.claude/tools/aidlc-runtime-paths.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
+import { COPY_LAUNCH_CONFIG, withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -86,10 +87,10 @@ describe.skipIf(process.platform === "win32")("config commands setup and --show 
     const shown = run(tool, ["config", "runtime", "--show", "--harness", "claude"], project);
     expect(shown.status, shown.out).toBe(0);
     const listAll = /\(([^()]*) lists all\)/.exec(shown.out)?.[1] ?? "";
-    expect(listAll).toBe("bun .claude/tools/aidlc.ts config runtime --show --json --harness claude");
-    const [bun, printedTool, ...args] = words(listAll);
+    expect(listAll).toBe(withCopyLaunchOptions("bun .claude/tools/aidlc.ts config runtime --show --json --harness claude"));
+    const [bun, ...launch] = words(listAll);
     expect(bun).toBe("bun");
-    const again = run(join(project, printedTool), args, project);
+    const again = run(launch[0], launch.slice(1), project);
     expect(again.status, again.out).toBe(0);
     expect(JSON.parse(again.out).ok).toBe(true);
   });
@@ -102,8 +103,10 @@ describe.skipIf(process.platform === "win32")("config commands setup and --show 
     expect(shown.status, shown.out).toBe(0);
     const listAll = /\(([^()]*) lists all\)/.exec(shown.out)?.[1] ?? "";
     expect(listAll).toEndWith(`--harness claude --project-dir ${quoteCommandArgument(project)}`);
-    const [, printedTool, ...args] = words(listAll);
-    const again = run(printedTool, args, elsewhere);
+    // The launch's config file is named by its full path too, or Bun would look for it in this folder.
+    expect(listAll).toStartWith(`bun ${quoteCommandArgument(`--config=${join(project, ".claude", "tools", COPY_LAUNCH_CONFIG)}`)} --no-env-file `);
+    const [, ...launch] = words(listAll);
+    const again = run(launch[0], launch.slice(1), elsewhere);
     expect(again.status, again.out).toBe(0);
   });
 
@@ -150,14 +153,14 @@ describe.skipIf(process.platform === "win32")("a plan token that no longer match
     const token = (JSON.parse(planned.out) as { data: { planToken: string } }).data.planToken;
     expect(token, planned.out).toBeString();
     const refused = run(own, ["config", "flags", "--bypass", "AIDLC_DISABLE_SENSORS", "--project", "--plan-token", token], project);
-    expect(refused.out).toContain("config plan changed after approval; run bun .claude/tools/aidlc.ts config --dry-run again");
+    expect(refused.out).toContain(`config plan changed after approval; run ${withCopyLaunchOptions("bun .claude/tools/aidlc.ts")} config --dry-run again`);
     const next = refused.out.trim().split("\n").at(-1)?.replace(/^\s*fix:\s*/, "") ?? "";
-    expect(next).toStartWith("bun .claude/tools/aidlc.ts config flags --bypass AIDLC_DISABLE_SENSORS --project");
+    expect(next).toStartWith(withCopyLaunchOptions("bun .claude/tools/aidlc.ts config flags --bypass AIDLC_DISABLE_SENSORS --project"));
     expect(next).toContain("--dry-run");
     expect(next).not.toContain("--plan-token");
     // Run as printed, it plans the same change and prints the token for it.
-    const [, printedTool, ...args] = words(next);
-    const replanned = run(join(project, printedTool), args, project);
+    const [, ...launch] = words(next);
+    const replanned = run(launch[0], launch.slice(1), project);
     expect(replanned.status, replanned.out).toBe(0);
     const fresh = (JSON.parse(replanned.out) as { data: { planToken: string } }).data.planToken;
     expect(fresh).toStartWith("sha256:");

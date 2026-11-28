@@ -16,6 +16,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
@@ -1286,7 +1287,7 @@ describe("t295 project section", () => {
     const copy = temp("aidlc-t295-copy-completions-");
     cpSync(join(DIST, "claude"), copy, { recursive: true });
     expect(completionInstruction(copy, ".claude", "bash")).toBe(
-      'eval "$(bun .claude/tools/aidlc.ts system completions bash)"',
+      `eval "$(${withCopyLaunchOptions("bun .claude/tools/aidlc.ts system completions bash")})"`,
     );
   });
 

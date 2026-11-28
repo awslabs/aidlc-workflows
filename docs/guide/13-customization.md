@@ -586,7 +586,7 @@ AI-DLC's value is:
 ```json
 "statusLine": {
   "type": "command",
-  "command": "bun \"$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts\" engine statusline"
+  "command": "bun \"--config=$CLAUDE_PROJECT_DIR/.claude/tools/aidlc-bunfig.toml\" --no-env-file \"$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts\" engine statusline"
 }
 ```
 

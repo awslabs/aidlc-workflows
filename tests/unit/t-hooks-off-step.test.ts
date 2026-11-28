@@ -21,6 +21,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, normalize } from "node:path";
 import { HOOKS_OFF_RERUN, hooksHealthDir, unattendedHumanPresenceHint } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { REQUEST_MAX_BYTES } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import { cleanupTestProject, REPO_ROOT, toPortablePath } from "../harness/fixtures.ts";
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
@@ -74,7 +75,7 @@ const HARNESSES: Harness[] = [
     lines: () => [
       "Type /agent and pick aidlc, then carry on. If aidlc is not in that list, type /upgrade-agent and choose the " +
         "workspace agents, then quit Kiro and start `kiro-cli --v3` again in this folder; or, to switch this project " +
-        "to Kiro, quit Kiro, run `bun .kiro/tools/aidlc.ts config --harness kiro` in a terminal in this folder and, " +
+        `to Kiro, quit Kiro, run \`${withCopyLaunchOptions("bun .kiro/tools/aidlc.ts config --harness kiro")}\` in a terminal in this folder and, ` +
         "once it has finished, start `kiro-cli --v3`; or quit Kiro and start it again in this folder with: " +
         "kiro-cli --v2 --agent aidlc (Kiro CLI 2.21.4 or later; for an older one, see the AI-DLC Kiro CLI guide), " +
         "and type /aidlc there to carry on.",
@@ -1240,7 +1241,7 @@ describe("a refusal for a reply that was not recorded carries the same step when
       expect(hint).toContain(RULES);
       expect(hint).toContain(`"${h.lines("")[0]}"`);
       // The refusal's step runs the engine's own next, so the waiting question shows again.
-      expect(hint).toContain("Then run `bun .claude/tools/aidlc.ts engine orchestrate next` and act on what it returns");
+      expect(hint).toContain(`Then run \`${withCopyLaunchOptions("bun .claude/tools/aidlc.ts engine orchestrate next")}\` and act on what it returns`);
       // With a heartbeat the hooks run: no step that sends the person after a setting already on.
       beat(proj, "reviewer-scope");
       const running = unattendedHumanPresenceHint();
@@ -1263,9 +1264,10 @@ describe("a refusal for a reply that was not recorded carries the same step when
 describe("claude: a .claude/settings.json that is missing, not valid JSON or without AI-DLC's hooks gets its repair, not a setting", () => {
   const h = HARNESSES[0];
   const restart = "then exit Claude Code and start it again in this folder, and type /aidlc";
+  const config = withCopyLaunchOptions("bun .claude/tools/aidlc.ts config --harness claude");
   const MISSING =
     ".claude/settings.json is missing from this project, so Claude Code runs none of AI-DLC's hooks here. In a " +
-    "terminal in this folder, run `bun .claude/tools/aidlc.ts config --harness claude --from <the runtime/claude " +
+    `terminal in this folder, run \`${config} --from <the runtime/claude ` +
     `root you copied from>\` to put back AI-DLC's hooks (your own hooks are kept), ${restart}`;
   const INVALID =
     "Claude Code cannot read this project's .claude/settings.json because it is not valid JSON, so it runs none " +
@@ -1299,7 +1301,7 @@ describe("claude: a .claude/settings.json that is missing, not valid JSON or wit
 
   const UNWIRED =
     ".claude/settings.json in this project does not register AI-DLC's hooks, so Claude Code runs none of them " +
-    "here. In a terminal in this folder, run `bun .claude/tools/aidlc.ts config --harness claude --from <the " +
+    `here. In a terminal in this folder, run \`${config} --from <the ` +
     `runtime/claude root you copied from>\` to put back AI-DLC's hooks (your own hooks are kept), ${restart}`;
 
   test("registers none of AI-DLC's hooks: the line names the config command that puts them back", () => {

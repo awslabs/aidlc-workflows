@@ -545,7 +545,7 @@ describe("planQuestionBoxAsAsked", () => {
 });
 
 // Two Units asked about in one question (the swarm set-up of
-// t-plan-approval-ask's groupedProject), with the person's source change since
+// groupedProject in tests/harness/plan-approval-ask.ts), with the person's source change since
 // the stage started when `changed` is set, in work with `repos` when given (each
 // Unit's plan naming its file in the next one).
 const GROUP = ["alpha", "beta"];

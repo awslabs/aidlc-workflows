@@ -6,7 +6,7 @@
 // reaches a read, in the dispatcher or in the tools it spawns.
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -90,6 +90,34 @@ describe("t-dotenv-guard: a project .env never reaches the engine", () => {
     doctor({ ...env, GIT_TRACE: trace });
     expect(existsSync(trace)).toBe(true);
   });
+
+  // plugin sync runs the compose script of every folder a plugin-root name
+  // gives it. A host hands a hook that name; a project .env naming the project
+  // itself must not make the project a plugin. The script leaves a marker.
+  test("plugin sync never runs the compose script of a folder a project .env names as a plugin", () => {
+    const project = projectWithClaudeTree();
+    const marker = join(project, "compose-ran.txt");
+    for (const dir of [".claude-plugin", ".aidlc-plugin", "hooks"]) mkdirSync(join(project, dir));
+    writeFileSync(join(project, ".claude-plugin", "plugin.json"), '{ "name": "aidlc-demo", "version": "1.0.0" }\n');
+    writeFileSync(join(project, ".aidlc-plugin", "plugin.json"), '{ "name": "demo", "version": "1.0.0" }\n');
+    writeFileSync(
+      join(project, "hooks", "compose.ts"),
+      `require("node:fs").appendFileSync(${JSON.stringify(marker)}, "ran\\n");\nexport async function compose() {}\n`,
+    );
+    const sync = (env: NodeJS.ProcessEnv) =>
+      spawnSync(BUN, [dispatcherIn(project), "engine", "plugin", "sync"], { cwd: project, encoding: "utf-8", env, timeout: 120_000 });
+    const env: NodeJS.ProcessEnv = { ...process.env };
+    for (const name of ["PLUGIN_ROOT", "CLAUDE_PLUGIN_ROOT", "AIDLC_PLUGIN_ROOT"]) delete env[name];
+
+    writeFileSync(join(project, ".env"), "PLUGIN_ROOT=.\n");
+    const fromFile = sync(env);
+    expect(existsSync(marker), `${fromFile.stdout ?? ""}${fromFile.stderr ?? ""}`).toBe(false);
+
+    // The same name in the real environment is the host's, and its plugin is composed.
+    writeFileSync(join(project, ".env"), "");
+    const fromHost = sync({ ...env, PLUGIN_ROOT: project });
+    expect(existsSync(marker), `${fromHost.stdout ?? ""}${fromHost.stderr ?? ""}`).toBe(true);
+  });
 });
 
 describe("t-dotenv-guard: the module", () => {
@@ -115,22 +143,33 @@ describe("t-dotenv-guard: the module", () => {
 
   test("drops AI-DLC's and the host tools' names the file assigns, keeps the person's application names", () => {
     const dir = folder({
-      ".env": "AIDLC_A=1\nAWS_AIDLC_DEFAULT_SCOPE=workshop\nCLAUDE_PROJECT_DIR=/elsewhere\nGIT_CONFIG_COUNT=1\nAIDLC_MISSING=1\n",
-      ".env.local": "export AWS_PROFILE=repo\nDATABASE_URL=postgres://repo\nPATH=/nowhere\nOTHER=2\n",
+      ".env": "AIDLC_A=1\nAWS_AIDLC_DEFAULT_SCOPE=workshop\nCLAUDE_PROJECT_DIR=/elsewhere\nGIT_CONFIG_COUNT=1\nAIDLC_MISSING=1\nPLUGIN_ROOT=.\n",
+      ".env.local": "export AWS_PROFILE=repo\nDATABASE_URL=postgres://repo\nPATH=/nowhere\nOTHER=2\nWEBPACK_PLUGIN_ROOT=./build\nPLUGIN_ROOT_URL=/static\n",
     });
     const env: NodeJS.ProcessEnv = {
       AIDLC_A: "1",
       AWS_AIDLC_DEFAULT_SCOPE: "workshop",
       CLAUDE_PROJECT_DIR: "/elsewhere",
       GIT_CONFIG_COUNT: "1",
+      PLUGIN_ROOT: ".",
       AWS_PROFILE: "mine",
       DATABASE_URL: "postgres://mine",
       PATH: "/real/bin",
       OTHER: "2",
+      WEBPACK_PLUGIN_ROOT: "./build",
+      PLUGIN_ROOT_URL: "/static",
       KEEP: "mine",
     };
-    expect(dropDotenvNames(env, dir)).toEqual(["AIDLC_A", "AWS_AIDLC_DEFAULT_SCOPE", "CLAUDE_PROJECT_DIR", "GIT_CONFIG_COUNT"]);
-    expect(env).toEqual({ AWS_PROFILE: "mine", DATABASE_URL: "postgres://mine", PATH: "/real/bin", OTHER: "2", KEEP: "mine" });
+    expect(dropDotenvNames(env, dir)).toEqual(["AIDLC_A", "AWS_AIDLC_DEFAULT_SCOPE", "CLAUDE_PROJECT_DIR", "GIT_CONFIG_COUNT", "PLUGIN_ROOT"]);
+    expect(env).toEqual({
+      AWS_PROFILE: "mine",
+      DATABASE_URL: "postgres://mine",
+      PATH: "/real/bin",
+      OTHER: "2",
+      WEBPACK_PLUGIN_ROOT: "./build",
+      PLUGIN_ROOT_URL: "/static",
+      KEEP: "mine",
+    });
     expect(dropDotenvNames(env, dir)).toEqual([]);
   });
 

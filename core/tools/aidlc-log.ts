@@ -6,6 +6,7 @@
 // (the §12a reviewer step). Orchestrator-callable; state tool doesn't own these
 // because they fire per-question / per-review, not per state transition.
 
+import { reviewedSourceMoved } from "./aidlc-swarm-source.ts";
 import { constructionPolicyRecovery } from "./aidlc-guard-operation.ts";
 import { projectDirFlag, settleClaudeTurnsFirst } from "./aidlc-claude-turn-pending.ts";
 import { CHANGE_NOTICES_NOTE, otherWorkNote, reviewRequestNote, reviewVerdictNote } from "./aidlc-directive.ts";
@@ -282,9 +283,6 @@ import {
   writeUnitSourceSnapshot,
   writeWorkspaceSourceSnapshot,
   readWorkspaceSourceSnapshot,
-  sourceKeysChangedOutsideAidlcSince,
-  aidlcOwnedSourceKey,
-  sourceListingChangedKeys,
   otherOpenWorkClaims,
   PLAN_APPROVAL_ASKED_BY_ENGINE,
   planApprovalAskIsOpen,
@@ -335,7 +333,7 @@ import {
   REVIEW_TESTING_CONTRACT_FIELD,
   reviewedTestingContract,
 } from "./aidlc-testing-posture.js";
-import { aidlcDispatcherInvocation, aidlcEngineCommand, aidlcToolInvocation, compiledExecutable, entrySkillInvocation, quoteCommandArgument, swarmUnitTestCommand } from "./aidlc-runtime-paths.ts";
+import { aidlcDispatcherInvocation, aidlcEngineCommand, aidlcToolInvocation, bunLaunchFlags, compiledExecutable, entrySkillInvocation, quoteCommandArgument, swarmUnitTestCommand } from "./aidlc-runtime-paths.ts";
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { chatTookStepHere } from "./aidlc-record-core.ts";
 import { personGitNameField } from "./aidlc-git-name.ts";
@@ -3647,7 +3645,7 @@ export function readEngineUnitDirective(
       ? [executable, "engine", "orchestrate", ...subargs]
       : [
           process.execPath,
-          fileURLToPath(new URL("./aidlc-orchestrate.ts", import.meta.url)),
+          ...bunLaunchFlags(), fileURLToPath(new URL("./aidlc-orchestrate.ts", import.meta.url)),
           ...subargs,
         ];
     const result = spawnSync(command[0], command.slice(1), {
@@ -5534,23 +5532,14 @@ function handleReview(args: string[]): void {
           );
         }
         let sourceMoved = !sameWorkspaceSource(requestBinding.sourceFingerprint, sourceFingerprint);
-        // Under strict, what moved is read against the listing the request kept,
-        // by the gate's own rule (sourceKeysChangedOutsideAidlcSince): a file Git
-        // ignores and HEAD does not track, such as a test run's output, is not a
-        // change to the reviewed source. AI-DLC's own files still count here, and
-        // a listing that cannot be read leaves the move counted.
+        // Under strict, what moved is read against the listing the request kept
+        // (reviewedSourceMoved): a file Git ignores and HEAD does not track, such
+        // as a test run's output, is not a change to the reviewed source.
         let requestedListing: string | undefined;
         if (sourceMoved && !changesAccepted && sourceState !== null) {
           const requested = readWorkspaceSourceSnapshot(pd, flags.stage as string, requestBinding.sourceFingerprint as string);
-          try {
-            if (requested !== null) requestedListing = writeBaselineSourceSnapshot(pd, flags.stage as string, requested, intent, space);
-          } catch {
-            // Not kept: the move counts.
-          }
-          const counted = sourceKeysChangedOutsideAidlcSince(pd, flags.stage as string, requestedListing, sourceState, [], null);
-          const owned = aidlcOwnedSourceKey(pd);
-          sourceMoved = requested === null || counted === null || counted.size > 0 ||
-            [...sourceListingChangedKeys(requested, sourceState.listing)].some(owned);
+          ({ moved: sourceMoved, listing: requestedListing } =
+            reviewedSourceMoved(pd, flags.stage as string, requested, sourceState, intent, space));
         }
         if (sourceMoved && !changesAccepted) {
           refuseReview(

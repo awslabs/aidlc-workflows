@@ -17,6 +17,7 @@ output_schema:
   scanned_files: string[]
   questions_file: string
   findings_count: integer
+  message: string
 timeout_seconds: 300
 ---
 
@@ -126,3 +127,8 @@ through.
 Emits `SENSOR_FAILED` and writes detail listing missing sections, untagged
 claim blocks, unresolved source ids, misplaced assumption tags, or an
 unconfirmed assumption set.
+
+A failing result also carries one `message` sentence with the fix its
+findings ask for where the check itself settles it: prefix an assumption or
+open question with `[assumption]`. The findings stay spelled as before beside
+it.

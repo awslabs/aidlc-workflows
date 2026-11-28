@@ -30,6 +30,7 @@ import {
   unitProgressRow,
   nextPastPushOffer,
 } from "../harness/team-unit-merge.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 
 // The pinned merge cases are split across four files
 // (t326-team-unit-merge*.test.ts) so the integration tier runs them in
@@ -187,7 +188,7 @@ describe("t326 pinned team Unit merge", () => {
       seed,
     );
     expect(movedGate.status).not.toBe(0);
-    expect(movedGate.out).toContain("run bun .claude/tools/aidlc.ts unit pin alpha again");
+    expect(movedGate.out).toContain(`run ${withCopyLaunchOptions("bun .claude/tools/aidlc.ts unit pin alpha")} again`);
     const repin = runMergeTool(UNIT, ["pin", "alpha"], seed);
     expect(repin.status, repin.out).toBe(0);
     expect(

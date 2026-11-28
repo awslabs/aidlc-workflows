@@ -25,10 +25,13 @@ import { fileURLToPath } from "node:url";
 // check of theirs switched off, records pointed at another folder, a tool run
 // from a directory of the repository's choosing. The installed engine is built
 // with that autoload off, so nothing in its environment came from a file and
-// nothing is dropped there. A Bun-run tree cannot carry a build flag, so here
-// every AI-DLC or host-tool name a `.env` file in the working directory assigns
-// is removed again before any read; a child Bun process loads the files again
-// and runs this again on its first import.
+// nothing is dropped there. A Bun-run tree's own launches pass Bun
+// `--no-env-file` (bunLaunchFlags), and then nothing is dropped either. A
+// launch without it (a command typed by hand, an older install's hook) still
+// loads the files, so for it every AI-DLC or host-tool name a `.env` file in the
+// working directory assigns is removed again before any read; a child Bun
+// process started without the flag loads the files again and runs this again on
+// its first import.
 //
 // What is removed here reaches a child only through process.env.
 // node:child_process hands a child process.env as it is now; Bun's own spawn
@@ -68,15 +71,17 @@ export const BUN_DOTENV_FILES = [
 
 const DOTENV_ASSIGNMENT = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/gm;
 // Names the engine reads as its own, or that the host tools use to tell it
-// where the project, the person's settings or a plugin is; then the names that
-// tell a program the engine starts what else to run: every `GIT_` name (its
+// where the project, the person's settings or a plugin is (a host hands a hook
+// its plugin's folder as CLAUDE_PLUGIN_ROOT or as PLUGIN_ROOT with no prefix,
+// and plugin sync runs the compose script of every folder so named); then the
+// names that tell a program the engine starts what else to run: every `GIT_` name (its
 // configuration, its helpers' folder, its ssh, askpass, diff, editor and pager
 // programs, the repository it reads), ssh's askpass, Bun's and Node's own
 // options and module path, the package registry a `bunx` sensor installs
 // from, the loader's preload and library path, the file a bash script reads
 // before it runs, and the editor git falls back to.
 const DOTENV_GUARDED =
-  /^(?:AIDLC_|AWS_AIDLC_|CLAUDE_|KIRO_|CODEX_|CURSOR_|COPILOT_|XDG_|GIT_|SSH_ASKPASS|BUN_|NPM_CONFIG_|LD_|DYLD_|NODE_(?:OPTIONS|PATH)$|(?:BASH_ENV|EDITOR|VISUAL)$)/i;
+  /^(?:AIDLC_|AWS_AIDLC_|CLAUDE_|KIRO_|CODEX_|CURSOR_|COPILOT_|PLUGIN_ROOT$|XDG_|GIT_|SSH_ASKPASS|BUN_|NPM_CONFIG_|LD_|DYLD_|NODE_(?:OPTIONS|PATH)$|(?:BASH_ENV|EDITOR|VISUAL)$)/i;
 // Declarations only the host makes: kept even when a file names them.
 const DOTENV_HOST_ONLY = /^AIDLC_(?:UNATTENDED$|INTERNAL_)/i;
 
@@ -129,6 +134,91 @@ dropDotenvNames();
 const MODULE_TOOLS_DIR = dirname(fileURLToPath(import.meta.url));
 const MODULE_HARNESS_ROOT = join(MODULE_TOOLS_DIR, "..");
 const PROJECTED_INVOKE = "{{INVOKE}}";
+
+// Bun reads the bunfig.toml of the folder it runs in, and runs its `preload`
+// before the program it was asked to run, and it loads that folder's `.env`
+// files: in a person's project, the project's own. A copy install's launches
+// start Bun with `--config=` this empty file of its own tools folder in place
+// of the project's, and `--no-env-file`. The `=` form, since Bun reads
+// `--config <path>` as the script; a path that names no file makes Bun refuse
+// to start. The compiled engine is built with both autoloads off.
+export const BUN_LAUNCH_CONFIG = "aidlc-bunfig.toml";
+
+// The two words a Bun child of engine code gets after the executable, its
+// config path absolute (a child may run from any folder). None in the compiled
+// engine; `--no-env-file` alone where the tools folder holds no config file
+// (the source tree, or a person removed it), so a child never meets Bun's
+// refusal.
+export function bunLaunchFlags(toolsDir = MODULE_TOOLS_DIR): string[] {
+  if (isCompiledExecutable()) return [];
+  const config = join(toolsDir, BUN_LAUNCH_CONFIG);
+  return existsSync(config) ? [`--config=${config}`, "--no-env-file"] : ["--no-env-file"];
+}
+
+/** A copy install's launch up to its script, as it writes and prints it: `bun --config=<dir>/tools/<file> --no-env-file`. */
+export function copyLaunchPrefix(harnessDir: string): string {
+  return `bun --config=${harnessDir}/tools/${BUN_LAUNCH_CONFIG} --no-env-file`;
+}
+
+/**
+ * `bun` as a command this tree prints launches a copied tool from the project
+ * folder: with the two options in a copy tree (whose launch the packager wrote
+ * into PROJECTED_INVOKE); plain in the source tree, which has no config file to
+ * name, and in the native tree, whose own launch is `aidlc`.
+ */
+export function bunLaunchFor(harnessDir: string): string {
+  return PROJECTED_INVOKE.startsWith("bun ") ? copyLaunchPrefix(harnessDir) : "bun";
+}
+
+/**
+ * `bun` for a printed command that names a tool of the tools folder at
+ * `toolsDir` by its full path: with the two options, the config's full path
+ * quoted for the shell, when that folder holds the config file (an older
+ * release's does not, and a `--config=` naming no file makes Bun refuse).
+ */
+export function bunLaunchAt(toolsDir: string): string {
+  if (!existsSync(join(toolsDir, BUN_LAUNCH_CONFIG))) return "bun";
+  return `bun ${quoteCommandArgument(`--config=${join(toolsDir, BUN_LAUNCH_CONFIG)}`)} --no-env-file`;
+}
+
+// The config file a copy launch names: `<a harness folder>/tools/aidlc-bunfig.toml`,
+// relative or under any folder. As one word (a process's own arguments, or a
+// command's words once the shell's quotes are read) its folder may hold any
+// character, a space or an apostrophe included; in text an unquoted path ends
+// at the first space or shell character.
+const LAUNCH_CONFIG = String.raw`\.[A-Za-z0-9_.-]+[\\/]tools[\\/]aidlc-bunfig\.toml`;
+const LAUNCH_CONFIG_WORD = new RegExp(String.raw`^--config=(?:[^\r\n]*[\\/])?` + LAUNCH_CONFIG + "$");
+const LAUNCH_OPTIONS_TEXT = new RegExp(
+  String.raw`(\bbun(?:\.exe)?[ \t]+)(?:"--config=(?:[^"\r\n]*[\\/])?` + LAUNCH_CONFIG + String.raw`"|'--config=(?:[^'\r\n]*[\\/])?` +
+    LAUNCH_CONFIG + String.raw`'|--config=(?:[^\s"';&|]*[\\/])?` + LAUNCH_CONFIG + String.raw`)[ \t]+--no-env-file[ \t]+`,
+  "g",
+);
+
+// How many of a copy launch's two options follow the Bun word at `at` in a
+// command's words: 2 for `--config=<a harness folder>/tools/aidlc-bunfig.toml`
+// then `--no-env-file`, else 0. Every reader of a command takes a launch with
+// them as the same launch without them; a config file of another name is not
+// AI-DLC's, so it is not skipped.
+export function bunLaunchOptionWords(words: readonly string[], at: number): number {
+  return LAUNCH_CONFIG_WORD.test(words[at] ?? "") && words[at + 1] === "--no-env-file" ? 2 : 0;
+}
+
+// The variable the dispatcher sets for a Bun child it starts when it was itself
+// started without a copy launch's `--config=` (the child always gets the
+// options, so only the dispatcher knows); doctor reads it. Set or removed for
+// every child, so no value from a `.env` or the shell stands.
+export const LAUNCHED_WITHOUT_CONFIG_ENV = "AIDLC_INTERNAL_LAUNCHED_WITHOUT_CONFIG";
+
+/** Whether this Bun process was started with a copy launch's `--config=`, so no folder's bunfig.toml applies. */
+export function launchedWithConfig(execArgv: readonly string[] = process.execArgv): boolean {
+  return execArgv.some((arg) => LAUNCH_CONFIG_WORD.test(arg));
+}
+
+/** A command's text with each copy launch's two options taken out after its Bun word, for readers that match text. */
+export function withoutBunLaunchOptions(text: string): string {
+  return text.replace(LAUNCH_OPTIONS_TEXT, "$1");
+}
+
 // Release version grammar: stable x.y.z, or a preview id
 // x.y.z-preview.YYYYMMDD.N. Literal of PREVIEW_CHANNEL / VERSION_ID in
 // aidlc-channel.ts, repeated here because hooks ship this module with a closed
@@ -312,7 +402,7 @@ export function aidlcEngineCommand(
 ): string[] {
   return executable
     ? [executable, "engine", route, ...args]
-    : [process.execPath, sourceToolPath ?? resolveHarnessPath(["tools", `aidlc-${route}.ts`]), ...args];
+    : [process.execPath, ...bunLaunchFlags(), sourceToolPath ?? resolveHarnessPath(["tools", `aidlc-${route}.ts`]), ...args];
 }
 
 // Whether the agent's shell is in the host a harness's `{ env }` names: `NAME`
@@ -476,7 +566,8 @@ export function aidlcToolInvocation(
   const path = qualifiedSource
     ? `${runtimeHarnessDir()}/tools/aidlc-${tool}.ts`
     : `aidlc-${tool}.ts`;
-  return `bun ${path}`;
+  // A bare file name runs from the tools folder, which holds no bunfig.toml or .env.
+  return `${qualifiedSource ? bunLaunchFor(runtimeHarnessDir()) : "bun"} ${path}`;
 }
 
 function explicitRuntimeProjectDir(argv: readonly string[] = process.argv.slice(1)): string | null {
@@ -1314,4 +1405,213 @@ export function syncFolderClause(projectDir: string): string {
   const service = syncServiceHolding(projectDir);
   if (service === null) return "";
   return `${syncFolderLabel(service)}. ${SYNC_FOLDER_STEP[0]!.toUpperCase()}${SYNC_FOLDER_STEP.slice(1)}. `;
+}
+
+// A path anyone can name may carry a line break or a control character. In a
+// line the person or the conductor reads it stays one inert line.
+export function inertPath(path: string): string {
+  return path.replace(
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: escaping them is the point
+    /[\u0000-\u001f\u007f-\u009f\u{200e}\u{200f}\u{2028}\u{2029}\u{202a}-\u{202e}\u{2066}-\u{2069}]/gu,
+    (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`,
+  );
+}
+
+// Google Drive's Folder backup hard-links each file it is uploading into a
+// hidden upload folder at the top of the backed-up folder, and drops the link
+// when the upload ends. A record file read during that window has a second
+// link that is Drive's, not an alias someone planted. Only this folder name is
+// known; a link anywhere else stays a refusal.
+export const SYNC_UPLOAD_FOLDERS: ReadonlyMap<string, string> = new Map([
+  [".tmp.driveupload", "Google Drive Folder backup"],
+]);
+// Drive's layout inside the folder is not documented, so the search is
+// recursive; the cap keeps a huge upload folder from stalling every read.
+const SYNC_UPLOAD_MAX_ENTRIES = 10_000;
+
+export interface LinkStat {
+  dev: number;
+  ino: number;
+  nlink: number;
+  ctimeMs: number;
+}
+export interface SyncUploadLinks {
+  /** The service whose upload folder holds a link, or null when none does. */
+  service: string | null;
+  /** The other links found, as real paths. */
+  paths: string[];
+  /** False when a folder could not be searched to the end. */
+  complete: boolean;
+}
+export interface SyncUploadOptions {
+  platform?: NodeJS.Platform;
+  home?: string;
+  uid?: number;
+  maxEntries?: number;
+}
+
+let syncUploadWalks = 0;
+const syncUploadDecisions = new Map<string, { accepted: boolean; result: SyncUploadLinks }>();
+
+/** How many upload-folder searches this process has run (tests spy on it). */
+export function syncUploadWalkCount(): number {
+  return syncUploadWalks;
+}
+
+export function resetSyncUploadCacheForTests(): void {
+  syncUploadWalks = 0;
+  syncUploadDecisions.clear();
+}
+
+// A folder someone else could have made, or a link to one, could hold any
+// file's second link; only a real folder the current user owns is Drive's.
+// Windows has no uid, so there the real-folder check alone applies.
+function ownUploadFolder(path: string, platform: NodeJS.Platform, uid: number | undefined): boolean {
+  const st = lstatSync(path, { throwIfNoEntry: false });
+  if (st === undefined || st.isSymbolicLink() || !st.isDirectory()) return false;
+  if (platform === "win32") return true;
+  return uid !== undefined && st.uid === uid;
+}
+
+// Every regular file under `folder` with this identity, never through a link.
+// Incomplete when the cap is reached or a folder cannot be listed: a link
+// could be in the part not seen.
+function linksInFolder(folder: string, stat: LinkStat, self: string, maxEntries: number): SyncUploadLinks {
+  const found: SyncUploadLinks = { service: null, paths: [], complete: true };
+  const pending = [folder];
+  let seen = 0;
+  while (pending.length > 0) {
+    const dir = pending.pop()!;
+    let entries: Dirent[];
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return { ...found, complete: false };
+    }
+    for (const entry of entries) {
+      seen++;
+      if (seen > maxEntries) return { ...found, complete: false };
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) pending.push(path);
+      if (!entry.isFile() || path === self) continue;
+      const st = lstatSync(path, { throwIfNoEntry: false });
+      if (st?.isFile() && st.dev === stat.dev && st.ino === stat.ino) found.paths.push(path);
+    }
+  }
+  return found;
+}
+
+/**
+ * The other links of a multiply linked file that sit in a sync service's
+ * upload folder. Looks in each ancestor of the file's real folder, up to the
+ * home folder when the file is inside it and to the filesystem root otherwise.
+ */
+export function syncUploadLinks(path: string, stat: LinkStat, options: SyncUploadOptions = {}): SyncUploadLinks {
+  syncUploadWalks++;
+  const platform = options.platform ?? process.platform;
+  const uid = options.uid ?? process.getuid?.();
+  const maxEntries = options.maxEntries ?? SYNC_UPLOAD_MAX_ENTRIES;
+  const home = realDirectory(options.home ?? homedir());
+  const start = realDirectory(resolve(dirname(path)));
+  if (start === null) return { service: null, paths: [], complete: false };
+  const self = join(start, basename(path));
+  const stop = home !== null && pathWithin(home, start) ? home : null;
+  const result: SyncUploadLinks = { service: null, paths: [], complete: true };
+  // An upload folder inside another is searched from both, so one link can be
+  // found twice; the accept compares the count of distinct paths (as spelled on
+  // disk) with the file's link count.
+  const links = new Set<string>();
+  for (let dir = start; ; dir = dirname(dir)) {
+    for (const [name, service] of SYNC_UPLOAD_FOLDERS) {
+      const folder = join(dir, name);
+      if (!ownUploadFolder(folder, platform, uid)) continue;
+      const found = linksInFolder(folder, stat, self, maxEntries);
+      if (!found.complete) result.complete = false;
+      if (found.paths.length > 0) result.service ??= service;
+      for (const link of found.paths) links.add(link);
+    }
+    if (dir === stop || dirname(dir) === dir) return { ...result, paths: [...links] };
+  }
+}
+
+/**
+ * Whether a multiply linked file's every other link is in a sync upload
+ * folder. Cached per process by identity, link count and ctime: a new link
+ * changes both the count and ctime, so a cached accept never covers it.
+ */
+export function acceptsSyncUploadLinks(
+  path: string,
+  stat: LinkStat,
+  options: SyncUploadOptions = {},
+): { accepted: boolean; result: SyncUploadLinks } {
+  const key = `${stat.dev}:${stat.ino}:${stat.nlink}:${stat.ctimeMs}`;
+  const cached = syncUploadDecisions.get(key);
+  if (cached !== undefined) return cached;
+  const result = syncUploadLinks(path, stat, options);
+  const accepted = stat.nlink > 1 && result.complete && result.paths.length === stat.nlink - 1;
+  const decision = { accepted, result };
+  syncUploadDecisions.set(key, decision);
+  return decision;
+}
+
+/** One link, or extra links that are all a sync service's upload links. */
+export function singleOrSyncUploadLinked(path: string, stat: LinkStat): boolean {
+  if (stat.nlink === 1) return true;
+  return stat.nlink > 1 && acceptsSyncUploadLinks(path, stat).accepted;
+}
+
+// Number() matches the precision of the number-valued lstat the upload-folder
+// search compares against, so the same inode compares equal on both sides.
+export function singleOrSyncUploadLinkedArtifact(
+  path: string,
+  st: { dev: bigint; ino: bigint; nlink: bigint; ctimeNs: bigint },
+): boolean {
+  return singleOrSyncUploadLinked(path, {
+    dev: Number(st.dev),
+    ino: Number(st.ino),
+    nlink: Number(st.nlink),
+    ctimeMs: Number(st.ctimeNs) / 1e6,
+  });
+}
+
+/**
+ * Whether a file's links held still while it was read. The count may not rise,
+ * and ctime may change only when the open was accepted as a sync upload link
+ * and the count went down: that is the service dropping its link mid-read.
+ */
+export function linksSteadyWhileReading(
+  opened: { nlink: number; ctimeMs: number },
+  after: { nlink: number; ctimeMs: number },
+  syncUploadAccepted: boolean,
+): boolean {
+  if (after.nlink < 1 || after.nlink > opened.nlink) return false;
+  if (after.ctimeMs === opened.ctimeMs) return true;
+  return syncUploadAccepted && after.nlink < opened.nlink;
+}
+
+/** The way past a hardlink refusal. Said in words: a chained shell command does
+ *  not parse in Windows PowerShell 5.1, and cmd has no cp or mv. */
+export const HARDLINK_REMEDY = "Copy the file, delete the original, give the copy the original's name, then re-run.";
+
+/**
+ * The refusal of a multiply linked file, naming what AI-DLC found of its other
+ * links. `subject` leads the line ("record file", or the knowledge tool's file
+ * name or "it"); `path`, when given, follows it.
+ */
+export function hardLinkRefusal(subject: string, path: string | null, nlink: number, result: SyncUploadLinks): string {
+  const others = nlink - 1;
+  const found = result.paths.length;
+  const missing = Math.max(0, others - found);
+  const where = found === 0
+    ? `It has ${nlink} links, and AI-DLC cannot see where ` +
+      `${others === 1 ? "the other one is" : `the other ${others} are`}. `
+    : `It has ${nlink} links. ${found === 1 ? "One other link is" : `${found} other links are`} in ` +
+      `${result.service}'s upload folder (${result.paths.map(inertPath).join(", ")}); ` +
+      `${missing} ${missing === 1 ? "link" : "links"} unaccounted for. `;
+  const cut = result.complete ? "" : "AI-DLC could not search an upload folder to the end. ";
+  // The leading words are the refusal callers and scripts already match on.
+  return `${inertPath(subject)} is multiply linked (a hardlink) and is not trusted${path === null ? "" : `: ${inertPath(path)}`}. ` +
+    `${where}${cut}` +
+    "A hardlink can alias content from elsewhere on the filesystem into this directory; backup and sync " +
+    `clients commonly make them. ${HARDLINK_REMEDY}`;
 }

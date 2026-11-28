@@ -27,8 +27,14 @@ import {
   resetAidlcEnv,
   runOrchestrateNext,
 } from "../harness/fixtures.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
+import { escapeRegex } from "../../core/tools/aidlc-markdown.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+// The dispatcher and the orchestrate tool as the copy tree's prints launch them.
+const AIDLC = withCopyLaunchOptions("bun .claude/tools/aidlc.ts");
+const ORCHESTRATE = withCopyLaunchOptions("bun .claude/tools/aidlc-orchestrate.ts");
 
 const TOOLS = join(import.meta.dir, "..", "..", "dist", "claude", ".claude", "tools");
 const STATE = join(TOOLS, "aidlc-state.ts");
@@ -141,7 +147,7 @@ function featureAtFeasibility(box: "in-progress" | "awaiting-approval"): string 
 
 /** The engine commands a print names, in order, as the utility subcommand and its arguments. */
 function engineCommands(message: string): string[][] {
-  return [...message.matchAll(/`bun \.claude\/tools\/aidlc\.ts engine (scope change|recompose) ([^`]*)`/g)]
+  return [...message.matchAll(new RegExp(`\`${escapeRegex(AIDLC)} engine (scope change|recompose) ([^\`]*)\``, "g"))]
     .filter((m) => !message.slice(0, m.index).endsWith("If they later ask to undo it, run "))
     .map((m) => [
       m[1] === "scope change" ? "scope-change" : "recompose",
@@ -173,7 +179,7 @@ describe("t-skip-beside-reopen: a skip typed beside a plan switch on finished wo
     const print = next(proj, ["--scope", "feature", "--skip", "ci-pipeline"]);
     expect(print.kind, JSON.stringify(print)).toBe("print");
     const said = print.message ?? "";
-    expect(said).toContain("`bun .claude/tools/aidlc.ts engine scope change --scope feature --skip ci-pipeline`");
+    expect(said).toContain(`\`${AIDLC} engine scope change --scope feature --skip ci-pipeline\``);
     expect(said).not.toContain("recompose");
     expect(said).not.toContain("do not show");
     expect(said).toContain('"Skipped CI Pipeline. It can still be run on its own with `/aidlc --stage ci-pipeline --single`."');
@@ -297,7 +303,7 @@ describe("t-skip-beside-reopen: everything else prints and does what it did", ()
     const proj = await finished("poc");
     const print = next(proj, ["--scope", "feature"]);
     expect(print.message).toBe(
-      "Run `bun .claude/tools/aidlc.ts engine scope change --scope feature` to change scope, then print its output " +
+      `Run \`${AIDLC} engine scope change --scope feature\` to change scope, then print its output ` +
         "verbatim and re-run next to carry on with the work.",
     );
     expect(run(UTILITY, proj, ["scope-change", "--scope", "feature"]).rc).toBe(0);
@@ -321,18 +327,18 @@ describe("t-skip-beside-reopen: everything else prints and does what it did", ()
   test("a skip beside a switch over running work prints the step it printed before", () => {
     const ahead = featureAtFeasibility("in-progress");
     expect(next(ahead, ["--scope", "mvp", "--skip", "delivery-planning"]).message).toBe(
-      "Run `bun .claude/tools/aidlc.ts engine scope change --scope mvp` and print its output verbatim, then run " +
-        "`bun .claude/tools/aidlc.ts engine recompose --skip delivery-planning --reason 'the person asked to skip it'` " +
+      `Run \`${AIDLC} engine scope change --scope mvp\` and print its output verbatim, then run ` +
+        `\`${AIDLC} engine recompose --skip delivery-planning --reason 'the person asked to skip it'\` ` +
         "to change this workflow's remaining stages as the person asked, and do not show its output: the one line " +
         "below says what changed. If a command refuses, tell the person in plain words why it could not, and the way " +
         "it names to do it instead, then stop. Otherwise tell the person in one line: \"Skipped Delivery Planning. You " +
         "can undo that until the work moves past it.\" Then stop. If they later ask to undo it, run " +
-        "`bun .claude/tools/aidlc.ts engine recompose --add delivery-planning`.",
+        `\`${AIDLC} engine recompose --add delivery-planning\`.`,
     );
     const running = featureAtFeasibility("in-progress");
     expect(next(running, ["--scope", "mvp", "--skip", "feasibility"]).message).toBe(
-      "Run `bun .claude/tools/aidlc.ts engine scope change --scope mvp` and print its output verbatim, then run " +
-        "`bun .claude/tools/aidlc-orchestrate.ts report --stage feasibility --result skipped --reason 'the person " +
+      `Run \`${AIDLC} engine scope change --scope mvp\` and print its output verbatim, then run ` +
+        `\`${ORCHESTRATE} report --stage feasibility --result skipped --reason 'the person ` +
         "asked to skip it'` to skip Feasibility & Constraints, which has already started, and do not show its output: " +
         "the one line below says what changed. If a command refuses, tell the person in plain words why it could not, " +
         "and the way it names to do it instead, then stop. Otherwise tell the person in one line: \"Skipped " +

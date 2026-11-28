@@ -47,8 +47,11 @@ export function exactCodexUtilityArgv(command: string): string[] | null {
     }
     words.push(word);
   }
-  if (words[0] !== "bun" || !CODEX_TOOL.test(words[1] ?? "")) return null;
-  return words.slice(2);
+  if (words[0] !== "bun") return null;
+  // The copy launch's two Bun options, its config file beside the tool's.
+  const at = /^--config=(?:\.\/)?(?:\/[^\s'"]*\/)?\.codex\/tools\/aidlc-bunfig\.toml$/.test(words[1] ?? "") && words[2] === "--no-env-file" ? 3 : 1;
+  if (!CODEX_TOOL.test(words[at] ?? "")) return null;
+  return words.slice(at + 1);
 }
 
 /** Codex can omit aggregated_output even when the CLI wrote its summary.

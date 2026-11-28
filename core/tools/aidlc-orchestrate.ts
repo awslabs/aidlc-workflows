@@ -681,6 +681,7 @@ import {
 } from "./aidlc-utility.ts";
 import { checkboxIsUnitProjection, ledgerStageActivity } from "./aidlc-doctor-bundle.ts";
 import {
+  bunLaunchFlags,
   aidlcDispatcherInvocation,
   aidlcEngineCommand,
   aidlcInvocation,
@@ -3372,7 +3373,7 @@ function toolCommand(toolFile: string, args: string[]): string[] {
     }
     throw new Error(`No compiled dispatcher route for ${toolFile} ${args.join(" ")}`);
   }
-  return [process.execPath, toolPath(toolFile), ...args];
+  return [process.execPath, ...bunLaunchFlags(), toolPath(toolFile), ...args];
 }
 
 // The result of spawning a sibling tool: its exit code plus captured streams.

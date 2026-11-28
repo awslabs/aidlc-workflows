@@ -35,6 +35,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { TextDecoder } from "node:util";
 import { inflateSync } from "node:zlib";
 import {
+  bunLaunchFlags,
+  bunLaunchOptionWords,
   aidlcDispatcherInvocation,
   aidlcInvocation,
   aidlcToolInvocation,
@@ -54,9 +56,13 @@ import {
   SPACE_NAME_REGEX,
   repoNameProblem,
   repoNameRefusal,
+  inertPath,
+  singleOrSyncUploadLinked,
+  singleOrSyncUploadLinkedArtifact,
   typedHarnessName,
+  withoutBunLaunchOptions,
 } from "./aidlc-runtime-paths.ts";
-export { entrySkillInvocation, repoNameProblem, repoNameRefusal, SPACE_NAME_REGEX } from "./aidlc-runtime-paths.ts";
+export { entrySkillInvocation, inertPath, repoNameProblem, repoNameRefusal, SPACE_NAME_REGEX } from "./aidlc-runtime-paths.ts";
 import { humanTurnMintAllowed, personGitNameField } from "./aidlc-git-name.ts";
 export { humanTurnMintAllowed } from "./aidlc-git-name.ts";
 import { gitCommonDirOf, hasRealGitEntry, submoduleLeavesProjectRepo } from "./aidlc-git.ts";
@@ -3152,7 +3158,7 @@ const sourceEngineDispatcher = new RegExp(
 // Canonicalize only the engine tools these detectors own so the Bun and native
 // spellings share one classification policy. Other engine tools remain untouched.
 function canonicalEngineCommand(text: string): string {
-  return text
+  return withoutBunLaunchOptions(text)
     .replace(sourceEngineDispatcher, "aidlc ")
     .replace(
       /\baidlc\s+engine\s+orchestrate\s+help\b/g,
@@ -3454,7 +3460,9 @@ function engineInvocationFromWords(
   }
   if (commandIndex >= tokens.length) return null;
   const viaBun = base(tokens[commandIndex]) === "bun";
-  if (viaBun) commandIndex++;
+  const bunIndex = commandIndex;
+  // A copy launch's two Bun options (bunLaunchOptionWords) read as the launch without them.
+  if (viaBun) commandIndex += 1 + bunLaunchOptionWords(tokens, commandIndex + 1);
   if (commandIndex >= tokens.length) return null;
   if (!/^(?:aidlc|aidlc\.ts|aidlc-(?:orchestrate|state|jump|bolt|swarm|unit)(?:\.ts)?)$/.test(base(tokens[commandIndex]))) {
     // Unsupported interpreters do not become Bun transports merely because a
@@ -3464,7 +3472,7 @@ function engineInvocationFromWords(
   let command = tokens[commandIndex].replaceAll("\\", "/").split("/").pop() ?? "";
   if (command === "aidlc.ts") {
     if (
-      !/(?:^|[/\\])bun$/.test(tokens[commandIndex - 1] ?? "") ||
+      !viaBun || !/(?:^|[/\\])bun$/.test(tokens[bunIndex] ?? "") ||
       !new RegExp(`${sourceEngineDispatcherPath}$`).test(tokens[commandIndex])
     ) return "opaque";
     command = "aidlc";
@@ -3607,7 +3615,7 @@ export function settingsBesideDecision(
   const run = Bun.spawnSync({
     cmd: isCompiledExecutable()
       ? [process.execPath, ...args]
-      : [process.execPath, join(dirname(fileURLToPath(import.meta.url)), "aidlc.ts"), ...args],
+      : [process.execPath, ...bunLaunchFlags(), join(dirname(fileURLToPath(import.meta.url)), "aidlc.ts"), ...args],
     env: hookChildEnv(projectDir, session ?? undefined),
     stdout: "pipe",
     stderr: "pipe",
@@ -11438,7 +11446,8 @@ function copilotGuardRestartPrintHashes(
       (parseStateStageSuffixes(stateContent).get(operation.stage) ?? mapping.stages[operation.stage]) !== "EXECUTE"
     ) return [];
     const direction = targetIndex === currentIndex ? "redo" : "backward";
-    return ["aidlc engine jump", `bun ${runtimeHarnessDir()}/tools/aidlc-jump.ts`].map(
+    // The jump tool's line in either spelling of a copy launch (aidlcToolInvocation prints the one with its options).
+    return [...new Set(["aidlc engine jump", `bun ${runtimeHarnessDir()}/tools/aidlc-jump.ts`, aidlcToolInvocation("jump")])].map(
       (invocation) => contentSha256(JSON.stringify(withPersonsWordsFirst({
         kind: "print",
         message: `Run \`${invocation} execute --target ${operation.stage} --direction ${direction} --scope ${scopeArg(scope)}\` to perform the jump, then re-run \`next\` to continue from the jump target.`,
@@ -16599,7 +16608,7 @@ function readStableReviewArtifacts(
         contents.push({ ...entry, state: "not-file", identity: before });
         continue;
       }
-      if (before.nlink !== 1n) return null;
+      if (!singleOrSyncUploadLinkedArtifact(entry.path, before)) return null;
 
       const noFollow =
         typeof fsConstants.O_NOFOLLOW === "number"
@@ -16617,7 +16626,7 @@ function readStableReviewArtifacts(
       const openedIdentity = artifactFdStat(fd);
       if (
         !openedIdentity.isFile() ||
-        openedIdentity.nlink !== 1n ||
+        !singleOrSyncUploadLinkedArtifact(entry.path, openedIdentity) ||
         !sameArtifactIdentity(before, openedIdentity)
       ) return null;
       const openedReal = realpathSync(entry.path);
@@ -22685,12 +22694,12 @@ function sourceSnapshotPathBatches(
   return batches;
 }
 
-// Shape a caller-owned temporary index to the same source boundary used by the
-// fingerprint. The caller seeds and overlays the index first; this helper then
-// restores framework/dependency/cache/generated paths to HEAD and force-adds
-// ignored source candidates plus every explicitly registered path (including
-// binary source). Swarm uses the same helper before writing its immutable
-// Source Commit.
+// Shape a caller-owned temporary index to the fingerprint's source boundary,
+// less the files Git ignores and HEAD does not track. The caller seeds and
+// overlays the index first; this helper then restores framework/dependency/
+// cache/generated paths to HEAD and force-adds the walk's other source candidates
+// plus every explicitly registered path (including binary source). Swarm uses
+// the same helper before writing its immutable Source Commit.
 export interface SourceSnapshotIndexShape {
   externalSymlinkPaths: string[];
   includedRegularPaths: Set<string>;
@@ -22831,10 +22840,9 @@ export function shapeSourceSnapshotIndex(
     if (restored.status !== 0) return null;
   }
 
-  // Files the walk leaves out by name keep HEAD's version here too, so the
-  // snapshot holds exactly what the fingerprint binds. Regular files only: a
-  // symlink with such a name, or its deletion, still counts; a registered path
-  // is re-added below.
+  // Files the walk leaves out by name keep HEAD's version here too, as the
+  // fingerprint leaves them out. Regular files only: a symlink with such a
+  // name, or its deletion, still counts; a registered path is re-added below.
   const byName = sourceSnapshotNameExcludedPathspecs(repoDir, env, sourceIdentity.registeredSnapshotPaths);
   if (byName === null) return null;
   const byNameBatches = sourceSnapshotPathBatches(repoDir, byName);
@@ -22848,7 +22856,9 @@ export function shapeSourceSnapshotIndex(
     if (restored.status !== 0) return null;
   }
 
-  const forcePaths = new Set(sourceIdentity.snapshotPaths);
+  // No force-add past an ignore line: a path Git ignores, HEAD does not track and no registry names stays out (an embedded checkout goes on to bind's check).
+  const ignored = unclaimableIgnoredSourceKeys(repoDir, sourceIdentity.snapshotPaths.filter((path) => !sourceIdentity.embeddedGitPaths.includes(path)).map((path) => `\0${path}`), false);
+  const forcePaths = new Set(sourceIdentity.snapshotPaths.filter((path) => !ignored.has(`\0${path}`)));
   for (const path of sourceIdentity.registeredSnapshotPaths) {
     if (existsSync(join(repoDir, path))) {
       forcePaths.add(path);
@@ -22862,8 +22872,7 @@ export function shapeSourceSnapshotIndex(
     if (tracked.status !== 0) return null;
     if (tracked.stdout.length > 0) forcePaths.add(path);
   }
-  const sortedForcePaths = [...forcePaths].sort();
-  const forceBatches = sourceSnapshotPathBatches(repoDir, sortedForcePaths);
+  const forceBatches = sourceSnapshotPathBatches(repoDir, [...forcePaths].sort());
   if (forceBatches === null) return null;
   for (const batch of forceBatches) {
     const restored = spawnSync(
@@ -28433,7 +28442,7 @@ function plainProjectFile(projectDir: string, rel: string): boolean {
   try {
     const path = assertNoSymlinkInChainOrThrow(realpathSync(projectDir), rel);
     const stat = lstatSync(path, { throwIfNoEntry: false });
-    return stat === undefined || (stat.isFile() && stat.nlink === 1);
+    return stat === undefined || (stat.isFile() && singleOrSyncUploadLinked(path, stat));
   } catch {
     return false;
   }
@@ -35549,7 +35558,8 @@ export type SwarmSourceMergeChain =
     };
 
 export type SwarmSourceOpeningFingerprint =
-  | { state: "invalid"; reason: string }
+  // `baseline`: the stage-start record's state, when that is what cannot be read.
+  | { state: "invalid"; reason: string; baseline?: Exclude<SourceBaselineResult["state"], "ready"> }
   | {
       state: "ready";
       fingerprint: string;
@@ -35684,6 +35694,7 @@ export function currentSwarmSourceOpeningFingerprint(
     return {
       state: "invalid",
       reason: "current source baseline is unavailable for the opening aggregate link",
+      baseline: baseline.state,
     };
   }
   return {
@@ -35880,10 +35891,16 @@ export function currentSwarmSourceMergeChain(
     }
     start = end;
   }
+  // A first link that opened from the main checkout as it was, because the
+  // record of what the stage started from could not be read there (the
+  // CHANGE_ACCEPTED row STAGE_START_UNAVAILABLE in aidlc-swarm-source.ts names),
+  // stands whatever that record reads as now.
+  const unchecked = openingPrevious !== null && openingRow !== null &&
+    keptChange("(stage start unavailable)", openingPrevious, openingRow);
   // The opening link was checked against the stage baseline as it stood then:
   // a repo that joined the work after that landing (withRepoBaselineAdditions
   // reads its INTENT_REPOS_CHANGED row) does not move it.
-  const opening = currentSwarmSourceOpeningFingerprint(
+  const opening = unchecked ? null : currentSwarmSourceOpeningFingerprint(
     projectDir,
     slug,
     intent,
@@ -35891,10 +35908,13 @@ export function currentSwarmSourceMergeChain(
     allRows.filter((row) =>
       row.event !== "INTENT_REPOS_CHANGED" || openingRow === null || !attemptEventDefinitelyBefore(openingRow, row)),
   );
-  if (opening.state === "invalid") {
+  // Lost on this machine (a fresh clone, a teammate's), the record proves
+  // nothing against a first link that was checked where it was made.
+  if (opening?.state === "invalid" && opening.baseline !== "missing") {
     return opening;
   }
   if (
+    opening?.state === "ready" &&
     openingPrevious !== opening.fingerprint &&
     !(openingPrevious !== null && openingRow !== null && keptChange(opening.fingerprint, openingPrevious, openingRow))
   ) {
@@ -41652,16 +41672,6 @@ function appendGuardPolicySetRow(
 }
 
 /** A bounded, human-readable list of changed paths. */
-// A path anyone can name may carry a line break or a control character. In a
-// line the person or the conductor reads it stays one inert line.
-export function inertPath(path: string): string {
-  return path.replace(
-    // biome-ignore lint/suspicious/noControlCharactersInRegex: escaping them is the point
-    /[\u0000-\u001f\u007f-\u009f\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g,
-    (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`,
-  );
-}
-
 export function renderChangedPaths(paths: readonly string[]): string {
   const shown = paths.slice(0, CHANGE_CONTROL_MAX_LISTED_PATHS).map(inertPath);
   const more = paths.length - shown.length;

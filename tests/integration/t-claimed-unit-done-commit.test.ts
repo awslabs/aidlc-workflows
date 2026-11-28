@@ -34,6 +34,7 @@ import {
   prepareCandidate,
   runMergeTool,
 } from "../harness/team-unit-merge.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
@@ -41,7 +42,8 @@ afterEach(cleanupTempDirs);
 
 const COPILOT_TREE = join(REPO_ROOT, "dist", "copilot", ".aidlc");
 const SESSION = "c1a1c0de-0000-4000-8000-000000003286";
-const NEXT = "bun .aidlc/tools/aidlc-orchestrate.ts next";
+// `next` as the copy tree prints it, which the agent runs as printed.
+const NEXT = withCopyLaunchOptions("bun .aidlc/tools/aidlc-orchestrate.ts next");
 const DONE = 'Unit "alpha" is complete and approved in this checkout.';
 // The done step's first word: the offer to publish the Unit, naming it.
 const OFFER = { kind: "ask", ask_type: "team-handover", handovers: ["publish"], unit: "alpha" };

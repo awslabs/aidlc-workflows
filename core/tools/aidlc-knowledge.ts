@@ -52,7 +52,7 @@
 
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS, LONG_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { readPdfMain } from "./aidlc-pdf.ts";
-import { compiledExecutable } from "./aidlc-runtime-paths.ts";
+import { acceptsSyncUploadLinks, bunLaunchFlags, compiledExecutable, hardLinkRefusal } from "./aidlc-runtime-paths.ts";
 import { createHash } from "node:crypto";
 import { type SpawnSyncReturns, spawnSync } from "node:child_process";
 import {
@@ -79,7 +79,6 @@ import {
   errorMessage,
   type FileIdentity,
   fileIdentity,
-  HARDLINK_REMEDY,
   intentsDir,
   isPidAlive,
   knowledgeDir,
@@ -507,7 +506,7 @@ function builtinPdfCommand(): readonly string[] {
   const exe = compiledExecutable();
   return exe !== null
     ? [exe, "engine", "knowledge", "read-pdf", "--page-cap", String(EXTRACT_PAGE_CAP)]
-    : [process.execPath, fileURLToPath(new URL("./aidlc-pdf.ts", import.meta.url)), "--page-cap", String(EXTRACT_PAGE_CAP)];
+    : [process.execPath, ...bunLaunchFlags(), fileURLToPath(new URL("./aidlc-pdf.ts", import.meta.url)), "--page-cap", String(EXTRACT_PAGE_CAP)];
 }
 
 /** The page count the built-in reader reports as the last line of its stderr (0 when it says none). */
@@ -1696,7 +1695,8 @@ function statOnlyRefusal(real: string, rel: string): string | null {
   // every sync quietly passed over it — the exact list/sync disagreement the
   // present_but_refused state exists to prevent.
   if (st.nlink !== 1) {
-    return `${rel} is multiply linked (a hardlink) and is not trusted. ${HARDLINK_REMEDY}`;
+    const { accepted, result } = acceptsSyncUploadLinks(real, st);
+    if (!accepted) return hardLinkRefusal(rel, null, st.nlink, result);
   }
   try {
     // fs.constants.R_OK, as a literal: this file's restricted fs allowlist

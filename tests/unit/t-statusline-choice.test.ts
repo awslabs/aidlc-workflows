@@ -31,6 +31,7 @@ import {
   switchClaudeStatusLine,
 } from "../../core/tools/aidlc-statusline-choice.ts";
 import { typedHarnessName } from "../../core/tools/aidlc-runtime-paths.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 
 setDefaultTimeout(180_000);
 
@@ -39,7 +40,7 @@ const INIT = join(REPO_ROOT, "core", "tools", "aidlc-init.ts");
 const ORCHESTRATE = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-orchestrate.ts");
 const RUNTIME = join(REPO_ROOT, "dist-release");
 const ITEMS = ["model-with-reasoning", "git-branch", "task-progress", "context-used"];
-const SOURCE_STATUS_LINE = { type: "command", command: 'bun "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts" engine statusline' };
+const SOURCE_STATUS_LINE = { type: "command", command: withCopyLaunchOptions('bun "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts" engine statusline') };
 const NATIVE_STATUS_LINE = { type: "command", command: "aidlc engine statusline" };
 const OWN = { type: "command", command: "echo mine", padding: 0 };
 const HOST_ENV = [

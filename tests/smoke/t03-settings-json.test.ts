@@ -42,6 +42,7 @@ import { join } from "node:path";
 import { CONFIG_SECTIONS } from "../../core/tools/aidlc-command.ts";
 import { copyChannelDispatcherCommands, copyChannelToolScripts, ROUTES } from "../../core/tools/aidlc.ts";
 import { RECORDABLE_PROJECT_BYPASSES } from "../../core/tools/aidlc-settings.ts";
+import { COPY_LAUNCH_CONFIG, withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import { AIDLC_SRC, REPO_ROOT } from "../harness/fixtures.ts";
 
 // Every read form agents were seen running for "show my settings", "what
@@ -64,6 +65,11 @@ const SEEN_READ_FORMS = [
     `config ${section} --help`,
   ]),
 ];
+
+// The copy tree starts its own Bun with these two options, so every command
+// it names, and every allow entry, carries them.
+const BUN = `bun --config=.claude/tools/${COPY_LAUNCH_CONFIG} --no-env-file`;
+const BUN_PATTERN = BUN.replace(/[.]/g, "\\.");
 
 const SETTINGS_PATH = join(AIDLC_SRC, "settings.json");
 const RAW = readFileSync(SETTINGS_PATH, "utf-8");
@@ -119,11 +125,11 @@ describe("permissions.allow — pre-approved tool list [.sh tests 2-9]", () => {
   test("permissions.allow lists AI-DLC's own commands exactly on the copy channel", () => {
     expect(allow).toEqual([
       "Edit(/**)",
-      "Bash(bun .claude/tools/aidlc.ts engine *)",
-      ...copyChannelDispatcherCommands().map((command) => `Bash(bun .claude/tools/aidlc.ts ${command})`),
+      `Bash(${BUN} .claude/tools/aidlc.ts engine *)`,
+      ...copyChannelDispatcherCommands().map((command) => `Bash(${BUN} .claude/tools/aidlc.ts ${command})`),
       ...copyChannelToolScripts().flatMap((script) => [
-        `Bash(bun .claude/tools/${script})`,
-        `Bash(bun .claude/tools/${script} *)`,
+        `Bash(${BUN} .claude/tools/${script})`,
+        `Bash(${BUN} .claude/tools/${script} *)`,
       ]),
       "Task",
       "WebSearch",
@@ -146,33 +152,33 @@ describe("permissions.allow — pre-approved tool list [.sh tests 2-9]", () => {
 
   test("a command that changes the machine's AI-DLC install, or any setting, shows Claude Code's own prompt", () => {
     for (const command of [
-      "bun .claude/tools/aidlc.ts use 2.10.0",
-      "bun .claude/tools/aidlc.ts update",
-      "bun .claude/tools/aidlc.ts update --check",
-      "bun .claude/tools/aidlc.ts rollback",
-      "bun .claude/tools/aidlc.ts uninstall --yes",
-      "bun .claude/tools/aidlc.ts system config global set offline true",
-      "bun .claude/tools/aidlc.ts --yes update",
+      `${BUN} .claude/tools/aidlc.ts use 2.10.0`,
+      `${BUN} .claude/tools/aidlc.ts update`,
+      `${BUN} .claude/tools/aidlc.ts update --check`,
+      `${BUN} .claude/tools/aidlc.ts rollback`,
+      `${BUN} .claude/tools/aidlc.ts uninstall --yes`,
+      `${BUN} .claude/tools/aidlc.ts system config global set offline true`,
+      `${BUN} .claude/tools/aidlc.ts --yes update`,
       // The scripts behind those commands.
-      "bun .claude/tools/aidlc-lifecycle.ts use 2.10.0",
-      "bun .claude/tools/aidlc-lifecycle.ts",
-      "bun .claude/tools/aidlc-machine-config.ts set offline true",
-      "bun .claude/tools/aidlc-init.ts --pin 2.10.0",
-      "bun .claude/tools/aidlc-doctor.ts",
+      `${BUN} .claude/tools/aidlc-lifecycle.ts use 2.10.0`,
+      `${BUN} .claude/tools/aidlc-lifecycle.ts`,
+      `${BUN} .claude/tools/aidlc-machine-config.ts set offline true`,
+      `${BUN} .claude/tools/aidlc-init.ts --pin 2.10.0`,
+      `${BUN} .claude/tools/aidlc-doctor.ts`,
       // Every config change, however its flags are spelled.
-      "bun .claude/tools/aidlc.ts config --pin 2.10.0",
-      "bun .claude/tools/aidlc.ts config --unpin",
-      "bun .claude/tools/aidlc.ts config --channel",
-      "bun .claude/tools/aidlc.ts config --channel preview",
-      "bun .claude/tools/aidlc.ts config project --plugins all --download --yes",
-      "bun .claude/tools/aidlc.ts config models --deciding-effort high --global --yes",
-      "bun .claude/tools/aidlc.ts config models --gl\"obal\" --yes",
-      "bun .claude/tools/aidlc.ts config models --deciding-effort high --project --yes",
-      "bun .claude/tools/aidlc.ts config depth --depth minimal --yes",
-      "bun .claude/tools/aidlc.ts config models --show --json --global",
+      `${BUN} .claude/tools/aidlc.ts config --pin 2.10.0`,
+      `${BUN} .claude/tools/aidlc.ts config --unpin`,
+      `${BUN} .claude/tools/aidlc.ts config --channel`,
+      `${BUN} .claude/tools/aidlc.ts config --channel preview`,
+      `${BUN} .claude/tools/aidlc.ts config project --plugins all --download --yes`,
+      `${BUN} .claude/tools/aidlc.ts config models --deciding-effort high --global --yes`,
+      `${BUN} .claude/tools/aidlc.ts config models --gl"obal" --yes`,
+      `${BUN} .claude/tools/aidlc.ts config models --deciding-effort high --project --yes`,
+      `${BUN} .claude/tools/aidlc.ts config depth --depth minimal --yes`,
+      `${BUN} .claude/tools/aidlc.ts config models --show --json --global`,
       // A longer file name than any AI-DLC script.
-      "bun .claude/tools/aidlc-log.tsx",
-      "bun .claude/tools/aidlc-log.ts.bak run",
+      `${BUN} .claude/tools/aidlc-log.tsx`,
+      `${BUN} .claude/tools/aidlc-log.ts.bak run`,
     ]) {
       expect(claudeBashEffect(command), command).toBe("prompt");
     }
@@ -182,7 +188,7 @@ describe("permissions.allow — pre-approved tool list [.sh tests 2-9]", () => {
   // skills name runs as it is. Turning a check off stays the person's click,
   // and so does any form that changes something else as well.
   test("turning a recorded check back on runs with no prompt; turning one off shows Claude Code's prompt", () => {
-    const flags = "bun .claude/tools/aidlc.ts config flags";
+    const flags = `${BUN} .claude/tools/aidlc.ts config flags`;
     for (const name of RECORDABLE_PROJECT_BYPASSES) {
       expect(claudeBashEffect(`${flags} --clear-bypass ${name} --yes`), name).toBe("allow");
     }
@@ -209,10 +215,10 @@ describe("permissions.allow — pre-approved tool list [.sh tests 2-9]", () => {
   // one cannot slip in.
   test("every read form agents run works with no prompt on the copy channel", () => {
     for (const form of SEEN_READ_FORMS) {
-      expect(claudeBashEffect(`bun .claude/tools/aidlc.ts ${form}`), form).toBe("allow");
+      expect(claudeBashEffect(`${BUN} .claude/tools/aidlc.ts ${form}`), form).toBe("allow");
     }
     for (const form of ["config", "config --yes", "--config", "config models --show --global"]) {
-      expect(claudeBashEffect(`bun .claude/tools/aidlc.ts ${form}`), form).toBe("prompt");
+      expect(claudeBashEffect(`${BUN} .claude/tools/aidlc.ts ${form}`), form).toBe("prompt");
     }
   });
 
@@ -224,20 +230,20 @@ describe("permissions.allow — pre-approved tool list [.sh tests 2-9]", () => {
     );
     expect(machine.size).toBeGreaterThan(0);
     for (const tool of machine) {
-      expect(claudeBashEffect(`bun .claude/tools/${tool}`), tool).toBe("prompt");
-      expect(claudeBashEffect(`bun .claude/tools/${tool} x`), tool).toBe("prompt");
+      expect(claudeBashEffect(`${BUN} .claude/tools/${tool}`), tool).toBe("prompt");
+      expect(claudeBashEffect(`${BUN} .claude/tools/${tool} x`), tool).toBe("prompt");
     }
   });
 
   test("AI-DLC's own commands, the ones its skill and stage files name included, run with no prompt", () => {
     for (const command of [
-      "bun .claude/tools/aidlc.ts engine orchestrate next",
-      "bun .claude/tools/aidlc.ts engine orchestrate report --stage requirements-analysis --result approved --user-input 'Approve (Recommended)'",
-      "bun .claude/tools/aidlc.ts config providers --show --json",
-      "bun .claude/tools/aidlc.ts --doctor",
-      "bun .claude/tools/aidlc-utility.ts codekb-path",
-      "bun .claude/tools/aidlc-utility.ts",
-      "bun .claude/tools/aidlc.ts engine now",
+      `${BUN} .claude/tools/aidlc.ts engine orchestrate next`,
+      `${BUN} .claude/tools/aidlc.ts engine orchestrate report --stage requirements-analysis --result approved --user-input 'Approve (Recommended)'`,
+      `${BUN} .claude/tools/aidlc.ts config providers --show --json`,
+      `${BUN} .claude/tools/aidlc.ts --doctor`,
+      `${BUN} .claude/tools/aidlc-utility.ts codekb-path`,
+      `${BUN} .claude/tools/aidlc-utility.ts`,
+      `${BUN} .claude/tools/aidlc.ts engine now`,
     ]) {
       expect(claudeBashEffect(command), command).toBe("allow");
     }
@@ -248,7 +254,7 @@ describe("permissions.allow — pre-approved tool list [.sh tests 2-9]", () => {
         const path = join(dir, name);
         if (statSync(path).isDirectory()) visit(path);
         else if (name.endsWith(".md")) {
-          for (const [, span] of readFileSync(path, "utf-8").matchAll(/`(bun \.claude\/tools\/aidlc[^`\s]*\.ts [^`\n]+)`/g)) {
+          for (const [, span] of readFileSync(path, "utf-8").matchAll(new RegExp(`\`(${BUN_PATTERN} \\.claude/tools/aidlc[^\`\\s]*\\.ts [^\`\\n]+)\``, "g"))) {
             named.add(span);
           }
         }
@@ -259,18 +265,18 @@ describe("permissions.allow — pre-approved tool list [.sh tests 2-9]", () => {
     // A config change is the person's to approve in Claude Code's prompt; its
     // read-only forms run as they are, for every section.
     const raise = new RegExp(
-      `^bun \\.claude/tools/aidlc\\.ts config flags --clear-bypass (?:${RECORDABLE_PROJECT_BYPASSES.join("|")}) --yes$`,
+      `^${BUN_PATTERN} \\.claude/tools/aidlc\\.ts config flags --clear-bypass (?:${RECORDABLE_PROJECT_BYPASSES.join("|")}) --yes$`,
     );
     const configChange = (command: string) =>
-      /^bun \.claude\/tools\/aidlc\.ts config\b/.test(command) && !/ --(?:show --json|help)$/.test(command) &&
+      new RegExp(`^${BUN_PATTERN} \\.claude/tools/aidlc\\.ts config\\b`).test(command) && !/ --(?:show --json|help)$/.test(command) &&
       !raise.test(command);
     // A Unit command changes git and reaches the remote, so it stays behind
     // the host's own prompt (t-unit-verb-route).
-    const unitCommand = (command: string) => /^bun \.claude\/tools\/aidlc\.ts unit /.test(command);
+    const unitCommand = (command: string) => command.startsWith(`${BUN} .claude/tools/aidlc.ts unit `);
     // The skill names the command-line tool's own help only as the command not
     // to run ("`--help` goes here too ... is the command-line tool's own help,
     // not the AI-DLC help the person asked for"), so it needs no entry.
-    named.delete("bun .claude/tools/aidlc.ts --help");
+    named.delete(`${BUN} .claude/tools/aidlc.ts --help`);
     for (const span of named) {
       const commands = span.includes("<section>")
         ? CONFIG_SECTIONS.map((section) => span.replace("<section>", section))
@@ -372,7 +378,7 @@ describe("statusLine [.sh test 10]", () => {
     const shipped = JSON.parse(readFileSync(join(AIDLC_SRC, "tools", "data", "harness.json"), "utf-8")) as {
       statusLine?: { command?: string };
     };
-    expect(shipped.statusLine?.command).toBe('bun "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts" engine statusline');
+    expect(shipped.statusLine?.command).toBe(withCopyLaunchOptions('bun "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts" engine statusline'));
   });
 });
 

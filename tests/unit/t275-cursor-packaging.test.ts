@@ -59,6 +59,7 @@ import { REPO_ROOT } from "../harness/fixtures.ts";
 import { copyChannelDispatcherCommands, copyChannelToolScripts, machineReachingTools, resolveAction } from "../../core/tools/aidlc.ts";
 import { RECORDABLE_PROJECT_BYPASSES } from "../../core/tools/aidlc-settings.ts";
 import { CONFIG_SECTIONS } from "../../core/tools/aidlc-command.ts";
+import { COPY_LAUNCH_CONFIG, withCopyLaunchOptions } from "../harness/copy-launch.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -127,8 +128,8 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
         if (rel === "aidlc-cursor-adapter.ts") continue;
         const src = join(CLAUDE_SRC, sub, rel);
         const cursor = readFileSync(file, "utf-8").replaceAll(
-          "bun .cursor/tools/aidlc.ts",
-          "bun .claude/tools/aidlc.ts",
+          withCopyLaunchOptions("bun .cursor/tools/aidlc.ts"),
+          withCopyLaunchOptions("bun .claude/tools/aidlc.ts"),
         );
         if (cursor !== readFileSync(src, "utf-8")) divergent.push(`${sub}/${rel}`);
       }
@@ -206,7 +207,7 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       // schema) would silently never fire.
       expect(event[0], `${event}: camelCase`).toBe(event[0].toLowerCase());
       for (const h of group) {
-        const m = h.command.match(/^bun \.cursor\/hooks\/aidlc-cursor-adapter\.ts ([a-z-]+)$/);
+        const m = h.command.match(/^bun --config=\.cursor\/tools\/aidlc-bunfig\.toml --no-env-file \.cursor\/hooks\/aidlc-cursor-adapter\.ts ([a-z-]+)$/);
         expect(m, `${event}: adapter command shape (${h.command})`).not.toBeNull();
         if (m) targets.add(m[1]);
       }
@@ -217,13 +218,13 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
     }
     expect(wiring.hooks.preToolUse).toEqual([
       {
-        command: "bun .cursor/hooks/aidlc-cursor-adapter.ts guards",
+        command: withCopyLaunchOptions("bun .cursor/hooks/aidlc-cursor-adapter.ts guards"),
         failClosed: true,
       },
     ]);
     expect(wiring.hooks.stop).toEqual([
       {
-        command: "bun .cursor/hooks/aidlc-cursor-adapter.ts stop",
+        command: withCopyLaunchOptions("bun .cursor/hooks/aidlc-cursor-adapter.ts stop"),
         loop_limit: 10,
       },
     ]);
@@ -249,10 +250,13 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
     }
   });
 
+  // The copy install starts its own Bun with these two options in front of
+  // the script, and the allow entries hold that spelling only.
+  const COPY_OPTIONS = `--config=.cursor/tools/${COPY_LAUNCH_CONFIG} --no-env-file`;
   const SHIPPED_ALLOW = [
-    "Shell(bun:.cursor/tools/aidlc.ts engine *)",
-    ...copyChannelDispatcherCommands().map((command) => `Shell(bun:.cursor/tools/aidlc.ts ${command})`),
-    ...copyChannelToolScripts().flatMap((tool) => [`Shell(bun:.cursor/tools/${tool})`, `Shell(bun:.cursor/tools/${tool} *)`]),
+    `Shell(bun:${COPY_OPTIONS} .cursor/tools/aidlc.ts engine *)`,
+    ...copyChannelDispatcherCommands().map((command) => `Shell(bun:${COPY_OPTIONS} .cursor/tools/aidlc.ts ${command})`),
+    ...copyChannelToolScripts().flatMap((tool) => [`Shell(bun:${COPY_OPTIONS} .cursor/tools/${tool})`, `Shell(bun:${COPY_OPTIONS} .cursor/tools/${tool} *)`]),
   ];
   const SHIPPED_DENY: string[] = [];
 
@@ -309,7 +313,7 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       "bun .cursor/tools/aidlc-log.ts answers --stage x",
       // Turning a recorded check back on, in the one form the skills name.
       ...RECORDABLE_PROJECT_BYPASSES.map((name) => `bun .cursor/tools/aidlc.ts config flags --clear-bypass ${name} --yes`),
-    ]) {
+    ].map(withCopyLaunchOptions)) {
       expect(cursorShellEffect(cli, command), command).toBe("allow");
     }
     // The verbs and the scripts behind them fall to Cursor's own prompt.
@@ -348,7 +352,15 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       // A file whose name only starts with a tool script's.
       "bun .cursor/tools/aidlc-log.tsx answers --stage x",
       "bun .cursor/tools/aidlc-log.ts.bak answers --stage x",
-    ]) {
+    ].map(withCopyLaunchOptions).concat([
+      // A launch without the copy install's two options, or with another
+      // config file, would load a bunfig.toml the allow entry cannot see.
+      "bun .cursor/tools/aidlc.ts engine orchestrate next",
+      "bun .cursor/tools/aidlc-utility.ts codekb-path",
+      "bun --config=.cursor/tools/aidlc-bunfig.toml .cursor/tools/aidlc.ts engine orchestrate next",
+      "bun --no-env-file .cursor/tools/aidlc.ts engine orchestrate next",
+      "bun --config=bunfig.toml --no-env-file .cursor/tools/aidlc.ts engine orchestrate next",
+    ])) {
       expect(cursorShellEffect(cli, command), command).toBe("ask");
     }
   });
@@ -369,11 +381,11 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
     const copy = { allow: SHIPPED_ALLOW, deny: SHIPPED_DENY };
     for (const form of SEEN_READ_FORMS) {
       expect(cursorShellEffect(cli, `aidlc ${form}`), form).toBe("allow");
-      expect(cursorShellEffect(copy, `bun .cursor/tools/aidlc.ts ${form}`), form).toBe("allow");
+      expect(cursorShellEffect(copy, withCopyLaunchOptions(`bun .cursor/tools/aidlc.ts ${form}`)), form).toBe("allow");
     }
     for (const form of ["config", "config --yes", "--config", "config models --show --global"]) {
       expect(cursorShellEffect(cli, `aidlc ${form}`), form).not.toBe("allow");
-      expect(cursorShellEffect(copy, `bun .cursor/tools/aidlc.ts ${form}`), form).not.toBe("allow");
+      expect(cursorShellEffect(copy, withCopyLaunchOptions(`bun .cursor/tools/aidlc.ts ${form}`)), form).not.toBe("allow");
     }
     for (const command of [
       "aidlc engine orchestrate next",
@@ -459,7 +471,7 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       expect(r.stdout).toContain("Runtime hook PATH");
       // Each install names its own doctor: the copied one runs it through Bun.
       for (const [tree, doctor] of [
-        [CURSOR_ROOT, "run `bun .cursor/tools/aidlc.ts doctor` (after installing Bun from https://bun.sh/install if `bun` is not found),"],
+        [CURSOR_ROOT, `run \`${withCopyLaunchOptions("bun .cursor/tools/aidlc.ts doctor")}\` (after installing Bun from https://bun.sh/install if \`bun\` is not found),`],
         [CURSOR_RELEASE_ROOT, "run `aidlc doctor`,"],
       ] as const) {
         const standing = readFileSync(join(tree, ".cursor", "rules", "aidlc.mdc"), "utf-8");
@@ -513,7 +525,7 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
         "bun .cursor/hooks/project-hook.ts",
       );
       expect(hooks.hooks.sessionStart.map((entry) => entry.command)).toContain(
-        "bun .cursor/hooks/aidlc-cursor-adapter.ts session-start",
+        withCopyLaunchOptions("bun .cursor/hooks/aidlc-cursor-adapter.ts session-start"),
       );
       expect(hooks.hooks.postToolUseFailure).toHaveLength(1);
       expect(hooks.hooks.preToolUse[0]?.failClosed).toBe(true);

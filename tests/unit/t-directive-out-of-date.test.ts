@@ -45,6 +45,7 @@ import {
   NATIVE_STARTUP_TIMEOUT_MS,
   remainingOperationTimeoutMs,
 } from "../harness/test-budget.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -211,7 +212,7 @@ describe("a step that went out of date says which write did it", () => {
     expect(lines[row]).toMatch(/^\s*warn\s+The Code Generation step went out of date at /);
     expect(lines[row]).toMatch(OUT_OF_DATE_AT);
     expect(lines[row]).toContain("when the chat was compacted.");
-    expect(lines[row + 1]).toContain("fix: run `bun .aidlc/tools/aidlc-orchestrate.ts next` as its own command");
+    expect(lines[row + 1]).toContain(`fix: run \`${withCopyLaunchOptions("bun .aidlc/tools/aidlc-orchestrate.ts next")}\` as its own command`);
     expect(lines[row + 1]).toContain("an approval that still matches is kept");
 
     expect(nextToBuild(proj, session, "after-compaction")).toMatchObject({

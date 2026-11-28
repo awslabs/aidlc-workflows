@@ -1898,9 +1898,12 @@ describe("t325 a claim typed with no work selected", () => {
     });
     expect(said.status, said.stderr).toBe(0);
     const setter = runOrchestrateNext(ORCH, mate, ["--guard.review-freeze", "off"], { cwd: mate, env: chat }).directive;
-    const named = /Run `bun \.claude\/tools\/(aidlc[a-z-]*\.ts) ([^`]+)`/.exec(String(setter?.message));
+    // The copy tree's two Bun options first, its config taken from the shipped tree as the tool is.
+    const named = /Run `bun (?:--config=\.claude\/tools\/(\S+) --no-env-file )?\.claude\/tools\/(aidlc[a-z-]*\.ts) ([^`]+)`/
+      .exec(String(setter?.message));
     expect(named, JSON.stringify(setter).slice(0, 300)).not.toBeNull();
-    const kept = spawnSync(process.execPath, [join(AIDLC_SRC, "tools", named![1]), ...named![2].split(" ")], {
+    const options = named![1] ? [`--config=${join(AIDLC_SRC, "tools", named![1])}`, "--no-env-file"] : [];
+    const kept = spawnSync(process.execPath, [...options, join(AIDLC_SRC, "tools", named![2]), ...named![3].split(" ")], {
       cwd: mate, encoding: "utf-8", env: { ...chat, CLAUDE_PROJECT_DIR: mate, AIDLC_PROJECT_DIR: mate },
     });
     expect(`${kept.stdout}${kept.stderr}`).toContain("for the work you pick up or start next");

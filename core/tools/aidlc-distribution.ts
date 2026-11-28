@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync, lstatSync, readFileSync, readdirSync } from "node:fs";
 import { basename, join, relative } from "node:path";
 import { VERSION_ID } from "./aidlc-channel.ts";
+import { withoutBunLaunchOptions } from "./aidlc-runtime-paths.ts";
 
 export type ProjectionStamp = {
   schemaVersion: 1;
@@ -116,10 +117,12 @@ export const LEGACY_AIDLC_HOOK_TARGETS: ReadonlySet<string> = new Set([
 export const AIDLC_HOOK_ENTRY_PREFIX = "hooksAidlc:";
 
 export function aidlcDispatcherTarget(
-  command: string,
+  launch: string,
   allowTrailingContent = false,
   projectDir?: string,
 ): string | null {
+  // A copy launch's two Bun options are AI-DLC's own, in either spelling.
+  const command = withoutBunLaunchOptions(launch);
   const match = (allowTrailingContent ? AIDLC_HOOK_COMMAND_PREFIX : AIDLC_HOOK_COMMAND)
     .exec(command);
   const target = match?.[1] ?? match?.[2];

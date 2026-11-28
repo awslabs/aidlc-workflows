@@ -41,6 +41,7 @@ import {
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 
 // Every case spawns several tool processes plus real git remotes; bun's 5s default is too tight under --parallel 4.
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
@@ -541,7 +542,7 @@ describe("t327 team construction dispatcher", () => {
     expect(rendered).toContain("| blocked | awaiting |");
     expect(rendered).toContain("no move seen since 2026-08-19T12:00:00Z");
     expect(rendered).toContain("`/aidlc --claim claimable`");
-    expect(rendered).toContain("`bun .claude/tools/aidlc.ts unit gate awaiting`");
+    expect(rendered).toContain(`\`${withCopyLaunchOptions("bun .claude/tools/aidlc.ts unit gate awaiting")}\``);
 
     const actual = run(ORCH, ["next"], project);
     expect(actual.status, actual.out).toBe(0);
@@ -585,7 +586,7 @@ describe("t327 team construction dispatcher", () => {
       "merged; the audit record is not finished yet",
     );
     expect(pendingAudit.message as string).toContain(
-      "`bun .claude/tools/aidlc.ts unit land awaiting`",
+      `\`${withCopyLaunchOptions("bun .claude/tools/aidlc.ts unit land awaiting")}\``,
     );
   });
 
@@ -670,7 +671,7 @@ describe("t327 team construction dispatcher", () => {
     const recoveryBoard = nextDirective(race.project);
     expect(recoveryBoard.kind).toBe("notice");
     expect(recoveryBoard.message as string).toContain(
-      "bun .claude/tools/aidlc.ts unit land awaiting --accept-released-attempt --user-input '<human acknowledgment>'",
+      withCopyLaunchOptions("bun .claude/tools/aidlc.ts unit land awaiting --accept-released-attempt --user-input '<human acknowledgment>'"),
     );
   });
 
@@ -790,7 +791,7 @@ describe("t327 team construction dispatcher", () => {
     const expected = `${renderTeamConstructionBoard(directBoard, "snapshot")}\n`;
     expect(expected).toContain("| secondary-alpha | secondary-team |");
     expect(expected).toContain("secondary-beta waits on secondary-alpha");
-    expect(expected).toContain("`bun .claude/tools/aidlc.ts unit gate secondary-alpha`");
+    expect(expected).toContain(`\`${withCopyLaunchOptions("bun .claude/tools/aidlc.ts unit gate secondary-alpha")}\``);
     expect(expected).not.toContain("awaiting-team");
 
     const bySpace = run(

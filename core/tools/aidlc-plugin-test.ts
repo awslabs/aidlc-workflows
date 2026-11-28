@@ -3,7 +3,7 @@
 
 import { discoverInstalledPluginNames } from "./aidlc-config-diagnostics.ts";
 import { LONG_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
-import { discoverProjectHarnesses, harnessIdFromTyped, isCompiledExecutable, typedHarnessName } from "./aidlc-runtime-paths.ts";
+import { bunLaunchFlags, discoverProjectHarnesses, harnessIdFromTyped, isCompiledExecutable, typedHarnessName } from "./aidlc-runtime-paths.ts";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import {
@@ -257,7 +257,7 @@ export function runPluginCompose(
     const result = spawnSync(
       process.execPath,
       [
-        join(
+        ...bunLaunchFlags(), join(
           options.pluginBuilt,
           "hooks",
           "aidlc-plugin-compose.ts",
@@ -284,7 +284,7 @@ export function runPluginCompose(
 
   const result = spawnSync(
     process.execPath,
-    [join(options.pluginBuilt, "hooks", "compose.ts")],
+    [...bunLaunchFlags(), join(options.pluginBuilt, "hooks", "compose.ts")],
     {
       cwd: options.projectDir,
       encoding: "utf-8",
@@ -466,7 +466,7 @@ function runGraphCompile(
     "tools",
     "aidlc-graph.ts",
   );
-  const result = spawnSync(process.execPath, [graph, "compile"], {
+  const result = spawnSync(process.execPath, [...bunLaunchFlags(), graph, "compile"], {
     cwd: candidateRoot,
     encoding: "utf-8",
     env: {

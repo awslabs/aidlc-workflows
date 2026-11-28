@@ -81,16 +81,18 @@ trust: Codex asks the person to trust the project's hooks once more after the
 upgrade, and Claude Code picks the new row up at its next start.
 
 **AI-DLC's own command in another spelling (Claude Code).** The copy
-channel's settings allow AI-DLC's tool commands in their relative spelling
-(`Bash(bun .claude/tools/aidlc.ts engine *)`,
-`Bash(bun .claude/tools/aidlc-utility.ts *)` and the rest of the list), and
+channel's settings allow AI-DLC's tool commands in their relative spelling,
+after the copy launch's two Bun options
+(`Bash(bun --config=.claude/tools/aidlc-bunfig.toml --no-env-file .claude/tools/aidlc.ts engine *)`,
+the same for `aidlc-utility.ts *` and the rest of the list), and
 Claude Code matches a Bash rule against the command text as written, so a helper that named
 the project's path in full was asked about a step AI-DLC runs for itself. When
 every check in the group passed and none printed anything, the group answers
 `"allow"` (with no reason text) for two spellings: a command whose relative
 form an exact or `<prefix> *` rule in the project's own `settings.json` allow
 list holds, with this project's `.claude/tools/` folder named by its absolute
-path (a POSIX path, or a Windows drive letter with either slash); and the one
+path (a POSIX path, or a Windows drive letter with either slash) and the
+launch's config file this project's own, by either path; and the one
 compound read of AI-DLC's record helpers were seen to run (`cat` of files in
 the project's `aidlc/` folder, `echo`, and `git -C <project> rev-parse HEAD`,
 joined by `;` or `&&`). Anything else gets no answer and Claude Code asks as
@@ -541,19 +543,26 @@ All seventeen TypeScript hook sources:
 - Resolve `$CLAUDE_PROJECT_DIR` with multiple fallback methods
 - Share locking and utility functions from `lib.ts`
 
-Claude's source-generated `.claude/settings.json` invokes hooks with
-`bun "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts" engine hook <name>`, and the
-status line value in `tools/data/harness.json` uses the same anchored
+Claude's copy-channel `.claude/settings.json` invokes hooks with
+`bun "--config=$CLAUDE_PROJECT_DIR/.claude/tools/aidlc-bunfig.toml" --no-env-file "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts" engine hook <name>`,
+and the status line value in `tools/data/harness.json` uses the same anchored
 dispatcher for `engine statusline`. The quoted entry path
 survives project roots containing spaces and application commands that change
 the working directory. It does not change the hook process's working directory
 or the `cwd` supplied in the JSON payload. Native release settings use
 `aidlc engine hook <name>` and `aidlc engine statusline`, without Bun.
-Either way the hook's environment is the host tool's, never the project's `.env` files: the
-compiled engine is built with Bun's dotenv and bunfig autoload off, and a Bun-run tree
+Either way the hook's environment is the host tool's, never the project's `.env` files, and
+the project's `bunfig.toml` (whose `preload` would run a file of the project's inside the hook)
+is never read: the compiled engine is built with Bun's dotenv and bunfig autoload off. A Bun-run
+tree starts Bun with `--config=<harness folder>/tools/aidlc-bunfig.toml --no-env-file` (an empty
+config file AI-DLC ships in its tools folder) in every launch it writes, prints, registers or
+allows, and every Bun child of engine code it starts gets the same two options. A launch without
+them (an older install's registration, a command typed by hand) still
 evaluates `aidlc-runtime-paths.ts` first (every entry imports it before its own body) to drop the AI-DLC and host-tool names those files
 assigned (`AIDLC_*`, `AWS_AIDLC_*`, the `CLAUDE_*`, `KIRO_*`, `CODEX_*`, `CURSOR_*`,
-`COPILOT_*` and `XDG_*` names), in the dispatcher and in each tool it spawns. It drops the same way
+`COPILOT_*` and `XDG_*` names, and `PLUGIN_ROOT`, the name a host gives a hook for its plugin's
+folder, so a project cannot name itself as a plugin for `plugin sync` to compose), in the
+dispatcher and in each tool it spawns. It drops the same way
 the names that tell a program the engine starts what else to run, so a file of the repository's is
 never handed to git, to ssh or to a sensor's compiler: every `GIT_*` name, `SSH_ASKPASS*`, `BUN_*`,
 `NODE_OPTIONS`, `NODE_PATH`, `NPM_CONFIG_*`, `LD_*`, `DYLD_*`, `BASH_ENV`, `EDITOR` and `VISUAL`.
@@ -1865,6 +1874,8 @@ This is one of the framework's six flow-altering hooks and one of its five `PreT
 
 **Decision.** The matcher (`evaluateReviewerScope`, an exported pure function pinned by `t220`) scans path fields and command/pattern text for `construction/<seg>` tokens: the dispatched unit passes, a wildcard or bare sweep root blocks, and a concrete sibling blocks unless the full token exactly matches an exempt entry's `construction/` suffix. A grep of the current unit, the shared inception contracts, and validation-tool runs are never touched. Blocks emit a `REVIEWER_SCOPE_BLOCKED` audit row (Tool, Target, Stage, Unit) and signal via **exit 2 + a redirecting stderr reason** — the harness PreToolUse reject contract — that names the scope and points the reviewer back to the passed contracts.
 
+A search or listing root that holds the record's `construction/` folder (the project folder, the record, the space) is refused for where it starts (the verdict's `above`): its reason says so and names the unit's folder and, for a root inside the project folder, up to 12 of its subfolders (`startsBelow`), each asked of `evaluateReviewerScope` before it is named.
+
 **Reviewer read-scope failure behavior.** No record, a stale or malformed record, a non-reviewer agent, an unknown tool, malformed stdin, or any internal error allows the reviewer read-scope call; a reviewer-agent sighting touching `construction/` paths with no dispatch record records an advisory drop for `--doctor` only while a digest-valid active directive is a per-unit `run-stage` (or a live `invoke-swarm`) - when `stage-protocol-reviewer-unit.md` owed the record. A single-stage review, or a missing/stale marker, stays silent rather than asserting an omission. The deterministic off-switch `AIDLC_DISABLE_REVIEWER_SCOPE_HOOK=1` disables this reviewer read-scope enforcement. A valid claimed-checkout stamp is handled first, and cross-unit writes remain refused under every policy word, per-work fence setting, and reviewer-scope environment switch.
 
 **Kiro (KAS layout: kiro-ide).** Kiro's hook payloads carry no agent identity, so this hook has no registration on Kiro IDE or the Kiro CLI v3 engine. The Unit review request (`aidlc-log.ts review --unit`, `prepareReviewCopy` in `aidlc-kiro-review-copy.ts`) instead writes `.kiro/agents/aidlc-scoped-review-<first 12 hex of the request id>.md`: the installed reviewer with an `fs_read` deny on `aidlc/spaces/*/intents/*/construction/**` and `.aidlc/worktrees/*/aidlc/spaces/*/intents/*/construction/**`, excluding only the Unit's own folder in this intent's record (`aidlc/spaces/<space>/intents/<intent>/construction/<unit>`), and returns its name as `dispatchAgent`. Unlike the record's `exempt` list here, the copy grants no other Unit's file; the reviewer notes a named integration point as a finding. Kiro enforces a delegated agent's own deny on reads in every path form and filters search results (Kiro CLI 2.31.0, Kiro IDE 1.3.0); shell reads stay an approval prompt. The completion Kiro reports under the copy's name is recorded under the request's reviewer (`Dispatch Agent` beside it, `aidlc-log-subagent.ts`), a dispatch Kiro answers with `Agent '<name>' not found in registry` records no completion, and the verdict deletes the copy. `sweepReviewCopies` (at each review request and verdict, and at the session start) also deletes a copy whose review is over without a verdict: after the request's latest row the ledger records its `REVIEW_COMPLETED`, a request that replaces it (`reviewRequestReplaces`), an approval of the Unit (`unitGateStatus` as it stood at that approval, so a later reopen does not keep the copy; it also reads another clone's rows of that second, whose order against the approval is not known) or of the whole stage (`gateEventMatchesUnit`, with no `Checkpoint`: a side-by-side batch's approval names its Units); a main-workflow request reads no row of an isolated stage run, and an isolated run's copy goes with its verdict or replacement only. A row retires a copy only when it is definitely after the request's latest rows. The request itself stays open, so a later verdict is still recorded. Nothing else retires a copy: one of a review sent back (Request Changes, a jump back) stays until one of those rows. It reads the record of the command or chat, under that record's audit lock, and keeps every copy when that record is not the one the engine reads for the folder, when its ledger cannot be read whole, or when the ledger does not name the copy's request. No copy is written for a swarm Unit's worktree, or while this check stands aside (Guard Policy `off`, the default of every plan but enterprise; `guard.reviewer-scope off`; `AIDLC_DISABLE_REVIEWER_SCOPE_HOOK=1`); one AI-DLC could not write (no `permissions.rules` list in the installed reviewer; a space, intent or unit name that is not a plain name; no resolvable intent record) leaves a `reviewer-scope` drop line and a `change_notices` line saying the review runs without the check. A copy carries the permissions of the moment it was written, so turning the check off applies from the next Unit review. The copy's patterns are Kiro's globs, not this matcher, and whether Kiro matches a path written in another letter case was not measured.
@@ -2050,7 +2061,9 @@ own outputs, another stage's, the phase-boundary verification report under
 parallel batch. Not the engine's own files there, which only the engine writes
 (`aidlc-state.md`, `intents.json`, `.aidlc-engine/`, `audit/`, and a delegated
 worktree's `.aidlc-plan-approval/`), nor a path reached through a symlink or
-hard-linked to another file. Nothing in a record stands in for the person's
+hard-linked to another file (a link Google Drive Folder backup holds in its
+`.tmp.driveupload` folder while it uploads the file does not count). Nothing in
+a record stands in for the person's
 answer: the approval is the engine's receipt, minted from the person's own
 recorded turn and kept outside `aidlc/spaces`. Three files outside that folder pass
 too, exactly: the composer's grid proposal
@@ -2440,12 +2453,14 @@ The `permissions.allow` array in `.claude/settings.json` pre-approves Claude Cod
 | Allow entry | AI-DLC Usage |
 |-------------|-------------|
 | `Edit(/**)` | Creating and changing artifacts and project files anywhere in the project, through `Edit` and `Write` (never the `audit/` shards, which the guards refuse) |
-| `Bash(bun .claude/tools/aidlc.ts engine *)`, one exact entry per read-only dispatcher command (`doctor`, `version`, `--doctor`, `status`, `config <section> --show --json`, `config <section> --help`), and `Bash(bun .claude/tools/aidlc-<tool>.ts)` plus `Bash(bun .claude/tools/aidlc-<tool>.ts *)` per AI-DLC tool script | AI-DLC's own workflow commands (`Bash(aidlc engine *)` in the native release) |
+| `Bash(bun --config=.claude/tools/aidlc-bunfig.toml --no-env-file .claude/tools/aidlc.ts engine *)`, one exact entry per read-only dispatcher command (`doctor`, `version`, `--doctor`, `status`, `config <section> --show --json`, `config <section> --help`), and `Bash(bun .claude/tools/aidlc-<tool>.ts)` plus `Bash(bun .claude/tools/aidlc-<tool>.ts *)` per AI-DLC tool script | AI-DLC's own workflow commands (`Bash(aidlc engine *)` in the native release) |
 | `Task` | Delegating to subagents for Reverse Engineering and Code Generation |
 | `WebSearch` | Market research, design reference lookups, compliance framework research |
 | `Bash(bun .claude/tools/aidlc.ts config flags --clear-bypass <switch> --yes)`, one exact entry per recordable switch | Turning a check back on, which only ever raises a check; turning one off still asks |
 | `Bash(bun .claude/tools/aidlc.ts --status)`, `Bash(bun .claude/tools/aidlc.ts --version)`, `Bash(bun .claude/tools/aidlc.ts config --help)`, `Bash(bun .claude/tools/aidlc.ts config --show)` with and without `--json`, `doctor --verbose` and `--doctor --verbose`, and one `Bash(bun .claude/tools/aidlc.ts config <section> --show)` per section | The status, version, config help, doctor and plain settings-read spellings agents also run |
 | `Bash(aidlc <command>)` for each exact entry above, beside `Bash(aidlc engine *)` (native release) | The same read-only and turn-back-on commands on a native install, run as the installed `aidlc` command |
+
+Every copy-channel `Bash(bun ...)` entry carries the copy launch's two Bun options after `bun`, as in the first `Bash` row; the other rows leave them out to stay short. A launch without them (a command typed by hand, an older install's spelling) is not on the list and asks.
 
 Reading and searching inside the project (`Read`, `Glob`, `Grep`) needs no entry. Writes outside the project, and the project's own build and test commands, ask as Claude Code normally does. So do a `config` change and the commands that change the machine's AI-DLC install (`use`, `update`, `rollback`, `uninstall`, `system`), with the tool scripts behind them (`aidlc-doctor.ts`, `aidlc-init.ts`, `aidlc-lifecycle.ts`, `aidlc-machine-config.ts`): the packager lists the copy channel's entries from the same command and script lists the Cursor copy channel uses, and those are not on them.
 
@@ -2591,7 +2606,8 @@ for values, precedence, and isolated-run semantics.
 inventories (or one injected current root), validates host manifests, hashes
 compose inputs, compares project stamps, and renders the three-action status
 surface. Sync composes base plugins before the plugins built on them, holds a
-plugin that cannot build on its base (with a `plugin-held-<key>.json` record
+plugin that cannot build on its base or that needs AI-DLC in a version range
+the project's AI-DLC version is outside (with a `plugin-held-<key>.json` record
 that list and doctor read), composes in staging and applies one
 `aidlc-transaction.ts` plan;
 `--prune-missing` additionally requires full inventory, `--yes` when

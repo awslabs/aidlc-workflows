@@ -24,6 +24,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { setGuardPolicyLine } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { cleanupTestProject, intentsDirOf, seededStateFile, setupIntegrationProject } from "../harness/fixtures.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -162,7 +163,8 @@ describe("t-stop-attended-turn-ends", () => {
 // arguments its own terminal classifier calls terminal, whatever the command's text, and a `next` that hands out
 // stage work after it clears the mark.
 describe("a command of AI-DLC's own asked over work in hand ends the turn where the work carries on by itself", () => {
-  const INVOKE = "bun .claude/tools/aidlc.ts";
+  // The dispatcher as a copy tree prints it, so the stand-in finds and runs the command a print names.
+  const INVOKE = withCopyLaunchOptions("bun .claude/tools/aidlc.ts");
   const chat = (unattended: boolean): NodeJS.ProcessEnv =>
     ({ AIDLC_SESSION_OVERRIDE: SESSION, ...(unattended ? { AIDLC_UNATTENDED: "1" } : {}) });
 
@@ -220,7 +222,7 @@ describe("a command of AI-DLC's own asked over work in hand ends the turn where 
     const row = (payload: Record<string, unknown>) => ({ type: "response_item", payload });
     const rows: unknown[] = [row({ type: "message", role: "user", content: [{ type: "input_text", text: `$aidlc ${typed}` }] })];
     calls.forEach(({ command, output }, i) => {
-      const cmd = command.replace(INVOKE, "bun .codex/tools/aidlc.ts");
+      const cmd = command.replace(INVOKE, withCopyLaunchOptions("bun .codex/tools/aidlc.ts"));
       rows.push(row({ type: "function_call", name: "exec_command", arguments: JSON.stringify({ cmd }), call_id: `call_${i}` }));
       rows.push(row({ type: "function_call_output", call_id: `call_${i}`, output: `Process exited with code 0\nOutput:\n${output}` }));
     });

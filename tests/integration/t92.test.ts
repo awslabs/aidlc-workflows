@@ -81,6 +81,7 @@ import {
   remainingOperationTimeoutMs,
 } from "../harness/test-budget.ts";
 import { envWithoutCommandOnPath } from "../harness/test-command-paths.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import { memoryTemplatesDir } from "../../dist/claude/.claude/tools/aidlc-graph.ts";
 import { auditLockDir, readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { resolveSensorScriptPath } from "../../dist/claude/.claude/tools/aidlc-sensor.ts";
@@ -1564,7 +1565,7 @@ function assertManifestCommandResolves(id: string): void {
   const text = readFileSync(manifest, "utf-8");
   const cmdLine = text.split("\n").find((l) => l.startsWith("command:")) ?? "";
   const cmd = cmdLine.replace(/^command:\s*/, "");
-  expect(cmd).toBe(`bun .claude/tools/aidlc.ts engine sensor-${id}`);
+  expect(cmd).toBe(withCopyLaunchOptions(`bun .claude/tools/aidlc.ts engine sensor-${id}`));
   const scriptPath = resolveSensorScriptPath(id);
   expect(basename(scriptPath)).toBe(`aidlc-sensor-${id}.ts`);
   expect(existsSync(scriptPath)).toBe(true);

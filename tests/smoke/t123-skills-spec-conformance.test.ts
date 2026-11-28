@@ -66,6 +66,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { AIDLC_SRC } from "../harness/fixtures.ts";
+import { withCopyLaunchOptions } from "../harness/copy-launch.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
 import { defaultScopeBatch } from "../../dist/claude/.claude/tools/aidlc-runner-gen.ts";
 
@@ -173,7 +174,7 @@ describe("t123 (smoke) skills-spec conformance — every shipped skill set", () 
         "utf-8",
       );
       expect(runner).toContain(
-        `bun ${harness.manifest.harnessDir}/tools/aidlc-orchestrate.ts next`,
+        withCopyLaunchOptions(`bun ${harness.manifest.harnessDir}/tools/aidlc-orchestrate.ts next`),
       );
       expect(runner).not.toContain("\naidlc engine orchestrate next");
       expect(runner).not.toContain("{{HARNESS_DIR}}");
